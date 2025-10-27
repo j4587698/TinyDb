@@ -157,9 +157,9 @@ public sealed class ExpressionParser
         var left = ParseExpression(methodCall.Object);
         var right = ParseExpression(methodCall.Arguments[0]);
 
-        // 简化实现：将 Contains 转换为字符串包含比较
-        // 实际实现可能需要更复杂的逻辑
-        throw new NotSupportedException("Contains method is not yet implemented");
+        // 将 Contains 转换为字符串包含比较
+        // 使用自定义的字符串包含操作，通过FunctionExpression处理
+        return new FunctionExpression("Contains", left, right);
     }
 
     /// <summary>

@@ -131,7 +131,7 @@ public class QueryTests : IDisposable
         // Act
         var filteredUsers = _users.Query()
             .Where(u => u.Age >= 25)
-            .Where(u => u.Name.Contains("a"))
+            .Where(u => u.Name.Contains("A"))
             .ToList();
 
         // 手动排序

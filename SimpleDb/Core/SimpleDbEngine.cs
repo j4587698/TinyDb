@@ -354,6 +354,9 @@ public sealed class SimpleDbEngine : IDisposable
             document = document.Set("_id", id);
         }
 
+        // 添加集合名称字段
+        document = document.Set("_collection", collectionName);
+
         // 序列化文档
         var documentData = BsonSerializer.SerializeDocument(document);
 
@@ -450,7 +453,14 @@ public sealed class SimpleDbEngine : IDisposable
 
                 var documentData = page.ReadData(0, dataSize);
                 var document = BsonSerializer.DeserializeDocument(documentData);
-                documents.Add(document);
+
+                // 按集合名称过滤
+                if (document.TryGetValue("_collection", out var collectionValue) &&
+                    collectionValue is BsonString collectionStr &&
+                    collectionStr.Value == collectionName)
+                {
+                    documents.Add(document);
+                }
             }
             catch (Exception)
             {

@@ -84,6 +84,7 @@ public sealed class QueryExecutor
             BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
             MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, entity),
             ParameterExpression paramExpr => true, // 参数表达式总是返回true
+            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
         };
     }
@@ -195,6 +196,61 @@ public sealed class QueryExecutor
         throw new NotSupportedException($"Member '{expression.MemberName}' not found on type {typeof(T).Name}");
     }
 
+    /// <summary>
+    /// 评估函数表达式
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">函数表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateFunctionExpression<T>(FunctionExpression expression, T entity)
+        where T : class
+    {
+        return expression.FunctionName switch
+        {
+            "Contains" => EvaluateContainsFunction(expression, entity),
+            _ => throw new NotSupportedException($"Function '{expression.FunctionName}' is not supported")
+        };
+    }
+
+    /// <summary>
+    /// 评估Contains函数
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">函数表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateContainsFunction<T>(FunctionExpression expression, T entity)
+        where T : class
+    {
+        // 获取目标值（左值）
+        var targetValue = EvaluateExpressionValue(expression.Target, entity);
+        // 获取参数值（右值）
+        var argumentValue = EvaluateExpressionValue(expression.Argument, entity);
+
+        // 处理字符串Contains
+        if (targetValue is string targetStr && argumentValue is string argStr)
+        {
+            return targetStr.Contains(argStr);
+        }
+
+        // 处理数组/列表Contains
+        if (targetValue is System.Collections.IEnumerable targetEnum)
+        {
+            foreach (var item in targetEnum)
+            {
+                if (Equals(item, argumentValue))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        throw new NotSupportedException($"Contains operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
+    }
+
+    
     /// <summary>
     /// 比较两个值
     /// </summary>
@@ -313,5 +369,23 @@ public sealed class ParameterExpression : QueryExpression
     public ParameterExpression(string name)
     {
         Name = name;
+    }
+}
+
+/// <summary>
+/// 函数表达式（用于处理Contains等字符串方法）
+/// </summary>
+public sealed class FunctionExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.Call; // 使用Call类型表示方法调用
+    public string FunctionName { get; }
+    public QueryExpression Target { get; }
+    public QueryExpression Argument { get; }
+
+    public FunctionExpression(string functionName, QueryExpression target, QueryExpression argument)
+    {
+        FunctionName = functionName;
+        Target = target;
+        Argument = argument;
     }
 }
