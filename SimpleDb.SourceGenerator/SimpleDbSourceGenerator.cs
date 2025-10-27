@@ -23,7 +23,7 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
             .CreateSyntaxProvider(
                 predicate: static (s, _) => s is ClassDeclarationSyntax,
                 transform: static (ctx, _) => GetClassInfo(ctx))
-            .Where(static m => m is not null && ShouldGenerateMapper(m))
+            .Where(static m => m is not null)
             .Collect();
 
         // 注册源代码生成
@@ -33,11 +33,13 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
 
             foreach (var classInfo in classes)
             {
-                if (classInfo == null) continue;
+                if (classInfo == null || !ShouldGenerateMapper(classInfo)) continue;
 
-                var sourceCode = GenerateMapperClass(classInfo);
-                var fileName = $"{classInfo.FullName.Replace(".", "_")}_Mapper.g.cs";
-                spc.AddSource(fileName, SourceText.From(sourceCode, Encoding.UTF8));
+                // 只生成partial类AOT支持，不生成复杂的mapper
+                var partialClassCode = GeneratePartialClass(classInfo);
+                // 使用类名作为唯一标识，确保每个类只生成一个文件
+                var partialFileName = $"{classInfo.Name}_AotHelper.g.cs";
+                spc.AddSource(partialFileName, SourceText.From(partialClassCode, Encoding.UTF8));
             }
         });
     }
@@ -48,25 +50,111 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
     private static ClassInfo? GetClassInfo(GeneratorSyntaxContext context)
     {
         var classDeclaration = (ClassDeclarationSyntax)context.Node;
+        var semanticModel = context.SemanticModel;
 
         // 获取类的完整名称
         var namespaceDeclaration = classDeclaration.FirstAncestorOrSelf<NamespaceDeclarationSyntax>();
         var namespaceName = namespaceDeclaration?.Name.ToString() ?? string.Empty;
         var className = classDeclaration.Identifier.Text;
 
+        // 获取类符号信息
+        var classSymbol = semanticModel.GetDeclaredSymbol(classDeclaration);
+
+        // 如果没有找到命名空间声明，使用符号信息获取命名空间
+        if (string.IsNullOrEmpty(namespaceName))
+        {
+            namespaceName = classSymbol?.ContainingNamespace?.ToString() ?? string.Empty;
+        }
+
+        // 检查是否有Entity属性
+        var hasEntityAttribute = classSymbol?.GetAttributes()
+            .Any(attr => attr.AttributeClass?.Name == "EntityAttribute") ?? false;
+
+        if (!hasEntityAttribute) return null;
+
+        // 获取Entity属性信息
+        var entityAttribute = classSymbol?.GetAttributes()
+            .FirstOrDefault(attr => attr.AttributeClass?.Name == "EntityAttribute");
+
+        var collectionName = entityAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+
+        // 获取Entity属性中指定的IdProperty名称
+        var specifiedIdProperty = entityAttribute?.NamedArguments
+            .FirstOrDefault(arg => arg.Key == "IdProperty").Value.Value?.ToString();
+
         // 获取属性信息
         var properties = new List<PropertyInfo>();
+        PropertyInfo? idProperty = null;
+
         foreach (var member in classDeclaration.Members)
         {
             if (member is PropertyDeclarationSyntax property)
             {
                 var propertyName = property.Identifier.Text;
                 var propertyType = property.Type.ToString();
-                properties.Add(new PropertyInfo(propertyName, propertyType));
+
+                // 检查是否有BsonIgnore属性
+                var propertySymbol = semanticModel.GetDeclaredSymbol(property);
+                var hasIgnoreAttribute = propertySymbol?.GetAttributes()
+                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute") ?? false;
+
+                var propInfo = new PropertyInfo(propertyName, propertyType, false, hasIgnoreAttribute);
+                properties.Add(propInfo);
             }
         }
 
-        return new ClassInfo(namespaceName, className, properties);
+        // 智能ID识别逻辑
+        if (!string.IsNullOrEmpty(specifiedIdProperty))
+        {
+            // 1. 优先使用Entity属性中指定的ID属性
+            idProperty = properties.FirstOrDefault(p => p.Name == specifiedIdProperty);
+            if (idProperty != null)
+            {
+                idProperty.IsId = true;
+            }
+        }
+        else
+        {
+            // 2. 自动查找标准ID属性名称
+            var standardIdNames = new[] { "Id", "_id", "ID", "Id" };
+            foreach (var idName in standardIdNames)
+            {
+                var foundIdProperty = properties.FirstOrDefault(p => p.Name == idName);
+                if (foundIdProperty != null)
+                {
+                    foundIdProperty.IsId = true;
+                    idProperty = foundIdProperty;
+                    break;
+                }
+            }
+        }
+
+        // 3. 如果还是没有找到，检查是否有[Id]属性标记
+        if (idProperty == null)
+        {
+            foreach (var member in classDeclaration.Members)
+            {
+                if (member is PropertyDeclarationSyntax property)
+                {
+                    var propertySymbol = semanticModel.GetDeclaredSymbol(property);
+                    var hasIdAttribute = propertySymbol?.GetAttributes()
+                        .Any(attr => attr.AttributeClass?.Name == "IdAttribute") ?? false;
+
+                    if (hasIdAttribute)
+                    {
+                        var propertyName = property.Identifier.Text;
+                        idProperty = properties.FirstOrDefault(p => p.Name == propertyName);
+                        if (idProperty != null)
+                        {
+                            idProperty.IsId = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        return new ClassInfo(namespaceName, className, properties, idProperty, collectionName);
     }
 
     /// <summary>
@@ -74,12 +162,23 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
     /// </summary>
     private static bool ShouldGenerateMapper(ClassInfo classInfo)
     {
-        // 排除所有SimpleDb内部命名空间
-        if (!string.IsNullOrEmpty(classInfo.Namespace) &&
-            (classInfo.Namespace.Contains("SimpleDb") ||
-             classInfo.Namespace.Contains("System")))
+        // 排除SimpleDb内部命名空间，但允许Demo项目
+        if (!string.IsNullOrEmpty(classInfo.Namespace))
         {
-            return false;
+            // 明确排除System命名空间
+            if (classInfo.Namespace.Contains("System"))
+            {
+                return false;
+            }
+
+            // 排除SimpleDb核心命名空间（除了Demo和SourceGenerator）
+            if (classInfo.Namespace == "SimpleDb" ||
+                (classInfo.Namespace.StartsWith("SimpleDb.") &&
+                 classInfo.Namespace != "SimpleDb.Demo" &&
+                 !classInfo.Namespace.Contains("SourceGenerator")))
+            {
+                return false;
+            }
         }
 
         // 排除所有内部类型的类名
@@ -104,8 +203,196 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
             return false;
         }
 
-        // 只为有属性的类生成映射器
+        // 只处理有属性的实体类（ID将通过智能识别获得）
         return classInfo.Properties.Count > 0;
+    }
+
+    /// <summary>
+    /// 生成AOT静态帮助器类
+    /// </summary>
+    private static string GeneratePartialClass(ClassInfo classInfo)
+    {
+        var sb = new StringBuilder();
+
+        // 添加文件头
+        sb.AppendLine("// <auto-generated/>");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using SimpleDb.Bson;");
+
+        // 添加实体类的命名空间引用 - 调试输出
+        sb.AppendLine($"// DEBUG: Namespace = '{classInfo.Namespace}'");
+        if (!string.IsNullOrEmpty(classInfo.Namespace))
+        {
+            sb.AppendLine($"using {classInfo.Namespace};");
+        }
+        sb.AppendLine();
+
+        // 添加命名空间
+        if (!string.IsNullOrEmpty(classInfo.Namespace))
+        {
+            sb.AppendLine($"namespace {classInfo.Namespace}");
+            sb.AppendLine("{");
+        }
+
+        // 添加静态帮助器类
+        sb.AppendLine($"    /// <summary>");
+        sb.AppendLine($"    /// {classInfo.Name} 的AOT支持帮助器（源代码生成器生成）");
+        sb.AppendLine($"    /// </summary>");
+        sb.AppendLine($"    public static class {classInfo.Name}AotHelper");
+        sb.AppendLine("    {");
+
+        // 生成AOT兼容的ID访问方法
+        if (classInfo.IdProperty != null)
+        {
+            var idProp = classInfo.IdProperty;
+            var isObjectId = idProp.Type == "ObjectId";
+
+            sb.AppendLine();
+            sb.AppendLine("        /// <summary>");
+            sb.AppendLine("        /// 获取实体的ID值（AOT兼容）");
+            sb.AppendLine("        /// </summary>");
+            sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+            sb.AppendLine("        /// <returns>ID值</returns>");
+            sb.AppendLine($"        public static BsonValue GetId({classInfo.Name} entity)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            if (entity == null) return BsonNull.Value;");
+            sb.AppendLine($"            // 硬编码ID属性访问 - 避免AOT反射问题");
+
+            if (isObjectId)
+            {
+                sb.AppendLine($"            return new BsonObjectId(entity.{idProp.Name});");
+            }
+            else if (idProp.Type == "string")
+            {
+                sb.AppendLine($"            return new BsonString(entity.{idProp.Name} ?? \"\");");
+            }
+            else if (idProp.Type == "int")
+            {
+                sb.AppendLine($"            return new BsonInt32(entity.{idProp.Name});");
+            }
+            else if (idProp.Type == "long")
+            {
+                sb.AppendLine($"            return new BsonInt64(entity.{idProp.Name});");
+            }
+            else
+            {
+                sb.AppendLine($"            return ConvertToBsonValue(entity.{idProp.Name});");
+            }
+
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            sb.AppendLine("        /// <summary>");
+            sb.AppendLine("        /// 设置实体的ID值（AOT兼容）");
+            sb.AppendLine("        /// </summary>");
+            sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+            sb.AppendLine("        /// <param name=\"id\">ID值</param>");
+            sb.AppendLine($"        public static void SetId({classInfo.Name} entity, BsonValue id)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            if (entity == null || id?.IsNull != false) return;");
+
+            if (isObjectId)
+            {
+                sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
+                sb.AppendLine($"                entity.{idProp.Name} = bsonObjectId.Value;");
+            }
+            else if (idProp.Type == "string")
+            {
+                sb.AppendLine("            if (id is BsonString bsonString)");
+                sb.AppendLine($"                entity.{idProp.Name} = bsonString.Value ?? \"\";");
+            }
+            else if (idProp.Type == "int")
+            {
+                sb.AppendLine("            if (id is BsonInt32 bsonInt32)");
+                sb.AppendLine($"                entity.{idProp.Name} = bsonInt32.Value;");
+            }
+            else if (idProp.Type == "long")
+            {
+                sb.AppendLine("            if (id is BsonInt64 bsonInt64)");
+                sb.AppendLine($"                entity.{idProp.Name} = bsonInt64.Value;");
+            }
+
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            sb.AppendLine("        /// <summary>");
+            sb.AppendLine("        /// 检查实体是否有有效的ID（AOT兼容）");
+            sb.AppendLine("        /// </summary>");
+            sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+            sb.AppendLine("        /// <returns>是否有有效ID</returns>");
+            sb.AppendLine($"        public static bool HasValidId({classInfo.Name} entity)");
+            sb.AppendLine("        {");
+            sb.AppendLine($"            if (entity == null) return false;");
+            sb.AppendLine($"            // 硬编码ID属性验证 - 避免AOT反射问题");
+
+            if (isObjectId)
+            {
+                sb.AppendLine($"            return entity.{idProp.Name} != ObjectId.Empty;");
+            }
+            else
+            {
+                sb.AppendLine($"            return entity.{idProp.Name} != null;");
+            }
+
+            sb.AppendLine("        }");
+        }
+        else
+        {
+            sb.AppendLine();
+            sb.AppendLine("        /// <summary>");
+            sb.AppendLine("        /// 获取实体的ID值（AOT兼容）");
+            sb.AppendLine("        /// </summary>");
+            sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+            sb.AppendLine("        /// <returns>ID值</returns>");
+            sb.AppendLine($"        public static BsonValue GetId({classInfo.Name} entity)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            // 没有找到ID属性");
+            sb.AppendLine("            return BsonNull.Value;");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            sb.AppendLine("        /// <summary>");
+            sb.AppendLine("        /// 设置实体的ID值（AOT兼容）");
+            sb.AppendLine("        /// </summary>");
+            sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+            sb.AppendLine("        /// <param name=\"id\">ID值</param>");
+            sb.AppendLine($"        public static void SetId({classInfo.Name} entity, BsonValue id)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            // 没有找到ID属性，忽略设置");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            sb.AppendLine("        /// <summary>");
+            sb.AppendLine("        /// 检查实体是否有有效的ID（AOT兼容）");
+            sb.AppendLine("        /// </summary>");
+            sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+            sb.AppendLine("        /// <returns>是否有有效ID</returns>");
+            sb.AppendLine($"        public static bool HasValidId({classInfo.Name} entity)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            // 没有找到ID属性");
+            sb.AppendLine("            return false;");
+            sb.AppendLine("        }");
+        }
+
+        // 生成partial类方法，调用静态帮助器
+        sb.AppendLine();
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// 为实体类生成实例方法包装器");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine($"        public static void PopulateInstanceMethods({classInfo.Name} entity)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            // 这个方法用于在运行时为实体添加实例方法（如果需要）");
+        sb.AppendLine("        }");
+
+        sb.AppendLine("    }");
+
+        // 关闭命名空间
+        if (!string.IsNullOrEmpty(classInfo.Namespace))
+        {
+            sb.AppendLine("}");
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>
@@ -140,6 +427,9 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
 
         // 生成 FromDocument 方法
         GenerateFromDocumentMethod(sb, classInfo);
+
+        // 生成AOT兼容的ID访问器
+        GenerateAotIdAccessor(sb, classInfo);
 
         sb.AppendLine("    }");
 
@@ -249,6 +539,81 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("            };");
         sb.AppendLine("        }");
     }
+
+    /// <summary>
+    /// 生成AOT兼容的ID访问器
+    /// </summary>
+    private static void GenerateAotIdAccessor(StringBuilder sb, ClassInfo classInfo)
+    {
+        if (classInfo.IdProperty == null) return;
+
+        var idProperty = classInfo.IdProperty;
+        var isObjectId = idProperty.Type == "ObjectId";
+
+        sb.AppendLine();
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// AOT兼容的ID属性访问器");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+        sb.AppendLine("        /// <returns>ID值</returns>");
+        sb.AppendLine($"        public static BsonValue GetId({classInfo.FullName} entity)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (entity == null) return BsonNull.Value;");
+
+        if (isObjectId)
+        {
+            sb.AppendLine($"            return new BsonObjectId(entity.{idProperty.Name});");
+        }
+        else
+        {
+            sb.AppendLine($"            return ConvertToBsonValue(entity.{idProperty.Name});");
+        }
+
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// 设置实体的ID值");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+        sb.AppendLine("        /// <param name=\"id\">ID值</param>");
+        sb.AppendLine($"        public static void SetId({classInfo.FullName} entity, BsonValue id)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (entity == null || id?.IsNull != false) return;");
+
+        if (isObjectId)
+        {
+            sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
+            sb.AppendLine($"                entity.{idProperty.Name} = bsonObjectId.Value;");
+        }
+        else
+        {
+            sb.AppendLine($"            entity.{idProperty.Name} = ConvertFromBsonValue<{idProperty.Type}>(id);");
+        }
+
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// 检查实体是否有有效的ID");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+        sb.AppendLine("        /// <returns>是否有有效ID</returns>");
+        sb.AppendLine($"        public static bool HasValidId({classInfo.FullName} entity)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (entity == null) return false;");
+
+        if (isObjectId)
+        {
+            sb.AppendLine($"            return entity.{idProperty.Name} != ObjectId.Empty;");
+        }
+        else
+        {
+            sb.AppendLine($"            return entity.{idProperty.Name} != null;");
+        }
+
+        sb.AppendLine("        }");
+    }
 }
 
 /// <summary>
@@ -260,12 +625,16 @@ public class ClassInfo
     public string Name { get; }
     public string FullName => string.IsNullOrEmpty(Namespace) ? Name : $"{Namespace}.{Name}";
     public List<PropertyInfo> Properties { get; }
+    public PropertyInfo? IdProperty { get; }
+    public string? CollectionName { get; }
 
-    public ClassInfo(string @namespace, string name, List<PropertyInfo> properties)
+    public ClassInfo(string @namespace, string name, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null)
     {
         Namespace = @namespace;
         Name = name;
         Properties = properties;
+        IdProperty = idProperty;
+        CollectionName = collectionName;
     }
 }
 
@@ -276,10 +645,14 @@ public class PropertyInfo
 {
     public string Name { get; }
     public string Type { get; }
+    public bool IsId { get; set; }
+    public bool IsIgnored { get; }
 
-    public PropertyInfo(string name, string type)
+    public PropertyInfo(string name, string type, bool isId = false, bool isIgnored = false)
     {
         Name = name;
         Type = type;
+        IsId = isId;
+        IsIgnored = isIgnored;
     }
 }

@@ -23,7 +23,9 @@ public static class BsonMapper
     /// <param name="entity">对象实例</param>
     /// <returns>BSON 文档</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BsonDocument ToDocument<T>(T entity) where T : class
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
+    public static BsonDocument ToDocument<T>(T entity)
+        where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -65,6 +67,7 @@ public static class BsonMapper
     /// </summary>
     /// <typeparam name="T">对象类型</typeparam>
     /// <returns>ID 属性访问器</returns>
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
     public static PropertyAccessor<T>? GetIdProperty<T>()
         where T : class
     {
@@ -122,6 +125,7 @@ public static class BsonMapper
     /// <typeparam name="T">对象类型</typeparam>
     /// <param name="entity">对象实例</param>
     /// <returns>ID 值</returns>
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
     public static BsonValue GetId<T>(T entity)
         where T : class
     {
@@ -143,6 +147,7 @@ public static class BsonMapper
     /// <typeparam name="T">对象类型</typeparam>
     /// <param name="entity">对象实例</param>
     /// <param name="id">ID 值</param>
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
     public static void SetId<T>(T entity, BsonValue id)
         where T : class
     {
@@ -307,6 +312,10 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
     public ObjectSerializer()
     {
         var type = typeof(T);
+
+        // 调试信息
+        Console.WriteLine($"[DEBUG] ObjectSerializer for {type.Name}");
+
         _properties = type
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead && p.CanWrite)
@@ -316,7 +325,42 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
                 p => new PropertyAccessor<T>(p)
             );
 
+        // 尝试使用反射获取ID属性
         _idProperty = BsonMapper.GetIdProperty<T>();
+
+        // 如果反射失败，尝试智能识别ID属性
+        if (_idProperty == null)
+        {
+            Console.WriteLine($"[DEBUG] ObjectSerializer: Using smart ID property detection");
+            Console.WriteLine($"[DEBUG] ObjectSerializer: Properties count: {_properties.Count}");
+            foreach (var prop in _properties.Keys)
+            {
+                Console.WriteLine($"[DEBUG] ObjectSerializer: Found property '{prop}'");
+            }
+
+            // 查找标准ID属性名称
+            var standardIdNames = new[] { "Id", "_id", "ID" };
+            foreach (var idName in standardIdNames)
+            {
+                if (_properties.TryGetValue(idName, out var accessor))
+                {
+                    _idProperty = accessor;
+                    Console.WriteLine($"[DEBUG] ObjectSerializer: Found ID property '{idName}' via smart detection");
+                    break;
+                }
+            }
+
+            if (_idProperty == null)
+            {
+                Console.WriteLine($"[DEBUG] ObjectSerializer: No ID property found in _properties");
+            }
+        }
+
+        Console.WriteLine($"[DEBUG] ObjectSerializer: _idProperty is null: {_idProperty == null}");
+        if (_idProperty != null)
+        {
+            Console.WriteLine($"[DEBUG] ObjectSerializer: ID property name: {_idProperty.Property.Name}");
+        }
     }
 
     /// <summary>
@@ -329,7 +373,59 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
         if (obj == null) throw new ArgumentNullException(nameof(obj));
 
         var document = new BsonDocument();
+        var entityType = typeof(T);
 
+        // 尝试使用生成的mapper处理ID字段
+        try
+        {
+            var mapperType = Type.GetType($"{entityType.Namespace}.{entityType.Name}Mapper");
+            if (mapperType != null)
+            {
+                var getIdMethod = mapperType.GetMethod("GetId", new[] { entityType });
+                if (getIdMethod != null)
+                {
+                    Console.WriteLine($"[DEBUG] Serialize: Using generated mapper for {entityType.Name}");
+
+                    // 直接从生成的mapper获取ID并设置为_id字段
+                    var idValue = (BsonValue)getIdMethod.Invoke(null, new object[] { obj })!;
+                    if (!idValue.IsNull)
+                    {
+                        document = document.Set("_id", idValue);
+                        Console.WriteLine($"[DEBUG] Serialize: Set _id field from generated mapper: {idValue}");
+                    }
+
+                    // 序列化其他属性（排除ID属性，因为已经处理了）
+                    foreach (var (name, accessor) in _properties)
+                    {
+                        // 跳过ID相关属性，避免重复
+                        if (name.Contains("Id", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"[DEBUG] Serialize: Skipping ID property '{name}' (handled by generated mapper)");
+                            continue;
+                        }
+
+                        try
+                        {
+                            var value = accessor.GetValue(obj);
+                            var bsonValue = BsonMapper.ConvertToBsonValue(value);
+                            document = document.Set(name, bsonValue);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException($"Failed to serialize property '{name}' of type {typeof(T).Name}", ex);
+                        }
+                    }
+
+                    return document;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DEBUG] Generated mapper serialization failed: {ex.Message}");
+        }
+
+        // 普通类型的序列化逻辑（备用）
         foreach (var (name, accessor) in _properties)
         {
             try
@@ -339,6 +435,13 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
 
                 // 如果这是ID属性，使用"_id"作为字段名
                 var fieldName = (_idProperty != null && accessor.Property.Name == _idProperty.Property.Name) ? "_id" : name;
+
+                // 调试信息
+                if (name.Contains("Id", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"[DEBUG] Serialize: property '{name}' -> fieldName '{fieldName}', _idProperty null: {_idProperty == null}");
+                }
+
                 document = document.Set(fieldName, bsonValue);
             }
             catch (Exception ex)

@@ -127,12 +127,17 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 确保实体有ID
-        var id = GetEntityId(entity);
-        if (id == null || id.IsNull)
+        // 确保实体有ID - 使用AOT兼容的访问器
+        var hasValidId = AotIdAccessor<T>.HasValidId(entity);
+        if (!hasValidId)
         {
+            // 调试信息
+            var entityId = AotIdAccessor<T>.GetId(entity);
+            Console.WriteLine($"[DEBUG] Update - HasValidId: {hasValidId}, Id: {entityId}, IsNull: {entityId?.IsNull}");
             throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
         }
+
+        var id = AotIdAccessor<T>.GetId(entity);
 
         // 转换为BSON文档
         var document = BsonMapper.ToDocument(entity);
@@ -413,9 +418,9 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
     {
         try
         {
-            return BsonMapper.GetId(entity);
+            return AotIdAccessor<T>.GetId(entity);
         }
-        catch (InvalidOperationException)
+        catch
         {
             return BsonNull.Value;
         }
@@ -430,9 +435,9 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
     {
         try
         {
-            BsonMapper.SetId(entity, id);
+            AotIdAccessor<T>.SetId(entity, id);
         }
-        catch (InvalidOperationException)
+        catch
         {
             // 如果实体没有ID属性，忽略更新
         }
