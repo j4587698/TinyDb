@@ -185,12 +185,12 @@ public sealed class PageManager : IDisposable
             // 尝试从空闲页面队列获取
             if (_freePages.TryDequeue(out pageID))
             {
-                // 重新使用空闲页面
-                var existingPage = GetPage(pageID, false);
-                existingPage.ClearData();
-                existingPage.UpdatePageType(pageType);
-                AddToCache(existingPage);
-                return existingPage;
+                // 重新使用空闲页面 - 直接创建新页面，避免从磁盘读取旧数据
+                var reusedPage = new Page(pageID, (int)_pageSize, pageType);
+                reusedPage.ClearData();
+                reusedPage.UpdatePageType(pageType);
+                AddToCache(reusedPage);
+                return reusedPage;
             }
 
             // 分配新页面

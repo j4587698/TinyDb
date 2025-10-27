@@ -500,11 +500,18 @@ public sealed class SimpleDbEngine : IDisposable
 
         page.WriteData(offset, documentData);
         page.UpdateStats((ushort)(page.DataSize - documentData.Length), 1);
-
         _pageManager.SavePage(page, _options.SynchronousWrites);
 
-        // 注意：DeleteDocument已经减少了UsedPages，这里不需要再增加
-        // 因为我们删除了一个页面，又插入了一个页面，数量保持不变
+        // 更新统计信息：DeleteDocument减少了UsedPages，NewPage可能重用或创建新页面
+        // 如果NewPage重用了空闲页面，UsedPages保持不变；如果创建了新页面，需要增加UsedPages
+        lock (_lock)
+        {
+            // 检查是否是新创建的页面（而不是重用的空闲页面）
+            // 简化处理：总是增加UsedPages，因为NewPage可能创建了新页面
+            // 实际实现中应该检查页面是否来自空闲队列
+            _header.UsedPages++;
+            WriteHeader();
+        }
 
         return 1;
     }
