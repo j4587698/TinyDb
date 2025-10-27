@@ -78,6 +78,25 @@ public sealed class Queryable<T> : IQueryable<T>
     }
 
     /// <summary>
+    /// 添加 OrderBy 条件
+    /// </summary>
+    /// <param name="keySelector">键选择器</param>
+    /// <returns>排序后的查询</returns>
+    public IOrderedQueryable<T> OrderBy<TKey>(Expression<Func<T, TKey>> keySelector)
+    {
+        if (keySelector == null) throw new ArgumentNullException(nameof(keySelector));
+
+        // 直接在内存中执行排序，返回一个包装了排序结果的IOrderedQueryable
+        var allData = _executor.Execute<T>(_collectionName).ToList();
+        var compiledKeySelector = keySelector.Compile();
+        var sortedData = allData.OrderBy(compiledKeySelector);
+
+        // 创建一个新的查询提供者，它直接返回排序后的数据
+        var sortedProvider = new SortedQueryProvider<T>(sortedData);
+        return new SortedQueryable<T>(sortedProvider);
+    }
+
+    /// <summary>
     /// 重写 ToString 方法
     /// </summary>
     public override string ToString()
@@ -190,8 +209,29 @@ public sealed class QueryProvider<T> : IQueryProvider
             return _executor.Execute<T>(_collectionName);
         }
 
+        // 解析 Count/LongCount 调用
+        if (TryExtractCountExpression(expression, out var whereExpression))
+        {
+            var data = GetFilteredData(whereExpression);
+            return (long)data.Count();
+        }
+
+        // 解析 First/FirstOrDefault 调用
+        if (TryExtractFirstExpression(expression, out whereExpression))
+        {
+            var data = GetFilteredData(whereExpression);
+            return data.FirstOrDefault();
+        }
+
+        // 解析 Any/Exists 调用
+        if (TryExtractAnyExpression(expression, out whereExpression))
+        {
+            var data = GetFilteredData(whereExpression);
+            return data.Any();
+        }
+
         // 解析 Where 表达式
-        if (TryExtractWhereExpression(expression, out var whereExpression))
+        if (TryExtractWhereExpression(expression, out whereExpression))
         {
             // whereExpression 已经是一个 LambdaExpression
             if (whereExpression is LambdaExpression lambda)
@@ -212,8 +252,183 @@ public sealed class QueryProvider<T> : IQueryProvider
             }
         }
 
+        // 解析 OrderBy 调用
+        if (TryExtractOrderByExpression(expression, out var orderBySourceExpression, out var keySelector))
+        {
+            var sourceResult = ExecuteInternal(orderBySourceExpression);
+            if (sourceResult is IEnumerable<T> enumerable && keySelector != null)
+            {
+                var compiledKeySelector = keySelector.Compile();
+                return enumerable.OrderBy<T, object>(x => compiledKeySelector.DynamicInvoke(x)!);
+            }
+        }
+
         // 对于其他操作，尝试在内存中执行
         return ExecuteInMemory(expression);
+    }
+
+    /// <summary>
+    /// 获取过滤后的数据
+    /// </summary>
+    /// <param name="whereExpression">Where表达式</param>
+    /// <returns>过滤后的数据</returns>
+    private IEnumerable<T> GetFilteredData(Expression? whereExpression)
+    {
+        var allData = _executor.Execute<T>(_collectionName);
+
+        if (whereExpression == null)
+        {
+            return allData;
+        }
+
+        if (whereExpression is LambdaExpression lambda)
+        {
+            var compiledPredicate = (Func<T, bool>)lambda.Compile();
+            return allData.Where(compiledPredicate);
+        }
+
+        return allData;
+    }
+
+    /// <summary>
+    /// 尝试提取 Count 表达式
+    /// </summary>
+    private static bool TryExtractCountExpression(Expression expression, out Expression? whereExpression)
+    {
+        whereExpression = null;
+
+        if (expression is MethodCallExpression methodCall)
+        {
+            if (methodCall.Method.Name == "LongCount" || methodCall.Method.Name == "Count")
+            {
+                if (methodCall.Arguments.Count == 2)
+                {
+                    // 直接的 Count(source, predicate) 调用
+                    whereExpression = ExtractLambdaFromQuote(methodCall.Arguments[1]);
+                    return true;
+                }
+                else if (methodCall.Arguments.Count == 1)
+                {
+                    // 可能是 Where().Count() 的链式调用
+                    if (TryExtractWhereExpression(methodCall.Arguments[0], out whereExpression))
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        whereExpression = null;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 尝试提取 First/FirstOrDefault 表达式
+    /// </summary>
+    private static bool TryExtractFirstExpression(Expression expression, out Expression? whereExpression)
+    {
+        whereExpression = null;
+
+        if (expression is MethodCallExpression methodCall)
+        {
+            if (methodCall.Method.Name == "FirstOrDefault" || methodCall.Method.Name == "First")
+            {
+                if (methodCall.Arguments.Count == 2)
+                {
+                    // 直接的 First(source, predicate) 调用
+                    whereExpression = ExtractLambdaFromQuote(methodCall.Arguments[1]);
+                    return true;
+                }
+                else if (methodCall.Arguments.Count == 1)
+                {
+                    // 可能是 Where().First() 的链式调用
+                    if (TryExtractWhereExpression(methodCall.Arguments[0], out whereExpression))
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        whereExpression = null;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 尝试提取 Any 表达式
+    /// </summary>
+    private static bool TryExtractAnyExpression(Expression expression, out Expression? whereExpression)
+    {
+        whereExpression = null;
+
+        if (expression is MethodCallExpression methodCall)
+        {
+            if (methodCall.Method.Name == "Any")
+            {
+                if (methodCall.Arguments.Count == 2)
+                {
+                    // 直接的 Any(source, predicate) 调用
+                    whereExpression = ExtractLambdaFromQuote(methodCall.Arguments[1]);
+                    return true;
+                }
+                else if (methodCall.Arguments.Count == 1)
+                {
+                    // 可能是 Where().Any() 的链式调用
+                    if (TryExtractWhereExpression(methodCall.Arguments[0], out whereExpression))
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        whereExpression = null;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 尝试提取 OrderBy 表达式
+    /// </summary>
+    private static bool TryExtractOrderByExpression(Expression expression, out Expression? sourceExpression, out LambdaExpression? keySelector)
+    {
+        sourceExpression = null;
+        keySelector = null;
+
+        if (expression is MethodCallExpression methodCall)
+        {
+            if (methodCall.Method.Name == "OrderBy")
+            {
+                sourceExpression = methodCall.Arguments[0];
+                keySelector = ExtractLambdaFromQuote(methodCall.Arguments[1]) as LambdaExpression;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 从 Quote 表达式中提取 Lambda 表达式
+    /// </summary>
+    private static Expression ExtractLambdaFromQuote(Expression expression)
+    {
+        if (expression is UnaryExpression unary && unary.NodeType == ExpressionType.Quote)
+        {
+            return unary.Operand;
+        }
+        return expression;
     }
 
     /// <summary>
@@ -473,5 +688,73 @@ internal class ParameterReplacementVisitor : System.Linq.Expressions.ExpressionV
     {
         // 替换所有参数引用为我们的参数
         return _parameter;
+    }
+}
+
+/// <summary>
+/// 已排序查询提供者
+/// </summary>
+/// <typeparam name="T">元素类型</typeparam>
+internal sealed class SortedQueryProvider<T> : IQueryProvider
+    where T : class
+{
+    internal readonly IEnumerable<T> _sortedData;
+
+    public SortedQueryProvider(IEnumerable<T> sortedData)
+    {
+        _sortedData = sortedData ?? throw new ArgumentNullException(nameof(sortedData));
+    }
+
+    public IQueryable CreateQuery(Expression expression)
+    {
+        throw new NotSupportedException("Sorted query provider does not support creating new queries");
+    }
+
+    public IQueryable<TElement> CreateQuery<TElement>(Expression expression)
+    {
+        throw new NotSupportedException("Sorted query provider does not support creating new queries");
+    }
+
+    public object Execute(Expression expression)
+    {
+        // 对于已排序的数据，直接在内存中执行
+        return _sortedData.AsQueryable().Provider.Execute(expression);
+    }
+
+    public TResult Execute<TResult>(Expression expression)
+    {
+        // 对于已排序的数据，直接在内存中执行
+        return _sortedData.AsQueryable().Provider.Execute<TResult>(expression);
+    }
+}
+
+/// <summary>
+/// 已排序可查询对象
+/// </summary>
+/// <typeparam name="T">元素类型</typeparam>
+internal sealed class SortedQueryable<T> : IOrderedQueryable<T>
+    where T : class
+{
+    private readonly SortedQueryProvider<T> _provider;
+    private readonly IEnumerable<T> _data;
+
+    public SortedQueryable(SortedQueryProvider<T> provider)
+    {
+        _provider = provider ?? throw new ArgumentNullException(nameof(provider));
+        _data = ((SortedQueryProvider<T>)provider)._sortedData; // 通过反射或内部访问获取数据
+    }
+
+    public Type ElementType => typeof(T);
+    public Expression Expression => Expression.Constant(this, typeof(SortedQueryable<T>));
+    public IQueryProvider Provider => _provider;
+
+    public IEnumerator<T> GetEnumerator()
+    {
+        return _data.GetEnumerator();
+    }
+
+    IEnumerator IEnumerable.GetEnumerator()
+    {
+        return GetEnumerator();
     }
 }
