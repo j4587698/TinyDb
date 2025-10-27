@@ -151,7 +151,6 @@ public class Program
 }
 
 [Entity("users")]
-[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
 public partial class User
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();

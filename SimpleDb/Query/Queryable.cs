@@ -235,22 +235,11 @@ public sealed class QueryProvider<T> : IQueryProvider
         {
             // 如果这是根级别的Where表达式（如来自Find方法的调用），使用数据库查询
             var isRootWhere = IsRootWhereExpression(expression);
-            if (isRootWhere)
+
+            // 调试：直接使用数据库查询，绕过复杂的判断逻辑
+            if (whereExpression is LambdaExpression lambda)
             {
-                if (whereExpression is LambdaExpression lambda)
-                {
-                    return _executor.Execute(_collectionName, (Expression<Func<T, bool>>)lambda);
-                }
-            }
-            else
-            {
-                // 对于链式Where调用，使用内存查询
-                var allData = _executor.Execute<T>(_collectionName);
-                if (whereExpression is LambdaExpression lambda)
-                {
-                    var compiledPredicate = (Func<T, bool>)lambda.Compile();
-                    return allData.Where(compiledPredicate);
-                }
+                return _executor.Execute(_collectionName, (Expression<Func<T, bool>>)lambda);
             }
         }
 
