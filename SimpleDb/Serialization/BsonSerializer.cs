@@ -22,10 +22,9 @@ public static class BsonSerializer
     /// <returns>字节数组</returns>
     public static byte[] Serialize(BsonValue value)
     {
-        using var stream = new MemoryStream();
-        using var writer = new BsonWriter(stream);
-        writer.WriteValue(value);
-        return stream.ToArray();
+        // 将单个值包装在文档中进行序列化
+        var document = new BsonDocument().Set("value", value);
+        return SerializeDocument(document);
     }
 
     /// <summary>
@@ -40,7 +39,8 @@ public static class BsonSerializer
 
         using var stream = new MemoryStream(data);
         using var reader = new BsonReader(stream);
-        return reader.ReadValue();
+        var document = reader.ReadDocument();
+        return document.ContainsKey("value") ? document["value"] : BsonNull.Value;
     }
 
     /// <summary>
@@ -196,6 +196,37 @@ public sealed class BsonWriter : IDisposable
             case BsonArray arr:
                 WriteArray(arr);
                 break;
+            case BsonBinary binary:
+                WriteBinary(binary.Bytes, binary.SubType);
+                break;
+            case BsonRegularExpression regex:
+                WriteRegularExpression(regex.Pattern, regex.Options);
+                break;
+            case BsonTimestamp timestamp:
+                WriteTimestamp(timestamp.Value);
+                break;
+            // TODO: 实现其他BSON类型
+            // case BsonUndefined:
+            //     WriteUndefined();
+            //     break;
+            // case BsonJavaScript js when js.Scope == null:
+            //     WriteJavaScript(js.Code);
+            //     break;
+            // case BsonJavaScript jsWithScope when jsWithScope.Scope != null:
+            //     WriteJavaScriptWithScope(jsWithScope.Code, jsWithScope.Scope);
+            //     break;
+            // case BsonSymbol symbol:
+            //     WriteSymbol(symbol.Name);
+            //     break;
+            // case BsonDecimal128 decimal128:
+            //     WriteDecimal128(decimal128.Value);
+            //     break;
+            // case BsonMinKey:
+            //     WriteMinKey();
+            //     break;
+            // case BsonMaxKey:
+            //     WriteMaxKey();
+            //     break;
             default:
                 throw new NotSupportedException($"BSON type {value.BsonType} is not supported");
         }
@@ -381,6 +412,79 @@ public sealed class BsonWriter : IDisposable
     }
 
     /// <summary>
+    /// 写入二进制数据
+    /// </summary>
+    /// <param name="bytes">二进制数据</param>
+    /// <param name="subType">子类型</param>
+    public void WriteBinary(byte[] bytes, BsonBinary.BinarySubType subType = BsonBinary.BinarySubType.Generic)
+    {
+        ThrowIfDisposed();
+        if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+
+        _writer.Write(bytes.Length);
+        _writer.Write((byte)subType);
+        _writer.Write(bytes);
+    }
+
+    /// <summary>
+    /// 写入未定义值
+    /// </summary>
+    public void WriteUndefined()
+    {
+        ThrowIfDisposed();
+        // Undefined 没有数据部分
+    }
+
+    /// <summary>
+    /// 写入正则表达式
+    /// </summary>
+    /// <param name="pattern">正则表达式模式</param>
+    /// <param name="options">正则表达式选项</param>
+    public void WriteRegularExpression(string pattern, string options)
+    {
+        ThrowIfDisposed();
+        if (pattern == null) throw new ArgumentNullException(nameof(pattern));
+        if (options == null) throw new ArgumentNullException(nameof(options));
+
+        WriteCString(pattern);
+        WriteCString(options);
+    }
+
+    // TODO: 实现其他BSON类型的写入方法
+    // public void WriteJavaScript(string code) { ... }
+    // public void WriteJavaScriptWithScope(string code, BsonDocument scope) { ... }
+    // public void WriteSymbol(string name) { ... }
+    // public void WriteDecimal128(decimal value) { ... }
+
+    /// <summary>
+    /// 写入时间戳
+    /// </summary>
+    /// <param name="value">时间戳值</param>
+    public void WriteTimestamp(long value)
+    {
+        ThrowIfDisposed();
+        _writer.Write(value);
+    }
+
+    /// <summary>
+    /// 写入最小键
+    /// </summary>
+    public void WriteMinKey()
+    {
+        ThrowIfDisposed();
+        // MinKey 没有数据部分
+    }
+
+    /// <summary>
+    /// 写入最大键
+    /// </summary>
+    public void WriteMaxKey()
+    {
+        ThrowIfDisposed();
+        // MaxKey 没有数据部分
+    }
+
+    /// <summary>
     /// 检查是否已释放
     /// </summary>
     private void ThrowIfDisposed()
@@ -443,7 +547,18 @@ public sealed class BsonReader : IDisposable
             BsonType.DateTime => ReadDateTime(),
             BsonType.Document => ReadDocument(),
             BsonType.Array => ReadArray(),
+            BsonType.Binary => ReadBinary(),
+            BsonType.RegularExpression => ReadRegularExpression(),
+            BsonType.Timestamp => ReadTimestamp(),
             BsonType.End => throw new InvalidOperationException("Unexpected end marker"),
+            // TODO: 实现其他BSON类型
+            // BsonType.Undefined => BsonUndefined.Value,
+            // BsonType.JavaScript => ReadJavaScript(),
+            // BsonType.Symbol => ReadSymbol(),
+            // BsonType.JavaScriptWithScope => ReadJavaScriptWithScope(),
+            // BsonType.Decimal128 => ReadDecimal128(),
+            // BsonType.MinKey => BsonMinKey.Value,
+            // BsonType.MaxKey => BsonMaxKey.Value,
             _ => throw new NotSupportedException($"BSON type {type} is not supported")
         };
     }
@@ -649,6 +764,48 @@ public sealed class BsonReader : IDisposable
         var dateTime = unixEpoch.AddMilliseconds(milliseconds);
         return new BsonDateTime(dateTime);
     }
+
+    /// <summary>
+    /// 读取二进制数据
+    /// </summary>
+    /// <returns>BsonBinary</returns>
+    public BsonBinary ReadBinary()
+    {
+        ThrowIfDisposed();
+        var length = _reader.ReadInt32();
+        var subType = (BsonBinary.BinarySubType)_reader.ReadByte();
+        var bytes = _reader.ReadBytes(length);
+        return new BsonBinary(bytes, subType);
+    }
+
+    /// <summary>
+    /// 读取正则表达式
+    /// </summary>
+    /// <returns>BsonRegularExpression</returns>
+    public BsonRegularExpression ReadRegularExpression()
+    {
+        ThrowIfDisposed();
+        var pattern = ReadCString();
+        var options = ReadCString();
+        return new BsonRegularExpression(pattern, options);
+    }
+
+    /// <summary>
+    /// 读取时间戳
+    /// </summary>
+    /// <returns>BsonTimestamp</returns>
+    public BsonTimestamp ReadTimestamp()
+    {
+        ThrowIfDisposed();
+        var value = _reader.ReadInt64();
+        return new BsonTimestamp(value);
+    }
+
+    // TODO: 实现其他BSON类型的读取方法
+    // public BsonJavaScript ReadJavaScript() { ... }
+    // public BsonSymbol ReadSymbol() { ... }
+    // public BsonJavaScript ReadJavaScriptWithScope() { ... }
+    // public BsonDecimal128 ReadDecimal128() { ... }
 
     /// <summary>
     /// 检查是否已释放
