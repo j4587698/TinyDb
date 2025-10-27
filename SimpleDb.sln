@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleDb", "SimpleDb\SimpleDb.csproj", "{93A27C67-2C32-4EF9-BAE8-84475844D8E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SimpleDb.SourceGenerator", "SimpleDb.SourceGenerator\SimpleDb.SourceGenerator.csproj", "{CAEE6205-5DCA-484F-AD2E-98F3E31BBC49}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{93A27C67-2C32-4EF9-BAE8-84475844D8E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{93A27C67-2C32-4EF9-BAE8-84475844D8E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{93A27C67-2C32-4EF9-BAE8-84475844D8E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{93A27C67-2C32-4EF9-BAE8-84475844D8E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CAEE6205-5DCA-484F-AD2E-98F3E31BBC49}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CAEE6205-5DCA-484F-AD2E-98F3E31BBC49}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CAEE6205-5DCA-484F-AD2E-98F3E31BBC49}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CAEE6205-5DCA-484F-AD2E-98F3E31BBC49}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

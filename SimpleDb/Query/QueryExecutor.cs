@@ -1,0 +1,317 @@
+using System.Linq.Expressions;
+using System.Reflection;
+using System.Diagnostics.CodeAnalysis;
+using SimpleDb.Bson;
+using SimpleDb.Core;
+
+namespace SimpleDb.Query;
+
+/// <summary>
+/// 查询执行器
+/// </summary>
+public sealed class QueryExecutor
+{
+    private readonly SimpleDbEngine _engine;
+    private readonly ExpressionParser _expressionParser;
+
+    /// <summary>
+    /// 初始化查询执行器
+    /// </summary>
+    /// <param name="engine">数据库引擎</param>
+    public QueryExecutor(SimpleDbEngine engine)
+    {
+        _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        _expressionParser = new ExpressionParser();
+    }
+
+    /// <summary>
+    /// 执行查询
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="expression">查询表达式</param>
+    /// <returns>查询结果</returns>
+    public IEnumerable<T> Execute<T>(string collectionName, Expression<Func<T, bool>>? expression = null)
+        where T : class
+    {
+        if (string.IsNullOrEmpty(collectionName))
+            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
+
+        // 获取所有文档
+        var documents = _engine.FindAll(collectionName);
+
+        // 如果没有查询条件，返回所有文档
+        if (expression == null)
+        {
+            foreach (var document in documents)
+            {
+                var entity = Serialization.BsonMapper.ToObject<T>(document);
+                if (entity != null)
+                {
+                    yield return entity;
+                }
+            }
+            yield break;
+        }
+
+        // 解析查询表达式
+        var queryExpression = _expressionParser.Parse(expression);
+
+        // 执行查询
+        foreach (var document in documents)
+        {
+            var entity = Serialization.BsonMapper.ToObject<T>(document);
+            if (entity != null && EvaluateExpression(queryExpression, entity))
+            {
+                yield return entity;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 评估查询表达式
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">查询表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>是否匹配</returns>
+    private static bool EvaluateExpression<T>(QueryExpression expression, T entity)
+        where T : class
+    {
+        return expression switch
+        {
+            ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
+            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
+            MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, entity),
+            ParameterExpression paramExpr => true, // 参数表达式总是返回true
+            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
+        };
+    }
+
+    /// <summary>
+    /// 评估常量表达式
+    /// </summary>
+    /// <param name="expression">常量表达式</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateConstantExpression(ConstantExpression expression)
+    {
+        if (expression.Value is bool boolValue)
+        {
+            return boolValue;
+        }
+
+        throw new InvalidOperationException($"Constant expression must be boolean, got {expression.Value?.GetType().Name}");
+    }
+
+    /// <summary>
+    /// 评估二元表达式
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">二元表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateBinaryExpression<T>(BinaryExpression expression, T entity)
+        where T : class
+    {
+        var leftValue = EvaluateExpressionValue(expression.Left, entity);
+        var rightValue = EvaluateExpressionValue(expression.Right, entity);
+
+        return expression.NodeType switch
+        {
+            ExpressionType.Equal => Equals(leftValue, rightValue),
+            ExpressionType.NotEqual => !Equals(leftValue, rightValue),
+            ExpressionType.GreaterThan => Compare(leftValue, rightValue) > 0,
+            ExpressionType.GreaterThanOrEqual => Compare(leftValue, rightValue) >= 0,
+            ExpressionType.LessThan => Compare(leftValue, rightValue) < 0,
+            ExpressionType.LessThanOrEqual => Compare(leftValue, rightValue) <= 0,
+            ExpressionType.AndAlso => leftValue is bool leftBool && rightValue is bool rightBool && leftBool && rightBool,
+            ExpressionType.OrElse => leftValue is bool leftBool2 && rightValue is bool rightBool2 && (leftBool2 || rightBool2),
+            _ => throw new NotSupportedException($"Binary operation {expression.NodeType} is not supported")
+        };
+    }
+
+    /// <summary>
+    /// 评估成员表达式
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">成员表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateMemberExpression<T>(MemberExpression expression, T entity)
+        where T : class
+    {
+        var value = GetMemberValue(expression, entity);
+
+        if (value is bool boolValue)
+        {
+            return boolValue;
+        }
+
+        // 对于非布尔值，返回true（在查询中通常用于检查存在性）
+        return value != null;
+    }
+
+    /// <summary>
+    /// 评估表达式值
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static object? EvaluateExpressionValue<T>(QueryExpression expression, T entity)
+        where T : class
+    {
+        return expression switch
+        {
+            ConstantExpression constExpr => constExpr.Value,
+            MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
+            ParameterExpression => entity,
+            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
+        };
+    }
+
+    /// <summary>
+    /// 获取成员值
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">成员表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>成员值</returns>
+    private static object? GetMemberValue<T>(MemberExpression expression, T entity)
+        where T : class
+    {
+        var propertyInfo = typeof(T).GetProperty(expression.MemberName);
+        if (propertyInfo != null)
+        {
+            return propertyInfo.GetValue(entity);
+        }
+
+        var fieldInfo = typeof(T).GetField(expression.MemberName);
+        if (fieldInfo != null)
+        {
+            return fieldInfo.GetValue(entity);
+        }
+
+        throw new NotSupportedException($"Member '{expression.MemberName}' not found on type {typeof(T).Name}");
+    }
+
+    /// <summary>
+    /// 比较两个值
+    /// </summary>
+    /// <param name="left">左值</param>
+    /// <param name="right">右值</param>
+    /// <returns>比较结果</returns>
+    private static int Compare(object? left, object? right)
+    {
+        if (left == null && right == null) return 0;
+        if (left == null) return -1;
+        if (right == null) return 1;
+
+        // 尝试转换为可比较的类型
+        if (left is IComparable leftComparable)
+        {
+            return leftComparable.CompareTo(right);
+        }
+
+        // 如果都是字符串，进行字符串比较
+        if (left is string leftStr && right is string rightStr)
+        {
+            return string.Compare(leftStr, rightStr, StringComparison.Ordinal);
+        }
+
+        // 尝试数值比较
+        if (IsNumericType(left) && IsNumericType(right))
+        {
+            var leftDecimal = Convert.ToDecimal(left);
+            var rightDecimal = Convert.ToDecimal(right);
+            return leftDecimal.CompareTo(rightDecimal);
+        }
+
+        // 最后尝试字符串比较
+        return string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 检查是否为数值类型
+    /// </summary>
+    /// <param name="value">值</param>
+    /// <returns>是否为数值类型</returns>
+    private static bool IsNumericType(object value)
+    {
+        return value is sbyte || value is byte || value is short || value is ushort ||
+               value is int || value is uint || value is long || value is ulong ||
+               value is float || value is double || value is decimal;
+    }
+}
+
+/// <summary>
+/// 查询表达式基类
+/// </summary>
+public abstract class QueryExpression
+{
+    /// <summary>
+    /// 表达式类型
+    /// </summary>
+    public abstract ExpressionType NodeType { get; }
+}
+
+/// <summary>
+/// 常量表达式
+/// </summary>
+public sealed class ConstantExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.Constant;
+    public object? Value { get; }
+
+    public ConstantExpression(object? value)
+    {
+        Value = value;
+    }
+}
+
+/// <summary>
+/// 二元表达式
+/// </summary>
+public sealed class BinaryExpression : QueryExpression
+{
+    public override ExpressionType NodeType { get; }
+    public QueryExpression Left { get; }
+    public QueryExpression Right { get; }
+
+    public BinaryExpression(ExpressionType nodeType, QueryExpression left, QueryExpression right)
+    {
+        NodeType = nodeType;
+        Left = left;
+        Right = right;
+    }
+}
+
+/// <summary>
+/// 成员表达式
+/// </summary>
+public sealed class MemberExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.MemberAccess;
+    public string MemberName { get; }
+    public QueryExpression? Expression { get; }
+
+    public MemberExpression(string memberName, QueryExpression? expression = null)
+    {
+        MemberName = memberName;
+        Expression = expression;
+    }
+}
+
+/// <summary>
+/// 参数表达式
+/// </summary>
+public sealed class ParameterExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.Parameter;
+    public string Name { get; }
+
+    public ParameterExpression(string name)
+    {
+        Name = name;
+    }
+}
