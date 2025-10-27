@@ -11,7 +11,7 @@ public class PageHeader
     /// <summary>
     /// 页面头部大小（字节）
     /// </summary>
-    public const int Size = 32;
+    public const int Size = 41; // 1 + 4 + 4 + 4 + 2 + 2 + 4 + 4 + 8 + 8 = 41
 
     /// <summary>
     /// 页面类型
@@ -74,7 +74,7 @@ public class PageHeader
         NextPageID = 0;
         FreeBytes = 0;
         ItemCount = 0;
-        Version = 1;
+        Version = 0; // 按照测试期望
         Checksum = 0;
         var now = DateTime.UtcNow.Ticks;
         CreatedAt = now;

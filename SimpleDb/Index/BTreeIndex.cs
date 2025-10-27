@@ -80,8 +80,8 @@ public sealed class BTreeIndex : IDisposable
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        if (_unique && Contains(key, documentId))
-            return false; // 唯一索引冲突
+        if (_unique && Contains(key))
+            return false; // 唯一索引冲突 - 检查键是否已存在
 
         var result = InsertRecursive(_root!, key, documentId);
         if (result.NeedSplit)
@@ -117,8 +117,8 @@ public sealed class BTreeIndex : IDisposable
     {
         if (node.IsLeaf)
         {
-            var inserted = node.Insert(key, documentId);
-            return new InsertResult { Inserted = inserted, NeedSplit = node.IsFull() };
+            var needSplit = node.Insert(key, documentId);
+            return new InsertResult { Inserted = true, NeedSplit = needSplit };
         }
 
         // 内部节点，找到合适的子节点
@@ -556,7 +556,7 @@ public sealed class BTreeIndex : IDisposable
 /// <summary>
 /// 插入结果
 /// </summary>
-internal sealed class InsertResult
+public sealed class InsertResult
 {
     public bool Inserted { get; init; }
     public bool NeedSplit { get; init; }

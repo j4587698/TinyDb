@@ -41,6 +41,21 @@ public sealed class DiskStream : IDisposable
     }
 
     /// <summary>
+    /// 是否可读
+    /// </summary>
+    public bool IsReadable => _fileStream.CanRead;
+
+    /// <summary>
+    /// 是否可写
+    /// </summary>
+    public bool IsWritable => _fileStream.CanWrite;
+
+    /// <summary>
+    /// 是否可定位
+    /// </summary>
+    public bool IsSeekable => _fileStream.CanSeek;
+
+    /// <summary>
     /// 初始化磁盘流
     /// </summary>
     /// <param name="filePath">文件路径</param>

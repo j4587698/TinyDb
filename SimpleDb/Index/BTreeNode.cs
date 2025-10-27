@@ -5,7 +5,7 @@ namespace SimpleDb.Index;
 /// <summary>
 /// B+ 树节点
 /// </summary>
-internal sealed class BTreeNode
+public sealed class BTreeNode
 {
     private readonly List<IndexKey> _keys;
     private readonly List<BTreeNode> _children;
@@ -165,9 +165,10 @@ internal sealed class BTreeNode
         // 检查键是否已存在
         if (position < _keys.Count && _keys[position].Equals(key))
         {
-            // 键已存在，添加文档ID
+            // 键已存在，在相同键的位置插入新的键-文档对
+            _keys.Insert(position, key);
             _documentIds.Insert(position, documentId);
-            return false;
+            return _keys.Count > MaxKeys;
         }
 
         // 插入新键和文档ID
@@ -189,8 +190,21 @@ internal sealed class BTreeNode
             throw new InvalidOperationException("Cannot insert child into leaf node");
 
         var position = FindKeyPosition(key);
+
+        // 确保position在有效范围内
+        position = Math.Min(position, _keys.Count);
+
         _keys.Insert(position, key);
-        _children.Insert(position + 1, child);
+
+        // 对于子节点，插入位置应该是position+1或position
+        if (position < _children.Count)
+        {
+            _children.Insert(position + 1, child);
+        }
+        else
+        {
+            _children.Add(child);
+        }
 
         return _keys.Count > MaxKeys;
     }
@@ -211,14 +225,31 @@ internal sealed class BTreeNode
         if (position >= _keys.Count || !_keys[position].Equals(key))
             return false; // 键不存在
 
-        var docPosition = FindDocumentPosition(documentId);
-        if (docPosition == -1)
-            return false; // 文档ID不存在
+        // 查找该键对应的所有文档ID位置
+        var startPos = position;
+        while (startPos > 0 && _keys[startPos - 1].Equals(key))
+        {
+            startPos--;
+        }
 
-        _keys.RemoveAt(position);
-        _documentIds.RemoveAt(position);
+        var endPos = position;
+        while (endPos < _keys.Count && _keys[endPos].Equals(key))
+        {
+            endPos++;
+        }
 
-        return true;
+        // 在这个范围内查找要删除的文档ID
+        for (int i = startPos; i < endPos; i++)
+        {
+            if (_documentIds[i].Equals(documentId))
+            {
+                _keys.RemoveAt(i);
+                _documentIds.RemoveAt(i);
+                return true;
+            }
+        }
+
+        return false; // 文档ID不存在
     }
 
     /// <summary>
