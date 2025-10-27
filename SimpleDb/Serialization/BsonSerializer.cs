@@ -423,14 +423,13 @@ public sealed class BsonReader : IDisposable
     }
 
     /// <summary>
-    /// 读取 BSON 值
+    /// 读取 BSON 值（需要先读取类型字节）
     /// </summary>
+    /// <param name="type">已读取的 BSON 类型</param>
     /// <returns>BSON 值</returns>
-    public BsonValue ReadValue()
+    public BsonValue ReadValue(BsonType type)
     {
         ThrowIfDisposed();
-
-        var type = (BsonType)_reader.ReadByte();
 
         return type switch
         {
@@ -447,6 +446,17 @@ public sealed class BsonReader : IDisposable
             BsonType.End => throw new InvalidOperationException("Unexpected end marker"),
             _ => throw new NotSupportedException($"BSON type {type} is not supported")
         };
+    }
+
+    /// <summary>
+    /// 读取 BSON 值（包含类型字节）
+    /// </summary>
+    /// <returns>BSON 值</returns>
+    public BsonValue ReadValue()
+    {
+        ThrowIfDisposed();
+        var type = (BsonType)_reader.ReadByte();
+        return ReadValue(type);
     }
 
     /// <summary>
@@ -532,19 +542,7 @@ public sealed class BsonReader : IDisposable
     /// <returns>BSON 值</returns>
     private BsonValue ReadTypedValue(BsonType type)
     {
-        return type switch
-        {
-            BsonType.String => ReadString(),
-            BsonType.Int32 => ReadInt32(),
-            BsonType.Int64 => ReadInt64(),
-            BsonType.Double => ReadDouble(),
-            BsonType.Boolean => ReadBoolean(),
-            BsonType.ObjectId => ReadObjectId(),
-            BsonType.DateTime => ReadDateTime(),
-            BsonType.Document => new BsonDocumentValue(ReadDocument()),
-            BsonType.Array => new BsonArrayValue(ReadArray()),
-            _ => throw new NotSupportedException($"BSON type {type} is not supported")
-        };
+        return ReadValue(type);
     }
 
     /// <summary>

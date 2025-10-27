@@ -46,12 +46,12 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     bool ICollection<KeyValuePair<string, BsonValue>>.IsReadOnly => true;
 
     /// <summary>
-    /// 获取或设置指定键的值
+    /// 获取指定键的值
     /// </summary>
     public BsonValue this[string key]
     {
         get => _elements.TryGetValue(key, out var value) ? value : BsonNull.Value;
-        set => Set(key, value);
+        set => throw new NotSupportedException("BsonDocument is immutable. Use Set method to create a new document.");
     }
 
     /// <summary>
@@ -230,7 +230,19 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public override bool Equals(BsonValue? other)
     {
-        return other is BsonDocument otherDoc && _elements.Equals(otherDoc._elements);
+        if (other is not BsonDocument otherDoc) return false;
+        if (Count != otherDoc.Count) return false;
+
+        // 逐个比较键值对
+        foreach (var kvp in _elements)
+        {
+            if (!otherDoc._elements.TryGetValue(kvp.Key, out var otherValue) || !kvp.Value.Equals(otherValue))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

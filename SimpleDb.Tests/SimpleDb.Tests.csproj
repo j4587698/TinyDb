@@ -6,12 +6,13 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <PublishAot>true</PublishAot>
+      <IsTestProject>true</IsTestProject>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="TUnit" Version="0.13.18" />
-    <PackageReference Include="coverlet.collector" Version="6.0.2" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" />
+    <PackageReference Include="TUnit" Version="0.77.3" />
+      <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.0.1" />
   </ItemGroup>
 
   <ItemGroup>

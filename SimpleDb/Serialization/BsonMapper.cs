@@ -248,7 +248,7 @@ public static class BsonMapper
     {
         var type = value.GetType();
         var serializer = _serializers.GetOrAdd(type, _ => CreateSerializer(type));
-        return new BsonDocumentValue(serializer.Serialize(value));
+        return serializer.Serialize(value);
     }
 
     /// <summary>
@@ -259,10 +259,10 @@ public static class BsonMapper
     /// <returns>复杂类型值</returns>
     private static object? ConvertComplexTypeFromBsonValue(BsonValue bsonValue, Type targetType)
     {
-        if (bsonValue is BsonDocumentValue docValue)
+        if (bsonValue is BsonDocument doc)
         {
             var serializer = _serializers.GetOrAdd(targetType, _ => CreateSerializer(targetType));
-            return serializer.Deserialize(docValue.Value);
+            return serializer.Deserialize(doc);
         }
 
         throw new NotSupportedException($"Cannot convert BSON type {bsonValue.BsonType} to {targetType.Name}");
