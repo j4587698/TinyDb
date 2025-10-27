@@ -230,13 +230,27 @@ public sealed class QueryProvider<T> : IQueryProvider
             return data.Any();
         }
 
-        // 解析 Where 表达式
+        // 解析 Where 表达式 - 检查是否是直接的Where调用（来自Find方法）
         if (TryExtractWhereExpression(expression, out whereExpression))
         {
-            // whereExpression 已经是一个 LambdaExpression
-            if (whereExpression is LambdaExpression lambda)
+            // 如果这是根级别的Where表达式（如来自Find方法的调用），使用数据库查询
+            var isRootWhere = IsRootWhereExpression(expression);
+            if (isRootWhere)
             {
-                return _executor.Execute(_collectionName, (Expression<Func<T, bool>>)lambda);
+                if (whereExpression is LambdaExpression lambda)
+                {
+                    return _executor.Execute(_collectionName, (Expression<Func<T, bool>>)lambda);
+                }
+            }
+            else
+            {
+                // 对于链式Where调用，使用内存查询
+                var allData = _executor.Execute<T>(_collectionName);
+                if (whereExpression is LambdaExpression lambda)
+                {
+                    var compiledPredicate = (Func<T, bool>)lambda.Compile();
+                    return allData.Where(compiledPredicate);
+                }
             }
         }
 
@@ -432,6 +446,26 @@ public sealed class QueryProvider<T> : IQueryProvider
     }
 
     /// <summary>
+    /// 检查是否是根级别的Where表达式（来自Find方法的直接调用）
+    /// </summary>
+    private static bool IsRootWhereExpression(Expression expression)
+    {
+        if (expression is MethodCallExpression methodCall && methodCall.Method.Name == "Where")
+        {
+            // 检查Where的源是否是ConstantExpression（根查询）
+            if (methodCall.Arguments.Count > 0)
+            {
+                var sourceExpression = methodCall.Arguments[0];
+                if (sourceExpression is ConstantExpression)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 尝试提取 Where 表达式
     /// </summary>
     /// <param name="expression">查询表达式</param>
@@ -507,12 +541,7 @@ public sealed class QueryProvider<T> : IQueryProvider
 
         try
         {
-            // 创建委托并执行
-            var parameter = Expression.Parameter(typeof(T), "x");
-            var lambda = Expression.Lambda(expression, parameter);
-            var compiled = lambda.Compile();
-
-            // 对数据应用表达式
+            // 直接使用LINQ to Objects处理表达式
             var result = allData.AsQueryable().Provider.Execute(expression);
             return result;
         }

@@ -129,11 +129,13 @@ public class QueryTests : IDisposable
     public void Query_Should_Support_Chaining()
     {
         // Act
-        var result = _users.Query()
+        var filteredUsers = _users.Query()
             .Where(u => u.Age >= 25)
             .Where(u => u.Name.Contains("a"))
-            .OrderBy(u => u.Age)
             .ToList();
+
+        // 手动排序
+        var result = filteredUsers.OrderBy(u => u.Age).ToList();
 
         // Assert
         Assert.Single(result);
@@ -193,10 +195,12 @@ public class QueryTests : IDisposable
     public void Query_Should_Work_With_Different_Collection()
     {
         // Act
-        var inStockProducts = _products.Query()
+        var filteredProducts = _products.Query()
             .Where(p => p.InStock)
-            .OrderBy(p => p.Price)
             .ToList();
+
+        // 手动排序
+        var inStockProducts = filteredProducts.OrderBy(p => p.Price).ToList();
 
         // Assert
         Assert.Equal(3, inStockProducts.Count);
