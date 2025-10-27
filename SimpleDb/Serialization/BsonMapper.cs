@@ -314,8 +314,7 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
         var type = typeof(T);
 
         // 调试信息
-        Console.WriteLine($"[DEBUG] ObjectSerializer for {type.Name}");
-
+        
         _properties = type
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead && p.CanWrite)
@@ -486,8 +485,8 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
         {
             if (IsIgnoredProperty(property)) continue;
 
-            // 检查文档中是否包含对应的字段
-            string fieldName = property.Name;
+            // 使用与Serialize相同的属性名映射逻辑
+            string fieldName = GetPropertyName(property);
 
             // 如果这是ID属性，检查"_id"字段
             if (_idProperty != null && property.Name == _idProperty.Property.Name)
@@ -497,7 +496,8 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
 
             if (document.ContainsKey(fieldName))
             {
-                var value = BsonMapper.ConvertFromBsonValue(document[fieldName], property.PropertyType);
+                var bsonValue = document[fieldName];
+                var value = BsonMapper.ConvertFromBsonValue(bsonValue, property.PropertyType);
                 property.SetValue(obj, value);
             }
         }
@@ -523,7 +523,20 @@ public sealed class ObjectSerializer<T> : ObjectSerializer
     private static string GetPropertyName(PropertyInfo property)
     {
         var attribute = property.GetCustomAttribute<BsonElementAttribute>();
-        return attribute?.ElementName ?? property.Name;
+        return attribute?.ElementName ?? ToCamelCase(property.Name);
+    }
+
+    /// <summary>
+    /// 将PascalCase转换为camelCase
+    /// </summary>
+    /// <param name="input">输入字符串</param>
+    /// <returns>camelCase字符串</returns>
+    private static string ToCamelCase(string input)
+    {
+        if (string.IsNullOrEmpty(input) || char.IsLower(input[0]))
+            return input;
+
+        return char.ToLower(input[0]) + input.Substring(1);
     }
 }
 
