@@ -1,8 +1,10 @@
 using System;
 using System.Linq;
+using System.Diagnostics.CodeAnalysis;
 using SimpleDb.Core;
 using SimpleDb.Collections;
 using SimpleDb.Bson;
+using SimpleDb.Attributes;
 
 namespace SimpleDb.Demo;
 
@@ -17,6 +19,11 @@ public class Program
         {
             System.IO.File.Delete("demo.db");
         }
+
+        Console.WriteLine("=== 简化版SimpleDb AOT Demo ===");
+        Console.WriteLine("用户现在只需要添加一个[Entity]属性！");
+        Console.WriteLine("ID属性会自动识别'Id'、'_id'等标准名称。");
+        Console.WriteLine();
 
         // 创建数据库引擎
         var options = new SimpleDbOptions
@@ -44,7 +51,7 @@ public class Program
 
         // 更新数据
         Console.WriteLine("\n--- 更新数据 ---");
-        UpdateData(users, engine);
+        UpdateData(users);
 
         // 删除数据
         Console.WriteLine("\n--- 删除数据 ---");
@@ -101,7 +108,7 @@ public class Program
         Console.WriteLine($"复杂查询结果: {complexQuery.Count} 个用户");
     }
 
-    static void UpdateData(ILiteCollection<User> users, SimpleDbEngine engine)
+    static void UpdateData(ILiteCollection<User> users)
     {
         // 查找并更新第一个用户
         var user = users.Find(u => u.Name == "张三").FirstOrDefault();
@@ -143,9 +150,12 @@ public class Program
     }
 }
 
-public class User
+[Entity("users")]
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
+public partial class User
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
+
     public string Name { get; set; } = "";
     public int Age { get; set; }
     public string Email { get; set; } = "";
