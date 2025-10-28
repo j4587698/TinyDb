@@ -9,11 +9,36 @@ using SimpleDb.Index;
 namespace SimpleDb.Test;
 
 /// <summary>
-/// 自动索引功能测试程序
+/// 索引功能综合测试程序
 /// </summary>
 public class Program
 {
     public static async Task Main(string[] args)
+    {
+        Console.WriteLine("=== SimpleDb 索引功能综合测试 ===");
+        Console.WriteLine();
+
+        // 运行自动索引功能测试
+        await IndexFunctionTest.RunAsync();
+
+        Console.WriteLine("\n" + new string('=', 60));
+
+        // 运行索引使用情况测试
+        await IndexUsageTest.RunAsync();
+
+        Console.WriteLine("\n" + new string('=', 60));
+
+        // 运行索引调试测试
+        await IndexDebugTest.RunAsync();
+    }
+}
+
+/// <summary>
+/// 自动索引功能测试
+/// </summary>
+public static class IndexFunctionTest
+{
+    public static async Task RunAsync()
     {
         Console.WriteLine("=== SimpleDb 自动索引功能测试 ===");
         Console.WriteLine();

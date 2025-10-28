@@ -267,4 +267,14 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     {
         return new IndexKey(values);
     }
+
+    /// <summary>
+    /// 获取最小索引键（用于范围查询的下界）
+    /// </summary>
+    public static IndexKey MinValue => new IndexKey(new BsonString(""));
+
+    /// <summary>
+    /// 获取最大索引键（用于范围查询的上界）
+    /// </summary>
+    public static IndexKey MaxValue => new IndexKey(new BsonString(new string(char.MaxValue, 100)));
 }

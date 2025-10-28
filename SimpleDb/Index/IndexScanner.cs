@@ -24,6 +24,9 @@ public static class IndexScanner
 
         var indexManager = engine.GetIndexManager(collectionName);
 
+        // 自动创建主键索引（_id字段）
+        CreatePrimaryKeyIndex(indexManager);
+
         // 扫描单个属性索引
         ScanPropertyIndexes(indexManager, entityType);
 
@@ -155,6 +158,33 @@ public static class IndexScanner
         indexes.Sort((a, b) => a.Priority.CompareTo(b.Priority));
 
         return indexes;
+    }
+
+    /// <summary>
+    /// 创建主键索引
+    /// </summary>
+    /// <param name="indexManager">索引管理器</param>
+    private static void CreatePrimaryKeyIndex(IndexManager indexManager)
+    {
+        const string primaryKeyIndexName = "pk__id";
+
+        // 检查主键索引是否已存在
+        if (indexManager.IndexExists(primaryKeyIndexName))
+        {
+            return; // 主键索引已存在，无需重复创建
+        }
+
+        try
+        {
+            // 创建主键索引，_id字段是唯一的
+            indexManager.CreateIndex(primaryKeyIndexName, new[] { "_id" }, true);
+            Console.WriteLine($"✅ 自动创建主键索引: {primaryKeyIndexName} on _id (Unique=True)");
+        }
+        catch (Exception ex)
+        {
+            // 主键索引创建失败不应阻止系统启动，但需要记录警告
+            Console.WriteLine($"Warning: Failed to create primary key index {primaryKeyIndexName}: {ex.Message}");
+        }
     }
 }
 

@@ -276,7 +276,14 @@ public sealed class IndexManager : IDisposable
 
         foreach (var field in index.Fields)
         {
-            if (document.TryGetValue(field, out var value))
+            // 将C#属性名转换为BSON字段名（camelCase）
+            var bsonField = char.ToLowerInvariant(field[0]) + field.Substring(1);
+
+            if (document.TryGetValue(bsonField, out var value))
+            {
+                values.Add(value);
+            }
+            else if (document.TryGetValue(field, out value)) // 保持兼容性，也尝试原始字段名
             {
                 values.Add(value);
             }

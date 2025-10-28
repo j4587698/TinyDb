@@ -337,6 +337,28 @@ public sealed class BTreeIndex : IDisposable
     }
 
     /// <summary>
+    /// 精确查找文档ID
+    /// </summary>
+    /// <param name="key">要查找的键</param>
+    /// <returns>文档ID，如果未找到则返回null</returns>
+    public BsonValue? FindExact(IndexKey key)
+    {
+        ThrowIfDisposed();
+        if (key == null) throw new ArgumentNullException(nameof(key));
+
+        var node = FindLeafNode(key);
+        if (node == null) return null;
+
+        var index = node.FindKeyPosition(key);
+        if (index < node.KeyCount && node.GetKey(index).Equals(key))
+        {
+            return node.GetDocumentId(index);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// 查找包含指定键的叶子节点
     /// </summary>
     /// <param name="key">要查找的键</param>

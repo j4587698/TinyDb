@@ -109,7 +109,10 @@ internal enum QueryOperation
     LongCount,
     Any,
     First,
-    FirstOrDefault
+    FirstOrDefault,
+    Take,
+    Skip,
+    TakeSkip
 }
 
 internal static class QueryOperationResolver
@@ -125,9 +128,37 @@ internal static class QueryOperationResolver
                 nameof(Queryable.Any) => QueryOperation.Any,
                 nameof(Queryable.First) => QueryOperation.First,
                 nameof(Queryable.FirstOrDefault) => QueryOperation.FirstOrDefault,
+                nameof(Queryable.Take) => QueryOperation.Take,
+                nameof(Queryable.Skip) => QueryOperation.Skip,
                 "ToList" => QueryOperation.ToList,
-                _ => QueryOperation.Sequence
+                _ => DetermineComplexOperation(methodCall)
             };
+        }
+
+        return QueryOperation.Sequence;
+    }
+
+    /// <summary>
+    /// 确定复杂操作（如Take和Skip的组合）
+    /// </summary>
+    private static QueryOperation DetermineComplexOperation(MethodCallExpression methodCall)
+    {
+        // 检查是否是Take/Skip链式调用
+        if (methodCall.Arguments.Count > 0)
+        {
+            var argument = methodCall.Arguments[0];
+            if (argument is MethodCallExpression innerCall)
+            {
+                var innerOperation = Determine(innerCall);
+                var currentOperation = Determine(methodCall);
+
+                // 如果是Take->Skip或Skip->Take的组合
+                if ((innerOperation == QueryOperation.Take && currentOperation == QueryOperation.Skip) ||
+                    (innerOperation == QueryOperation.Skip && currentOperation == QueryOperation.Take))
+                {
+                    return QueryOperation.TakeSkip;
+                }
+            }
         }
 
         return QueryOperation.Sequence;

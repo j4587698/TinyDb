@@ -409,6 +409,18 @@ public sealed class SimpleDbEngine : IDisposable
             WriteHeader();
         }
 
+        // 更新索引 - 在插入文档后更新所有相关索引
+        try
+        {
+            var indexManager = GetIndexManager(collectionName);
+            indexManager?.InsertDocument(document, id);
+        }
+        catch (Exception ex)
+        {
+            // 索引更新失败不应影响文档插入，但需要记录警告
+            Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
+        }
+
         return id;
     }
 
@@ -526,6 +538,7 @@ public sealed class SimpleDbEngine : IDisposable
         var totalPages = _pageManager.TotalPages;
         uint targetPageId = 0;
         Page? targetPage = null;
+        BsonDocument? oldDocument = null;
 
         for (uint pageId = 1; pageId <= totalPages; pageId++)
         {
@@ -550,6 +563,7 @@ public sealed class SimpleDbEngine : IDisposable
                 {
                     targetPageId = pageId;
                     targetPage = page;
+                    oldDocument = existingDocument; // 保存旧文档用于索引更新
                     break;
                 }
             }
@@ -560,7 +574,7 @@ public sealed class SimpleDbEngine : IDisposable
             }
         }
 
-        if (targetPage == null) return 0; // 文档不存在
+        if (targetPage == null || oldDocument == null) return 0; // 文档不存在
 
         // 确保文档包含集合名称字段 - 这是关键修复！
         if (!document.TryGetValue("_collection", out _) ||
@@ -587,6 +601,18 @@ public sealed class SimpleDbEngine : IDisposable
         // 强制刷新到磁盘
         _pageManager.SavePage(targetPage, forceFlush: true);
 
+        // 更新索引 - 在更新文档后更新所有相关索引
+        try
+        {
+            var indexManager = GetIndexManager(collectionName);
+            indexManager?.UpdateDocument(oldDocument, document, id);
+        }
+        catch (Exception ex)
+        {
+            // 索引更新失败不应影响文档更新，但需要记录警告
+            Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
+        }
+
         return 1;
     }
 
@@ -603,6 +629,7 @@ public sealed class SimpleDbEngine : IDisposable
 
         // 查找并删除文档
         var totalPages = _pageManager.TotalPages;
+        BsonDocument? documentToDelete = null;
 
         for (uint pageId = 1; pageId <= totalPages; pageId++)
         {
@@ -619,6 +646,8 @@ public sealed class SimpleDbEngine : IDisposable
 
                 if (document.TryGetValue("_id", out var docId) && docId.Equals(id))
                 {
+                    documentToDelete = document; // 保存要删除的文档用于索引更新
+
                     // 释放页面
                     _pageManager.FreePage(pageId);
 
@@ -627,6 +656,18 @@ public sealed class SimpleDbEngine : IDisposable
                     {
                         _header.UsedPages--;
                         WriteHeader();
+                    }
+
+                    // 更新索引 - 在删除文档后更新所有相关索引
+                    try
+                    {
+                        var indexManager = GetIndexManager(collectionName);
+                        indexManager?.DeleteDocument(document, id);
+                    }
+                    catch (Exception ex)
+                    {
+                        // 索引更新失败不应影响文档删除，但需要记录警告
+                        Console.WriteLine($"Warning: Failed to update indexes for deleted document {id}: {ex.Message}");
                     }
 
                     return 1;
