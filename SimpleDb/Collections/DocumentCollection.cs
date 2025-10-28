@@ -401,11 +401,41 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// <param name="entity">实体</param>
     private void EnsureEntityHasId(T entity)
     {
+        // 尝试使用新的ID生成系统
+        if (AotIdAccessor<T>.GenerateIdIfNeeded(entity))
+        {
+            // ID生成成功，确保创建了索引
+            EnsureIdIndex();
+            return;
+        }
+
+        // 回退到原有的ObjectId生成逻辑
         var id = GetEntityId(entity);
         if (id == null || id.IsNull)
         {
             var newId = ObjectId.NewObjectId();
             UpdateEntityId(entity, newId);
+            EnsureIdIndex();
+        }
+    }
+
+    /// <summary>
+    /// 确保ID索引存在
+    /// </summary>
+    private void EnsureIdIndex()
+    {
+        try
+        {
+            var idProperty = SimpleDb.Serialization.EntityMetadata<T>.IdProperty;
+            if (idProperty != null)
+            {
+                var indexName = $"idx_{_name}_id";
+                _engine.EnsureIndex(_name, "_id", indexName, unique: true);
+            }
+        }
+        catch
+        {
+            // 索引创建失败不应影响插入操作
         }
     }
 

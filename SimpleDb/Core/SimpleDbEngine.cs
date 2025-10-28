@@ -4,6 +4,7 @@ using SimpleDb.Collections;
 using SimpleDb.Serialization;
 using SimpleDb.Storage;
 using SimpleDb.Bson;
+using SimpleDb.Index;
 using System.Runtime.CompilerServices;
 
 namespace SimpleDb.Core;
@@ -18,6 +19,7 @@ public sealed class SimpleDbEngine : IDisposable
     private readonly DiskStream _diskStream;
     private readonly PageManager _pageManager;
     private readonly ConcurrentDictionary<string, IDocumentCollection> _collections;
+    private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly object _lock = new();
     private DatabaseHeader _header;
     private bool _disposed;
@@ -62,6 +64,7 @@ public sealed class SimpleDbEngine : IDisposable
         _diskStream = new DiskStream(_filePath);
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
         _collections = new ConcurrentDictionary<string, IDocumentCollection>();
+        _indexManagers = new ConcurrentDictionary<string, IndexManager>();
 
         InitializeDatabase();
     }
@@ -752,6 +755,9 @@ public sealed class SimpleDbEngine : IDisposable
                 }
                 _collections.Clear();
 
+                // 释放索引管理器
+                DisposeIndexManagers();
+
                 // 释放页面管理器
                 _pageManager?.Dispose();
 
@@ -768,6 +774,54 @@ public sealed class SimpleDbEngine : IDisposable
                 _isInitialized = false;
             }
         }
+    }
+
+    /// <summary>
+    /// 确保索引存在
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="fieldName">字段名称</param>
+    /// <param name="indexName">索引名称</param>
+    /// <param name="unique">是否唯一索引</param>
+    /// <returns>是否创建或验证成功</returns>
+    public bool EnsureIndex(string collectionName, string fieldName, string indexName, bool unique = false)
+    {
+        ThrowIfDisposed();
+
+        if (string.IsNullOrEmpty(collectionName))
+            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
+        if (string.IsNullOrEmpty(fieldName))
+            throw new ArgumentException("Field name cannot be null or empty", nameof(fieldName));
+        if (string.IsNullOrEmpty(indexName))
+            throw new ArgumentException("Index name cannot be null or empty", nameof(indexName));
+
+        var indexManager = _indexManagers.GetOrAdd(collectionName, name => new IndexManager(name));
+        return indexManager.CreateIndex(indexName, new[] { fieldName }, unique);
+    }
+
+    /// <summary>
+    /// 获取指定集合的索引管理器
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <returns>索引管理器</returns>
+    internal IndexManager? GetIndexManager(string collectionName)
+    {
+        if (string.IsNullOrEmpty(collectionName)) return null;
+
+        _indexManagers.TryGetValue(collectionName, out var indexManager);
+        return indexManager;
+    }
+
+    /// <summary>
+    /// 释放索引管理器资源
+    /// </summary>
+    private void DisposeIndexManagers()
+    {
+        foreach (var indexManager in _indexManagers.Values)
+        {
+            indexManager.Dispose();
+        }
+        _indexManagers.Clear();
     }
 
     /// <summary>

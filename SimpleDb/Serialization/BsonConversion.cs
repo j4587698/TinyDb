@@ -6,7 +6,7 @@ namespace SimpleDb.Serialization;
 /// <summary>
 /// 提供在BSON值与CLR值之间转换的基础设施，避免运行时反射构造动态代码。
 /// </summary>
-internal static class BsonConversion
+public static class BsonConversion
 {
     public static BsonValue ToBsonValue(object value)
     {
@@ -19,13 +19,21 @@ internal static class BsonConversion
             long l => new BsonInt64(l),
             double d => new BsonDouble(d),
             float f => new BsonDouble(f),
-            decimal dec => new BsonDouble((double)dec),
+            decimal dec => new BsonDecimal128(dec),
             bool b => new BsonBoolean(b),
             DateTime dt => new BsonDateTime(dt),
-            Guid guid => new BsonBinary(guid.ToByteArray(), BsonBinary.BinarySubType.Uuid),
+            Guid guid => new BsonBinary(guid, BsonBinary.BinarySubType.Uuid),
             ObjectId oid => new BsonObjectId(oid),
             _ => new BsonString(value.ToString() ?? string.Empty)
         };
+    }
+
+    /// <summary>
+    /// 将值转换为BsonValue（用于源代码生成器）
+    /// </summary>
+    public static BsonValue ConvertToBsonValue(object value)
+    {
+        return ToBsonValue(value);
     }
 
     public static object? FromBsonValue(BsonValue bsonValue, Type targetType)
@@ -64,6 +72,7 @@ internal static class BsonConversion
             var t when t == typeof(decimal) =>
                 bsonValue switch
                 {
+                    BsonDecimal128 dec128 => dec128.Value,
                     BsonDouble dbl => Convert.ToDecimal(dbl.Value),
                     BsonInt32 i32 => i32.Value,
                     BsonInt64 i64 => i64.Value,

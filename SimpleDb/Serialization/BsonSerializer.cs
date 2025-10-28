@@ -190,6 +190,9 @@ public sealed class BsonWriter : IDisposable
             case BsonDateTime dt:
                 WriteDateTime(dt.Value);
                 break;
+            case BsonDecimal128 dec128:
+                WriteDecimal128(dec128.Value);
+                break;
             case BsonDocument doc:
                 WriteDocument(doc);
                 break;
@@ -457,6 +460,22 @@ public sealed class BsonWriter : IDisposable
     // public void WriteDecimal128(decimal value) { ... }
 
     /// <summary>
+    /// 写入 Decimal128 值
+    /// </summary>
+    /// <param name="value">Decimal128 值</param>
+    public void WriteDecimal128(decimal value)
+    {
+        ThrowIfDisposed();
+        // BSON Decimal128 使用 128 位十进制浮点数
+        // 这里我们将其存储为字符串以保持精度
+        _writer.Write((byte)BsonType.Decimal128);
+        var stringValue = value.ToString();
+        _writer.Write(stringValue.Length + 1); // Length includes null terminator
+        _writer.Write(Encoding.UTF8.GetBytes(stringValue));
+        _writer.Write((byte)0); // Null terminator
+    }
+
+    /// <summary>
     /// 写入时间戳
     /// </summary>
     /// <param name="value">时间戳值</param>
@@ -545,6 +564,7 @@ public sealed class BsonReader : IDisposable
             BsonType.Boolean => ReadBoolean(),
             BsonType.ObjectId => ReadObjectId(),
             BsonType.DateTime => ReadDateTime(),
+            BsonType.Decimal128 => ReadDecimal128(),
             BsonType.Document => ReadDocument(),
             BsonType.Array => ReadArray(),
             BsonType.Binary => ReadBinary(),
@@ -763,6 +783,28 @@ public sealed class BsonReader : IDisposable
         var unixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var dateTime = unixEpoch.AddMilliseconds(milliseconds);
         return new BsonDateTime(dateTime);
+    }
+
+    /// <summary>
+    /// 读取 Decimal128 值
+    /// </summary>
+    /// <returns>Decimal128 值</returns>
+    public BsonDecimal128 ReadDecimal128()
+    {
+        ThrowIfDisposed();
+        var length = _reader.ReadInt32();
+        var bytes = _reader.ReadBytes(length - 1); // 不包含 null 终止符
+        var nullTerminator = _reader.ReadByte();
+        if (nullTerminator != 0)
+        {
+            throw new InvalidOperationException("Decimal128 null terminator expected");
+        }
+        var stringValue = Encoding.UTF8.GetString(bytes);
+        if (decimal.TryParse(stringValue, out var decimalValue))
+        {
+            return new BsonDecimal128(decimalValue);
+        }
+        throw new InvalidOperationException($"Invalid Decimal128 value: {stringValue}");
     }
 
     /// <summary>

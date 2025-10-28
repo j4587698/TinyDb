@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using SimpleDb.Bson;
+using SimpleDb.IdGeneration;
 
 namespace SimpleDb.Serialization;
 
@@ -78,5 +79,20 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
             long l => l != 0,
             _ => true
         };
+    }
+
+    /// <summary>
+    /// 为实体生成ID（如果需要）
+    /// </summary>
+    /// <param name="entity">实体实例</param>
+    /// <returns>是否成功生成ID</returns>
+    public static bool GenerateIdIfNeeded(T entity)
+    {
+        if (entity == null) return false;
+
+        var idProperty = SimpleDb.Serialization.EntityMetadata<T>.IdProperty;
+        if (idProperty == null) return false;
+
+        return AutoIdGenerator.GenerateIdIfNeeded(entity, idProperty);
     }
 }

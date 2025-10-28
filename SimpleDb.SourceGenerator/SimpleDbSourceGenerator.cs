@@ -283,7 +283,7 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.AppendLine($"            return ConvertToBsonValue(entity.{idProp.Name});");
+                sb.AppendLine($"            return SimpleDb.Serialization.BsonConversion.ConvertToBsonValue(entity.{idProp.Name});");
             }
 
             sb.AppendLine("        }");
@@ -407,7 +407,7 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("            // 确保包含集合名称字段");
         sb.AppendLine("            if (!document.ContainsKey(\"_collection\"))");
         sb.AppendLine("            {");
-        sb.AppendLine($"                document[\"_collection\"] = \"{classInfo.CollectionName ?? classInfo.Name}\";");
+        sb.AppendLine($"                document = document.Set(\"_collection\", \"{classInfo.CollectionName ?? classInfo.Name}\");");
         sb.AppendLine("            }");
 
         sb.AppendLine("            return document;");
@@ -575,7 +575,7 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
 
         foreach (var property in classInfo.Properties)
         {
-            sb.AppendLine($"            doc[\"{property.Name}\"] = ConvertToBsonValue(entity.{property.Name});");
+            sb.AppendLine($"            doc[\"{property.Name}\"] = SimpleDb.Serialization.BsonConversion.ConvertToBsonValue(entity.{property.Name});");
         }
 
         sb.AppendLine("            return doc;");
@@ -780,6 +780,15 @@ public class PropertyInfo
 public static partial class SourceGeneratorHelpers
 {
     /// <summary>
+    /// 检查属性是否为ID属性
+    /// </summary>
+    private static bool IsIdProperty(PropertyInfo prop)
+    {
+        return prop.IsId || prop.Name.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
+               prop.Name.Equals("_id", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// 生成属性序列化代码
     /// </summary>
     public static string GeneratePropertySerialization(PropertyInfo prop)
@@ -787,20 +796,23 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyType = prop.Type;
 
+        // 检查是否是ID属性，如果是则映射到_id字段
+        var bsonFieldName = IsIdProperty(prop) ? "_id" : propertyName;
+
         return propertyType switch
         {
-            "string" => $"document[\"{propertyName}\"] = string.IsNullOrEmpty(entity.{propertyName}) ? BsonNull.Value : new BsonString(entity.{propertyName});",
-            "int" or "Int32" => $"document[\"{propertyName}\"] = new BsonInt32(entity.{propertyName});",
-            "long" or "Int64" => $"document[\"{propertyName}\"] = new BsonInt64(entity.{propertyName});",
-            "double" or "Double" => $"document[\"{propertyName}\"] = new BsonDouble(entity.{propertyName});",
-            "float" or "Single" => $"document[\"{propertyName}\"] = new BsonDouble(entity.{propertyName});",
-            "decimal" or "Decimal" => $"document[\"{propertyName}\"] = new BsonDecimal128(entity.{propertyName});",
-            "bool" or "Boolean" => $"document[\"{propertyName}\"] = new BsonBoolean(entity.{propertyName});",
-            "DateTime" => $"document[\"{propertyName}\"] = new BsonDateTime(entity.{propertyName});",
-            "Guid" => $"document[\"{propertyName}\"] = new BsonBinary(entity.{propertyName});",
-            "ObjectId" => $"document[\"{propertyName}\"] = new BsonObjectId(entity.{propertyName});",
-            _ when propertyType.EndsWith("?") => $"document[\"{propertyName}\"] = entity.{propertyName} == null ? BsonNull.Value : ConvertToBsonValue(entity.{propertyName});",
-            _ => $"document[\"{propertyName}\"] = ConvertToBsonValue(entity.{propertyName});"
+            "string" => $"document = document.Set(\"{bsonFieldName}\", string.IsNullOrEmpty(entity.{propertyName}) ? BsonNull.Value : new BsonString(entity.{propertyName}));",
+            "int" or "Int32" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt32(entity.{propertyName}));",
+            "long" or "Int64" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt64(entity.{propertyName}));",
+            "double" or "Double" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyName}));",
+            "float" or "Single" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyName}));",
+            "decimal" or "Decimal" => $"document = document.Set(\"{bsonFieldName}\", new BsonDecimal128(entity.{propertyName}));",
+            "bool" or "Boolean" => $"document = document.Set(\"{bsonFieldName}\", new BsonBoolean(entity.{propertyName}));",
+            "DateTime" => $"document = document.Set(\"{bsonFieldName}\", new BsonDateTime(entity.{propertyName}));",
+            "Guid" => $"document = document.Set(\"{bsonFieldName}\", new BsonBinary(entity.{propertyName}));",
+            "ObjectId" => $"document = document.Set(\"{bsonFieldName}\", new BsonObjectId(entity.{propertyName}));",
+            _ when propertyType.EndsWith("?") => $"document = document.Set(\"{bsonFieldName}\", entity.{propertyName} == null ? BsonNull.Value : ConvertToBsonValue(entity.{propertyName}));",
+            _ => $"document = document.Set(\"{bsonFieldName}\", ConvertToBsonValue(entity.{propertyName}));"
         };
     }
 
@@ -812,20 +824,23 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyType = prop.Type;
 
+        // 检查是否是ID属性，如果是则从_id字段读取
+        var bsonFieldName = IsIdProperty(prop) ? "_id" : propertyName;
+
         return propertyType switch
         {
-            "string" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonString str{propertyName}) entity.{propertyName} = str{propertyName}.Value;",
-            "int" or "Int32" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value;",
-            "long" or "Int64" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value;",
-            "double" or "Double" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value;",
-            "float" or "Single" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = (float)dbl{propertyName}.Value;",
-            "decimal" or "Decimal" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDecimal128 dec{propertyName}) entity.{propertyName} = dec{propertyName}.Value;",
-            "bool" or "Boolean" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value;",
-            "DateTime" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value;",
-            "Guid" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = guid{propertyName}.Value;",
-            "ObjectId" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value;",
+            "string" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonString str{propertyName}) entity.{propertyName} = str{propertyName}.Value;",
+            "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value;",
+            "long" or "Int64" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value;",
+            "double" or "Double" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value;",
+            "float" or "Single" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = (float)dbl{propertyName}.Value;",
+            "decimal" or "Decimal" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDecimal128 dec{propertyName}) entity.{propertyName} = dec{propertyName}.Value;",
+            "bool" or "Boolean" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value;",
+            "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value;",
+            "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = new Guid(guid{propertyName}.Bytes);",
+            "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value;",
             _ when propertyType.EndsWith("?") => GenerateNullablePropertyDeserialization(prop),
-            _ => $"entity.{propertyName} = ConvertFromBsonValue<{propertyType}>(document[\"{propertyName}\"]);"
+            _ => $"entity.{propertyName} = ConvertFromBsonValue<{propertyType}>(document[\"{bsonFieldName}\"]);"
         };
     }
 
@@ -837,16 +852,19 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var underlyingType = prop.Type.Replace("?", "");
 
+        // 检查是否是ID属性，如果是则从_id字段读取
+        var bsonFieldName = IsIdProperty(prop) ? "_id" : propertyName;
+
         return underlyingType switch
         {
-            "int" or "Int32" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value; else entity.{propertyName} = null;",
-            "long" or "Int64" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value; else entity.{propertyName} = null;",
-            "double" or "Double" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value; else entity.{propertyName} = null;",
-            "bool" or "Boolean" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value; else entity.{propertyName} = null;",
-            "DateTime" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value; else entity.{propertyName} = null;",
-            "Guid" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = guid{propertyName}.Value; else entity.{propertyName} = null;",
-            "ObjectId" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value; else entity.{propertyName} = null;",
-            _ => $"entity.{propertyName} = document[\"{propertyName}\"].IsNull ? null : ConvertFromBsonValue<{underlyingType}>(document[\"{propertyName}\"]);"
+            "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value; else entity.{propertyName} = null;",
+            "long" or "Int64" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value; else entity.{propertyName} = null;",
+            "double" or "Double" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value; else entity.{propertyName} = null;",
+            "bool" or "Boolean" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value; else entity.{propertyName} = null;",
+            "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value; else entity.{propertyName} = null;",
+            "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = new Guid(guid{propertyName}.Bytes); else entity.{propertyName} = null;",
+            "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value; else entity.{propertyName} = null;",
+            _ => $"entity.{propertyName} = document[\"{bsonFieldName}\"].IsNull ? null : ConvertFromBsonValue<{underlyingType}>(document[\"{bsonFieldName}\"]);"
         };
     }
 }

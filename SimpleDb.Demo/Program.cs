@@ -10,7 +10,7 @@ namespace SimpleDb.Demo;
 
 public class Program
 {
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         Console.WriteLine("=== SimpleDb AOT Demo ===");
 
@@ -59,6 +59,10 @@ public class Program
 
         Console.WriteLine("\n=== AOT Demo 完成！ ===");
         Console.WriteLine($"数据库统计: {engine.GetStatistics()}");
+
+        // 运行自动ID生成功能演示
+        Console.WriteLine("\n" + new string('=', 50));
+        await AutoIdSimpleDemo.RunAsync();
     }
 
     static void InsertTestData(ILiteCollection<User> users)

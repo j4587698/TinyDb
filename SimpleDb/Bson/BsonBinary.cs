@@ -59,6 +59,11 @@ public sealed class BsonBinary : BsonValue
     public BinarySubType SubType { get; }
 
     /// <summary>
+    /// 值（兼容性属性）
+    /// </summary>
+    public byte[] Value => Bytes;
+
+    /// <summary>
     /// BSON 类型
     /// </summary>
     public override BsonType BsonType => BsonType.Binary;
@@ -76,6 +81,17 @@ public sealed class BsonBinary : BsonValue
     public BsonBinary(byte[] bytes, BinarySubType subType = BinarySubType.Generic)
     {
         Bytes = bytes ?? throw new ArgumentNullException(nameof(bytes));
+        SubType = subType;
+    }
+
+    /// <summary>
+    /// 初始化 BsonBinary 从 Guid
+    /// </summary>
+    /// <param name="guid">Guid值</param>
+    /// <param name="subType">子类型</param>
+    public BsonBinary(Guid guid, BinarySubType subType = BinarySubType.Uuid)
+    {
+        Bytes = guid.ToByteArray();
         SubType = subType;
     }
 

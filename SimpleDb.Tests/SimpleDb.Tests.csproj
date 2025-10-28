@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SimpleDb\SimpleDb.csproj" />
+    <ProjectReference Include="..\SimpleDb.Demo\SimpleDb.Demo.csproj" />
   </ItemGroup>
 
 </Project>
