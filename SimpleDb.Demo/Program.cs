@@ -63,6 +63,14 @@ public class Program
         // 运行自动ID生成功能演示
         Console.WriteLine("\n" + new string('=', 50));
         await AutoIdSimpleDemo.RunAsync();
+
+        // 运行事务功能演示
+        Console.WriteLine("\n" + new string('=', 50));
+        await TransactionDemo.RunAsync();
+
+        // 运行索引功能演示
+        Console.WriteLine("\n" + new string('=', 50));
+        await IndexDemo.RunAsync();
     }
 
     static void InsertTestData(ILiteCollection<User> users)

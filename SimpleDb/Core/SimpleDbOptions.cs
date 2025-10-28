@@ -86,6 +86,16 @@ public sealed class SimpleDbOptions
     public int MaxTransactionSize { get; set; } = 10000;
 
     /// <summary>
+    /// 最大并发事务数量
+    /// </summary>
+    public int MaxTransactions { get; set; } = 100;
+
+    /// <summary>
+    /// 事务超时时间
+    /// </summary>
+    public TimeSpan TransactionTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// 是否启用同步写入
     /// </summary>
     public bool SynchronousWrites { get; set; } = true;
@@ -134,6 +144,13 @@ public sealed class SimpleDbOptions
         // 验证事务大小
         if (MaxTransactionSize <= 0)
             throw new ArgumentException("Max transaction size must be positive", nameof(MaxTransactionSize));
+
+        // 验证事务配置
+        if (MaxTransactions <= 0)
+            throw new ArgumentException("Max transactions must be positive", nameof(MaxTransactions));
+
+        if (TransactionTimeout <= TimeSpan.Zero)
+            throw new ArgumentException("Transaction timeout must be positive", nameof(TransactionTimeout));
     }
 
     /// <summary>
@@ -167,6 +184,8 @@ public sealed class SimpleDbOptions
             EnableEncryption = EnableEncryption,
             EncryptionKey = EncryptionKey?.ToArray(),
             MaxTransactionSize = MaxTransactionSize,
+            MaxTransactions = MaxTransactions,
+            TransactionTimeout = TransactionTimeout,
             SynchronousWrites = SynchronousWrites
         };
     }

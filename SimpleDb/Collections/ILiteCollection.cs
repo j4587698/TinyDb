@@ -1,4 +1,6 @@
 using SimpleDb.Bson;
+using SimpleDb.Core;
+using SimpleDb.Index;
 
 namespace SimpleDb.Collections;
 
@@ -127,6 +129,18 @@ public interface ILiteCollection<T> where T : class
     /// <param name="entity">要插入或更新的实体</param>
     /// <returns>操作类型和影响的文档数量</returns>
     (UpdateType UpdateType, int Count) Upsert(T entity);
+
+    /// <summary>
+    /// 获取数据库引擎实例
+    /// </summary>
+    /// <returns>数据库引擎实例</returns>
+    SimpleDbEngine Database { get; }
+
+    /// <summary>
+    /// 获取索引管理器
+    /// </summary>
+    /// <returns>索引管理器实例</returns>
+    IndexManager GetIndexManager();
 }
 
 /// <summary>

@@ -20,6 +20,7 @@ public sealed class SimpleDbEngine : IDisposable
     private readonly PageManager _pageManager;
     private readonly ConcurrentDictionary<string, IDocumentCollection> _collections;
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
+    private readonly TransactionManager _transactionManager;
     private readonly object _lock = new();
     private DatabaseHeader _header;
     private bool _disposed;
@@ -65,6 +66,7 @@ public sealed class SimpleDbEngine : IDisposable
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
         _collections = new ConcurrentDictionary<string, IDocumentCollection>();
         _indexManagers = new ConcurrentDictionary<string, IndexManager>();
+        _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
 
         InitializeDatabase();
     }
@@ -281,6 +283,28 @@ public sealed class SimpleDbEngine : IDisposable
         });
     }
 
+    /// <summary>
+    /// 开始事务
+    /// </summary>
+    /// <returns>事务实例</returns>
+    public ITransaction BeginTransaction()
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        return _transactionManager.BeginTransaction();
+    }
+
+    /// <summary>
+    /// 获取事务管理器统计信息
+    /// </summary>
+    /// <returns>事务管理器统计信息</returns>
+    public TransactionManagerStatistics GetTransactionStatistics()
+    {
+        ThrowIfDisposed();
+        return _transactionManager.GetStatistics();
+    }
+
+    
     /// <summary>
     /// 注册集合
     /// </summary>
@@ -755,6 +779,9 @@ public sealed class SimpleDbEngine : IDisposable
                 }
                 _collections.Clear();
 
+                // 释放事务管理器
+                _transactionManager?.Dispose();
+
                 // 释放索引管理器
                 DisposeIndexManagers();
 
@@ -804,12 +831,12 @@ public sealed class SimpleDbEngine : IDisposable
     /// </summary>
     /// <param name="collectionName">集合名称</param>
     /// <returns>索引管理器</returns>
-    internal IndexManager? GetIndexManager(string collectionName)
+    public IndexManager GetIndexManager(string collectionName)
     {
-        if (string.IsNullOrEmpty(collectionName)) return null;
+        ThrowIfDisposed();
+        if (string.IsNullOrEmpty(collectionName)) throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
 
-        _indexManagers.TryGetValue(collectionName, out var indexManager);
-        return indexManager;
+        return _indexManagers.GetOrAdd(collectionName, name => new IndexManager(name));
     }
 
     /// <summary>

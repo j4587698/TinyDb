@@ -4,6 +4,7 @@ using SimpleDb.Bson;
 using SimpleDb.Core;
 using SimpleDb.Serialization;
 using SimpleDb.Query;
+using SimpleDb.Index;
 
 namespace SimpleDb.Collections;
 
@@ -471,6 +472,22 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         {
             // 如果实体没有ID属性，忽略更新
         }
+    }
+
+    /// <summary>
+    /// 获取数据库引擎实例
+    /// </summary>
+    /// <returns>数据库引擎实例</returns>
+    public SimpleDbEngine Database => _engine;
+
+    /// <summary>
+    /// 获取索引管理器
+    /// </summary>
+    /// <returns>索引管理器实例</returns>
+    public IndexManager GetIndexManager()
+    {
+        ThrowIfDisposed();
+        return _engine.GetIndexManager(_name);
     }
 
     /// <summary>

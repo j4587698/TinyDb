@@ -113,6 +113,9 @@ public sealed class BTreeNode
         _children = new List<BTreeNode>(maxKeys + 1);
         _documentIdLists = new List<List<BsonValue>>(maxKeys);
         _isLeaf = isLeaf;
+
+        // 估算数据大小
+        DataSize = isLeaf ? maxKeys * 64 : maxKeys * 32;
     }
 
     /// <summary>
@@ -254,6 +257,7 @@ public sealed class BTreeNode
     {
         var mid = _keys.Count / 2;
         var newNode = new BTreeNode(MaxKeys, _isLeaf);
+        newNode.Parent = Parent; // 新节点的父节点与当前节点相同
 
         if (_isLeaf)
         {
@@ -391,10 +395,20 @@ public sealed class BTreeNode
     public bool IsFull() => _keys.Count >= MaxKeys;
 
     /// <summary>
+    /// 父节点
+    /// </summary>
+    public BTreeNode? Parent { get; set; }
+
+    /// <summary>
+    /// 数据大小（字节）
+    /// </summary>
+    public int DataSize { get; private set; }
+
+    /// <summary>
     /// 检查节点是否需要合并
     /// </summary>
     /// <returns>是否需要合并</returns>
-    public bool NeedsMerge() => _keys.Count < MinKeys;
+    public bool NeedsMerge() => _keys.Count < MinKeys && Parent != null;
 
     /// <summary>
     /// 获取节点的统计信息
