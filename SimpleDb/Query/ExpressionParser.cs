@@ -16,7 +16,7 @@ public sealed class ExpressionParser
     /// <returns>查询表达式</returns>
     public QueryExpression Parse<T>(Expression<Func<T, bool>> expression)
     {
-        if (expression == null) throw new ArgumentNullException(nameof(expression));
+        if (expression == null) return null!;
         return ParseExpression(expression.Body);
     }
 

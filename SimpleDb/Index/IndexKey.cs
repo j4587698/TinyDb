@@ -60,6 +60,40 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     }
 
     /// <summary>
+    /// 获取 BSON 类型的比较顺序
+    /// 基于 MongoDB 的类型比较顺序
+    /// </summary>
+    /// <param name="bsonType">BSON 类型</param>
+    /// <returns>类型顺序</returns>
+    private static int GetTypeOrder(BsonType bsonType)
+    {
+        return bsonType switch
+        {
+            BsonType.MinKey => 0,
+            BsonType.Null => 1,
+            BsonType.Boolean => 2,
+            BsonType.Int32 => 3,
+            BsonType.Int64 => 4,
+            BsonType.Double => 5,
+            BsonType.Decimal128 => 6,
+            BsonType.String => 7,
+            BsonType.ObjectId => 8,
+            BsonType.DateTime => 9,
+            BsonType.Binary => 10,
+            BsonType.Array => 11,
+            BsonType.Document => 12,
+            BsonType.RegularExpression => 13,
+            BsonType.JavaScript => 14,
+            BsonType.JavaScriptWithScope => 15,
+            BsonType.Timestamp => 16,
+            BsonType.Symbol => 17,
+            BsonType.Undefined => 18,
+            BsonType.MaxKey => 19,
+            _ => 20 // 未知类型
+        };
+    }
+
+    /// <summary>
     /// 比较两个 BSON 值
     /// </summary>
     /// <param name="left">左值</param>
@@ -78,7 +112,7 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
 
         if (leftType != rightType)
         {
-            return leftType.CompareTo(rightType);
+            return GetTypeOrder(leftType).CompareTo(GetTypeOrder(rightType));
         }
 
         // 同类型比较

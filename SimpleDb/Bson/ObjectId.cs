@@ -321,7 +321,19 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         if (conversionType == typeof(string)) return ToString();
         if (conversionType == typeof(DateTime)) return Timestamp;
         if (conversionType == typeof(byte[])) return ToByteArray().ToArray();
-        throw new InvalidCastException();
+        if (conversionType == typeof(ObjectId)) return this;
+        if (conversionType == typeof(object)) return this;
+
+        // Handle nullable types
+        if (conversionType.IsGenericType && conversionType.GetGenericTypeDefinition() == typeof(Nullable<>))
+        {
+            var underlyingType = Nullable.GetUnderlyingType(conversionType);
+            if (underlyingType == typeof(ObjectId)) return this;
+            if (underlyingType == typeof(string)) return ToString();
+            if (underlyingType == typeof(DateTime)) return Timestamp;
+        }
+
+        throw new InvalidCastException($"Cannot convert ObjectId to {conversionType.Name}");
     }
 
     ushort IConvertible.ToUInt16(IFormatProvider? provider) => throw new InvalidCastException();

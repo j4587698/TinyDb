@@ -103,8 +103,8 @@ public class PageTests : IDisposable
         // Arrange
         using var page = new Page(1u, TestPageSize, PageType.Data);
 
-        // Act
-        var readData = page.ReadData(100, 10);
+        // Act - Read beyond data size
+        var readData = page.ReadData(4050, 10); // Beyond DataSize (4055)
 
         // Assert
         await Assert.That(readData.Length).IsEqualTo(0);

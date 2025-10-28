@@ -34,8 +34,10 @@ public sealed class QueryExecutor
     public IEnumerable<T> Execute<T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class
     {
-        if (string.IsNullOrEmpty(collectionName))
-            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
+        if (collectionName == null)
+            throw new ArgumentNullException(nameof(collectionName));
+        if (collectionName.Length == 0)
+            throw new ArgumentException("Collection name cannot be empty", nameof(collectionName));
 
         // 获取所有文档
         var documents = _engine.FindAll(collectionName);
@@ -167,6 +169,7 @@ public sealed class QueryExecutor
             ConstantExpression constExpr => constExpr.Value,
             MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
             ParameterExpression => entity,
+            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }

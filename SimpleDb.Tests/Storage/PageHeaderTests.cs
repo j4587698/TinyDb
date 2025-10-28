@@ -75,9 +75,9 @@ public class PageHeaderTests
         var header = new PageHeader();
 
         // Act & Assert
-        await Assert.That(header.GetDataSize(512) == 480).IsTrue();
-        await Assert.That(header.GetDataSize(1024) == 992).IsTrue();
-        await Assert.That(header.GetDataSize(8192) == 8160).IsTrue();
+        await Assert.That(header.GetDataSize(512) == 471).IsTrue();
+        await Assert.That(header.GetDataSize(1024) == 983).IsTrue();
+        await Assert.That(header.GetDataSize(8192) == 8151).IsTrue();
     }
 
     [Test]

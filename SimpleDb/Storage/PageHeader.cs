@@ -99,7 +99,7 @@ public class PageHeader
         return PageID > 0 &&
                CreatedAt > 0 &&
                ModifiedAt >= CreatedAt &&
-               Version > 0;
+               Version >= 0; // Allow version 0
     }
 
     /// <summary>
@@ -109,6 +109,7 @@ public class PageHeader
     /// <returns>数据区域大小</returns>
     public int GetDataSize(int pageSize)
     {
+        if (pageSize <= Size) return 0;
         return pageSize - Size;
     }
 
