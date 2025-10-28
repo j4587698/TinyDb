@@ -72,7 +72,7 @@ public class BsonDocumentTests
 
         // Assert
         await Assert.That(existingResult).IsTrue();
-        await Assert.That(existingValue.ToString()).IsEqualTo("value");
+        await Assert.That(existingValue!.ToString()).IsEqualTo("value");
         await Assert.That(missingResult).IsFalse();
     }
 

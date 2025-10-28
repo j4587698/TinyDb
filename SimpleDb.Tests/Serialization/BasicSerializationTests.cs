@@ -72,7 +72,7 @@ public class BasicSerializationTests
     public async Task BsonMapper_Should_Handle_Null_Document()
     {
         // Act
-        var user = BsonMapper.ToObject<User>(null);
+        var user = BsonMapper.ToObject<User>(null!);
 
         // Assert
         await Assert.That(user).IsNull();
@@ -149,7 +149,8 @@ public class BasicSerializationTests
         var document = BsonMapper.ToDocument(user);
         var bytes = BsonSerializer.Serialize(document);
         var deserializedDocument = BsonSerializer.Deserialize(bytes) as BsonDocument;
-        var finalUser = BsonMapper.ToObject<User>(deserializedDocument);
+        await Assert.That(deserializedDocument).IsNotNull();
+        var finalUser = BsonMapper.ToObject<User>(deserializedDocument!);
 
         // Assert
         await Assert.That(finalUser).IsNotNull();
@@ -176,13 +177,13 @@ public class BasicSerializationTests
             .Select(bytes => BsonSerializer.Deserialize(bytes) as BsonDocument)
             .Where(doc => doc != null)
             .ToList();
-        var finalUsers = deserializedDocuments.Select(BsonMapper.ToObject<User>).ToList();
+        var finalUsers = deserializedDocuments.Select(doc => BsonMapper.ToObject<User>(doc!)).ToList();
 
         // Assert
         await Assert.That(finalUsers.Count).IsEqualTo(3);
         await Assert.That(finalUsers.All(u => u != null)).IsTrue();
-        await Assert.That(finalUsers.All(u => !string.IsNullOrEmpty(u.Name))).IsTrue();
-        await Assert.That(finalUsers.All(u => u.Age > 0)).IsTrue();
+        await Assert.That(finalUsers.All(u => !string.IsNullOrEmpty(u!.Name))).IsTrue();
+        await Assert.That(finalUsers.All(u => u!.Age > 0)).IsTrue();
     }
 
     [Test]
@@ -219,12 +220,13 @@ public class BasicSerializationTests
             .ToList();
 
         // Act - Parallel serialization
-        var tasks = users.Select(async user =>
+        var tasks = users.Select(user =>
         {
             var doc = BsonMapper.ToDocument(user);
             var bytes = BsonSerializer.Serialize(doc);
-            var deserializedDoc = BsonSerializer.Deserialize(bytes) as BsonDocument;
-            return BsonMapper.ToObject<User>(deserializedDoc);
+            var deserializedDoc = BsonSerializer.Deserialize(bytes) as BsonDocument
+                ?? throw new InvalidOperationException("Deserialized document cannot be null.");
+            return Task.FromResult(BsonMapper.ToObject<User>(deserializedDoc)!);
         }).ToArray();
 
         var results = await Task.WhenAll(tasks);
@@ -232,7 +234,7 @@ public class BasicSerializationTests
         // Assert
         await Assert.That(results.Length).IsEqualTo(10);
         await Assert.That(results.All(u => u != null)).IsTrue();
-        await Assert.That(results.All(u => u.Name.StartsWith("User "))).IsTrue();
+        await Assert.That(results.All(u => u!.Name.StartsWith("User "))).IsTrue();
     }
 
     [Test]

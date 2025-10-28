@@ -263,7 +263,7 @@ public sealed class SimpleDbEngine : IDisposable
     /// <typeparam name="T">文档类型</typeparam>
     /// <param name="name">集合名称</param>
     /// <returns>文档集合</returns>
-    public ILiteCollection<T> GetCollection<T>(string? name = null) where T : class
+    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(string? name = null) where T : class, new()
     {
         ThrowIfDisposed();
         EnsureInitialized();
@@ -776,7 +776,7 @@ public sealed class SimpleDbEngine : IDisposable
     /// <typeparam name="T">文档类型</typeparam>
     /// <returns>文档集合</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ILiteCollection<T> GetCollectionAOT<T>() where T : class
+    public ILiteCollection<T> GetCollectionAOT<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>() where T : class, new()
     {
         return GetCollection<T>();
     }

@@ -1,234 +1,167 @@
-using System.Collections.Concurrent;
-using System.Reflection;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using SimpleDb.Bson;
 
 namespace SimpleDb.Serialization;
 
 /// <summary>
-/// AOT兼容的BSON映射器 - 使用源代码生成器生成的代码
+/// AOT友好的BSON映射器，根据源生成器提供的辅助适配器进行序列化与反序列化。
 /// </summary>
 public static class AotBsonMapper
 {
-    /// <summary>
-    /// 将实体转换为BSON文档（AOT兼容）
-    /// </summary>
-    /// <typeparam name="T">实体类型</typeparam>
-    /// <param name="entity">实体实例</param>
-    /// <returns>BSON文档</returns>
-    public static BsonDocument ToDocument<T>(T entity)
-        where T : class
+    public static BsonDocument ToDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity)
+        where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 使用源代码生成器生成的AOT兼容方法
-        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
-        var helperType = typeof(T).Assembly.GetType(helperTypeName);
-        if (helperType != null)
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            var method = helperType.GetMethod("ToDocument", new[] { typeof(T) });
-            if (method != null)
-            {
-                return (BsonDocument)method.Invoke(null, new object[] { entity })!;
-            }
+            return adapter.ToDocument(entity);
         }
 
-        // 如果没有生成的代码，回退到基本实现
         return FallbackToDocument(entity);
     }
 
-    /// <summary>
-    /// 从BSON文档创建实体（AOT兼容）
-    /// </summary>
-    /// <typeparam name="T">实体类型</typeparam>
-    /// <param name="document">BSON文档</param>
-    /// <returns>实体实例</returns>
-    public static T FromDocument<T>(BsonDocument document)
+    public static T FromDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BsonDocument document)
         where T : class, new()
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        // 使用源代码生成器生成的AOT兼容方法
-        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
-        var helperType = typeof(T).Assembly.GetType(helperTypeName);
-        if (helperType != null)
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            var method = helperType.GetMethod("FromDocument", new[] { typeof(BsonDocument) });
-            if (method != null)
-            {
-                return (T)method.Invoke(null, new object[] { document })!;
-            }
+            return adapter.FromDocument(document);
         }
 
-        // 如果没有生成的代码，回退到基本实现
         return FallbackFromDocument<T>(document);
     }
 
-    /// <summary>
-    /// 获取实体的ID值（AOT兼容）
-    /// </summary>
-    /// <typeparam name="T">实体类型</typeparam>
-    /// <param name="entity">实体实例</param>
-    /// <returns>ID值</returns>
-    public static BsonValue GetId<T>(T entity)
-        where T : class
+    public static BsonValue GetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity)
+        where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 使用源代码生成器生成的AOT兼容方法
-        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
-        var helperType = typeof(T).Assembly.GetType(helperTypeName);
-        if (helperType != null)
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            var method = helperType.GetMethod("GetId", new[] { typeof(T) });
-            if (method != null)
-            {
-                return (BsonValue)method.Invoke(null, new object[] { entity })!;
-            }
+            return adapter.GetId(entity);
         }
 
-        // 如果没有生成的代码，返回null
-        return BsonNull.Value;
+        var idProperty = EntityMetadata<T>.IdProperty;
+        if (idProperty == null)
+        {
+            return BsonNull.Value;
+        }
+
+        var value = idProperty.GetValue(entity);
+        return value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
     }
 
-    /// <summary>
-    /// 设置实体的ID值（AOT兼容）
-    /// </summary>
-    /// <typeparam name="T">实体类型</typeparam>
-    /// <param name="entity">实体实例</param>
-    /// <param name="id">ID值</param>
-    public static void SetId<T>(T entity, BsonValue id)
-        where T : class
+    public static void SetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, BsonValue id)
+        where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 使用源代码生成器生成的AOT兼容方法
-        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
-        var helperType = typeof(T).Assembly.GetType(helperTypeName);
-        if (helperType != null)
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            var method = helperType.GetMethod("SetId", new[] { typeof(T), typeof(BsonValue) });
-            if (method != null)
-            {
-                method.Invoke(null, new object[] { entity, id });
-                return;
-            }
+            adapter.SetId(entity, id);
+            return;
         }
+
+        var idProperty = EntityMetadata<T>.IdProperty;
+        if (idProperty == null || id == null || id.IsNull)
+        {
+            return;
+        }
+
+        var converted = BsonConversion.FromBsonValue(id, idProperty.PropertyType);
+        idProperty.SetValue(entity, converted);
     }
 
-    /// <summary>
-    /// 获取属性值（AOT兼容）
-    /// </summary>
-    /// <typeparam name="T">实体类型</typeparam>
-    /// <param name="entity">实体实例</param>
-    /// <param name="propertyName">属性名称</param>
-    /// <returns>属性值</returns>
-    public static object? GetPropertyValue<T>(T entity, string propertyName)
-        where T : class
+    public static object? GetPropertyValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, string propertyName)
+        where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
+        if (string.IsNullOrWhiteSpace(propertyName)) throw new ArgumentNullException(nameof(propertyName));
 
-        // 使用源代码生成器生成的AOT兼容方法
-        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
-        var helperType = typeof(T).Assembly.GetType(helperTypeName);
-        if (helperType != null)
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            var method = helperType.GetMethod("GetPropertyValue", new[] { typeof(T), typeof(string) });
-            if (method != null)
-            {
-                return method.Invoke(null, new object[] { entity, propertyName });
-            }
+            return adapter.GetPropertyValue(entity, propertyName);
         }
 
-        // 如果没有生成的代码，回退到反射
-        var property = typeof(T).GetProperty(propertyName);
-        return property?.GetValue(entity);
+        return EntityMetadata<T>.TryGetProperty(propertyName, out var property)
+            ? property.GetValue(entity)
+            : null;
     }
 
-    /// <summary>
-    /// 回退的序列化实现（仅用于未生成代码的情况）
-    /// </summary>
-    private static BsonDocument FallbackToDocument<T>(T entity)
-        where T : class
+    private static BsonDocument FallbackToDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity)
+        where T : class, new()
     {
         var document = new BsonDocument();
-        var type = typeof(T);
 
-        foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        var idProperty = EntityMetadata<T>.IdProperty;
+        if (idProperty != null)
         {
-            var value = prop.GetValue(entity);
-            if (value != null)
+            var id = idProperty.GetValue(entity);
+            if (id != null)
             {
-                document[prop.Name] = ConvertValueToBson(value);
+                document = document.Set("_id", BsonConversion.ToBsonValue(id));
             }
+        }
+
+        foreach (var property in EntityMetadata<T>.Properties)
+        {
+            if (idProperty != null && property.Name == idProperty.Name)
+            {
+                continue;
+            }
+
+            var value = property.GetValue(entity);
+
+            var key = ToCamelCase(property.Name);
+            var bsonValue = value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
+            document = document.Set(key, bsonValue);
         }
 
         return document;
     }
 
-    /// <summary>
-    /// 回退的反序列化实现（仅用于未生成代码的情况）
-    /// </summary>
-    private static T FallbackFromDocument<T>(BsonDocument document)
+    private static T FallbackFromDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BsonDocument document)
         where T : class, new()
     {
         var entity = new T();
-        var type = typeof(T);
 
-        foreach (var kvp in document)
+        var idProperty = EntityMetadata<T>.IdProperty;
+        var propertyMap = EntityMetadata<T>.Properties.ToDictionary(prop => ToCamelCase(prop.Name));
+
+        foreach (var (key, bsonValue) in document)
         {
-            var prop = type.GetProperty(kvp.Key);
-            if (prop != null && prop.CanWrite)
+            if (key == "_id" && idProperty != null)
             {
-                var value = ConvertBsonToValue(kvp.Value, prop.PropertyType);
-                prop.SetValue(entity, value);
+                AotIdAccessor<T>.SetId(entity, bsonValue);
+                continue;
             }
+
+            if (!propertyMap.TryGetValue(key, out var property) || !property.CanWrite)
+            {
+                continue;
+            }
+
+            if (bsonValue == null || bsonValue.IsNull)
+            {
+                property.SetValue(entity, null);
+                continue;
+            }
+
+            var value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
+            property.SetValue(entity, value);
         }
 
         return entity;
     }
 
-    /// <summary>
-    /// 将值转换为BSON值
-    /// </summary>
-    private static BsonValue ConvertValueToBson(object value)
+    private static string ToCamelCase(string name)
     {
-        return value switch
-        {
-            string str => new BsonString(str),
-            int i => new BsonInt32(i),
-            long l => new BsonInt64(l),
-            double d => new BsonDouble(d),
-            float f => new BsonDouble(f),
-            decimal dec => new BsonDouble((double)dec),
-            bool b => new BsonBoolean(b),
-            DateTime dt => new BsonDateTime(dt),
-            Guid guid => new BsonBinary(guid.ToByteArray()),
-            ObjectId oid => new BsonObjectId(oid),
-            null => BsonNull.Value,
-            _ => new BsonString(value.ToString()!)
-        };
-    }
-
-    /// <summary>
-    /// 将BSON值转换为指定类型
-    /// </summary>
-    private static object? ConvertBsonToValue(BsonValue bsonValue, Type targetType)
-    {
-        if (bsonValue.IsNull) return null;
-
-        return targetType switch
-        {
-            var t when t == typeof(string) => bsonValue is BsonString str ? str.Value : bsonValue.ToString(),
-            var t when t == typeof(int) => bsonValue is BsonInt32 i32 ? i32.Value : Convert.ToInt32(bsonValue.ToString()),
-            var t when t == typeof(long) => bsonValue is BsonInt64 i64 ? i64.Value : Convert.ToInt64(bsonValue.ToString()),
-            var t when t == typeof(double) => bsonValue is BsonDouble dbl ? dbl.Value : Convert.ToDouble(bsonValue.ToString()),
-            var t when t == typeof(float) => bsonValue is BsonDouble dbl ? (float)dbl.Value : Convert.ToSingle(bsonValue.ToString()),
-            var t when t == typeof(decimal) => bsonValue is BsonDouble dbl ? (decimal)dbl.Value : Convert.ToDecimal(bsonValue.ToString()),
-            var t when t == typeof(bool) => bsonValue is BsonBoolean bl ? bl.Value : Convert.ToBoolean(bsonValue.ToString()),
-            var t when t == typeof(DateTime) => bsonValue is BsonDateTime dt ? dt.Value : Convert.ToDateTime(bsonValue.ToString()),
-            var t when t == typeof(Guid) => bsonValue is BsonBinary bin ? new Guid(bin.Bytes) : Guid.NewGuid(),
-            var t when t == typeof(ObjectId) => bsonValue is BsonObjectId oid ? oid.Value : ObjectId.Empty,
-            _ => bsonValue.ToString()
-        };
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
     }
 }

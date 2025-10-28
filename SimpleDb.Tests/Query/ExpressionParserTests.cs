@@ -34,7 +34,7 @@ public class ExpressionParserTests
         var parser = new ExpressionParser();
 
         // Act
-        var result = parser.Parse<TestPerson>(null);
+        var result = parser.Parse<TestPerson>(null!);
 
         // Assert
         await Assert.That(result).IsNull();

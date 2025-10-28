@@ -9,14 +9,21 @@ public class PageTypeTests
     [Test]
     public async Task PageType_Should_Have_Correct_Values()
     {
-        // Assert
-        await Assert.That((byte)PageType.Empty == 0x00).IsTrue();
-        await Assert.That((byte)PageType.Header == 0x01).IsTrue();
-        await Assert.That((byte)PageType.Collection == 0x02).IsTrue();
-        await Assert.That((byte)PageType.Data == 0x03).IsTrue();
-        await Assert.That((byte)PageType.Index == 0x04).IsTrue();
-        await Assert.That((byte)PageType.Journal == 0x05).IsTrue();
-        await Assert.That((byte)PageType.Extension == 0x06).IsTrue();
+        var expectedValues = new Dictionary<PageType, byte>
+        {
+            [PageType.Empty] = 0x00,
+            [PageType.Header] = 0x01,
+            [PageType.Collection] = 0x02,
+            [PageType.Data] = 0x03,
+            [PageType.Index] = 0x04,
+            [PageType.Journal] = 0x05,
+            [PageType.Extension] = 0x06
+        };
+
+        foreach (var (pageType, value) in expectedValues)
+        {
+            await Assert.That((byte)pageType).IsEqualTo(value);
+        }
     }
 
     [Test]
@@ -29,7 +36,7 @@ public class PageTypeTests
         var byteValue = (byte)pageType;
 
         // Assert
-        await Assert.That(byteValue == 0x03).IsTrue();
+        await Assert.That(byteValue).IsEqualTo((byte)0x03);
     }
 
     [Test]
@@ -42,7 +49,7 @@ public class PageTypeTests
         var pageType = (PageType)byteValue;
 
         // Assert
-        await Assert.That(pageType == PageType.Index).IsTrue();
+        await Assert.That(pageType).IsEqualTo(PageType.Index);
     }
 
     [Test]

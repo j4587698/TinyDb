@@ -125,9 +125,9 @@ public class BsonArrayTests
 
         // Assert
         await Assert.That(enumeratedItems.Count).IsEqualTo(3);
-        await Assert.That(enumeratedItems[0].ToString()).IsEqualTo("item1");
-        await Assert.That(enumeratedItems[1].ToString()).IsEqualTo("item2");
-        await Assert.That(enumeratedItems[2].ToString()).IsEqualTo("item3");
+        await Assert.That(enumeratedItems[0]!.ToString()).IsEqualTo("item1");
+        await Assert.That(enumeratedItems[1]!.ToString()).IsEqualTo("item2");
+        await Assert.That(enumeratedItems[2]!.ToString()).IsEqualTo("item3");
     }
 
     [Test]
@@ -197,8 +197,10 @@ public class BsonArrayTests
         await Assert.That(array[0].IsArray).IsTrue();
 
         var retrievedArray = array[0] as BsonArray;
-        await Assert.That(retrievedArray.Count).IsEqualTo(3);
-        await Assert.That(retrievedArray[0].ToInt32(null)).IsEqualTo(1);
+        await Assert.That(retrievedArray).IsNotNull();
+        var nonNullArray = retrievedArray!;
+        await Assert.That(nonNullArray.Count).IsEqualTo(3);
+        await Assert.That(nonNullArray[0]!.ToInt32(null)).IsEqualTo(1);
     }
 
     [Test]

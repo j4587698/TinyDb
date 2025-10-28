@@ -215,7 +215,7 @@ public class DiskStreamTests : IDisposable
     }
 
     [Test]
-    public async Task UnlockRegion_Should_Work_Correctly()
+    public Task UnlockRegion_Should_Work_Correctly()
     {
         // Arrange
         using var diskStream = new DiskStream(_testFilePath);
@@ -223,6 +223,8 @@ public class DiskStreamTests : IDisposable
 
         // Act & Assert - Should not throw
         diskStream.UnlockRegion(lockHandle);
+
+        return Task.CompletedTask;
     }
 
     [Test]

@@ -39,8 +39,8 @@ public sealed class BsonTimestamp : BsonValue
     /// <param name="increment">增量计数器</param>
     public BsonTimestamp(int timestamp, int increment)
     {
-        if (increment < 0 || increment > 0xFFFFFFFF)
-            throw new ArgumentOutOfRangeException(nameof(increment), "Increment must be between 0 and 2^32-1");
+        if (increment < 0)
+            throw new ArgumentOutOfRangeException(nameof(increment), "Increment must be non-negative");
 
         Value = ((long)timestamp << 32) | (uint)increment;
     }

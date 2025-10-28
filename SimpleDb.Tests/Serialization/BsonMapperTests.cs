@@ -71,7 +71,7 @@ public class BsonMapperTests
     public async Task ToObject_Should_Return_Null_For_Null_Document()
     {
         // Act
-        var user = BsonMapper.ToObject<User>(null);
+        var user = BsonMapper.ToObject<User>(null!);
 
         // Assert
         await Assert.That(user).IsNull();

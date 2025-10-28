@@ -38,20 +38,21 @@ public class PageHeaderTests
         header.Version = 1u;
 
         // Assert
-        await Assert.That(header.PageType == PageType.Data).IsTrue();
-        await Assert.That(header.PageID == 42u).IsTrue();
-        await Assert.That(header.PrevPageID == 10u).IsTrue();
-        await Assert.That(header.NextPageID == 20u).IsTrue();
-        await Assert.That(header.FreeBytes == 1000).IsTrue();
-        await Assert.That(header.ItemCount == 5).IsTrue();
-        await Assert.That(header.Version == 1u).IsTrue();
+        await Assert.That(header.PageType).IsEqualTo(PageType.Data);
+        await Assert.That(header.PageID).IsEqualTo(42u);
+        await Assert.That(header.PrevPageID).IsEqualTo(10u);
+        await Assert.That(header.NextPageID).IsEqualTo(20u);
+        await Assert.That((int)header.FreeBytes).IsEqualTo(1000);
+        await Assert.That((int)header.ItemCount).IsEqualTo(5);
+        await Assert.That((uint)header.Version).IsEqualTo(1u);
     }
 
     [Test]
     public async Task GetSize_Should_Return_Header_Size()
     {
         // Act & Assert
-        await Assert.That(PageHeader.Size == 41).IsTrue();
+        var size = PageHeader.Size;
+        await Assert.That(size).IsEqualTo(41);
     }
 
     [Test]
@@ -65,7 +66,7 @@ public class PageHeaderTests
         var dataSize = header.GetDataSize(pageSize);
 
         // Assert
-        await Assert.That(dataSize == pageSize - PageHeader.Size).IsTrue();
+        await Assert.That(dataSize).IsEqualTo(pageSize - PageHeader.Size);
     }
 
     [Test]
@@ -75,9 +76,12 @@ public class PageHeaderTests
         var header = new PageHeader();
 
         // Act & Assert
-        await Assert.That(header.GetDataSize(512) == 471).IsTrue();
-        await Assert.That(header.GetDataSize(1024) == 983).IsTrue();
-        await Assert.That(header.GetDataSize(8192) == 8151).IsTrue();
+        var size512 = header.GetDataSize(512);
+        var size1024 = header.GetDataSize(1024);
+        var size8192 = header.GetDataSize(8192);
+        await Assert.That(size512).IsEqualTo(471);
+        await Assert.That(size1024).IsEqualTo(983);
+        await Assert.That(size8192).IsEqualTo(8151);
     }
 
     [Test]

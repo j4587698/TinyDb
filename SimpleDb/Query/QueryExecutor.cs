@@ -1,8 +1,8 @@
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using SimpleDb.Bson;
 using SimpleDb.Core;
+using SimpleDb.Serialization;
 
 namespace SimpleDb.Query;
 
@@ -31,8 +31,8 @@ public sealed class QueryExecutor
     /// <param name="collectionName">集合名称</param>
     /// <param name="expression">查询表达式</param>
     /// <returns>查询结果</returns>
-    public IEnumerable<T> Execute<T>(string collectionName, Expression<Func<T, bool>>? expression = null)
-        where T : class
+    public IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
+        where T : class, new()
     {
         // 立即验证参数，不延迟执行
         if (collectionName == null)
@@ -78,8 +78,8 @@ public sealed class QueryExecutor
     /// <param name="expression">查询表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>是否匹配</returns>
-    private static bool EvaluateExpression<T>(QueryExpression expression, T entity)
-        where T : class
+    private static bool EvaluateExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
+        where T : class, new()
     {
         return expression switch
         {
@@ -114,8 +114,8 @@ public sealed class QueryExecutor
     /// <param name="expression">二元表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static bool EvaluateBinaryExpression<T>(BinaryExpression expression, T entity)
-        where T : class
+    private static bool EvaluateBinaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BinaryExpression expression, T entity)
+        where T : class, new()
     {
         var leftValue = EvaluateExpressionValue(expression.Left, entity);
         var rightValue = EvaluateExpressionValue(expression.Right, entity);
@@ -141,8 +141,8 @@ public sealed class QueryExecutor
     /// <param name="expression">成员表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static bool EvaluateMemberExpression<T>(MemberExpression expression, T entity)
-        where T : class
+    private static bool EvaluateMemberExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
+        where T : class, new()
     {
         var value = GetMemberValue(expression, entity);
 
@@ -162,8 +162,8 @@ public sealed class QueryExecutor
     /// <param name="expression">表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static object? EvaluateExpressionValue<T>(QueryExpression expression, T entity)
-        where T : class
+    private static object? EvaluateExpressionValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
+        where T : class, new()
     {
         return expression switch
         {
@@ -182,31 +182,17 @@ public sealed class QueryExecutor
     /// <param name="expression">成员表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>成员值</returns>
-    private static object? GetMemberValue<T>(MemberExpression expression, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T entity)
-        where T : class
+    private static object? GetMemberValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
+        where T : class, new()
     {
-        try
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            // 尝试使用AotBsonMapper的GetPropertyValue方法
-            return AotBsonMapper.GetPropertyValue(entity, expression.MemberName);
+            return adapter.GetPropertyValue(entity, expression.MemberName);
         }
-        catch
-        {
-            // 如果AotBsonMapper失败，回退到基本反射（仅在必要时）
-            var propertyInfo = typeof(T).GetProperty(expression.MemberName);
-            if (propertyInfo != null)
-            {
-                return propertyInfo.GetValue(entity);
-            }
 
-            var fieldInfo = typeof(T).GetField(expression.MemberName);
-            if (fieldInfo != null)
-            {
-                return fieldInfo.GetValue(entity);
-            }
-
-            throw new NotSupportedException($"Member '{expression.MemberName}' not found on type {typeof(T).Name}");
-        }
+        return EntityMetadata<T>.TryGetProperty(expression.MemberName, out var property)
+            ? property.GetValue(entity)
+            : null;
     }
 
     /// <summary>
@@ -216,8 +202,8 @@ public sealed class QueryExecutor
     /// <param name="expression">函数表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static bool EvaluateFunctionExpression<T>(FunctionExpression expression, T entity)
-        where T : class
+    private static bool EvaluateFunctionExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
+        where T : class, new()
     {
         return expression.FunctionName switch
         {
@@ -235,8 +221,8 @@ public sealed class QueryExecutor
     /// <param name="expression">函数表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static bool EvaluateContainsFunction<T>(FunctionExpression expression, T entity)
-        where T : class
+    private static bool EvaluateContainsFunction<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
+        where T : class, new()
     {
         // 获取目标值（左值）
         var targetValue = EvaluateExpressionValue(expression.Target, entity);
@@ -272,8 +258,8 @@ public sealed class QueryExecutor
     /// <param name="expression">函数表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static bool EvaluateStartsWithFunction<T>(FunctionExpression expression, T entity)
-        where T : class
+    private static bool EvaluateStartsWithFunction<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
+        where T : class, new()
     {
         // 获取目标值（左值）
         var targetValue = EvaluateExpressionValue(expression.Target, entity);
@@ -296,8 +282,8 @@ public sealed class QueryExecutor
     /// <param name="expression">函数表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>评估结果</returns>
-    private static bool EvaluateEndsWithFunction<T>(FunctionExpression expression, T entity)
-        where T : class
+    private static bool EvaluateEndsWithFunction<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
+        where T : class, new()
     {
         // 获取目标值（左值）
         var targetValue = EvaluateExpressionValue(expression.Target, entity);

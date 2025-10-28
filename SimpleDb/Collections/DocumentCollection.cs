@@ -1,5 +1,5 @@
-using System.Linq.Expressions;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq.Expressions;
 using SimpleDb.Bson;
 using SimpleDb.Core;
 using SimpleDb.Serialization;
@@ -11,7 +11,7 @@ namespace SimpleDb.Collections;
 /// 文档集合实现
 /// </summary>
 /// <typeparam name="T">文档类型</typeparam>
-public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollection where T : class
+public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T> : ILiteCollection<T>, IDocumentCollection where T : class, new()
 {
     private readonly SimpleDbEngine _engine;
     private readonly string _name;
