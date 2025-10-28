@@ -3,6 +3,8 @@ using SimpleDb.Core;
 using SimpleDb.Query;
 using SimpleDb.Bson;
 using SimpleDb.Collections;
+using SimpleDb.Attributes;
+using SimpleDb.Tests.TestEntities;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -39,17 +41,6 @@ public class QueryableTests : IDisposable
                 // Ignore cleanup errors
             }
         }
-    }
-
-    // 测试实体类
-    public class TestProduct
-    {
-        public ObjectId? Id { get; set; }
-        public string? Name { get; set; }
-        public decimal Price { get; set; }
-        public string? Category { get; set; }
-        public bool InStock { get; set; }
-        public DateTime CreatedAt { get; set; }
     }
 
     [Test]
