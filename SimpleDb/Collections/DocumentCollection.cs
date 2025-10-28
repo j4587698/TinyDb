@@ -5,6 +5,7 @@ using SimpleDb.Core;
 using SimpleDb.Serialization;
 using SimpleDb.Query;
 using SimpleDb.Index;
+using SimpleDb.Attributes;
 
 namespace SimpleDb.Collections;
 
@@ -44,6 +45,24 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _name = name ?? throw new ArgumentNullException(nameof(name));
         _queryExecutor = new QueryExecutor(engine);
+
+        // 自动扫描并创建基于属性的索引
+        CreateAutoIndexes();
+    }
+
+    /// <summary>
+    /// 创建自动索引
+    /// </summary>
+    private void CreateAutoIndexes()
+    {
+        try
+        {
+            IndexScanner.ScanAndCreateIndexes(_engine, typeof(T), _name);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Failed to create auto indexes for collection {_name}: {ex.Message}");
+        }
     }
 
     /// <summary>

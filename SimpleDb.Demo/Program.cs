@@ -71,6 +71,10 @@ public class Program
         // 运行索引功能演示
         Console.WriteLine("\n" + new string('=', 50));
         await IndexDemo.RunAsync();
+
+        // 运行自动索引功能演示
+        Console.WriteLine("\n" + new string('=', 50));
+        await AutoIndexDemo.RunAsync();
     }
 
     static void InsertTestData(ILiteCollection<User> users)
