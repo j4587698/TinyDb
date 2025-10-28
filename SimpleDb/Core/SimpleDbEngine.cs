@@ -405,15 +405,21 @@ public sealed class SimpleDbEngine : IDisposable
             try
             {
                 var page = _pageManager.GetPage(pageId);
+                // 跳过非数据页面和空页面
                 if (page.PageType != PageType.Data) continue;
+                if (page.Header.ItemCount == 0) continue; // 空页面没有有效数据
 
                 var dataSize = page.DataSize - page.Header.FreeBytes;
-                if (dataSize <= 0) continue;
+                if (dataSize <= 0) continue; // 没有数据
 
                 var documentData = page.ReadData(0, dataSize);
                 var document = BsonSerializer.DeserializeDocument(documentData);
 
-                if (document.TryGetValue("_id", out var docId) && docId.Equals(id))
+                // 按集合名称和ID过滤
+                if (document.TryGetValue("_collection", out var collectionValue) &&
+                    collectionValue is BsonString collectionStr &&
+                    collectionStr.Value == collectionName &&
+                    document.TryGetValue("_id", out var docId) && docId.Equals(id))
                 {
                     return document;
                 }
@@ -446,10 +452,12 @@ public sealed class SimpleDbEngine : IDisposable
             try
             {
                 var page = _pageManager.GetPage(pageId);
+                // 跳过非数据页面和空页面
                 if (page.PageType != PageType.Data) continue;
+                if (page.Header.ItemCount == 0) continue; // 空页面没有有效数据
 
                 var dataSize = page.DataSize - page.Header.FreeBytes;
-                if (dataSize <= 0) continue;
+                if (dataSize <= 0) continue; // 没有数据
 
                 var documentData = page.ReadData(0, dataSize);
                 var document = BsonSerializer.DeserializeDocument(documentData);
@@ -487,41 +495,70 @@ public sealed class SimpleDbEngine : IDisposable
             throw new ArgumentException("Document must have _id field for update", nameof(document));
         }
 
-        // 查找现有文档
-        var existingDocument = FindById(collectionName, id);
-        if (existingDocument == null) return 0;
+        // 查找现有文档并获取其页面位置
+        var totalPages = _pageManager.TotalPages;
+        uint targetPageId = 0;
+        Page? targetPage = null;
 
-        // 删除旧文档
-        DeleteDocument(collectionName, id);
-
-        // 直接插入新文档（不再生成新的_id）
-        // 序列化文档
-        var documentData = BsonSerializer.SerializeDocument(document);
-
-        // 分配数据页面并写入
-        var page = _pageManager.NewPage(PageType.Data);
-        var offset = 0;
-
-        // 如果文档太大，需要分页存储（简化实现，实际需要更复杂的逻辑）
-        if (documentData.Length > page.DataSize)
+        for (uint pageId = 1; pageId <= totalPages; pageId++)
         {
-            throw new InvalidOperationException($"Document is too large: {documentData.Length} bytes, max {page.DataSize} bytes");
+            try
+            {
+                var page = _pageManager.GetPage(pageId);
+                // 跳过非数据页面和空页面
+                if (page.PageType != PageType.Data) continue;
+                if (page.Header.ItemCount == 0) continue;
+
+                var dataSize = page.DataSize - page.Header.FreeBytes;
+                if (dataSize <= 0) continue; // 没有数据
+
+                var documentData = page.ReadData(0, dataSize);
+                var existingDocument = BsonSerializer.DeserializeDocument(documentData);
+
+                // 按集合名称和ID过滤
+                if (existingDocument.TryGetValue("_collection", out var collectionValue) &&
+                    collectionValue is BsonString collectionStr &&
+                    collectionStr.Value == collectionName &&
+                    existingDocument.TryGetValue("_id", out var docId) && docId.Equals(id))
+                {
+                    targetPageId = pageId;
+                    targetPage = page;
+                    break;
+                }
+            }
+            catch (Exception)
+            {
+                // 忽略损坏的页面，继续搜索
+                continue;
+            }
         }
 
-        page.WriteData(offset, documentData);
-        page.UpdateStats((ushort)(page.DataSize - documentData.Length), 1);
-        _pageManager.SavePage(page, _options.SynchronousWrites);
+        if (targetPage == null) return 0; // 文档不存在
 
-        // 更新统计信息：DeleteDocument减少了UsedPages，NewPage可能重用或创建新页面
-        // 如果NewPage重用了空闲页面，UsedPages保持不变；如果创建了新页面，需要增加UsedPages
-        lock (_lock)
+        // 确保文档包含集合名称字段 - 这是关键修复！
+        if (!document.TryGetValue("_collection", out _) ||
+            !(document["_collection"] is BsonString existingCollectionStr) ||
+            existingCollectionStr.Value != collectionName)
         {
-            // 检查是否是新创建的页面（而不是重用的空闲页面）
-            // 简化处理：总是增加UsedPages，因为NewPage可能创建了新页面
-            // 实际实现中应该检查页面是否来自空闲队列
-            _header.UsedPages++;
-            WriteHeader();
+            document = document.Set("_collection", collectionName);
         }
+
+        // 序列化新文档
+        var newDocumentData = BsonSerializer.SerializeDocument(document);
+
+        // 如果新文档太大，需要分页存储（简化实现，实际需要更复杂的逻辑）
+        if (newDocumentData.Length > targetPage.DataSize)
+        {
+            throw new InvalidOperationException($"Document is too large: {newDocumentData.Length} bytes, max {targetPage.DataSize} bytes");
+        }
+
+        // 直接在原页面覆盖更新
+        targetPage.WriteData(0, newDocumentData);
+        targetPage.UpdateStats((ushort)(targetPage.DataSize - newDocumentData.Length), 1);
+        targetPage.UpdateChecksum();
+
+        // 强制刷新到磁盘
+        _pageManager.SavePage(targetPage, forceFlush: true);
 
         return 1;
     }

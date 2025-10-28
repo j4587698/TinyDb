@@ -172,8 +172,11 @@ public sealed class ExpressionParser
         if (methodCall.Object == null || methodCall.Arguments.Count != 1)
             throw new InvalidOperationException("StartsWith method must have one argument");
 
-        // 简化实现：暂时不支持
-        throw new NotSupportedException("StartsWith method is not yet implemented");
+        var targetExpression = ParseExpression(methodCall.Object);
+        var argumentExpression = ParseExpression(methodCall.Arguments[0]);
+
+        // 创建一个表示StartsWith操作的函数表达式
+        return new FunctionExpression("StartsWith", targetExpression, argumentExpression);
     }
 
     /// <summary>
@@ -186,8 +189,11 @@ public sealed class ExpressionParser
         if (methodCall.Object == null || methodCall.Arguments.Count != 1)
             throw new InvalidOperationException("EndsWith method must have one argument");
 
-        // 简化实现：暂时不支持
-        throw new NotSupportedException("EndsWith method is not yet implemented");
+        var targetExpression = ParseExpression(methodCall.Object);
+        var argumentExpression = ParseExpression(methodCall.Arguments[0]);
+
+        // 创建一个表示EndsWith操作的函数表达式
+        return new FunctionExpression("EndsWith", targetExpression, argumentExpression);
     }
 
     /// <summary>

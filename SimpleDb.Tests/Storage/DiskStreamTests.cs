@@ -96,16 +96,19 @@ public class DiskStreamTests : IDisposable
         // Arrange
         var testData = new byte[] { 1, 2, 3, 4, 5 };
 
-        using var diskStream = new DiskStream(_testFilePath);
+        byte[] fileContent;
+        {
+            using var diskStream = new DiskStream(_testFilePath);
 
-        // Act
-        diskStream.Write(testData, 0, testData.Length);
+            // Act
+            diskStream.Write(testData, 0, testData.Length);
 
-        // Assert
-        await Assert.That(diskStream.Size).IsEqualTo(5);
+            // Assert
+            await Assert.That(diskStream.Size).IsEqualTo(5);
+        } // 释放 disk stream
 
         // Verify file content
-        var fileContent = File.ReadAllBytes(_testFilePath);
+        fileContent = File.ReadAllBytes(_testFilePath);
         await Assert.That(fileContent.SequenceEqual(testData)).IsTrue();
     }
 
@@ -135,16 +138,19 @@ public class DiskStreamTests : IDisposable
         var testData = new byte[] { 1, 2, 3, 4, 5 };
         File.WriteAllBytes(_testFilePath, testData);
 
-        using var diskStream = new DiskStream(_testFilePath);
+        byte[] fileContent;
+        {
+            using var diskStream = new DiskStream(_testFilePath);
 
-        // Act
-        diskStream.SetLength(10);
+            // Act
+            diskStream.SetLength(10);
 
-        // Assert
-        await Assert.That(diskStream.Size).IsEqualTo(10);
+            // Assert
+            await Assert.That(diskStream.Size).IsEqualTo(10);
+        } // 释放 disk stream
 
         // Verify file was extended with zeros
-        var fileContent = File.ReadAllBytes(_testFilePath);
+        fileContent = File.ReadAllBytes(_testFilePath);
         await Assert.That(fileContent.Length).IsEqualTo(10);
         await Assert.That(fileContent[0] == 1).IsTrue();
         await Assert.That(fileContent[4] == 5).IsTrue();
@@ -159,16 +165,19 @@ public class DiskStreamTests : IDisposable
         var testData = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
         File.WriteAllBytes(_testFilePath, testData);
 
-        using var diskStream = new DiskStream(_testFilePath);
+        byte[] fileContent;
+        {
+            using var diskStream = new DiskStream(_testFilePath);
 
-        // Act
-        diskStream.SetLength(5);
+            // Act
+            diskStream.SetLength(5);
 
-        // Assert
-        await Assert.That(diskStream.Size).IsEqualTo(5);
+            // Assert
+            await Assert.That(diskStream.Size).IsEqualTo(5);
+        } // 释放 disk stream
 
         // Verify file was truncated
-        var fileContent = File.ReadAllBytes(_testFilePath);
+        fileContent = File.ReadAllBytes(_testFilePath);
         var expected = new byte[] { 1, 2, 3, 4, 5 };
         await Assert.That(fileContent.SequenceEqual(expected)).IsTrue();
     }
@@ -265,16 +274,19 @@ public class DiskStreamTests : IDisposable
             pageData[i] = (byte)(i % 256);
         }
 
-        using var diskStream = new DiskStream(_testFilePath);
+        byte[] fileContent;
+        {
+            using var diskStream = new DiskStream(_testFilePath);
 
-        // Act
-        diskStream.WritePage(0, pageData);
+            // Act
+            diskStream.WritePage(0, pageData);
 
-        // Assert
-        await Assert.That(diskStream.Size).IsEqualTo(pageData.Length);
+            // Assert
+            await Assert.That(diskStream.Size).IsEqualTo(pageData.Length);
+        } // 释放 disk stream
 
         // Verify file content
-        var fileContent = File.ReadAllBytes(_testFilePath);
+        fileContent = File.ReadAllBytes(_testFilePath);
         await Assert.That(fileContent.SequenceEqual(pageData)).IsTrue();
     }
 
@@ -308,16 +320,19 @@ public class DiskStreamTests : IDisposable
             pageData[i] = (byte)(i % 256);
         }
 
-        using var diskStream = new DiskStream(_testFilePath);
+        byte[] fileContent;
+        {
+            using var diskStream = new DiskStream(_testFilePath);
 
-        // Act
-        await diskStream.WritePageAsync(0, pageData);
+            // Act
+            await diskStream.WritePageAsync(0, pageData);
 
-        // Assert
-        await Assert.That(diskStream.Size).IsEqualTo(pageData.Length);
+            // Assert
+            await Assert.That(diskStream.Size).IsEqualTo(pageData.Length);
+        } // 释放 disk stream
 
         // Verify file content
-        var fileContent = File.ReadAllBytes(_testFilePath);
+        fileContent = File.ReadAllBytes(_testFilePath);
         await Assert.That(fileContent.SequenceEqual(pageData)).IsTrue();
     }
 

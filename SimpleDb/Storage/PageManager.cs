@@ -292,12 +292,25 @@ public sealed class PageManager : IDisposable
 
         lock (_allocationLock)
         {
-            // 从缓存中移除
-            if (_pageCache.TryRemove(pageID, out var page))
+            // 获取页面并标记为空闲
+            var page = GetPage(pageID, useCache: false); // 不使用缓存，直接从磁盘读取
+            page.ClearData(); // 清除所有数据，重置PageType为Empty
+            page.UpdatePageType(PageType.Empty);
+
+            // 确保页面的ItemCount为0，FreeBytes为最大值
+            page.Header.ItemCount = 0;
+            page.Header.FreeBytes = (ushort)(page.DataSize);
+            page.UpdateChecksum(); // 更新校验和
+
+            SavePage(page, forceFlush: true); // 强制刷新到磁盘确保更改持久化
+
+            // 从缓存中彻底移除该页面的所有实例
+            while (_pageCache.TryRemove(pageID, out _))
             {
-                _lruCache.Remove(pageID);
-                page.Dispose();
+                // 确保所有缓存实例都被移除
             }
+            _lruCache.Remove(pageID);
+            page.Dispose();
 
             // 添加到空闲页面队列
             _freePages.Enqueue(pageID);

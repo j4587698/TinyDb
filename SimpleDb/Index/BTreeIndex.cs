@@ -273,16 +273,11 @@ public sealed class BTreeIndex : IDisposable
                 var position = node.FindKeyPosition(key);
                 if (position < node.KeyCount && node.GetKey(position).Equals(key))
                 {
-                    // 返回所有匹配的文档ID
-                    var endPosition = position;
-                    while (endPosition < node.KeyCount && node.GetKey(endPosition).Equals(key))
+                    // 返回该键对应的所有文档ID
+                    var documentIds = node.GetDocumentIds(position);
+                    foreach (var docId in documentIds)
                     {
-                        endPosition++;
-                    }
-
-                    for (int i = position; i < endPosition; i++)
-                    {
-                        yield return node.GetDocumentId(i);
+                        yield return docId;
                     }
                 }
                 yield break;

@@ -277,19 +277,20 @@ public class PageManagerTests : IDisposable
     public async Task Page_Data_Persistence_Should_Work()
     {
         // Arrange
-        using var diskStream = new DiskStream(_testFilePath);
-        using var pageManager = new PageManager(diskStream, TestPageSize, TestCacheSize);
-        var page = pageManager.GetPage(1);
-        page.UpdatePageType(PageType.Collection);
+        byte[] testData = new byte[] { 1, 2, 3, 4, 5 };
+        {
+            using var diskStream = new DiskStream(_testFilePath);
+            using var pageManager = new PageManager(diskStream, TestPageSize, TestCacheSize);
+            var page = pageManager.GetPage(1);
+            page.UpdatePageType(PageType.Collection);
 
-        // Write some data to the page
-        var testData = new byte[] { 1, 2, 3, 4, 5 };
-        page.WriteData(0, testData);
-        pageManager.SavePage(page);
+            // Write some data to the page
+            page.WriteData(0, testData);
+            pageManager.SavePage(page);
+        } // 释放所有资源
 
         // Act - Create a new manager and load the page
-        using var newDiskStream = new DiskStream(_testFilePath);
-        using var newPageManager = new PageManager(newDiskStream, TestPageSize, TestCacheSize);
+        using var newPageManager = new PageManager(new DiskStream(_testFilePath), TestPageSize, TestCacheSize);
         var loadedPage = newPageManager.GetPage(1);
 
         // Assert

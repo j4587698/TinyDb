@@ -70,14 +70,14 @@ public class QueryExecutorTests : IDisposable
     public async Task Execute_With_Null_CollectionName_Should_Throw()
     {
         // Act & Assert
-        await Assert.That(() => _executor.Execute<TestUser>(null!)).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<TestUser>(null!).ToList()).Throws<ArgumentException>();
     }
 
     [Test]
     public async Task Execute_With_Empty_CollectionName_Should_Throw()
     {
         // Act & Assert
-        await Assert.That(() => _executor.Execute<TestUser>("")).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<TestUser>("").ToList()).Throws<ArgumentException>();
     }
 
     [Test]

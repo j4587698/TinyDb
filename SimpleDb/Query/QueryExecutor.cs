@@ -34,10 +34,11 @@ public sealed class QueryExecutor
     public IEnumerable<T> Execute<T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class
     {
+        // 立即验证参数，不延迟执行
         if (collectionName == null)
-            throw new ArgumentNullException(nameof(collectionName));
-        if (collectionName.Length == 0)
-            throw new ArgumentException("Collection name cannot be empty", nameof(collectionName));
+            throw new ArgumentException("Collection name cannot be null", nameof(collectionName));
+        if (string.IsNullOrWhiteSpace(collectionName))
+            throw new ArgumentException("Collection name cannot be null, empty, or whitespace", nameof(collectionName));
 
         // 获取所有文档
         var documents = _engine.FindAll(collectionName);
@@ -212,6 +213,8 @@ public sealed class QueryExecutor
         return expression.FunctionName switch
         {
             "Contains" => EvaluateContainsFunction(expression, entity),
+            "StartsWith" => EvaluateStartsWithFunction(expression, entity),
+            "EndsWith" => EvaluateEndsWithFunction(expression, entity),
             _ => throw new NotSupportedException($"Function '{expression.FunctionName}' is not supported")
         };
     }
@@ -253,7 +256,55 @@ public sealed class QueryExecutor
         throw new NotSupportedException($"Contains operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
     }
 
-    
+    /// <summary>
+    /// 评估StartsWith函数
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">函数表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateStartsWithFunction<T>(FunctionExpression expression, T entity)
+        where T : class
+    {
+        // 获取目标值（左值）
+        var targetValue = EvaluateExpressionValue(expression.Target, entity);
+        // 获取参数值（右值）
+        var argumentValue = EvaluateExpressionValue(expression.Argument, entity);
+
+        // 处理字符串StartsWith
+        if (targetValue is string targetStr && argumentValue is string argStr)
+        {
+            return targetStr.StartsWith(argStr);
+        }
+
+        throw new NotSupportedException($"StartsWith operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
+    }
+
+    /// <summary>
+    /// 评估EndsWith函数
+    /// </summary>
+    /// <typeparam name="T">文档类型</typeparam>
+    /// <param name="expression">函数表达式</param>
+    /// <param name="entity">实体对象</param>
+    /// <returns>评估结果</returns>
+    private static bool EvaluateEndsWithFunction<T>(FunctionExpression expression, T entity)
+        where T : class
+    {
+        // 获取目标值（左值）
+        var targetValue = EvaluateExpressionValue(expression.Target, entity);
+        // 获取参数值（右值）
+        var argumentValue = EvaluateExpressionValue(expression.Argument, entity);
+
+        // 处理字符串EndsWith
+        if (targetValue is string targetStr && argumentValue is string argStr)
+        {
+            return targetStr.EndsWith(argStr);
+        }
+
+        throw new NotSupportedException($"EndsWith operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
+    }
+
+
     /// <summary>
     /// 比较两个值
     /// </summary>

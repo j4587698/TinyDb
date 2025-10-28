@@ -9,7 +9,7 @@ public sealed class BTreeNode
 {
     private readonly List<IndexKey> _keys;
     private readonly List<BTreeNode> _children;
-    private readonly List<BsonValue> _documentIds;
+    private readonly List<List<BsonValue>> _documentIdLists;
     private bool _isLeaf;
 
     /// <summary>
@@ -34,7 +34,7 @@ public sealed class BTreeNode
     /// <summary>
     /// 文档ID数量（仅叶子节点）
     /// </summary>
-    public int DocumentCount => _documentIds.Count;
+    public int DocumentCount => _documentIdLists.Sum(list => list.Count);
 
     /// <summary>
     /// 最大键数量
@@ -87,11 +87,18 @@ public sealed class BTreeNode
     public void RemoveChildAt(int index) => _children.RemoveAt(index);
 
     /// <summary>
-    /// 获取指定索引的文档ID
+    /// 获取指定索引的文档ID列表
+    /// </summary>
+    /// <param name="index">索引</param>
+    /// <returns>文档ID列表</returns>
+    public IReadOnlyList<BsonValue> GetDocumentIds(int index) => _documentIdLists[index];
+
+    /// <summary>
+    /// 获取指定索引的第一个文档ID（为了向后兼容）
     /// </summary>
     /// <param name="index">索引</param>
     /// <returns>文档ID</returns>
-    public BsonValue GetDocumentId(int index) => _documentIds[index];
+    public BsonValue GetDocumentId(int index) => _documentIdLists[index].Count > 0 ? _documentIdLists[index][0] : BsonNull.Value;
 
     /// <summary>
     /// 初始化 B+ 树节点
@@ -104,7 +111,7 @@ public sealed class BTreeNode
         MinKeys = maxKeys / 2;
         _keys = new List<IndexKey>(maxKeys);
         _children = new List<BTreeNode>(maxKeys + 1);
-        _documentIds = new List<BsonValue>(maxKeys);
+        _documentIdLists = new List<List<BsonValue>>(maxKeys);
         _isLeaf = isLeaf;
     }
 
@@ -141,9 +148,9 @@ public sealed class BTreeNode
     /// <returns>位置，如果不存在则返回-1</returns>
     public int FindDocumentPosition(BsonValue documentId)
     {
-        for (int i = 0; i < _documentIds.Count; i++)
+        for (int i = 0; i < _documentIdLists.Count; i++)
         {
-            if (_documentIds[i].Equals(documentId))
+            if (_documentIdLists[i].Contains(documentId))
                 return i;
         }
         return -1;
@@ -165,15 +172,15 @@ public sealed class BTreeNode
         // 检查键是否已存在
         if (position < _keys.Count && _keys[position].Equals(key))
         {
-            // 键已存在，在相同键的位置插入新的键-文档对
-            _keys.Insert(position, key);
-            _documentIds.Insert(position, documentId);
-            return _keys.Count > MaxKeys;
+            // 键已存在，在对应位置的文档列表前面插入新的文档ID
+            _documentIdLists[position].Insert(0, documentId);
+            // 不增加KeyCount，因为key是相同的
+            return _documentIdLists.Count > MaxKeys;
         }
 
-        // 插入新键和文档ID
+        // 插入新键和文档ID列表
         _keys.Insert(position, key);
-        _documentIds.Insert(position, documentId);
+        _documentIdLists.Insert(position, new List<BsonValue> { documentId });
 
         return _keys.Count > MaxKeys;
     }
@@ -225,31 +232,18 @@ public sealed class BTreeNode
         if (position >= _keys.Count || !_keys[position].Equals(key))
             return false; // 键不存在
 
-        // 查找该键对应的所有文档ID位置
-        var startPos = position;
-        while (startPos > 0 && _keys[startPos - 1].Equals(key))
+        // 从该键对应的文档列表中删除指定的文档ID
+        var docList = _documentIdLists[position];
+        var removed = docList.Remove(documentId);
+
+        if (removed && docList.Count == 0)
         {
-            startPos--;
+            // 如果文档列表为空，删除整个键
+            _keys.RemoveAt(position);
+            _documentIdLists.RemoveAt(position);
         }
 
-        var endPos = position;
-        while (endPos < _keys.Count && _keys[endPos].Equals(key))
-        {
-            endPos++;
-        }
-
-        // 在这个范围内查找要删除的文档ID
-        for (int i = startPos; i < endPos; i++)
-        {
-            if (_documentIds[i].Equals(documentId))
-            {
-                _keys.RemoveAt(i);
-                _documentIds.RemoveAt(i);
-                return true;
-            }
-        }
-
-        return false; // 文档ID不存在
+        return removed;
     }
 
     /// <summary>
@@ -265,10 +259,10 @@ public sealed class BTreeNode
         {
             // 叶子节点分裂
             newNode._keys.AddRange(_keys.GetRange(mid, _keys.Count - mid));
-            newNode._documentIds.AddRange(_documentIds.GetRange(mid, _documentIds.Count - mid));
+            newNode._documentIdLists.AddRange(_documentIdLists.GetRange(mid, _documentIdLists.Count - mid));
 
             _keys.RemoveRange(mid, _keys.Count - mid);
-            _documentIds.RemoveRange(mid, _documentIds.Count - mid);
+            _documentIdLists.RemoveRange(mid, _documentIdLists.Count - mid);
         }
         else
         {
@@ -297,7 +291,7 @@ public sealed class BTreeNode
         {
             // 叶子节点合并
             _keys.AddRange(other._keys);
-            _documentIds.AddRange(other._documentIds);
+            _documentIdLists.AddRange(other._documentIdLists);
         }
         else
         {
@@ -329,27 +323,27 @@ public sealed class BTreeNode
             {
                 // 从右兄弟借第一个键
                 var borrowedKey = sibling._keys[0];
-                var borrowedDoc = sibling._documentIds[0];
+                var borrowedDocs = sibling._documentIdLists[0];
 
                 _keys.Insert(0, borrowedKey);
-                _documentIds.Insert(0, borrowedDoc);
+                _documentIdLists.Insert(0, borrowedDocs);
 
                 sibling._keys.RemoveAt(0);
-                sibling._documentIds.RemoveAt(0);
+                sibling._documentIdLists.RemoveAt(0);
 
                 newSeparatorKey = sibling._keys.Count > 0 ? sibling._keys[0] : separatorKey;
             }
             else
             {
-                // 从左兄弟借最后一个键
-                var borrowedKey = sibling._keys[^1];
-                var borrowedDoc = sibling._documentIds[^1];
+                // 从左兄弟借第一个键（最接近当前节点的键）
+                var borrowedKey = sibling._keys[0];
+                var borrowedDocs = sibling._documentIdLists[0];
 
                 _keys.Add(borrowedKey);
-                _documentIds.Add(borrowedDoc);
+                _documentIdLists.Add(borrowedDocs);
 
-                sibling._keys.RemoveAt(sibling._keys.Count - 1);
-                sibling._documentIds.RemoveAt(sibling._documentIds.Count - 1);
+                sibling._keys.RemoveAt(0);
+                sibling._documentIdLists.RemoveAt(0);
 
                 newSeparatorKey = borrowedKey;
             }
@@ -413,7 +407,7 @@ public sealed class BTreeNode
             IsLeaf = _isLeaf,
             KeyCount = _keys.Count,
             ChildCount = _children.Count,
-            DocumentCount = _documentIds.Count,
+            DocumentCount = DocumentCount,
             MaxKeys = MaxKeys,
             MinKeys = MinKeys,
             IsFull = IsFull(),
@@ -428,7 +422,7 @@ public sealed class BTreeNode
     public override string ToString()
     {
         var type = _isLeaf ? "Leaf" : "Internal";
-        return $"BTreeNode({type}): {_keys.Count} keys, {_children.Count} children, {_documentIds.Count} documents";
+        return $"BTreeNode({type}): {_keys.Count} keys, {_children.Count} children, {DocumentCount} documents";
     }
 }
 

@@ -42,7 +42,9 @@ public sealed class Queryable<T> : IQueryable<T>
     public Queryable(QueryExecutor executor, string collectionName, Expression? expression = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
-        _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
+        if (string.IsNullOrWhiteSpace(collectionName))
+            throw new ArgumentNullException(nameof(collectionName));
+        _collectionName = collectionName;
         _expression = expression;
 
         // 创建表达式树
@@ -213,7 +215,12 @@ public sealed class QueryProvider<T> : IQueryProvider
         if (TryExtractCountExpression(expression, out var whereExpression))
         {
             var data = GetFilteredData(whereExpression);
-            return (long)data.Count();
+            // 检查是Count还是LongCount
+            if (expression is System.Linq.Expressions.MethodCallExpression methodCall)
+            {
+                return methodCall.Method.Name == "LongCount" ? (object)(long)data.Count() : (object)data.Count();
+            }
+            return data.Count();
         }
 
         // 解析 First/FirstOrDefault 调用
@@ -230,14 +237,20 @@ public sealed class QueryProvider<T> : IQueryProvider
             return data.Any();
         }
 
+        // 解析链式Where表达式 - 优先处理链式调用
+        if (IsChainedWhereExpression(expression))
+        {
+            var filteredData = GetFilteredData(expression);
+            return filteredData;
+        }
+
         // 解析 Where 表达式 - 检查是否是直接的Where调用（来自Find方法）
         if (TryExtractWhereExpression(expression, out whereExpression))
         {
             // 如果这是根级别的Where表达式（如来自Find方法的调用），使用数据库查询
             var isRootWhere = IsRootWhereExpression(expression);
 
-            // 调试：直接使用数据库查询，绕过复杂的判断逻辑
-            if (whereExpression is LambdaExpression lambda)
+            if (isRootWhere && whereExpression is LambdaExpression lambda)
             {
                 return _executor.Execute(_collectionName, (Expression<Func<T, bool>>)lambda);
             }
@@ -250,8 +263,9 @@ public sealed class QueryProvider<T> : IQueryProvider
             var sourceExpression = GetSourceExpression(expression);
             if (sourceExpression != null)
             {
-                var result = ExecuteInternal(sourceExpression);
-                return result;
+                // 对于ToList()，直接使用GetFilteredData处理Where链
+                var filteredData = GetFilteredData(sourceExpression);
+                return filteredData.ToList();
             }
         }
 
@@ -266,6 +280,13 @@ public sealed class QueryProvider<T> : IQueryProvider
             }
         }
 
+        // 检查是否是链式Where表达式
+        if (IsChainedWhereExpression(expression))
+        {
+            var filteredData = GetFilteredData(expression);
+            return filteredData;
+        }
+
         // 对于其他操作，尝试在内存中执行
         return ExecuteInMemory(expression);
     }
@@ -273,24 +294,100 @@ public sealed class QueryProvider<T> : IQueryProvider
     /// <summary>
     /// 获取过滤后的数据
     /// </summary>
-    /// <param name="whereExpression">Where表达式</param>
+    /// <param name="expression">查询表达式</param>
     /// <returns>过滤后的数据</returns>
-    private IEnumerable<T> GetFilteredData(Expression? whereExpression)
+    private IEnumerable<T> GetFilteredData(Expression? expression)
     {
         var allData = _executor.Execute<T>(_collectionName);
 
-        if (whereExpression == null)
+        if (expression == null)
         {
             return allData;
         }
 
-        if (whereExpression is LambdaExpression lambda)
+        // 提取所有Where条件并组合它们
+        var wherePredicates = ExtractAllWherePredicates(expression);
+
+        if (wherePredicates.Count == 0)
         {
-            var compiledPredicate = (Func<T, bool>)lambda.Compile();
-            return allData.Where(compiledPredicate);
+            // 如果没有找到Where谓词，尝试直接编译表达式
+            if (expression is LambdaExpression lambda)
+            {
+                var compiledPredicate = (Func<T, bool>)lambda.Compile();
+                return allData.Where(compiledPredicate);
+            }
+            return allData;
         }
 
-        return allData;
+        // 编译所有谓词并依次应用
+        var result = allData;
+        foreach (var predicate in wherePredicates)
+        {
+            var compiledPredicate = (Func<T, bool>)predicate.Compile();
+            result = result.Where(compiledPredicate);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 检查是否为链式Where表达式
+    /// </summary>
+    /// <param name="expression">表达式</param>
+    /// <returns>是否为链式Where调用</returns>
+    private bool IsChainedWhereExpression(Expression expression)
+    {
+        if (expression is MethodCallExpression methodCall && methodCall.Method.Name == "Where")
+        {
+            // 检查源表达式是否也是Where调用
+            if (methodCall.Arguments.Count > 0)
+            {
+                var sourceExpression = methodCall.Arguments[0];
+                return sourceExpression is MethodCallExpression sourceCall &&
+                       sourceCall.Method.Name == "Where";
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 提取所有Where谓词表达式
+    /// </summary>
+    /// <param name="expression">表达式</param>
+    /// <returns>所有Where谓词的列表，按调用顺序排列</returns>
+    private IList<LambdaExpression> ExtractAllWherePredicates(Expression expression)
+    {
+        var predicates = new List<LambdaExpression>();
+        ExtractWherePredicatesRecursive(expression, predicates);
+        return predicates;
+    }
+
+    /// <summary>
+    /// 递归提取Where谓词
+    /// </summary>
+    /// <param name="expression">当前表达式</param>
+    /// <param name="predicates">谓词列表</param>
+    private void ExtractWherePredicatesRecursive(Expression expression, IList<LambdaExpression> predicates)
+    {
+        if (expression is MethodCallExpression methodCall && methodCall.Method.Name == "Where")
+        {
+            // Where(source, predicate) -> 提取 predicate
+            if (methodCall.Arguments.Count == 2)
+            {
+                var quote = methodCall.Arguments[1] as UnaryExpression;
+                if (quote?.NodeType == ExpressionType.Quote && quote.Operand is LambdaExpression lambda)
+                {
+                    // 将谓词添加到列表前面，保持正确的调用顺序
+                    predicates.Insert(0, lambda);
+                }
+            }
+
+            // 递归检查源表达式
+            if (methodCall.Arguments.Count > 0)
+            {
+                ExtractWherePredicatesRecursive(methodCall.Arguments[0], predicates);
+            }
+        }
     }
 
     /// <summary>
@@ -500,7 +597,8 @@ public sealed class QueryProvider<T> : IQueryProvider
         if (expression is MethodCallExpression methodCall)
         {
             return methodCall.Method.Name == "ToList" &&
-                   methodCall.Method.DeclaringType == typeof(System.Linq.Enumerable);
+                   (methodCall.Method.DeclaringType == typeof(System.Linq.Enumerable) ||
+                    methodCall.Method.DeclaringType == typeof(System.Linq.Queryable));
         }
         return false;
     }

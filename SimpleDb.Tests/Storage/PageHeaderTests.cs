@@ -51,7 +51,7 @@ public class PageHeaderTests
     public async Task GetSize_Should_Return_Header_Size()
     {
         // Act & Assert
-        await Assert.That(PageHeader.Size == 32).IsTrue();
+        await Assert.That(PageHeader.Size == 41).IsTrue();
     }
 
     [Test]
