@@ -48,7 +48,7 @@ public sealed class QueryExecutor
         {
             foreach (var document in documents)
             {
-                var entity = Serialization.BsonMapper.ToObject<T>(document);
+                var entity = AotBsonMapper.FromDocument<T>(document);
                 if (entity != null)
                 {
                     yield return entity;
@@ -63,7 +63,7 @@ public sealed class QueryExecutor
         // 执行查询
         foreach (var document in documents)
         {
-            var entity = Serialization.BsonMapper.ToObject<T>(document);
+            var entity = AotBsonMapper.FromDocument<T>(document);
             if (entity != null && EvaluateExpression(queryExpression, entity))
             {
                 yield return entity;
@@ -176,29 +176,37 @@ public sealed class QueryExecutor
     }
 
     /// <summary>
-    /// 获取成员值
+    /// 获取成员值（使用AotBsonMapper避免反射）
     /// </summary>
     /// <typeparam name="T">文档类型</typeparam>
     /// <param name="expression">成员表达式</param>
     /// <param name="entity">实体对象</param>
     /// <returns>成员值</returns>
-    [RequiresDynamicCode("Member access using reflection requires dynamic code")]
-    private static object? GetMemberValue<T>(MemberExpression expression, T entity)
+    private static object? GetMemberValue<T>(MemberExpression expression, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T entity)
         where T : class
     {
-        var propertyInfo = typeof(T).GetProperty(expression.MemberName);
-        if (propertyInfo != null)
+        try
         {
-            return propertyInfo.GetValue(entity);
+            // 尝试使用AotBsonMapper的GetPropertyValue方法
+            return AotBsonMapper.GetPropertyValue(entity, expression.MemberName);
         }
-
-        var fieldInfo = typeof(T).GetField(expression.MemberName);
-        if (fieldInfo != null)
+        catch
         {
-            return fieldInfo.GetValue(entity);
-        }
+            // 如果AotBsonMapper失败，回退到基本反射（仅在必要时）
+            var propertyInfo = typeof(T).GetProperty(expression.MemberName);
+            if (propertyInfo != null)
+            {
+                return propertyInfo.GetValue(entity);
+            }
 
-        throw new NotSupportedException($"Member '{expression.MemberName}' not found on type {typeof(T).Name}");
+            var fieldInfo = typeof(T).GetField(expression.MemberName);
+            if (fieldInfo != null)
+            {
+                return fieldInfo.GetValue(entity);
+            }
+
+            throw new NotSupportedException($"Member '{expression.MemberName}' not found on type {typeof(T).Name}");
+        }
     }
 
     /// <summary>

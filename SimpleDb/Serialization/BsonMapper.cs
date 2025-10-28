@@ -87,7 +87,7 @@ public static class BsonMapper
     /// </summary>
     /// <typeparam name="T">对象类型</typeparam>
     /// <returns>ID 属性访问器</returns>
-    private static PropertyAccessor<T>? FindIdProperty<T>()
+    private static PropertyAccessor<T>? FindIdProperty<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>()
         where T : class
     {
         var type = typeof(T);

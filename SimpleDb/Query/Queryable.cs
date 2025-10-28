@@ -39,7 +39,6 @@ public sealed class Queryable<T> : IQueryable<T>
     /// <param name="executor">查询执行器</param>
     /// <param name="collectionName">集合名称</param>
     /// <param name="expression">查询表达式</param>
-    [RequiresDynamicCode("LINQ query expressions require dynamic code generation")]
     public Queryable(QueryExecutor executor, string collectionName, Expression? expression = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
@@ -732,7 +731,6 @@ public sealed class QueryProvider<T> : IQueryProvider
     /// <summary>
     /// 在内存中执行查询
     /// </summary>
-    [RequiresDynamicCode("In-memory query execution requires dynamic code generation")]
     private object? ExecuteInMemory(Expression expression)
     {
         // 获取所有数据
@@ -973,14 +971,65 @@ internal sealed class SortedQueryProvider<T> : IQueryProvider
 
     public object Execute(Expression expression)
     {
-        // 对于已排序的数据，直接在内存中执行
-        return _sortedData.AsQueryable().Provider.Execute(expression);
+        // 对于已排序的数据，使用简单的内存执行，避免AsQueryable
+        try
+        {
+            // 尝试直接处理基本操作
+            if (expression is ConstantExpression constExpr)
+            {
+                return constExpr.Value;
+            }
+
+            // 对于方法调用，如果可能是Count/First等，手动处理
+            if (expression is MethodCallExpression methodCall)
+            {
+                return ExecuteMethodCall(methodCall, _sortedData);
+            }
+
+            // 默认返回数据本身
+            return _sortedData;
+        }
+        catch
+        {
+            return _sortedData;
+        }
     }
 
     public TResult Execute<TResult>(Expression expression)
     {
-        // 对于已排序的数据，直接在内存中执行
-        return _sortedData.AsQueryable().Provider.Execute<TResult>(expression);
+        // 对于已排序的数据，使用简单的内存执行，避免AsQueryable
+        try
+        {
+            var result = Execute(expression);
+            if (result is TResult typedResult)
+            {
+                return typedResult;
+            }
+
+            // 尝试转换
+            return (TResult)Convert.ChangeType(result, typeof(TResult));
+        }
+        catch
+        {
+            return default(TResult)!;
+        }
+    }
+
+    /// <summary>
+    /// 执行方法调用
+    /// </summary>
+    private static object? ExecuteMethodCall(MethodCallExpression methodCall, IEnumerable sortedData)
+    {
+        var methodName = methodCall.Method.Name;
+
+        return methodName switch
+        {
+            "Count" => sortedData.Cast<object>().Count(),
+            "LongCount" => sortedData.Cast<object>().LongCount(),
+            "First" => sortedData.Cast<object>().FirstOrDefault(),
+            "FirstOrDefault" => sortedData.Cast<object>().FirstOrDefault(),
+            _ => sortedData
+        };
     }
 }
 

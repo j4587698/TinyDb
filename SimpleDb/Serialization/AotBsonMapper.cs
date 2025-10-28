@@ -21,7 +21,8 @@ public static class AotBsonMapper
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         // 使用源代码生成器生成的AOT兼容方法
-        var helperType = Type.GetType($"{typeof(T).Namespace}.{typeof(T).Name}AotHelper");
+        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
+        var helperType = typeof(T).Assembly.GetType(helperTypeName);
         if (helperType != null)
         {
             var method = helperType.GetMethod("ToDocument", new[] { typeof(T) });
@@ -47,7 +48,8 @@ public static class AotBsonMapper
         if (document == null) throw new ArgumentNullException(nameof(document));
 
         // 使用源代码生成器生成的AOT兼容方法
-        var helperType = Type.GetType($"{typeof(T).Namespace}.{typeof(T).Name}AotHelper");
+        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
+        var helperType = typeof(T).Assembly.GetType(helperTypeName);
         if (helperType != null)
         {
             var method = helperType.GetMethod("FromDocument", new[] { typeof(BsonDocument) });
@@ -73,7 +75,8 @@ public static class AotBsonMapper
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         // 使用源代码生成器生成的AOT兼容方法
-        var helperType = Type.GetType($"{typeof(T).Namespace}.{typeof(T).Name}AotHelper");
+        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
+        var helperType = typeof(T).Assembly.GetType(helperTypeName);
         if (helperType != null)
         {
             var method = helperType.GetMethod("GetId", new[] { typeof(T) });
@@ -99,7 +102,8 @@ public static class AotBsonMapper
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         // 使用源代码生成器生成的AOT兼容方法
-        var helperType = Type.GetType($"{typeof(T).Namespace}.{typeof(T).Name}AotHelper");
+        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
+        var helperType = typeof(T).Assembly.GetType(helperTypeName);
         if (helperType != null)
         {
             var method = helperType.GetMethod("SetId", new[] { typeof(T), typeof(BsonValue) });
@@ -124,7 +128,8 @@ public static class AotBsonMapper
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
         // 使用源代码生成器生成的AOT兼容方法
-        var helperType = Type.GetType($"{typeof(T).Namespace}.{typeof(T).Name}AotHelper");
+        var helperTypeName = $"{typeof(T).Namespace}.{typeof(T).Name}AotHelper";
+        var helperType = typeof(T).Assembly.GetType(helperTypeName);
         if (helperType != null)
         {
             var method = helperType.GetMethod("GetPropertyValue", new[] { typeof(T), typeof(string) });

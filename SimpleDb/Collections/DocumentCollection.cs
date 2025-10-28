@@ -90,8 +90,8 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
             // 确保实体有ID
             EnsureEntityHasId(entity);
 
-            // 转换为BSON文档
-            var document = BsonMapper.ToDocument(entity);
+            // 转换为BSON文档（AOT兼容）
+            var document = AotBsonMapper.ToDocument(entity);
             documents.Add(document);
         }
 
@@ -214,7 +214,7 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
         if (id == null || id.IsNull) return null;
 
         var document = _engine.FindById(_name, id);
-        return document != null ? BsonMapper.ToObject<T>(document) : null;
+        return document != null ? AotBsonMapper.FromDocument<T>(document) : default(T);
     }
 
     /// <summary>
@@ -228,7 +228,7 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
         var documents = _engine.FindAll(_name);
         foreach (var document in documents)
         {
-            var entity = BsonMapper.ToObject<T>(document);
+            var entity = AotBsonMapper.FromDocument<T>(document);
             if (entity != null)
             {
                 yield return entity;
