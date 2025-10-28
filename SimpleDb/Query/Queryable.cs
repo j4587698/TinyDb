@@ -67,18 +67,18 @@ public sealed class Queryable<T> : IQueryable<T>
     /// <returns>枚举器</returns>
     public IEnumerator<T> GetEnumerator()
     {
-        // 简化处理：对于复杂查询，直接返回所有数据并在内存中过滤
+        // 获取所有数据并返回简单的枚举器，暂时不支持复杂的链式Where
         try
         {
             var allData = _executor.Execute<T>(_collectionName).ToList();
 
-            // 尝试在内存中应用Where条件
+            // 简单的单Where过滤
             if (Expression is MethodCallExpression methodCall && methodCall.Method.Name == "Where")
             {
-                var whereExpression = methodCall.Arguments[1];
-                if (whereExpression is LambdaExpression lambda)
+                var whereLambda = methodCall.Arguments[1] as LambdaExpression;
+                if (whereLambda != null)
                 {
-                    var compiled = lambda.Compile();
+                    var compiled = whereLambda.Compile();
                     var filtered = allData.Where(item => (bool)compiled.DynamicInvoke(item)!);
                     return filtered.GetEnumerator();
                 }
@@ -91,6 +91,88 @@ public sealed class Queryable<T> : IQueryable<T>
             // 如果失败，返回所有数据
             return _executor.Execute<T>(_collectionName).GetEnumerator();
         }
+    }
+
+    /// <summary>
+    /// 递归应用所有Where过滤器
+    /// </summary>
+    /// <param name="data">要过滤的数据</param>
+    /// <param name="expression">查询表达式</param>
+    /// <returns>过滤后的数据</returns>
+    private IEnumerable<T> ApplyAllWhereFilters(IEnumerable<T> data, Expression expression)
+    {
+        var currentData = data;
+
+        // 递归解析表达式树，提取所有Where条件
+        ExtractWhereExpressions(expression, whereExpressions =>
+        {
+            foreach (var whereExpr in whereExpressions)
+            {
+                if (whereExpr is LambdaExpression lambda)
+                {
+                    var compiled = lambda.Compile();
+                    currentData = currentData.Where(item => (bool)compiled.DynamicInvoke(item)!);
+                }
+            }
+        });
+
+        return currentData;
+    }
+
+    /// <summary>
+    /// 递归提取Where表达式
+    /// </summary>
+    /// <param name="expression">当前表达式</param>
+    /// <param name="onWhereExpressions">找到Where表达式时的回调</param>
+    private void ExtractWhereExpressions(Expression expression, Action<List<LambdaExpression>> onWhereExpressions)
+    {
+        var whereExpressions = new List<LambdaExpression>();
+        ExtractWhereExpressionsRecursive(expression, whereExpressions);
+
+        // 调试信息
+        Console.WriteLine($"[DEBUG] 找到 {whereExpressions.Count} 个Where表达式");
+        for (int i = 0; i < whereExpressions.Count; i++)
+        {
+            Console.WriteLine($"[DEBUG] Where[{i}]: {whereExpressions[i]}");
+        }
+
+        onWhereExpressions(whereExpressions);
+    }
+
+    /// <summary>
+    /// 递归提取Where表达式的具体实现
+    /// </summary>
+    private void ExtractWhereExpressionsRecursive(Expression expression, List<LambdaExpression> whereExpressions)
+    {
+        if (expression is MethodCallExpression methodCall)
+        {
+            if (methodCall.Method.Name == "Where")
+            {
+                // 提取当前Where的Lambda表达式
+                var whereLambda = methodCall.Arguments[1] as LambdaExpression;
+                if (whereLambda != null)
+                {
+                    whereExpressions.Add(whereLambda);
+                }
+
+                // 递归处理源表达式（第一个参数）
+                ExtractWhereExpressionsRecursive(methodCall.Arguments[0], whereExpressions);
+            }
+            else
+            {
+                // 对于非Where方法调用，检查所有参数
+                foreach (var arg in methodCall.Arguments)
+                {
+                    ExtractWhereExpressionsRecursive(arg, whereExpressions);
+                }
+            }
+        }
+        else if (expression is UnaryExpression unary)
+        {
+            // 处理UnaryExpression（如Convert等）
+            ExtractWhereExpressionsRecursive(unary.Operand, whereExpressions);
+        }
+        // 其他类型的表达式不需要处理
     }
 
     /// <summary>
