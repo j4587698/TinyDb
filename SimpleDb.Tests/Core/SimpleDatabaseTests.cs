@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using SimpleDb.Core;
 using SimpleDb.Collections;
 using SimpleDb.Tests.TestEntities;
@@ -83,5 +84,37 @@ public class SimpleDatabaseTests
         await Assert.That(id).IsNotNull();
         await Assert.That(id.IsNull).IsFalse();
         await Assert.That(user.Id).IsNotEqualTo(ObjectId.Empty);
+    }
+
+    [Test]
+    public async Task GetCollection_Should_Return_Same_Instance_For_Same_Name()
+    {
+        var first = _engine.GetCollection<User>("users");
+        var second = _engine.GetCollection<User>("users");
+
+        await Assert.That(ReferenceEquals(first, second)).IsTrue();
+        await Assert.That(_engine.CollectionCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DropCollection_Should_Remove_Metadata_From_Current_Session()
+    {
+        _engine.GetCollection<User>("users");
+        _engine.GetCollection<Product>("products");
+
+        var dropResult = _engine.DropCollection("users");
+
+        await Assert.That(dropResult).IsTrue();
+        await Assert.That(_engine.CollectionExists("users")).IsFalse();
+        await Assert.That(_engine.GetCollectionNames().Any(n => n == "users")).IsFalse();
+        await Assert.That(_engine.CollectionExists("products")).IsTrue();
+    }
+
+    [Test]
+    public async Task DropCollection_Should_Return_False_For_Nonexistent_Collection()
+    {
+        var result = _engine.DropCollection("missing");
+
+        await Assert.That(result).IsFalse();
     }
 }

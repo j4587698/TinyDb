@@ -7,9 +7,11 @@ using SimpleDb.Attributes;
 using SimpleDb.Tests.TestEntities;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace SimpleDb.Tests.Query;
 
+[NotInParallel]
 public class QueryableTests : IDisposable
 {
     private readonly string _testDirectory;

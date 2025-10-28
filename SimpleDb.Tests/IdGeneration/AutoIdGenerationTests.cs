@@ -4,12 +4,14 @@ using SimpleDb.Core;
 using SimpleDb.IdGeneration;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace SimpleDb.Tests.IdGeneration;
 
 /// <summary>
 /// 自动ID生成功能测试
 /// </summary>
+[NotInParallel]
 public class AutoIdGenerationTests
 {
     private string _testFile = null!;

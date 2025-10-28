@@ -19,7 +19,7 @@ public static class BsonConversion
             long l => new BsonInt64(l),
             double d => new BsonDouble(d),
             float f => new BsonDouble(f),
-            decimal dec => new BsonDecimal128(dec),
+            decimal dec => new BsonDouble((double)dec),
             bool b => new BsonBoolean(b),
             DateTime dt => new BsonDateTime(dt),
             Guid guid => new BsonBinary(guid, BsonBinary.BinarySubType.Uuid),
@@ -72,7 +72,6 @@ public static class BsonConversion
             var t when t == typeof(decimal) =>
                 bsonValue switch
                 {
-                    BsonDecimal128 dec128 => dec128.Value,
                     BsonDouble dbl => Convert.ToDecimal(dbl.Value),
                     BsonInt32 i32 => i32.Value,
                     BsonInt64 i64 => i64.Value,
