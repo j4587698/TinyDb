@@ -279,4 +279,29 @@ public class BsonMapperTests
         await Assert.That(user.Age).IsEqualTo(0);
         await Assert.That(user.Email).IsEqualTo("");
     }
+
+    [Test]
+    public async Task Decimal_Property_Should_RoundTrip_Without_Precision_Loss()
+    {
+        // Arrange
+        var product = new Product
+        {
+            Name = "Decimal Product",
+            Price = 42.987654321m,
+            InStock = true,
+            CreatedAt = new DateTime(2024, 5, 1, 12, 0, 0, DateTimeKind.Utc)
+        };
+
+        // Act
+        var document = BsonMapper.ToDocument(product);
+        var restored = BsonMapper.ToObject<Product>(document);
+
+        // Assert
+        await Assert.That(document.ContainsKey("price")).IsTrue();
+        await Assert.That(document["price"].GetType()).IsEqualTo(typeof(BsonDecimal128));
+        await Assert.That(((BsonDecimal128)document["price"]).Value).IsEqualTo(product.Price);
+
+        await Assert.That(restored).IsNotNull();
+        await Assert.That(restored!.Price).IsEqualTo(product.Price);
+    }
 }

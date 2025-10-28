@@ -468,10 +468,10 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         // BSON Decimal128 使用 128 位十进制浮点数
         // 这里我们将其存储为字符串以保持精度
-        _writer.Write((byte)BsonType.Decimal128);
-        var stringValue = value.ToString();
-        _writer.Write(stringValue.Length + 1); // Length includes null terminator
-        _writer.Write(Encoding.UTF8.GetBytes(stringValue));
+        var stringValue = value.ToString(CultureInfo.InvariantCulture);
+        var bytes = Encoding.UTF8.GetBytes(stringValue);
+        _writer.Write(bytes.Length + 1); // Length includes null terminator
+        _writer.Write(bytes);
         _writer.Write((byte)0); // Null terminator
     }
 
@@ -800,7 +800,7 @@ public sealed class BsonReader : IDisposable
             throw new InvalidOperationException("Decimal128 null terminator expected");
         }
         var stringValue = Encoding.UTF8.GetString(bytes);
-        if (decimal.TryParse(stringValue, out var decimalValue))
+        if (decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var decimalValue))
         {
             return new BsonDecimal128(decimalValue);
         }

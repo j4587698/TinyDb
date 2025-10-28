@@ -146,6 +146,40 @@ public class BsonSerializerTests
     }
 
     [Test]
+    public async Task Serialize_Should_Preserve_BsonDecimal128_Precision()
+    {
+        // Arrange
+        const decimal original = 1234567890123456.987654321m;
+        var decimalValue = new BsonDecimal128(original);
+
+        // Act
+        var bytes = BsonSerializer.Serialize(decimalValue);
+        var deserialized = BsonSerializer.Deserialize(bytes) as BsonDecimal128;
+
+        // Assert
+        await Assert.That(deserialized).IsNotNull();
+        await Assert.That(deserialized!.Value).IsEqualTo(original);
+    }
+
+    [Test]
+    public async Task Document_With_Decimal_Should_RoundTrip()
+    {
+        // Arrange
+        const decimal price = 199.99m;
+        var document = new BsonDocument().Set("price", new BsonDecimal128(price));
+
+        // Act
+        var bytes = BsonSerializer.Serialize(document);
+        var deserialized = BsonSerializer.Deserialize(bytes) as BsonDocument;
+
+        // Assert
+        await Assert.That(deserialized).IsNotNull();
+        var priceValue = deserialized!["price"];
+        await Assert.That(priceValue.GetType()).IsEqualTo(typeof(BsonDecimal128));
+        await Assert.That(((BsonDecimal128)priceValue).Value).IsEqualTo(price);
+    }
+
+    [Test]
     public async Task Deserialize_Should_Return_BsonNull_For_Empty_Bytes()
     {
         // Arrange
@@ -180,7 +214,8 @@ public class BsonSerializerTests
             new BsonBoolean(false),
             BsonNull.Value,
             new BsonObjectId(ObjectId.NewObjectId()),
-            new BsonDateTime(DateTime.UtcNow)
+            new BsonDateTime(DateTime.UtcNow),
+            new BsonDecimal128(6543210.123456789m)
         };
 
         foreach (var originalValue in testCases)
