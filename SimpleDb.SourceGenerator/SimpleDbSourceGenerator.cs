@@ -374,14 +374,84 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine("        }");
         }
 
-        // 生成partial类方法，调用静态帮助器
+        // 生成完整的序列化方法
         sb.AppendLine();
         sb.AppendLine("        /// <summary>");
-        sb.AppendLine("        /// 为实体类生成实例方法包装器");
+        sb.AppendLine("        /// 将实体序列化为BSON文档（AOT兼容）");
         sb.AppendLine("        /// </summary>");
-        sb.AppendLine($"        public static void PopulateInstanceMethods({classInfo.Name} entity)");
+        sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+        sb.AppendLine("        /// <returns>BSON文档</returns>");
+        sb.AppendLine($"        public static BsonDocument ToDocument({classInfo.Name} entity)");
         sb.AppendLine("        {");
-        sb.AppendLine("            // 这个方法用于在运行时为实体添加实例方法（如果需要）");
+        sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
+        sb.AppendLine("            var document = new BsonDocument();");
+        sb.AppendLine();
+
+        // 为每个属性生成序列化代码
+        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
+        {
+            var bsonCode = SourceGeneratorHelpers.GeneratePropertySerialization(prop);
+            sb.AppendLine($"            // 序列化属性: {prop.Name}");
+            sb.AppendLine(bsonCode);
+            sb.AppendLine();
+        }
+
+        // 确保包含集合名称字段
+        sb.AppendLine("            // 确保包含集合名称字段");
+        sb.AppendLine("            if (!document.ContainsKey(\"_collection\"))");
+        sb.AppendLine("            {");
+        sb.AppendLine($"                document[\"_collection\"] = \"{classInfo.CollectionName ?? classInfo.Name}\";");
+        sb.AppendLine("            }");
+
+        sb.AppendLine("            return document;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        // 生成反序列化方法
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// 从BSON文档反序列化实体（AOT兼容）");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        /// <param name=\"document\">BSON文档</param>");
+        sb.AppendLine("        /// <returns>实体实例</returns>");
+        sb.AppendLine($"        public static {classInfo.Name} FromDocument(BsonDocument document)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (document == null) throw new ArgumentNullException(nameof(document));");
+        sb.AppendLine($"            var entity = new {classInfo.Name}();");
+        sb.AppendLine();
+
+        // 为每个属性生成反序列化代码
+        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
+        {
+            var bsonCode = SourceGeneratorHelpers.GeneratePropertyDeserialization(prop);
+            sb.AppendLine($"            // 反序列化属性: {prop.Name}");
+            sb.AppendLine(bsonCode);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("            return entity;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+
+        // 生成属性访问方法
+        sb.AppendLine("        /// <summary>");
+        sb.AppendLine("        /// 获取属性值（AOT兼容）");
+        sb.AppendLine("        /// </summary>");
+        sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
+        sb.AppendLine("        /// <param name=\"propertyName\">属性名称</param>");
+        sb.AppendLine("        /// <returns>属性值</returns>");
+        sb.AppendLine($"        public static object? GetPropertyValue({classInfo.Name} entity, string propertyName)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
+        sb.AppendLine("            return propertyName switch");
+        sb.AppendLine("            {");
+
+        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
+        {
+            sb.AppendLine($"                \"{prop.Name}\" => entity.{prop.Name},");
+        }
+
+        sb.AppendLine("                _ => throw new ArgumentException($\"Unknown property: {propertyName}\")");
+        sb.AppendLine("            };");
         sb.AppendLine("        }");
 
         sb.AppendLine("    }");
@@ -647,12 +717,91 @@ public class PropertyInfo
     public string Type { get; }
     public bool IsId { get; set; }
     public bool IsIgnored { get; }
+    public bool HasIgnoreAttribute { get; set; }
 
-    public PropertyInfo(string name, string type, bool isId = false, bool isIgnored = false)
+    public PropertyInfo(string name, string type, bool isId = false, bool isIgnored = false, bool hasIgnoreAttribute = false)
     {
         Name = name;
         Type = type;
         IsId = isId;
         IsIgnored = isIgnored;
+        HasIgnoreAttribute = hasIgnoreAttribute;
+    }
+}
+
+/// <summary>
+/// 生成属性序列化代码的辅助方法
+/// </summary>
+public static partial class SourceGeneratorHelpers
+{
+    /// <summary>
+    /// 生成属性序列化代码
+    /// </summary>
+    public static string GeneratePropertySerialization(PropertyInfo prop)
+    {
+        var propertyName = prop.Name;
+        var propertyType = prop.Type;
+
+        return propertyType switch
+        {
+            "string" => $"document[\"{propertyName}\"] = string.IsNullOrEmpty(entity.{propertyName}) ? BsonNull.Value : new BsonString(entity.{propertyName});",
+            "int" or "Int32" => $"document[\"{propertyName}\"] = new BsonInt32(entity.{propertyName});",
+            "long" or "Int64" => $"document[\"{propertyName}\"] = new BsonInt64(entity.{propertyName});",
+            "double" or "Double" => $"document[\"{propertyName}\"] = new BsonDouble(entity.{propertyName});",
+            "float" or "Single" => $"document[\"{propertyName}\"] = new BsonDouble(entity.{propertyName});",
+            "decimal" or "Decimal" => $"document[\"{propertyName}\"] = new BsonDecimal128(entity.{propertyName});",
+            "bool" or "Boolean" => $"document[\"{propertyName}\"] = new BsonBoolean(entity.{propertyName});",
+            "DateTime" => $"document[\"{propertyName}\"] = new BsonDateTime(entity.{propertyName});",
+            "Guid" => $"document[\"{propertyName}\"] = new BsonBinary(entity.{propertyName});",
+            "ObjectId" => $"document[\"{propertyName}\"] = new BsonObjectId(entity.{propertyName});",
+            _ when propertyType.EndsWith("?") => $"document[\"{propertyName}\"] = entity.{propertyName} == null ? BsonNull.Value : ConvertToBsonValue(entity.{propertyName});",
+            _ => $"document[\"{propertyName}\"] = ConvertToBsonValue(entity.{propertyName});"
+        };
+    }
+
+    /// <summary>
+    /// 生成属性反序列化代码
+    /// </summary>
+    public static string GeneratePropertyDeserialization(PropertyInfo prop)
+    {
+        var propertyName = prop.Name;
+        var propertyType = prop.Type;
+
+        return propertyType switch
+        {
+            "string" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonString str{propertyName}) entity.{propertyName} = str{propertyName}.Value;",
+            "int" or "Int32" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value;",
+            "long" or "Int64" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value;",
+            "double" or "Double" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value;",
+            "float" or "Single" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = (float)dbl{propertyName}.Value;",
+            "decimal" or "Decimal" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDecimal128 dec{propertyName}) entity.{propertyName} = dec{propertyName}.Value;",
+            "bool" or "Boolean" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value;",
+            "DateTime" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value;",
+            "Guid" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = guid{propertyName}.Value;",
+            "ObjectId" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value;",
+            _ when propertyType.EndsWith("?") => GenerateNullablePropertyDeserialization(prop),
+            _ => $"entity.{propertyName} = ConvertFromBsonValue<{propertyType}>(document[\"{propertyName}\"]);"
+        };
+    }
+
+    /// <summary>
+    /// 生成可空属性反序列化代码
+    /// </summary>
+    private static string GenerateNullablePropertyDeserialization(PropertyInfo prop)
+    {
+        var propertyName = prop.Name;
+        var underlyingType = prop.Type.Replace("?", "");
+
+        return underlyingType switch
+        {
+            "int" or "Int32" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value; else entity.{propertyName} = null;",
+            "long" or "Int64" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value; else entity.{propertyName} = null;",
+            "double" or "Double" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value; else entity.{propertyName} = null;",
+            "bool" or "Boolean" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value; else entity.{propertyName} = null;",
+            "DateTime" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value; else entity.{propertyName} = null;",
+            "Guid" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = guid{propertyName}.Value; else entity.{propertyName} = null;",
+            "ObjectId" => $"if (document.TryGetValue(\"{propertyName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value; else entity.{propertyName} = null;",
+            _ => $"entity.{propertyName} = document[\"{propertyName}\"].IsNull ? null : ConvertFromBsonValue<{underlyingType}>(document[\"{propertyName}\"]);"
+        };
     }
 }

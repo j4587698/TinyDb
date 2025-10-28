@@ -58,8 +58,8 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
         // 确保实体有ID
         EnsureEntityHasId(entity);
 
-        // 转换为BSON文档
-        var document = BsonMapper.ToDocument(entity);
+        // 转换为BSON文档（AOT兼容）
+        var document = AotBsonMapper.ToDocument(entity);
 
         // 插入到数据库
         var id = _engine.InsertDocument(_name, document);
@@ -139,8 +139,8 @@ public sealed class DocumentCollection<T> : ILiteCollection<T>, IDocumentCollect
 
         var id = AotIdAccessor<T>.GetId(entity);
 
-        // 转换为BSON文档
-        var document = BsonMapper.ToDocument(entity);
+        // 转换为BSON文档（AOT兼容）
+        var document = AotBsonMapper.ToDocument(entity);
 
         // 更新到数据库
         return _engine.UpdateDocument(_name, document);

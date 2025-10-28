@@ -67,7 +67,7 @@ public static class BsonMapper
     /// </summary>
     /// <typeparam name="T">对象类型</typeparam>
     /// <returns>ID 属性访问器</returns>
-    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
+    [RequiresDynamicCode("ID property discovery requires dynamic code")]
     public static PropertyAccessor<T>? GetIdProperty<T>()
         where T : class
     {
@@ -125,7 +125,8 @@ public static class BsonMapper
     /// <typeparam name="T">对象类型</typeparam>
     /// <param name="entity">对象实例</param>
     /// <returns>ID 值</returns>
-    public static BsonValue GetId<T>([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T entity)
+    [RequiresDynamicCode("ID property access requires dynamic code")]
+    public static BsonValue GetId<T>(T entity)
         where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -146,7 +147,8 @@ public static class BsonMapper
     /// <typeparam name="T">对象类型</typeparam>
     /// <param name="entity">对象实例</param>
     /// <param name="id">ID 值</param>
-    public static void SetId<T>([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T entity, BsonValue id)
+    [RequiresDynamicCode("ID property access requires dynamic code")]
+    public static void SetId<T>(T entity, BsonValue id)
         where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));

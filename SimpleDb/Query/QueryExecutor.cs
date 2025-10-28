@@ -183,7 +183,7 @@ public sealed class QueryExecutor
     /// <param name="entity">实体对象</param>
     /// <returns>成员值</returns>
     [RequiresDynamicCode("Member access using reflection requires dynamic code")]
-    private static object? GetMemberValue<T>(MemberExpression expression, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T entity)
+    private static object? GetMemberValue<T>(MemberExpression expression, T entity)
         where T : class
     {
         var propertyInfo = typeof(T).GetProperty(expression.MemberName);

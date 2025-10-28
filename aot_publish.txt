@@ -2,13 +2,7 @@
   所有项目均是最新的，无法还原。
   SimpleDb.SourceGenerator -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.SourceGenerator/bin/Release/net9.0/SimpleDb.SourceGenerator.dll
   SimpleDb -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb/bin/Release/net9.0/SimpleDb.dll
-  SimpleDb.Demo -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/bin/Release/net9.0/SimpleDb.Demo.dll
-  SimpleDb.Tests -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Tests/bin/Release/net9.0/SimpleDb.Tests.dll
-
-已成功生成。
-    0 个警告
-    0 个错误
-
-已用时间 00:00:03.39
+  SimpleDb.Demo -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/bin/Release/net9.0/linux-x64/SimpleDb.Demo.dll
+  SimpleDb.Demo -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/bin/Release/net9.0/linux-x64/publish/
 
 有可用的工作负载更新。有关详细信息，请运行 `dotnet workload list`。
