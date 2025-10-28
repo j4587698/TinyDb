@@ -39,6 +39,7 @@ public sealed class Queryable<T> : IQueryable<T>
     /// <param name="executor">查询执行器</param>
     /// <param name="collectionName">集合名称</param>
     /// <param name="expression">查询表达式</param>
+    [RequiresDynamicCode("LINQ query expressions require dynamic code generation")]
     public Queryable(QueryExecutor executor, string collectionName, Expression? expression = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));

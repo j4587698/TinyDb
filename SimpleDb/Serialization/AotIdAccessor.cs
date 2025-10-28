@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using System.Diagnostics.CodeAnalysis;
 using SimpleDb.Bson;
 
 namespace SimpleDb.Serialization;
@@ -7,6 +8,7 @@ namespace SimpleDb.Serialization;
 /// <summary>
 /// AOT兼容的ID属性访问器 - 使用直接反射避免表达式树问题
 /// </summary>
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
 public static class AotIdAccessor<T>
     where T : class
 {
@@ -50,7 +52,7 @@ public static class AotIdAccessor<T>
     /// <summary>
     /// 硬编码尝试获取属性，避免AOT反射问题
     /// </summary>
-    private static PropertyInfo? TryGetPropertyHardcoded(Type type, params string[] propertyNames)
+    private static PropertyInfo? TryGetPropertyHardcoded([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type type, params string[] propertyNames)
     {
         try
         {

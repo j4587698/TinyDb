@@ -1,0 +1,110 @@
+生成启动时间为 2025/10/28 02:55:04。
+     1>项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”在节点 1 上(Restore 个目标)。
+     1>ValidateSolutionConfiguration:
+         正在生成解决方案配置“Release|Any CPU”。
+       _GetAllRestoreProjectPathItems:
+         正在确定要还原的项目…
+       Restore:
+         X.509 证书链验证将使用 "/usr/lib/dotnet/sdk/9.0.305/trustedroots/codesignctl.pem" 处的回退证书捆绑包。
+         X.509 证书链验证将使用 "/usr/lib/dotnet/sdk/9.0.305/trustedroots/timestampctl.pem" 处的回退证书捆绑包。
+         资产文件未改变。跳过资产文件写入。路径: /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Tests/obj/project.assets.json
+         资产文件未改变。跳过资产文件写入。路径: /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/obj/project.assets.json
+         资产文件未改变。跳过资产文件写入。路径: /home/j4587698/RiderProjects/SimpleDb/SimpleDb/obj/project.assets.json
+         资产文件未改变。跳过资产文件写入。路径: /home/j4587698/RiderProjects/SimpleDb/SimpleDb.SourceGenerator/obj/project.assets.json
+         已还原 /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Tests/SimpleDb.Tests.csproj (用时 92 毫秒)。
+         已还原 /home/j4587698/RiderProjects/SimpleDb/SimpleDb.SourceGenerator/SimpleDb.SourceGenerator.csproj (用时 94 毫秒)。
+         已还原 /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/SimpleDb.Demo.csproj (用时 90 毫秒)。
+         已还原 /home/j4587698/RiderProjects/SimpleDb/SimpleDb/SimpleDb.csproj (用时 92 毫秒)。
+         
+         使用的 NuGet 配置文件:
+             /home/j4587698/.nuget/NuGet/NuGet.Config
+         
+         使用的源:
+             https://api.nuget.org/v3/index.json
+             /usr/lib/dotnet/library-packs
+         所有项目均是最新的，无法还原。
+     1>已完成生成项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(Restore 个目标)的操作。
+   1:2>节点 1 上的项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(默认目标)。
+     1>ValidateSolutionConfiguration:
+         正在生成解决方案配置“Release|Any CPU”。
+   1:2>项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(1:2)正在节点 3 上生成“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.SourceGenerator/SimpleDb.SourceGenerator.csproj”(4:8) (默认目标)。
+     4>GenerateTargetFrameworkMonikerAttribute:
+       正在跳过目标“GenerateTargetFrameworkMonikerAttribute”，因为所有输出文件相对于输入文件而言都是最新的。
+       CoreGenerateAssemblyInfo:
+       正在跳过目标“CoreGenerateAssemblyInfo”，因为所有输出文件相对于输入文件而言都是最新的。
+       _GenerateSourceLinkFile:
+         Source Link 为空，则文件 "obj/Release/net9.0/SimpleDb.SourceGenerator.sourcelink.json" 不存在。
+       CoreCompile:
+       正在跳过目标“CoreCompile”，因为所有输出文件相对于输入文件而言都是最新的。
+       GenerateBuildDependencyFile:
+       正在跳过目标“GenerateBuildDependencyFile”，因为所有输出文件相对于输入文件而言都是最新的。
+       CopyFilesToOutputDirectory:
+         SimpleDb.SourceGenerator -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.SourceGenerator/bin/Release/net9.0/SimpleDb.SourceGenerator.dll
+     4>已完成生成项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.SourceGenerator/SimpleDb.SourceGenerator.csproj”(默认目标)的操作。
+   1:2>项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(1:2)正在节点 1 上生成“/home/j4587698/RiderProjects/SimpleDb/SimpleDb/SimpleDb.csproj”(2:8) (默认目标)。
+     2>GenerateTargetFrameworkMonikerAttribute:
+       正在跳过目标“GenerateTargetFrameworkMonikerAttribute”，因为所有输出文件相对于输入文件而言都是最新的。
+       CoreGenerateAssemblyInfo:
+       正在跳过目标“CoreGenerateAssemblyInfo”，因为所有输出文件相对于输入文件而言都是最新的。
+       _GenerateSourceLinkFile:
+         Source Link 为空，则文件 "obj/Release/net9.0/SimpleDb.sourcelink.json" 不存在。
+       CoreCompile:
+       正在跳过目标“CoreCompile”，因为所有输出文件相对于输入文件而言都是最新的。
+       GenerateBuildDependencyFile:
+       正在跳过目标“GenerateBuildDependencyFile”，因为所有输出文件相对于输入文件而言都是最新的。
+       CopyFilesToOutputDirectory:
+         SimpleDb -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb/bin/Release/net9.0/SimpleDb.dll
+     2>已完成生成项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb/SimpleDb.csproj”(默认目标)的操作。
+   1:2>项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(1:2)正在节点 4 上生成“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/SimpleDb.Demo.csproj”(5:6) (默认目标)。
+     5>GenerateTargetFrameworkMonikerAttribute:
+       正在跳过目标“GenerateTargetFrameworkMonikerAttribute”，因为所有输出文件相对于输入文件而言都是最新的。
+   1:2>项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(1:2)正在节点 2 上生成“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.Tests/SimpleDb.Tests.csproj”(3:6) (默认目标)。
+     3>GenerateTargetFrameworkMonikerAttribute:
+       正在跳过目标“GenerateTargetFrameworkMonikerAttribute”，因为所有输出文件相对于输入文件而言都是最新的。
+       _GenerateTestingPlatformEntryPoint:
+       正在跳过目标“_GenerateTestingPlatformEntryPoint”，因为所有输出文件相对于输入文件而言都是最新的。
+       _GenerateSelfRegisteredExtensions:
+       正在跳过目标“_GenerateSelfRegisteredExtensions”，因为所有输出文件相对于输入文件而言都是最新的。
+     5>CoreGenerateAssemblyInfo:
+       正在跳过目标“CoreGenerateAssemblyInfo”，因为所有输出文件相对于输入文件而言都是最新的。
+       _GenerateSourceLinkFile:
+         Source Link 为空，则文件 "obj/Release/net9.0/SimpleDb.Demo.sourcelink.json" 不存在。
+       CoreCompile:
+       正在跳过目标“CoreCompile”，因为所有输出文件相对于输入文件而言都是最新的。
+       _CreateAppHost:
+       正在跳过目标“_CreateAppHost”，因为所有输出文件相对于输入文件而言都是最新的。
+       _CopyOutOfDateSourceItemsToOutputDirectory:
+       正在跳过目标“_CopyOutOfDateSourceItemsToOutputDirectory”，因为所有输出文件相对于输入文件而言都是最新的。
+       GenerateBuildDependencyFile:
+       正在跳过目标“GenerateBuildDependencyFile”，因为所有输出文件相对于输入文件而言都是最新的。
+       GenerateBuildRuntimeConfigurationFiles:
+       正在跳过目标“GenerateBuildRuntimeConfigurationFiles”，因为所有输出文件相对于输入文件而言都是最新的。
+       CopyFilesToOutputDirectory:
+         SimpleDb.Demo -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/bin/Release/net9.0/SimpleDb.Demo.dll
+     5>已完成生成项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.Demo/SimpleDb.Demo.csproj”(默认目标)的操作。
+     3>CoreGenerateAssemblyInfo:
+       正在跳过目标“CoreGenerateAssemblyInfo”，因为所有输出文件相对于输入文件而言都是最新的。
+       _GenerateSourceLinkFile:
+         Source Link 为空，则文件 "obj/Release/net9.0/SimpleDb.Tests.sourcelink.json" 不存在。
+       CoreCompile:
+       正在跳过目标“CoreCompile”，因为所有输出文件相对于输入文件而言都是最新的。
+       _CreateAppHost:
+       正在跳过目标“_CreateAppHost”，因为所有输出文件相对于输入文件而言都是最新的。
+       _CopyOutOfDateSourceItemsToOutputDirectory:
+       正在跳过目标“_CopyOutOfDateSourceItemsToOutputDirectory”，因为所有输出文件相对于输入文件而言都是最新的。
+       GenerateBuildDependencyFile:
+       正在跳过目标“GenerateBuildDependencyFile”，因为所有输出文件相对于输入文件而言都是最新的。
+       GenerateBuildRuntimeConfigurationFiles:
+       正在跳过目标“GenerateBuildRuntimeConfigurationFiles”，因为所有输出文件相对于输入文件而言都是最新的。
+       CopyFilesToOutputDirectory:
+         SimpleDb.Tests -> /home/j4587698/RiderProjects/SimpleDb/SimpleDb.Tests/bin/Release/net9.0/SimpleDb.Tests.dll
+     3>已完成生成项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.Tests/SimpleDb.Tests.csproj”(默认目标)的操作。
+     1>已完成生成项目“/home/j4587698/RiderProjects/SimpleDb/SimpleDb.sln”(默认目标)的操作。
+
+已成功生成。
+    0 个警告
+    0 个错误
+
+已用时间 00:00:05.64
+
+有可用的工作负载更新。有关详细信息，请运行 `dotnet workload list`。

@@ -23,7 +23,7 @@ public static class BsonMapper
     /// <param name="entity">对象实例</param>
     /// <returns>BSON 文档</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
+    [RequiresDynamicCode("Object serialization requires dynamic code generation")]
     public static BsonDocument ToDocument<T>(T entity)
         where T : class
     {
@@ -67,7 +67,7 @@ public static class BsonMapper
     /// </summary>
     /// <typeparam name="T">对象类型</typeparam>
     /// <returns>ID 属性访问器</returns>
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
     public static PropertyAccessor<T>? GetIdProperty<T>()
         where T : class
     {
@@ -125,8 +125,7 @@ public static class BsonMapper
     /// <typeparam name="T">对象类型</typeparam>
     /// <param name="entity">对象实例</param>
     /// <returns>ID 值</returns>
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
-    public static BsonValue GetId<T>(T entity)
+    public static BsonValue GetId<T>([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T entity)
         where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -147,8 +146,7 @@ public static class BsonMapper
     /// <typeparam name="T">对象类型</typeparam>
     /// <param name="entity">对象实例</param>
     /// <param name="id">ID 值</param>
-    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
-    public static void SetId<T>(T entity, BsonValue id)
+    public static void SetId<T>([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T entity, BsonValue id)
         where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -303,6 +301,7 @@ public abstract class ObjectSerializer
 /// 对象序列化器
 /// </summary>
 /// <typeparam name="T">对象类型</typeparam>
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
 public sealed class ObjectSerializer<T> : ObjectSerializer
     where T : class
 {
