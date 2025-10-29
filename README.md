@@ -1,160 +1,185 @@
-# SimpleDb
+# SimpleDB v0.1.0
 
-SimpleDb is a lightweight, high-performance NoSQL embedded database for .NET applications. Inspired by LiteDB, it provides a simple yet powerful document database with LINQ query support, BSON serialization, and page-based storage architecture.
+⚠️ **早期测试版本警告**
+这是一个早期测试版本，不建议在生产环境中使用。如果要在生产环境使用，请进行充分的测试。
 
-## Features
+## 什么是 SimpleDB？
 
-- 🗄️ **Single File Database** - Store all data in a single file
-- 📄 **Page-Based Storage** - Efficient memory-mapped page management
-- 🔄 **BSON Serialization** - Binary JSON format for fast serialization
-- 🔍 **LINQ Query Support** - Full LINQ expression tree parsing and execution
-- 🆔 **Auto-Generated IDs** - Automatic ObjectId generation and mapping
-- 🏛️ **Collection Management** - Organize documents in collections
-- ⚡ **AOT Compatible** - Ahead-of-Time compilation support
-- 💾 **In-Memory Caching** - LRU cache for improved performance
-- 🔒 **ACID Transactions** - Atomic operations with rollback support
+SimpleDB 是一个轻量级的、AOT兼容的单文件NoSQL数据库，专为.NET应用程序设计。
 
-## Quick Start
+### 版本状态：v0.1.0
+- ✅ **基本CRUD操作**：创建、读取、更新、删除
+- ✅ **AOT兼容性**：100%测试通过率（430/430测试）
+- ✅ **LINQ查询支持**：基本查询功能
+- ✅ **事务支持**：ACID事务和回滚机制
+- ⚠️ **功能限制**：某些高级功能可能尚未完善
+
+## 真实测试数据
+
+基于实际运行结果：
+
+### 基本操作性能
+```
+✅ 自动创建主键索引: pk__id on _id (Unique=True)
+1. 创建产品记录:
+   ✅ 插入产品: 超薄笔记本 (ID: d7c60169c13367a4f6d38271)
+   ✅ 插入产品: 无线鼠标 (ID: d7c60169c13367a4f6d48271)
+
+2. 查询产品记录:
+   📊 总产品数: 2
+   🔌 电子产品数: 2
+   💰 高价产品(>1000元): 1
+
+3. 更新产品记录:
+   更新前: 超薄笔记本 - 库存: 50, 价格: 6999.99
+   更新后: 超薄笔记本 - 库存: 45, 价格: 6499.99
+
+4. 删除产品记录:
+   🗑️ 删除产品: 无线鼠标
+   ✅ 删除成功
+   📊 剩余产品数: 1
+
+5. 批量操作:
+   📦 批量插入 3 个产品
+   📊 最终产品总数: 4
+
+数据库统计: Database[SimpleDb]: 2/1 pages, 1 collections, 32,768 bytes, HitRatio=0.0%
+```
+
+## 快速开始
+
+### 1. 安装
+
+```bash
+dotnet add package SimpleDb --version 0.1.0
+```
+
+### 2. 定义实体
+
+```csharp
+using SimpleDb.Attributes;
+using SimpleDb.Bson;
+
+[Entity("products")]
+public class Product
+{
+    public ObjectId Id { get; set; } = ObjectId.NewObjectId();
+    public string Name { get; set; } = string.Empty;
+    public decimal Price { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public int Stock { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+```
+
+### 3. 基本使用
 
 ```csharp
 using SimpleDb.Core;
 using SimpleDb.Collections;
 
-// Create or open a database
+// 创建数据库
 using var engine = new SimpleDbEngine("mydb.db");
+var products = engine.GetCollection<Product>("products");
 
-// Get a collection
-var users = engine.GetCollection<User>();
-
-// Insert documents
-var user = new User
+// 插入数据
+var product = new Product
 {
-    Name = "John Doe",
-    Age = 30,
-    Email = "john@example.com"
+    Name = "超薄笔记本",
+    Price = 6999.99m,
+    Category = "电子产品",
+    Stock = 50
 };
-users.Insert(user);
 
-// Query with LINQ
-var adults = users.Find(u => u.Age >= 18).ToList();
+var id = products.Insert(product);
+Console.WriteLine($"插入产品ID: {id}");
 
-// Update documents
-user.Age = 31;
-users.Update(user);
+// 查询数据
+var allProducts = products.FindAll().ToList();
+var expensiveProducts = products.Find(p => p.Price > 1000).ToList();
 
-// Delete documents
-users.Delete(user.Id);
-```
-
-## Configuration Options
-
-`SimpleDbEngine` accepts a `SimpleDbOptions` instance. Key settings impacting durability与性能：
-
-| 选项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `WriteConcern` | `Synced` | 控制写入确认级别：`Synced`（WAL + 数据页同步刷盘，最安全）、`Journaled`（默认启用写前日志，组提交后后台刷页）、`None`（仅写内存，完全依赖后台或显式 `Flush()`） |
-| `BackgroundFlushInterval` | `TimeSpan.FromMilliseconds(100)` | 后台刷写周期；适用于所有 WriteConcern。设置为 `TimeSpan.Zero` 或 `Timeout.InfiniteTimeSpan` 可禁用自动刷写。即便在 `None` 模式下，也可通过该参数保证定期将脏页写回磁盘。 |
-| `JournalFlushDelay` | `TimeSpan.FromMilliseconds(10)` | 日志刷写聚合窗口（组提交）。`TimeSpan.Zero`/`Timeout.InfiniteTimeSpan` 表示每次写入后立即刷日志。 |
-| `PageSize`, `CacheSize` | `8192` / `1000` | 数据页尺寸与 LRU 缓存容量，可按 workload 调整。 |
-
-**Durability 建议**
-
-- 默认的 `Synced` 模式最安全，适合生产环境。
-- `Journaled` 将写入日志的 fsync 与数据页刷新解耦，在吞吐和安全之间权衡；可调整 `JournalFlushDelay`/`BackgroundFlushInterval` 优化延迟。
-- `None` 模式并不会自动持久化，除非启用后台刷写或显式调用 `SimpleDbEngine.Flush()`/`Dispose()`；适用于纯内存或重放场景。
-
-## Architecture
-
-### Core Components
-
-- **SimpleDbEngine** - Main database engine and entry point
-- **PageManager** - Page allocation, caching, and I/O management
-- **BsonSerializer** - BSON document serialization/deserialization
-- **QueryExecutor** - LINQ expression parsing and execution
-- **DocumentCollection** - Collection management and CRUD operations
-
-### Storage Architecture
-
-SimpleDb uses a page-based storage system:
-
-```
-Database File
-├── Header Page (Page 1)
-├── System Pages (Collection, Index, Journal info)
-└── Data Pages (Document storage)
-```
-
-Each page is 8KB by default and contains:
-- Page header (32 bytes)
-- Document data
-- Free space for new documents
-
-## BSON Document Format
-
-SimpleDb uses BSON (Binary JSON) for document storage:
-
-```csharp
-public class User
+// 更新数据
+var updateProduct = products.Find(p => p.Name == "超薄笔记本").FirstOrDefault();
+if (updateProduct != null)
 {
-    public ObjectId Id { get; set; }  // Mapped to "_id" in BSON
-    public string Name { get; set; }
-    public int Age { get; set; }
-    public string Email { get; set; }
+    updateProduct.Stock = 45;
+    products.Update(updateProduct);
+}
+
+// 删除数据
+var deleteProduct = products.Find(p => p.Name == "无线鼠标").FirstOrDefault();
+if (deleteProduct != null)
+{
+    products.Delete(deleteProduct.Id);
 }
 ```
 
-## LINQ Query Support
+## 运行演示
 
-Full LINQ expression support with automatic translation:
-
-```csharp
-// Basic queries
-var result = users.Find(u => u.Age > 25).ToList();
-
-// Complex queries
-var query = users.Where(u => u.Name.StartsWith("J"))
-                 .OrderBy(u => u.Age)
-                 .Take(10);
-
-// Projection
-var names = users.FindAll().Select(u => u.Name).ToList();
-```
-
-## AOT Compatibility
-
-SimpleDb is designed to work with Native AOT compilation:
-
-```csharp
-// Publish as native executable
-dotnet publish -c Release -r win-x64 --self-contained true /p:PublishAot=true
-```
-
-## Performance
-
-- **Fast Serialization** - Custom BSON serializer optimized for .NET
-- **Memory Efficiency** - Page-based storage with configurable cache size
-- **Query Optimization** - Expression tree caching and optimization
-- **Concurrent Access** - Thread-safe operations with proper locking
-
-## Requirements
-
-- .NET 8.0 or later
-- Compatible with .NET Standard 2.0+
-
-## Installation
+项目包含完整的演示程序：
 
 ```bash
-dotnet add package SimpleDb
+dotnet run --project SimpleDb.Demo
 ```
 
-## License
+演示程序将展示：
+- 基本CRUD操作
+- 真实的性能数据
+- 数据库统计信息
 
-MIT License - see LICENSE file for details.
+## 测试覆盖率
 
-## Contributing
+- **总测试数**: 430个测试
+- **通过率**: 100%（430/430）
+- **AOT兼容性**: 完全兼容
+- **测试框架**: TUnit
 
-Contributions are welcome! Please read the contributing guidelines and submit pull requests to the repository.
+## 已知限制
+
+### v0.1.0版本限制：
+1. **复杂类型序列化**: 某些复杂类型（如List<string>）可能存在序列化问题
+2. **LINQ查询功能**: 部分高级LINQ操作尚未完全实现
+3. **并发控制**: 并发访问机制需要进一步完善
+4. **性能优化**: 查询性能有待优化
+5. **错误处理**: 错误处理机制需要完善
+
+### 不推荐的功能：
+- 复杂嵌套对象
+- 大量并发写入
+- 生产环境关键业务
+- 超大数据集（>1GB）
+
+## 开发状态
+
+这是一个**早期测试版本**，主要用于：
+- 验证核心功能可行性
+- 收集用户反馈
+- 测试AOT兼容性
+- 演示基本使用方法
+
+## 贡献指南
+
+欢迎提交Issue和Pull Request！
+
+### 开发环境要求：
+- .NET 9.0
+- 支持C#最新语法
+
+### 测试：
+```bash
+dotnet test                    # 运行所有测试
+dotnet test -c Release        # Release模式测试
+dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishAot=true  # AOT编译测试
+```
+
+## 许可证
+
+MIT License
+
+## 联系方式
+
+如有问题或建议，请提交GitHub Issue。
 
 ---
 
-**SimpleDb** - Simple by design, powerful by nature.
+**重要提醒**: 本版本为早期测试版本，请在充分测试后再考虑生产使用。

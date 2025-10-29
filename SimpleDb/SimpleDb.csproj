@@ -8,8 +8,9 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <PackageId>SimpleDb</PackageId>
+        <Version>0.1.0</Version>
         <Authors>SimpleDb Team</Authors>
-        <Description>A lightweight, AOT-compatible single-file NoSQL database for .NET</Description>
+        <Description>SimpleDb v0.1 - 早期测试版本，轻量级的AOT兼容单文件NoSQL数据库</Description>
         <Copyright>Copyright © 2024 SimpleDb Team</Copyright>
         <IsAotCompatible>true</IsAotCompatible>
     </PropertyGroup>
