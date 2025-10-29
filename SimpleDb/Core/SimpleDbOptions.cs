@@ -1,3 +1,6 @@
+using System;
+using System.Threading;
+
 namespace SimpleDb.Core;
 
 /// <summary>
@@ -96,9 +99,28 @@ public sealed class SimpleDbOptions
     public TimeSpan TransactionTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// 是否启用同步写入
+    /// 写入关注级别
     /// </summary>
-    public bool SynchronousWrites { get; set; } = true;
+    public WriteConcern WriteConcern { get; set; } = WriteConcern.Synced;
+
+    /// <summary>
+    /// 后台刷写周期（应用于数据页和日志）；&lt;= 0 禁用自动刷写。
+    /// </summary>
+    public TimeSpan BackgroundFlushInterval { get; set; } = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// 日志聚合刷写延迟（Journaled 模式组提交窗口）；&lt;= 0 表示立即刷写。
+    /// </summary>
+    public TimeSpan JournalFlushDelay { get; set; } = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>
+    /// 是否启用同步写入（兼容旧配置）。
+    /// </summary>
+    public bool SynchronousWrites
+    {
+        get => WriteConcern == WriteConcern.Synced;
+        set => WriteConcern = value ? WriteConcern.Synced : WriteConcern.Journaled;
+    }
 
     /// <summary>
     /// 验证选项并抛出异常（如果有问题）
@@ -151,6 +173,12 @@ public sealed class SimpleDbOptions
 
         if (TransactionTimeout <= TimeSpan.Zero)
             throw new ArgumentException("Transaction timeout must be positive", nameof(TransactionTimeout));
+
+        if (BackgroundFlushInterval < TimeSpan.Zero && BackgroundFlushInterval != System.Threading.Timeout.InfiniteTimeSpan)
+            throw new ArgumentException("Background flush interval must be non-negative or Infinite", nameof(BackgroundFlushInterval));
+
+        if (JournalFlushDelay < TimeSpan.Zero && JournalFlushDelay != System.Threading.Timeout.InfiniteTimeSpan)
+            throw new ArgumentException("Journal flush delay must be non-negative or Infinite", nameof(JournalFlushDelay));
     }
 
     /// <summary>
@@ -186,7 +214,9 @@ public sealed class SimpleDbOptions
             MaxTransactionSize = MaxTransactionSize,
             MaxTransactions = MaxTransactions,
             TransactionTimeout = TransactionTimeout,
-            SynchronousWrites = SynchronousWrites
+            WriteConcern = WriteConcern,
+            BackgroundFlushInterval = BackgroundFlushInterval,
+            JournalFlushDelay = JournalFlushDelay
         };
     }
 

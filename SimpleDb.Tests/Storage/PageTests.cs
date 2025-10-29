@@ -1,5 +1,6 @@
-using SimpleDb.Storage;
+using System;
 using System.Linq;
+using SimpleDb.Storage;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -166,8 +167,8 @@ public class PageTests : IDisposable
         await Assert.That(page.Header.PageType).IsEqualTo(PageType.Empty); // Reset to Empty
         await Assert.That(page.Header.PrevPageID).IsEqualTo(0u);
         await Assert.That(page.Header.NextPageID).IsEqualTo(0u);
-        await Assert.That(page.Header.FreeBytes == 0).IsTrue();
-        await Assert.That(page.Header.ItemCount == 0).IsTrue();
+        await Assert.That(page.Header.FreeBytes).IsEqualTo((ushort)Math.Min(page.DataSize, ushort.MaxValue));
+        await Assert.That(page.Header.ItemCount).IsEqualTo((ushort)0);
         await Assert.That(page.Header.Version).IsEqualTo(0u);
     }
 

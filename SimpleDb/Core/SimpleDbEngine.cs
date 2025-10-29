@@ -1,11 +1,14 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using SimpleDb.Bson;
 using SimpleDb.Collections;
+using SimpleDb.Index;
 using SimpleDb.Serialization;
 using SimpleDb.Storage;
-using SimpleDb.Bson;
-using SimpleDb.Index;
-using System.Runtime.CompilerServices;
 
 namespace SimpleDb.Core;
 
@@ -18,13 +21,64 @@ public sealed class SimpleDbEngine : IDisposable
     private readonly SimpleDbOptions _options;
     private readonly DiskStream _diskStream;
     private readonly PageManager _pageManager;
+    private readonly WriteAheadLog _writeAheadLog;
+    private readonly FlushScheduler _flushScheduler;
     private readonly ConcurrentDictionary<string, IDocumentCollection> _collections;
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly TransactionManager _transactionManager;
+    private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
     private readonly object _lock = new();
     private DatabaseHeader _header;
     private bool _disposed;
     private bool _isInitialized;
+
+    private const int DocumentLengthPrefixSize = sizeof(int);
+    private const int MinimumFreeSpaceThreshold = DocumentLengthPrefixSize + 64;
+
+    private sealed class CollectionState
+    {
+        private int _cacheInitialized;
+
+        public DataPageState PageState { get; } = new();
+        public ConcurrentDictionary<string, DocumentLocation> DocumentLocations { get; } = new(StringComparer.Ordinal);
+        public object CacheLock { get; } = new();
+
+        public bool IsCacheInitialized => Volatile.Read(ref _cacheInitialized) == 1;
+
+        public void MarkCacheInitialized() => Volatile.Write(ref _cacheInitialized, 1);
+    }
+
+    private sealed class DataPageState
+    {
+        public uint PageId;
+        public readonly object SyncRoot = new();
+    }
+
+    private readonly struct DocumentLocation
+    {
+        public DocumentLocation(uint pageId, ushort entryIndex)
+        {
+            PageId = pageId;
+            EntryIndex = entryIndex;
+        }
+
+        public uint PageId { get; }
+        public ushort EntryIndex { get; }
+    }
+
+    private readonly struct PageDocumentEntry
+    {
+        public PageDocumentEntry(BsonDocument document, byte[] rawBytes)
+        {
+            Document = document;
+            RawBytes = rawBytes;
+        }
+
+        public BsonDocument Document { get; }
+        public byte[] RawBytes { get; }
+
+        public BsonValue Id => Document.TryGetValue("_id", out var id) ? id : BsonNull.Value;
+    }
 
     /// <summary>
     /// 文件路径
@@ -64,11 +118,29 @@ public sealed class SimpleDbEngine : IDisposable
 
         _diskStream = new DiskStream(_filePath);
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
+        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling);
+        _flushScheduler = new FlushScheduler(
+            _pageManager,
+            _writeAheadLog,
+            NormalizeInterval(_options.BackgroundFlushInterval),
+            NormalizeInterval(_options.JournalFlushDelay));
         _collections = new ConcurrentDictionary<string, IDocumentCollection>();
         _indexManagers = new ConcurrentDictionary<string, IndexManager>();
+        _collectionStates = new ConcurrentDictionary<string, CollectionState>();
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
 
+        RecoverFromWriteAheadLog();
         InitializeDatabase();
+    }
+
+    private static TimeSpan NormalizeInterval(TimeSpan interval)
+    {
+        if (interval == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            return TimeSpan.Zero;
+        }
+
+        return interval;
     }
 
     /// <summary>
@@ -129,6 +201,24 @@ public sealed class SimpleDbEngine : IDisposable
         }
     }
 
+    private void RecoverFromWriteAheadLog()
+    {
+        if (!_writeAheadLog.IsEnabled) return;
+
+        try
+        {
+            _writeAheadLog.ReplayAsync((pageId, data) =>
+            {
+                _pageManager.RestorePage(pageId, data);
+                return Task.CompletedTask;
+            }).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: WAL recovery failed: {ex.Message}");
+        }
+    }
+
     /// <summary>
     /// 读取数据库头部
     /// </summary>
@@ -157,7 +247,7 @@ public sealed class SimpleDbEngine : IDisposable
         headerPage.WriteData(0, headerData);
         headerPage.UpdateStats((ushort)(headerPage.DataSize - headerData.Length), 1);
 
-        _pageManager.SavePage(headerPage, _options.SynchronousWrites);
+        _pageManager.SavePage(headerPage, forceFlush: _options.WriteConcern == WriteConcern.Synced);
     }
 
     /// <summary>
@@ -203,7 +293,7 @@ public sealed class SimpleDbEngine : IDisposable
         page.WriteData(0, paddedIdentifier);
         page.UpdateStats((ushort)(page.DataSize - paddedIdentifier.Length), 1);
 
-        _pageManager.SavePage(page, _options.SynchronousWrites);
+        _pageManager.SavePage(page, forceFlush: _options.WriteConcern == WriteConcern.Synced);
 
         return page.PageID;
     }
@@ -259,7 +349,7 @@ public sealed class SimpleDbEngine : IDisposable
         collectionPage.WriteData(32, collectionData);
         collectionPage.UpdateStats((ushort)(collectionPage.DataSize - 32 - collectionData.Length), 1);
 
-        _pageManager.SavePage(collectionPage, _options.SynchronousWrites);
+        _pageManager.SavePage(collectionPage, forceFlush: _options.WriteConcern == WriteConcern.Synced);
     }
 
     /// <summary>
@@ -332,6 +422,7 @@ public sealed class SimpleDbEngine : IDisposable
             }
 
             SaveCollections();
+            _collectionStates.TryRemove(collectionName, out _);
             return true;
         }
 
@@ -363,6 +454,447 @@ public sealed class SimpleDbEngine : IDisposable
         return _collections.ContainsKey(collectionName);
     }
 
+    private static int GetEntrySize(int documentLength) => DocumentLengthPrefixSize + documentLength;
+
+    private int GetMaxDocumentSize()
+    {
+        var usable = (int)Math.Min(_pageManager.PageSize - PageHeader.Size - DocumentLengthPrefixSize, int.MaxValue);
+        return Math.Max(usable, 0);
+    }
+
+    private void InitializeDataPage(Page page)
+    {
+        var freeBytes = (ushort)Math.Min(page.DataSize, ushort.MaxValue);
+        page.UpdateStats(freeBytes, 0);
+    }
+
+    private (Page page, bool isNewPage) GetWritableDataPageLocked(string collectionName, DataPageState state, int requiredSize)
+    {
+        if (requiredSize > GetMaxDocumentSize())
+        {
+            throw new InvalidOperationException($"Document is too large: {requiredSize - DocumentLengthPrefixSize} bytes");
+        }
+
+        if (state.PageId != 0)
+        {
+            var existingPage = _pageManager.GetPage(state.PageId);
+            if (existingPage.Header.FreeBytes >= requiredSize)
+            {
+                return (existingPage, false);
+            }
+
+            state.PageId = 0;
+        }
+
+        var page = _pageManager.NewPage(PageType.Data);
+        InitializeDataPage(page);
+        state.PageId = page.PageID;
+        return (page, true);
+    }
+
+    private static int GetUsedBytes(Page page) => page.DataSize - page.Header.FreeBytes;
+
+    private void PersistPage(Page page)
+    {
+        if (page == null) throw new ArgumentNullException(nameof(page));
+
+        if (_writeAheadLog.IsEnabled)
+        {
+            _writeAheadLog.AppendPage(page);
+        }
+    }
+
+    private void EnsureWriteDurability()
+    {
+        var concern = _options.WriteConcern;
+        if (concern == WriteConcern.None)
+        {
+            return;
+        }
+
+        _flushScheduler.EnsureDurabilityAsync(concern).GetAwaiter().GetResult();
+    }
+
+    private BsonDocument PrepareDocumentForInsert(string collectionName, BsonDocument document, out BsonValue id)
+    {
+        if (!document.TryGetValue("_id", out id) || id.IsNull)
+        {
+            id = ObjectId.NewObjectId();
+            document = document.Set("_id", id);
+        }
+
+        if (!DocumentBelongsToCollection(document, collectionName))
+        {
+            document = document.Set("_collection", collectionName);
+        }
+
+        return document;
+    }
+
+    private CollectionState GetCollectionState(string collectionName)
+    {
+        if (string.IsNullOrWhiteSpace(collectionName))
+        {
+            throw new ArgumentException("Collection name cannot be null or whitespace", nameof(collectionName));
+        }
+
+        var state = _collectionStates.GetOrAdd(collectionName, _ => new CollectionState());
+
+        if (!state.IsCacheInitialized)
+        {
+            lock (state.CacheLock)
+            {
+                if (!state.IsCacheInitialized)
+                {
+                    BuildDocumentLocationCache(collectionName, state);
+                    state.MarkCacheInitialized();
+                }
+            }
+        }
+
+        return state;
+    }
+
+    private void BuildDocumentLocationCache(string collectionName, CollectionState state)
+    {
+        state.DocumentLocations.Clear();
+        uint candidatePageId = 0;
+
+        var totalPages = _pageManager.TotalPages;
+        for (uint pageId = 1; pageId <= totalPages; pageId++)
+        {
+            Page page;
+            try
+            {
+                page = _pageManager.GetPage(pageId);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
+            {
+                continue;
+            }
+
+            var entries = ReadDocumentsFromPage(page);
+            var hasCollectionDocument = false;
+
+            for (ushort entryIndex = 0; entryIndex < entries.Count; entryIndex++)
+            {
+                var entry = entries[entryIndex];
+                if (!DocumentBelongsToCollection(entry.Document, collectionName))
+                {
+                    continue;
+                }
+
+                if (!TryGetDocumentKey(entry.Id, out var key))
+                {
+                    continue;
+                }
+
+                state.DocumentLocations[key] = new DocumentLocation(page.PageID, entryIndex);
+                hasCollectionDocument = true;
+            }
+
+            if (hasCollectionDocument && page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
+            {
+                candidatePageId = page.PageID;
+            }
+        }
+
+        state.PageState.PageId = candidatePageId;
+    }
+
+    private static bool TryGetDocumentKey(BsonValue id, out string key)
+    {
+        key = string.Empty;
+
+        if (id == null || id.IsNull)
+        {
+            return false;
+        }
+
+        var value = id.ToString();
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        key = value;
+        return true;
+    }
+
+    private static void RemoveCachedDocumentsInPage(CollectionState state, uint pageId)
+    {
+        foreach (var kvp in state.DocumentLocations)
+        {
+            if (kvp.Value.PageId == pageId)
+            {
+                state.DocumentLocations.TryRemove(kvp.Key, out _);
+            }
+        }
+    }
+
+    private bool TryResolveDocumentLocation(string collectionName, CollectionState state, BsonValue id, string documentKey, out Page page, out List<PageDocumentEntry> entries, out ushort entryIndex)
+    {
+        page = default!;
+        entries = default!;
+        entryIndex = 0;
+
+        if (!state.DocumentLocations.TryGetValue(documentKey, out var location))
+        {
+            return false;
+        }
+
+        try
+        {
+            page = _pageManager.GetPage(location.PageId);
+        }
+        catch
+        {
+            state.DocumentLocations.TryRemove(documentKey, out _);
+            return false;
+        }
+
+        if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
+        {
+            state.DocumentLocations.TryRemove(documentKey, out _);
+            return false;
+        }
+
+        entries = ReadDocumentsFromPage(page);
+        if (location.EntryIndex >= entries.Count)
+        {
+            state.DocumentLocations.TryRemove(documentKey, out _);
+            return false;
+        }
+
+        var entry = entries[location.EntryIndex];
+        if (!DocumentBelongsToCollection(entry.Document, collectionName) || !entry.Id.Equals(id))
+        {
+            state.DocumentLocations.TryRemove(documentKey, out _);
+            return false;
+        }
+
+        entryIndex = location.EntryIndex;
+        return true;
+    }
+
+    private bool TryEnsureDocumentLocation(string collectionName, CollectionState state, BsonValue id, out Page page, out List<PageDocumentEntry> entries, out ushort entryIndex)
+    {
+        page = default!;
+        entries = default!;
+        entryIndex = 0;
+
+        if (!TryGetDocumentKey(id, out var documentKey))
+        {
+            return false;
+        }
+
+        if (TryResolveDocumentLocation(collectionName, state, id, documentKey, out page, out entries, out entryIndex))
+        {
+            return true;
+        }
+
+        var document = FindByIdFullScan(collectionName, id, state);
+        if (document == null)
+        {
+            return false;
+        }
+
+        return TryResolveDocumentLocation(collectionName, state, id, documentKey, out page, out entries, out entryIndex);
+    }
+
+    private bool TryReadDocumentFromLocation(string collectionName, CollectionState state, BsonValue id, out BsonDocument? document)
+    {
+        document = null;
+
+        if (!TryGetDocumentKey(id, out var documentKey))
+        {
+            return false;
+        }
+
+        if (!TryResolveDocumentLocation(collectionName, state, id, documentKey, out var page, out var entries, out var entryIndex))
+        {
+            return false;
+        }
+
+        document = entries[entryIndex].Document;
+        return true;
+    }
+
+    private BsonValue InsertPreparedDocument(string collectionName, BsonDocument document, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
+    {
+        var documentBytes = BsonSerializer.SerializeDocument(document);
+        var requiredSize = GetEntrySize(documentBytes.Length);
+
+        var state = collectionState.PageState;
+        bool isNewPage;
+        uint pageId;
+        ushort entryIndex;
+
+        lock (state.SyncRoot)
+        {
+            Page page;
+            (page, isNewPage) = GetWritableDataPageLocked(collectionName, state, requiredSize);
+            entryIndex = page.Header.ItemCount;
+            AppendDocumentToPage(page, documentBytes);
+            pageId = page.PageID;
+
+            if (page.Header.FreeBytes < MinimumFreeSpaceThreshold)
+            {
+                state.PageId = 0;
+            }
+            else
+            {
+                state.PageId = page.PageID;
+            }
+
+            PersistPage(page);
+        }
+
+        if (TryGetDocumentKey(id, out var documentKey))
+        {
+            collectionState.DocumentLocations[documentKey] = new DocumentLocation(pageId, entryIndex);
+        }
+
+        if (isNewPage)
+        {
+            lock (_lock)
+            {
+                _header.UsedPages++;
+                WriteHeader();
+            }
+        }
+
+        if (updateIndexes && indexManager != null)
+        {
+            try
+            {
+                indexManager.InsertDocument(document, id);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
+            }
+        }
+
+        return id;
+    }
+
+    private void AppendDocumentToPage(Page page, ReadOnlySpan<byte> documentBytes)
+    {
+        var requiredSize = GetEntrySize(documentBytes.Length);
+        if (page.Header.FreeBytes < requiredSize)
+        {
+            throw new InvalidOperationException("Insufficient space in page to append document.");
+        }
+
+        var usedBytes = GetUsedBytes(page);
+
+        Span<byte> lengthBuffer = stackalloc byte[DocumentLengthPrefixSize];
+        BinaryPrimitives.WriteInt32LittleEndian(lengthBuffer, documentBytes.Length);
+        page.WriteData(usedBytes, lengthBuffer);
+        page.WriteData(usedBytes + DocumentLengthPrefixSize, documentBytes);
+
+        var newFreeBytes = (ushort)(page.Header.FreeBytes - requiredSize);
+        var newItemCount = (ushort)Math.Min(page.Header.ItemCount + 1, ushort.MaxValue);
+        page.UpdateStats(newFreeBytes, newItemCount);
+    }
+
+    private List<PageDocumentEntry> ReadDocumentsFromPage(Page page)
+    {
+        var documents = new List<PageDocumentEntry>(Math.Max(page.Header.ItemCount, (ushort)1));
+        var usedBytes = GetUsedBytes(page);
+        var offset = 0;
+
+        for (int i = 0; i < page.Header.ItemCount && offset < usedBytes; i++)
+        {
+            var lengthBytes = page.ReadData(offset, DocumentLengthPrefixSize);
+            if (lengthBytes.Length < DocumentLengthPrefixSize)
+            {
+                break;
+            }
+
+            var documentLength = BinaryPrimitives.ReadInt32LittleEndian(lengthBytes);
+            offset += DocumentLengthPrefixSize;
+
+            if (documentLength <= 0 || offset + documentLength > usedBytes + DocumentLengthPrefixSize)
+            {
+                break;
+            }
+
+            var documentBytes = page.ReadData(offset, documentLength);
+            if (documentBytes.Length != documentLength)
+            {
+                break;
+            }
+
+            offset += documentLength;
+
+            var document = BsonSerializer.DeserializeDocument(documentBytes);
+            documents.Add(new PageDocumentEntry(document, documentBytes));
+        }
+
+        return documents;
+    }
+
+    private void RewritePageWithDocuments(string collectionName, CollectionState state, Page page, List<PageDocumentEntry> documents)
+    {
+        RemoveCachedDocumentsInPage(state, page.PageID);
+
+        page.ClearData();
+        page.UpdatePageType(PageType.Data);
+        InitializeDataPage(page);
+
+        ushort entryIndex = 0;
+        foreach (var entry in documents)
+        {
+            AppendDocumentToPage(page, entry.RawBytes);
+
+            if (DocumentBelongsToCollection(entry.Document, collectionName) && TryGetDocumentKey(entry.Id, out var key))
+            {
+                state.DocumentLocations[key] = new DocumentLocation(page.PageID, entryIndex);
+            }
+
+            entryIndex++;
+        }
+
+        if (page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
+        {
+            state.PageState.PageId = page.PageID;
+        }
+        else if (state.PageState.PageId == page.PageID)
+        {
+            state.PageState.PageId = 0;
+        }
+
+        PersistPage(page);
+    }
+
+    private static bool DocumentBelongsToCollection(BsonDocument document, string collectionName)
+    {
+        if (document.TryGetValue("_collection", out var value) && value is BsonString collection)
+        {
+            return string.Equals(collection.Value, collectionName, StringComparison.Ordinal);
+        }
+
+        // 兼容旧数据：没有 _collection 字段时视为当前集合的文档
+        return true;
+    }
+
+    /// <summary>
+    /// 获取集合的文档缓存数量（基于 DocumentLocations）
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    public int GetCachedDocumentCount(string collectionName)
+    {
+        var state = GetCollectionState(collectionName);
+        return state.DocumentLocations.Count;
+    }
+
     /// <summary>
     /// 插入文档到指定集合
     /// </summary>
@@ -374,54 +906,12 @@ public sealed class SimpleDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        // 生成或获取文档ID
-        if (!document.TryGetValue("_id", out var id) || id.IsNull)
-        {
-            id = ObjectId.NewObjectId();
-            document = document.Set("_id", id);
-        }
-
-        // 添加集合名称字段
-        document = document.Set("_collection", collectionName);
-
-        // 序列化文档
-        var documentData = BsonSerializer.SerializeDocument(document);
-
-        // 分配数据页面并写入
-        var page = _pageManager.NewPage(PageType.Data);
-        var offset = 0;
-
-        // 如果文档太大，需要分页存储（简化实现，实际需要更复杂的逻辑）
-        if (documentData.Length > page.DataSize)
-        {
-            throw new InvalidOperationException($"Document is too large: {documentData.Length} bytes, max {page.DataSize} bytes");
-        }
-
-        page.WriteData(offset, documentData);
-        page.UpdateStats((ushort)(page.DataSize - documentData.Length), 1);
-
-        _pageManager.SavePage(page, _options.SynchronousWrites);
-
-        // 更新统计信息
-        lock (_lock)
-        {
-            _header.UsedPages++;
-            WriteHeader();
-        }
-
-        // 更新索引 - 在插入文档后更新所有相关索引
-        try
-        {
-            var indexManager = GetIndexManager(collectionName);
-            indexManager?.InsertDocument(document, id);
-        }
-        catch (Exception ex)
-        {
-            // 索引更新失败不应影响文档插入，但需要记录警告
-            Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
-        }
-
-        return id;
+        var preparedDocument = PrepareDocumentForInsert(collectionName, document, out var id);
+        var indexManager = GetIndexManager(collectionName);
+        var collectionState = GetCollectionState(collectionName);
+        var result = InsertPreparedDocument(collectionName, preparedDocument, id, collectionState, indexManager, updateIndexes: true);
+        EnsureWriteDurability();
+        return result;
     }
 
     /// <summary>
@@ -435,41 +925,79 @@ public sealed class SimpleDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        // 简化实现：线性搜索所有数据页面
-        // 实际实现应该使用索引进行快速查找
+        if (id == null || id.IsNull)
+        {
+            return null;
+        }
+
+        var collectionState = GetCollectionState(collectionName);
+
+        if (TryReadDocumentFromLocation(collectionName, collectionState, id, out var cachedDocument))
+        {
+            return cachedDocument;
+        }
+
+        return FindByIdFullScan(collectionName, id, collectionState);
+    }
+
+    private BsonDocument? FindByIdFullScan(string collectionName, BsonValue id, CollectionState state)
+    {
         var totalPages = _pageManager.TotalPages;
+        var candidatePageId = state.PageState.PageId;
 
         for (uint pageId = 1; pageId <= totalPages; pageId++)
         {
+            Page page;
             try
             {
-                var page = _pageManager.GetPage(pageId);
-                // 跳过非数据页面和空页面
-                if (page.PageType != PageType.Data) continue;
-                if (page.Header.ItemCount == 0) continue; // 空页面没有有效数据
+                page = _pageManager.GetPage(pageId);
+            }
+            catch
+            {
+                continue;
+            }
 
-                var dataSize = page.DataSize - page.Header.FreeBytes;
-                if (dataSize <= 0) continue; // 没有数据
+            if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
+            {
+                continue;
+            }
 
-                var documentData = page.ReadData(0, dataSize);
-                var document = BsonSerializer.DeserializeDocument(documentData);
-
-                // 按集合名称和ID过滤
-                if (document.TryGetValue("_collection", out var collectionValue) &&
-                    collectionValue is BsonString collectionStr &&
-                    collectionStr.Value == collectionName &&
-                    document.TryGetValue("_id", out var docId) && docId.Equals(id))
+            var entries = ReadDocumentsFromPage(page);
+            var hasCollectionDocument = false;
+            for (ushort entryIndex = 0; entryIndex < entries.Count; entryIndex++)
+            {
+                var entry = entries[entryIndex];
+                if (!DocumentBelongsToCollection(entry.Document, collectionName))
                 {
-                    return document;
+                    continue;
+                }
+
+                hasCollectionDocument = true;
+
+                if (TryGetDocumentKey(entry.Id, out var key))
+                {
+                    state.DocumentLocations[key] = new DocumentLocation(page.PageID, entryIndex);
+                }
+
+                if (entry.Id.Equals(id))
+                {
+                    if (page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
+                    {
+                        candidatePageId = page.PageID;
+                    }
+
+                    state.PageState.PageId = candidatePageId;
+                    return entry.Document;
                 }
             }
-            catch (Exception)
+
+            if (hasCollectionDocument && page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
             {
-                // 忽略损坏的页面，继续搜索
-                continue;
+                candidatePageId = page.PageID;
             }
         }
 
+        state.PageState.PageId = candidatePageId;
         return null;
     }
 
@@ -483,38 +1011,100 @@ public sealed class SimpleDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        var documents = new List<BsonDocument>();
-        var totalPages = _pageManager.TotalPages;
+        var collectionState = GetCollectionState(collectionName);
+        var snapshot = collectionState.DocumentLocations.ToArray();
 
-        for (uint pageId = 1; pageId <= totalPages; pageId++)
+        if (snapshot.Length == 0)
         {
+            return FindAllByScanning(collectionName, collectionState);
+        }
+
+        var documents = FetchDocumentsByLocations(collectionName, collectionState, snapshot);
+
+        if (documents.Count < snapshot.Length)
+        {
+            return FindAllByScanning(collectionName, collectionState);
+        }
+
+        return documents;
+    }
+
+    private IEnumerable<BsonDocument> FindAllByScanning(string collectionName, CollectionState state)
+    {
+        BuildDocumentLocationCache(collectionName, state);
+
+        var snapshot = state.DocumentLocations.ToArray();
+        if (snapshot.Length == 0)
+        {
+            return Array.Empty<BsonDocument>();
+        }
+
+        return FetchDocumentsByLocations(collectionName, state, snapshot);
+    }
+
+    private List<BsonDocument> FetchDocumentsByLocations(string collectionName, CollectionState state, KeyValuePair<string, DocumentLocation>[] snapshot)
+    {
+        var documents = new List<BsonDocument>(snapshot.Length);
+        var pageGroups = new Dictionary<uint, List<KeyValuePair<string, DocumentLocation>>>();
+
+        foreach (var kvp in snapshot)
+        {
+            if (!pageGroups.TryGetValue(kvp.Value.PageId, out var list))
+            {
+                list = new List<KeyValuePair<string, DocumentLocation>>();
+                pageGroups[kvp.Value.PageId] = list;
+            }
+            list.Add(kvp);
+        }
+
+        foreach (var group in pageGroups)
+        {
+            var pageId = group.Key;
+            var locations = group.Value;
+
+            Page page;
             try
             {
-                var page = _pageManager.GetPage(pageId);
-                // 跳过非数据页面和空页面
-                if (page.PageType != PageType.Data) continue;
-                if (page.Header.ItemCount == 0) continue; // 空页面没有有效数据
-
-                var dataSize = page.DataSize - page.Header.FreeBytes;
-                if (dataSize <= 0) continue; // 没有数据
-
-                var documentData = page.ReadData(0, dataSize);
-                var document = BsonSerializer.DeserializeDocument(documentData);
-
-                // 按集合名称过滤
-                if (document.TryGetValue("_collection", out var collectionValue) &&
-                    collectionValue is BsonString collectionStr &&
-                    collectionStr.Value == collectionName)
-                {
-                    documents.Add(document);
-                }
+                page = _pageManager.GetPage(pageId);
             }
-            catch (Exception)
+            catch
             {
-                // 忽略损坏的页面，继续搜索
+                foreach (var location in locations)
+                {
+                    state.DocumentLocations.TryRemove(location.Key, out _);
+                }
                 continue;
             }
+
+            if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
+            {
+                foreach (var location in locations)
+                {
+                    state.DocumentLocations.TryRemove(location.Key, out _);
+                }
+                continue;
+            }
+
+            var entries = ReadDocumentsFromPage(page);
+            foreach (var location in locations)
+            {
+                if (location.Value.EntryIndex >= entries.Count)
+                {
+                    state.DocumentLocations.TryRemove(location.Key, out _);
+                    continue;
+                }
+
+                var entry = entries[location.Value.EntryIndex];
+                if (!DocumentBelongsToCollection(entry.Document, collectionName))
+                {
+                    state.DocumentLocations.TryRemove(location.Key, out _);
+                    continue;
+                }
+
+                documents.Add(entry.Document);
+            }
         }
+
         return documents;
     }
 
@@ -534,84 +1124,74 @@ public sealed class SimpleDbEngine : IDisposable
             throw new ArgumentException("Document must have _id field for update", nameof(document));
         }
 
-        // 查找现有文档并获取其页面位置
-        var totalPages = _pageManager.TotalPages;
-        uint targetPageId = 0;
-        Page? targetPage = null;
-        BsonDocument? oldDocument = null;
-
-        for (uint pageId = 1; pageId <= totalPages; pageId++)
+        if (!TryGetDocumentKey(id, out var documentKey))
         {
-            try
+            throw new ArgumentException("Document must have a valid _id value for update", nameof(document));
+        }
+
+        var collectionState = GetCollectionState(collectionName);
+        var state = collectionState.PageState;
+        var indexManager = GetIndexManager(collectionName);
+
+        if (!TryEnsureDocumentLocation(collectionName, collectionState, id, out _, out _, out _))
+        {
+            return 0;
+        }
+
+        BsonDocument? oldDocumentSnapshot = null;
+        BsonDocument? newDocumentSnapshot = null;
+        var updated = false;
+
+        lock (state.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(collectionName, collectionState, id, documentKey, out var page, out var entries, out var entryIndex))
             {
-                var page = _pageManager.GetPage(pageId);
-                // 跳过非数据页面和空页面
-                if (page.PageType != PageType.Data) continue;
-                if (page.Header.ItemCount == 0) continue;
-
-                var dataSize = page.DataSize - page.Header.FreeBytes;
-                if (dataSize <= 0) continue; // 没有数据
-
-                var documentData = page.ReadData(0, dataSize);
-                var existingDocument = BsonSerializer.DeserializeDocument(documentData);
-
-                // 按集合名称和ID过滤
-                if (existingDocument.TryGetValue("_collection", out var collectionValue) &&
-                    collectionValue is BsonString collectionStr &&
-                    collectionStr.Value == collectionName &&
-                    existingDocument.TryGetValue("_id", out var docId) && docId.Equals(id))
-                {
-                    targetPageId = pageId;
-                    targetPage = page;
-                    oldDocument = existingDocument; // 保存旧文档用于索引更新
-                    break;
-                }
+                return 0;
             }
-            catch (Exception)
+
+            var oldEntry = entries[entryIndex];
+            var updatedDocument = document;
+
+            if (!DocumentBelongsToCollection(updatedDocument, collectionName))
             {
-                // 忽略损坏的页面，继续搜索
-                continue;
+                updatedDocument = updatedDocument.Set("_collection", collectionName);
             }
+
+            if (!updatedDocument.TryGetValue("_id", out var newId) || !newId.Equals(id))
+            {
+                updatedDocument = updatedDocument.Set("_id", id);
+            }
+
+            var newDocumentBytes = BsonSerializer.SerializeDocument(updatedDocument);
+            if (GetEntrySize(newDocumentBytes.Length) > page.DataSize)
+            {
+                throw new InvalidOperationException($"Document is too large: {newDocumentBytes.Length} bytes, max {page.DataSize - DocumentLengthPrefixSize} bytes");
+            }
+
+            entries[entryIndex] = new PageDocumentEntry(updatedDocument, newDocumentBytes);
+
+            RewritePageWithDocuments(collectionName, collectionState, page, entries);
+
+            oldDocumentSnapshot = oldEntry.Document;
+            newDocumentSnapshot = updatedDocument;
+            updated = true;
         }
 
-        if (targetPage == null || oldDocument == null) return 0; // 文档不存在
-
-        // 确保文档包含集合名称字段 - 这是关键修复！
-        if (!document.TryGetValue("_collection", out _) ||
-            !(document["_collection"] is BsonString existingCollectionStr) ||
-            existingCollectionStr.Value != collectionName)
+        if (!updated)
         {
-            document = document.Set("_collection", collectionName);
+            return 0;
         }
 
-        // 序列化新文档
-        var newDocumentData = BsonSerializer.SerializeDocument(document);
-
-        // 如果新文档太大，需要分页存储（简化实现，实际需要更复杂的逻辑）
-        if (newDocumentData.Length > targetPage.DataSize)
-        {
-            throw new InvalidOperationException($"Document is too large: {newDocumentData.Length} bytes, max {targetPage.DataSize} bytes");
-        }
-
-        // 直接在原页面覆盖更新
-        targetPage.WriteData(0, newDocumentData);
-        targetPage.UpdateStats((ushort)(targetPage.DataSize - newDocumentData.Length), 1);
-        targetPage.UpdateChecksum();
-
-        // 强制刷新到磁盘
-        _pageManager.SavePage(targetPage, forceFlush: true);
-
-        // 更新索引 - 在更新文档后更新所有相关索引
         try
         {
-            var indexManager = GetIndexManager(collectionName);
-            indexManager?.UpdateDocument(oldDocument, document, id);
+            indexManager?.UpdateDocument(oldDocumentSnapshot!, newDocumentSnapshot!, id);
         }
         catch (Exception ex)
         {
-            // 索引更新失败不应影响文档更新，但需要记录警告
             Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
         }
+
+        EnsureWriteDurability();
 
         return 1;
     }
@@ -627,60 +1207,81 @@ public sealed class SimpleDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        // 查找并删除文档
-        var totalPages = _pageManager.TotalPages;
-        BsonDocument? documentToDelete = null;
-
-        for (uint pageId = 1; pageId <= totalPages; pageId++)
+        if (id == null || id.IsNull)
         {
-            try
-            {
-                var page = _pageManager.GetPage(pageId);
-                if (page.PageType != PageType.Data) continue;
-
-                var dataSize = page.DataSize - page.Header.FreeBytes;
-                if (dataSize <= 0) continue;
-
-                var documentData = page.ReadData(0, dataSize);
-                var document = BsonSerializer.DeserializeDocument(documentData);
-
-                if (document.TryGetValue("_id", out var docId) && docId.Equals(id))
-                {
-                    documentToDelete = document; // 保存要删除的文档用于索引更新
-
-                    // 释放页面
-                    _pageManager.FreePage(pageId);
-
-                    // 更新统计信息
-                    lock (_lock)
-                    {
-                        _header.UsedPages--;
-                        WriteHeader();
-                    }
-
-                    // 更新索引 - 在删除文档后更新所有相关索引
-                    try
-                    {
-                        var indexManager = GetIndexManager(collectionName);
-                        indexManager?.DeleteDocument(document, id);
-                    }
-                    catch (Exception ex)
-                    {
-                        // 索引更新失败不应影响文档删除，但需要记录警告
-                        Console.WriteLine($"Warning: Failed to update indexes for deleted document {id}: {ex.Message}");
-                    }
-
-                    return 1;
-                }
-            }
-            catch (Exception)
-            {
-                // 忽略损坏的页面，继续搜索
-                continue;
-            }
+            return 0;
         }
 
-        return 0;
+        if (!TryGetDocumentKey(id, out var documentKey))
+        {
+            return 0;
+        }
+
+        var collectionState = GetCollectionState(collectionName);
+        var state = collectionState.PageState;
+        var indexManager = GetIndexManager(collectionName);
+
+        if (!TryEnsureDocumentLocation(collectionName, collectionState, id, out _, out _, out _))
+        {
+            return 0;
+        }
+
+        var deletedEntry = default(PageDocumentEntry?);
+
+        lock (state.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(collectionName, collectionState, id, documentKey, out var page, out var entries, out var entryIndex))
+            {
+                return 0;
+            }
+
+            var entry = entries[entryIndex];
+
+            entries.RemoveAt(entryIndex);
+            collectionState.DocumentLocations.TryRemove(documentKey, out _);
+
+            if (entries.Count == 0)
+            {
+                RewritePageWithDocuments(collectionName, collectionState, page, entries);
+
+                if (state.PageId == page.PageID)
+                {
+                    state.PageId = 0;
+                }
+
+                _pageManager.FreePage(page.PageID);
+
+                lock (_lock)
+                {
+                    _header.UsedPages--;
+                    WriteHeader();
+                }
+            }
+            else
+            {
+                RewritePageWithDocuments(collectionName, collectionState, page, entries);
+            }
+
+            deletedEntry = entry;
+        }
+
+        if (deletedEntry == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            indexManager?.DeleteDocument(deletedEntry.Value.Document, id);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Failed to update indexes for deleted document {id}: {ex.Message}");
+        }
+
+        EnsureWriteDurability();
+
+        return 1;
     }
 
     /// <summary>
@@ -697,10 +1298,10 @@ public sealed class SimpleDbEngine : IDisposable
         if (documents == null) throw new ArgumentNullException(nameof(documents));
         if (documents.Length == 0) return 0;
 
-        // 第一步：批量预处理文档
-        var processedDocuments = new List<BsonDocument>(documents.Length);
-        var documentDataList = new List<byte[]>(documents.Length);
+        var indexManager = GetIndexManager(collectionName);
+        var collectionState = GetCollectionState(collectionName);
 
+        var insertedCount = 0;
         for (int i = 0; i < documents.Length; i++)
         {
             var document = documents[i];
@@ -708,91 +1309,23 @@ public sealed class SimpleDbEngine : IDisposable
 
             try
             {
-                // 生成或获取文档ID
-                if (!document.TryGetValue("_id", out var id) || id.IsNull)
-                {
-                    id = ObjectId.NewObjectId();
-                    document = document.Set("_id", id);
-                }
-
-                // 添加集合名称字段
-                document = document.Set("_collection", collectionName);
-
-                // 序列化文档
-                var documentData = BsonSerializer.SerializeDocument(document);
-
-                // 检查文档大小
-                if (documentData.Length > _pageManager.PageSize - PageHeader.Size)
-                {
-                    throw new InvalidOperationException($"Document is too large: {documentData.Length} bytes, max {_pageManager.PageSize - PageHeader.Size} bytes");
-                }
-
-                processedDocuments.Add(document);
-                documentDataList.Add(documentData);
+                var preparedDocument = PrepareDocumentForInsert(collectionName, document, out var id);
+                documents[i] = preparedDocument; // propagate metadata
+                InsertPreparedDocument(collectionName, preparedDocument, id, collectionState, indexManager, updateIndexes: true);
+                insertedCount++;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // 跳过有问题的文档
-                continue;
+                Console.WriteLine($"Warning: Failed to insert document into collection '{collectionName}': {ex.Message}");
             }
         }
 
-        if (processedDocuments.Count == 0) return 0;
-
-        // 第二步：批量分配页面
-        var pages = new List<Page>(processedDocuments.Count);
-        for (int i = 0; i < processedDocuments.Count; i++)
+        if (insertedCount > 0)
         {
-            var page = _pageManager.NewPage(PageType.Data);
-            pages.Add(page);
+            EnsureWriteDurability();
         }
 
-        // 第三步：批量写入文档
-        var successfulWrites = 0;
-        for (int i = 0; i < processedDocuments.Count; i++)
-        {
-            try
-            {
-                var page = pages[i];
-                var documentData = documentDataList[i];
-
-                page.WriteData(0, documentData);
-                page.UpdateStats((ushort)(page.DataSize - documentData.Length), 1);
-
-                // 批量保存页面（如果开启了同步写入，则保存；否则延迟保存）
-                if (_options.SynchronousWrites)
-                {
-                    _pageManager.SavePage(page, true);
-                }
-
-                successfulWrites++;
-            }
-            catch (Exception)
-            {
-                // 释放失败的页面
-                if (i < pages.Count)
-                {
-                    _pageManager.FreePage(pages[i].PageID);
-                }
-                continue;
-            }
-        }
-
-        // 第四步：如果未开启同步写入，则批量提交所有页面
-        if (!_options.SynchronousWrites && successfulWrites > 0)
-        {
-            try
-            {
-                // 批量刷新到磁盘
-                _diskStream.Flush();
-            }
-            catch (Exception)
-            {
-                // 即使刷新失败，数据已经在内存中，不会丢失
-            }
-        }
-
-        return successfulWrites;
+        return insertedCount;
     }
 
     /// <summary>
@@ -855,8 +1388,7 @@ public sealed class SimpleDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        _pageManager.FlushDirtyPages();
-        _diskStream.Flush();
+        _flushScheduler.FlushAsync().GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -868,8 +1400,7 @@ public sealed class SimpleDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        await _pageManager.FlushDirtyPagesAsync(cancellationToken);
-        await _diskStream.FlushAsync(cancellationToken);
+        await _flushScheduler.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -890,6 +1421,9 @@ public sealed class SimpleDbEngine : IDisposable
                 // 刷新所有缓存
                 Flush();
 
+                _flushScheduler?.Dispose();
+                _writeAheadLog?.Dispose();
+
                 // 释放所有集合
                 foreach (var collection in _collections.Values)
                 {
@@ -899,6 +1433,7 @@ public sealed class SimpleDbEngine : IDisposable
                     }
                 }
                 _collections.Clear();
+                _collectionStates.Clear();
 
                 // 释放事务管理器
                 _transactionManager?.Dispose();

@@ -46,6 +46,23 @@ users.Update(user);
 users.Delete(user.Id);
 ```
 
+## Configuration Options
+
+`SimpleDbEngine` accepts a `SimpleDbOptions` instance. Key settings impacting durability与性能：
+
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WriteConcern` | `Synced` | 控制写入确认级别：`Synced`（WAL + 数据页同步刷盘，最安全）、`Journaled`（默认启用写前日志，组提交后后台刷页）、`None`（仅写内存，完全依赖后台或显式 `Flush()`） |
+| `BackgroundFlushInterval` | `TimeSpan.FromMilliseconds(100)` | 后台刷写周期；适用于所有 WriteConcern。设置为 `TimeSpan.Zero` 或 `Timeout.InfiniteTimeSpan` 可禁用自动刷写。即便在 `None` 模式下，也可通过该参数保证定期将脏页写回磁盘。 |
+| `JournalFlushDelay` | `TimeSpan.FromMilliseconds(10)` | 日志刷写聚合窗口（组提交）。`TimeSpan.Zero`/`Timeout.InfiniteTimeSpan` 表示每次写入后立即刷日志。 |
+| `PageSize`, `CacheSize` | `8192` / `1000` | 数据页尺寸与 LRU 缓存容量，可按 workload 调整。 |
+
+**Durability 建议**
+
+- 默认的 `Synced` 模式最安全，适合生产环境。
+- `Journaled` 将写入日志的 fsync 与数据页刷新解耦，在吞吐和安全之间权衡；可调整 `JournalFlushDelay`/`BackgroundFlushInterval` 优化延迟。
+- `None` 模式并不会自动持久化，除非启用后台刷写或显式调用 `SimpleDbEngine.Flush()`/`Dispose()`；适用于纯内存或重放场景。
+
 ## Architecture
 
 ### Core Components

@@ -1,21 +1,26 @@
-using SimpleDb.Core;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
 using SimpleDb.Bson;
-using Xunit;
+using SimpleDb.Core;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
 
 namespace SimpleDb.Tests.Core;
 
 /// <summary>
 /// 事务管理器测试
 /// </summary>
-public class TransactionManagerTests : IDisposable
+public class TransactionManagerTests
 {
-    private readonly SimpleDbEngine _engine;
-    private readonly TransactionManager _manager;
+    private string _databasePath = null!;
+    private SimpleDbEngine _engine = null!;
+    private TransactionManager _manager = null!;
 
-    public TransactionManagerTests()
+    [Before(Test)]
+    public void Setup()
     {
-        // 创建临时数据库
-        var testDbFile = Path.GetTempFileName();
+        _databasePath = Path.Combine(Path.GetTempPath(), $"txn_{Guid.NewGuid():N}.db");
         var options = new SimpleDbOptions
         {
             DatabaseName = "TransactionTestDb",
@@ -25,204 +30,176 @@ public class TransactionManagerTests : IDisposable
             TransactionTimeout = TimeSpan.FromSeconds(30)
         };
 
-        _engine = new SimpleDbEngine(testDbFile, options);
+        _engine = new SimpleDbEngine(_databasePath, options);
         _manager = new TransactionManager(_engine, options.MaxTransactions, options.TransactionTimeout);
     }
 
-    public void Dispose()
+    [After(Test)]
+    public void Cleanup()
     {
         _manager?.Dispose();
         _engine?.Dispose();
+        if (File.Exists(_databasePath))
+        {
+            File.Delete(_databasePath);
+        }
     }
 
-    [Fact]
-    public void TransactionManager_Constructor_ShouldInitializeCorrectly()
+    [Test]
+    public async Task TransactionManager_Constructor_ShouldInitializeCorrectly()
     {
-        // Assert
-        Assert.Equal(0, _manager.ActiveTransactionCount);
-        Assert.Equal(10, _manager.MaxTransactions);
-        Assert.Equal(TimeSpan.FromSeconds(30), _manager.TransactionTimeout);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(0);
+        await Assert.That(_manager.MaxTransactions).IsEqualTo(10);
+        await Assert.That(_manager.TransactionTimeout).IsEqualTo(TimeSpan.FromSeconds(30));
     }
 
-    [Fact]
-    public void BeginTransaction_ShouldCreateNewTransaction()
+    [Test]
+    public async Task BeginTransaction_ShouldCreateNewTransaction()
     {
-        // Act
         using var transaction = _manager.BeginTransaction();
 
-        // Assert
-        Assert.NotNull(transaction);
-        Assert.Equal(TransactionState.Active, transaction.State);
-        Assert.Equal(1, _manager.ActiveTransactionCount);
+        await Assert.That(transaction).IsNotNull();
+        await Assert.That(transaction.State).IsEqualTo(TransactionState.Active);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(1);
     }
 
-    [Fact]
-    public void BeginTransaction_ShouldRespectMaxTransactionLimit()
+    [Test]
+    public async Task BeginTransaction_ShouldRespectMaxTransactionLimit()
     {
-        // Arrange
         var transactions = new List<ITransaction>();
 
-        // Act - 创建最大数量的事务
         for (int i = 0; i < 10; i++)
         {
             transactions.Add(_manager.BeginTransaction());
         }
 
-        // Assert - 达到最大数量
-        Assert.Equal(10, _manager.ActiveTransactionCount);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(10);
+        await Assert.That(() => _manager.BeginTransaction()).Throws<InvalidOperationException>();
 
-        // Act & Assert - 超过最大数量应该抛出异常
-        Assert.Throws<InvalidOperationException>(() => _manager.BeginTransaction());
-
-        // Cleanup
         foreach (var transaction in transactions)
         {
             transaction.Dispose();
         }
     }
 
-    [Fact]
-    public void CommitTransaction_ShouldCommitSuccessfully()
+    [Test]
+    public async Task CommitTransaction_ShouldCommitSuccessfully()
     {
-        // Arrange
         using var transaction = _manager.BeginTransaction();
 
-        // Act
         transaction.Commit();
 
-        // Assert
-        Assert.Equal(TransactionState.Committed, transaction.State);
-        Assert.Equal(0, _manager.ActiveTransactionCount);
+        await Assert.That(transaction.State).IsEqualTo(TransactionState.Committed);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(0);
     }
 
-    [Fact]
-    public void RollbackTransaction_ShouldRollbackSuccessfully()
+    [Test]
+    public async Task RollbackTransaction_ShouldRollbackSuccessfully()
     {
-        // Arrange
         using var transaction = _manager.BeginTransaction();
 
-        // Act
         transaction.Rollback();
 
-        // Assert
-        Assert.Equal(TransactionState.RolledBack, transaction.State);
-        Assert.Equal(0, _manager.ActiveTransactionCount);
+        await Assert.That(transaction.State).IsEqualTo(TransactionState.RolledBack);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(0);
     }
 
-    [Fact]
-    public void TransactionSavepoint_ShouldWorkCorrectly()
+    [Test]
+    public async Task TransactionSavepoint_ShouldWorkCorrectly()
     {
-        // Arrange
         using var transaction = _manager.BeginTransaction();
 
-        // Act - 创建保存点
         var savepointId = transaction.CreateSavepoint("test_savepoint");
+        await Assert.That(savepointId).IsNotEqualTo(Guid.Empty);
 
-        // Assert
-        Assert.NotEqual(Guid.Empty, savepointId);
-
-        // Act - 回滚到保存点
         transaction.RollbackToSavepoint(savepointId);
+        await Assert.That(transaction.State).IsEqualTo(TransactionState.Active);
 
-        // Assert - 事务仍然活动
-        Assert.Equal(TransactionState.Active, transaction.State);
-
-        // Act - 释放保存点
         transaction.ReleaseSavepoint(savepointId);
-
-        // Assert - 事务仍然活动
-        Assert.Equal(TransactionState.Active, transaction.State);
+        await Assert.That(transaction.State).IsEqualTo(TransactionState.Active);
     }
 
-    [Fact]
-    public void TransactionDispose_ShouldAutoRollback()
+    [Test]
+    public async Task TransactionDispose_ShouldAutoRollback()
     {
-        // Arrange
         var transaction = _manager.BeginTransaction();
-        Assert.Equal(1, _manager.ActiveTransactionCount);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(1);
 
-        // Act
         transaction.Dispose();
 
-        // Assert
-        Assert.Equal(0, _manager.ActiveTransactionCount);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(0);
     }
 
-    [Fact]
-    public void GetStatistics_ShouldReturnCorrectInformation()
+    [Test]
+    public async Task GetStatistics_ShouldReturnCorrectInformation()
     {
-        // Arrange
         using var transaction1 = _manager.BeginTransaction();
         using var transaction2 = _manager.BeginTransaction();
 
-        // Act
         var stats = _manager.GetStatistics();
 
-        // Assert
-        Assert.Equal(2, stats.ActiveTransactionCount);
-        Assert.Equal(10, stats.MaxTransactions);
-        Assert.Equal(TimeSpan.FromSeconds(30), stats.TransactionTimeout);
+        await Assert.That(stats.ActiveTransactionCount).IsEqualTo(2);
+        await Assert.That(stats.MaxTransactions).IsEqualTo(10);
+        await Assert.That(stats.TransactionTimeout).IsEqualTo(TimeSpan.FromSeconds(30));
     }
 
-    [Theory]
-    [InlineData(TransactionState.Active, true)]
-    [InlineData(TransactionState.Committed, false)]
-    [InlineData(TransactionState.RolledBack, false)]
-    [InlineData(TransactionState.Failed, false)]
-    public void TransactionStateValidation_ShouldWorkCorrectly(TransactionState state, bool canOperate)
+    [Test]
+    public async Task TransactionStateValidation_ShouldWorkCorrectly()
     {
-        // Arrange - 这个测试需要访问内部状态，我们通过操作来验证
-        using var transaction = _manager.BeginTransaction();
-
-        if (state != TransactionState.Active)
-        {
-            // 通过提交或回滚来改变状态
-            if (state == TransactionState.Committed)
-                transaction.Commit();
-            else if (state == TransactionState.RolledBack)
-                transaction.Rollback();
-        }
-
-        // Act & Assert
-        if (canOperate)
-        {
-            // 应该能够创建保存点
-            Assert.NotEqual(Guid.Empty, transaction.CreateSavepoint("test"));
-        }
-        else
-        {
-            // 不应该能够进行操作
-            Assert.Throws<InvalidOperationException>(() => transaction.CreateSavepoint("test"));
-        }
+        await VerifyTransactionState(TransactionState.Active, true);
+        await VerifyTransactionState(TransactionState.Committed, false);
+        await VerifyTransactionState(TransactionState.RolledBack, false);
+        await VerifyTransactionState(TransactionState.Failed, false);
     }
 
-    [Fact]
-    public void MultipleConcurrentTransactions_ShouldWorkCorrectly()
+    [Test]
+    public async Task MultipleConcurrentTransactions_ShouldWorkCorrectly()
     {
-        // Arrange
         var transactions = new List<ITransaction>();
 
-        // Act - 创建多个并发事务
         for (int i = 0; i < 5; i++)
         {
             transactions.Add(_manager.BeginTransaction());
         }
 
-        // Assert
-        Assert.Equal(5, _manager.ActiveTransactionCount);
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(5);
 
-        // 提交一部分事务
         for (int i = 0; i < 2; i++)
         {
             transactions[i].Commit();
         }
-        Assert.Equal(3, _manager.ActiveTransactionCount);
 
-        // 回滚剩余事务
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(3);
+
         for (int i = 2; i < 5; i++)
         {
             transactions[i].Rollback();
         }
-        Assert.Equal(0, _manager.ActiveTransactionCount);
+
+        await Assert.That(_manager.ActiveTransactionCount).IsEqualTo(0);
+    }
+
+    private async Task VerifyTransactionState(TransactionState state, bool canOperate)
+    {
+        using var transaction = _manager.BeginTransaction();
+
+        if (state == TransactionState.Committed)
+        {
+            transaction.Commit();
+        }
+        else if (state == TransactionState.RolledBack || state == TransactionState.Failed)
+        {
+            transaction.Rollback();
+        }
+
+        if (canOperate)
+        {
+            var savepoint = transaction.CreateSavepoint("test");
+            await Assert.That(savepoint).IsNotEqualTo(Guid.Empty);
+        }
+        else
+        {
+            await Assert.That(() => transaction.CreateSavepoint("test")).Throws<InvalidOperationException>();
+        }
     }
 }

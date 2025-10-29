@@ -17,6 +17,7 @@ public sealed class BTreeIndex : IDisposable
     private int _nodeCount;
     private int _entryCount;
     private bool _disposed;
+    private readonly object _syncRoot = new();
 
     /// <summary>
     /// 索引名称
@@ -80,30 +81,30 @@ public sealed class BTreeIndex : IDisposable
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        if (_unique && Contains(key))
-            return false; // 唯一索引冲突 - 检查键是否已存在
-
-        var result = InsertRecursive(_root!, key, documentId);
-        if (result.NeedSplit)
+        lock (_syncRoot)
         {
-            // 分裂根节点
-            var newRoot = new BTreeNode(_maxKeys, false);
-            var newSibling = _root!.Split();
+            if (_unique && ContainsNoLock(key))
+                return false;
 
-            // 提升中间键
-            var promotedKey = _root.GetKey(_root.KeyCount - 1);
+            var result = InsertRecursive(_root!, key, documentId);
+            if (result.NeedSplit)
+            {
+                var newRoot = new BTreeNode(_maxKeys, false);
+                var newSibling = _root!.Split();
+                var promotedKey = _root.GetKey(_root.KeyCount - 1);
 
-            newRoot.InsertChild(promotedKey, _root);
-            newRoot.InsertChild(newSibling.GetKey(0), newSibling);
+                newRoot.InsertChild(promotedKey, _root);
+                newRoot.InsertChild(newSibling.GetKey(0), newSibling);
 
-            _root = newRoot;
-            _nodeCount++;
+                _root = newRoot;
+                _nodeCount++;
+            }
+
+            if (result.Inserted)
+                _entryCount++;
+
+            return result.Inserted;
         }
-
-        if (result.Inserted)
-            _entryCount++;
-
-        return result.Inserted;
     }
 
     /// <summary>
@@ -154,11 +155,14 @@ public sealed class BTreeIndex : IDisposable
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        var deleted = DeleteRecursive(_root!, key, documentId);
-        if (deleted)
-            _entryCount--;
+        lock (_syncRoot)
+        {
+            var deleted = DeleteRecursive(_root!, key, documentId);
+            if (deleted)
+                _entryCount--;
 
-        return deleted;
+            return deleted;
+        }
     }
 
     /// <summary>
@@ -265,27 +269,12 @@ public sealed class BTreeIndex : IDisposable
         ThrowIfDisposed();
         if (key == null) throw new ArgumentNullException(nameof(key));
 
-        var node = _root;
-        while (node != null)
+        List<BsonValue> results;
+        lock (_syncRoot)
         {
-            if (node.IsLeaf)
-            {
-                var position = node.FindKeyPosition(key);
-                if (position < node.KeyCount && node.GetKey(position).Equals(key))
-                {
-                    // 返回该键对应的所有文档ID
-                    var documentIds = node.GetDocumentIds(position);
-                    foreach (var docId in documentIds)
-                    {
-                        yield return docId;
-                    }
-                }
-                yield break;
-            }
-
-            var childIndex = node.FindKeyPosition(key);
-            node = childIndex < node.ChildCount ? node.GetChild(childIndex) : null;
+            results = FindInternal(key);
         }
+        return results;
     }
 
     /// <summary>
@@ -302,38 +291,12 @@ public sealed class BTreeIndex : IDisposable
         if (startKey == null) throw new ArgumentNullException(nameof(startKey));
         if (endKey == null) throw new ArgumentNullException(nameof(endKey));
 
-        // 找到起始位置
-        var startNode = FindLeafNode(startKey);
-        if (startNode == null) yield break;
-
-        var startIndex = startNode.FindKeyPosition(startKey);
-        if (!includeStart && startIndex < startNode.KeyCount && startNode.GetKey(startIndex).Equals(startKey))
+        List<BsonValue> results;
+        lock (_syncRoot)
         {
-            startIndex++;
+            results = FindRangeInternal(startKey, endKey, includeStart, includeEnd);
         }
-
-        // 遍历叶子节点
-        var currentNode = startNode;
-        var currentIndex = startIndex;
-
-        while (currentNode != null)
-        {
-            while (currentIndex < currentNode.KeyCount)
-            {
-                var currentKey = currentNode.GetKey(currentIndex);
-                var comparison = currentKey.CompareTo(endKey);
-
-                if (comparison > 0) yield break;
-                if (comparison == 0 && !includeEnd) yield break;
-
-                yield return currentNode.GetDocumentId(currentIndex);
-                currentIndex++;
-            }
-
-            // 移动到下一个叶子节点
-            currentNode = GetNextLeafNode(currentNode);
-            currentIndex = 0;
-        }
+        return results;
     }
 
     /// <summary>
@@ -346,16 +309,19 @@ public sealed class BTreeIndex : IDisposable
         ThrowIfDisposed();
         if (key == null) throw new ArgumentNullException(nameof(key));
 
-        var node = FindLeafNode(key);
-        if (node == null) return null;
-
-        var index = node.FindKeyPosition(key);
-        if (index < node.KeyCount && node.GetKey(index).Equals(key))
+        lock (_syncRoot)
         {
-            return node.GetDocumentId(index);
-        }
+            var node = FindLeafNode(key);
+            if (node == null) return null;
 
-        return null;
+            var index = node.FindKeyPosition(key);
+            if (index < node.KeyCount && node.GetKey(index).Equals(key))
+            {
+                return node.GetDocumentId(index);
+            }
+
+            return null;
+        }
     }
 
     /// <summary>
@@ -394,7 +360,16 @@ public sealed class BTreeIndex : IDisposable
     /// <returns>是否包含</returns>
     public bool Contains(IndexKey key, BsonValue documentId)
     {
-        return Find(key).Contains(documentId);
+        ThrowIfDisposed();
+        if (key == null) throw new ArgumentNullException(nameof(key));
+        if (documentId == null) throw new ArgumentNullException(nameof(documentId));
+
+        List<BsonValue> results;
+        lock (_syncRoot)
+        {
+            results = FindInternal(key);
+        }
+        return results.Contains(documentId);
     }
 
     /// <summary>
@@ -404,7 +379,81 @@ public sealed class BTreeIndex : IDisposable
     /// <returns>是否包含</returns>
     public bool Contains(IndexKey key)
     {
-        return Find(key).Any();
+        ThrowIfDisposed();
+        if (key == null) throw new ArgumentNullException(nameof(key));
+
+        lock (_syncRoot)
+        {
+            return ContainsNoLock(key);
+        }
+    }
+
+    private bool ContainsNoLock(IndexKey key)
+    {
+        var node = FindLeafNode(key);
+        if (node == null) return false;
+
+        var position = node.FindKeyPosition(key);
+        return position < node.KeyCount && node.GetKey(position).Equals(key);
+    }
+
+    private List<BsonValue> FindInternal(IndexKey key)
+    {
+        var results = new List<BsonValue>();
+        var node = _root;
+        while (node != null)
+        {
+            if (node.IsLeaf)
+            {
+                var position = node.FindKeyPosition(key);
+                if (position < node.KeyCount && node.GetKey(position).Equals(key))
+                {
+                    results.AddRange(node.GetDocumentIds(position));
+                }
+                break;
+            }
+
+            var childIndex = node.FindKeyPosition(key);
+            node = childIndex < node.ChildCount ? node.GetChild(childIndex) : null;
+        }
+        return results;
+    }
+
+    private List<BsonValue> FindRangeInternal(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
+    {
+        var results = new List<BsonValue>();
+
+        var startNode = FindLeafNode(startKey);
+        if (startNode == null) return results;
+
+        var startIndex = startNode.FindKeyPosition(startKey);
+        if (!includeStart && startIndex < startNode.KeyCount && startNode.GetKey(startIndex).Equals(startKey))
+        {
+            startIndex++;
+        }
+
+        var currentNode = startNode;
+        var currentIndex = startIndex;
+
+        while (currentNode != null)
+        {
+            while (currentIndex < currentNode.KeyCount)
+            {
+                var currentKey = currentNode.GetKey(currentIndex);
+                var comparison = currentKey.CompareTo(endKey);
+
+                if (comparison > 0) return results;
+                if (comparison == 0 && !includeEnd) return results;
+
+                results.Add(currentNode.GetDocumentId(currentIndex));
+                currentIndex++;
+            }
+
+            currentNode = GetNextLeafNode(currentNode);
+            currentIndex = 0;
+        }
+
+        return results;
     }
 
     /// <summary>

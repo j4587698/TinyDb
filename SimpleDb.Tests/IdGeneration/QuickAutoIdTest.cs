@@ -1,8 +1,8 @@
-using SimpleDb.Tests.TestEntities;
 using SimpleDb.Core;
 using SimpleDb.Demo;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
+using TestAutoUser = SimpleDb.Tests.TestEntities.AutoUser;
 
 namespace SimpleDb.Tests.IdGeneration;
 
@@ -17,9 +17,9 @@ public class QuickAutoIdTest
         // 测试int类型自动生成
         var dbPath = Path.GetTempFileName();
         using var engine = new SimpleDbEngine(dbPath);
-        var collection = engine.GetCollection<AutoUser>();
+        var collection = engine.GetCollection<TestAutoUser>();
 
-        var user = new AutoUser { Name = "TestUser", Age = 25 };
+        var user = new TestAutoUser { Name = "TestUser", Age = 25 };
         collection.Insert(user);
 
         await Assert.That(user.Id).IsGreaterThan(0);

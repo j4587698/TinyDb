@@ -111,70 +111,94 @@ internal enum QueryOperation
     First,
     FirstOrDefault,
     Take,
-    Skip,
-    TakeSkip
+    Skip
 }
+
+internal readonly record struct QueryOperationDescriptor(QueryOperation Operation, int? IntValue);
+
+internal readonly record struct QueryPipelinePlan(
+    IReadOnlyList<QueryOperationDescriptor> SequenceOperations,
+    QueryOperation TerminalOperation);
 
 internal static class QueryOperationResolver
 {
-    public static QueryOperation Determine(Expression expression)
+    public static QueryPipelinePlan Analyze(Expression expression)
     {
-        if (expression is MethodCallExpression methodCall)
+        var sequenceOperations = new List<QueryOperationDescriptor>();
+        var terminalOperation = QueryOperation.Sequence;
+        var current = expression;
+
+        while (current is MethodCallExpression methodCall)
         {
-            return methodCall.Method.Name switch
+            switch (methodCall.Method.Name)
             {
-                nameof(Queryable.Count) => QueryOperation.Count,
-                nameof(Queryable.LongCount) => QueryOperation.LongCount,
-                nameof(Queryable.Any) => QueryOperation.Any,
-                nameof(Queryable.First) => QueryOperation.First,
-                nameof(Queryable.FirstOrDefault) => QueryOperation.FirstOrDefault,
-                nameof(Queryable.Take) => QueryOperation.Take,
-                nameof(Queryable.Skip) => QueryOperation.Skip,
-                "ToList" => QueryOperation.ToList,
-                _ => DetermineComplexOperation(methodCall)
-            };
-        }
-
-        return QueryOperation.Sequence;
-    }
-
-    /// <summary>
-    /// 确定复杂操作（如Take和Skip的组合）
-    /// </summary>
-    private static QueryOperation DetermineComplexOperation(MethodCallExpression methodCall)
-    {
-        // 检查是否是Take/Skip链式调用
-        if (methodCall.Arguments.Count > 0)
-        {
-            var argument = methodCall.Arguments[0];
-            if (argument is MethodCallExpression innerCall)
-            {
-                var innerOperation = Determine(innerCall);
-                var currentOperation = Determine(methodCall);
-
-                // 如果是Take->Skip或Skip->Take的组合
-                if ((innerOperation == QueryOperation.Take && currentOperation == QueryOperation.Skip) ||
-                    (innerOperation == QueryOperation.Skip && currentOperation == QueryOperation.Take))
-                {
-                    return QueryOperation.TakeSkip;
-                }
+                case nameof(Queryable.Take):
+                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.Take, ExtractIntegerArgument(methodCall, 1)));
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.Skip):
+                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.Skip, ExtractIntegerArgument(methodCall, 1)));
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.Count):
+                    terminalOperation = QueryOperation.Count;
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.LongCount):
+                    terminalOperation = QueryOperation.LongCount;
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.Any):
+                    terminalOperation = QueryOperation.Any;
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.First):
+                    terminalOperation = QueryOperation.First;
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.FirstOrDefault):
+                    terminalOperation = QueryOperation.FirstOrDefault;
+                    current = methodCall.Arguments[0];
+                    continue;
+                case "ToList":
+                    terminalOperation = QueryOperation.ToList;
+                    current = methodCall.Arguments[0];
+                    continue;
+                default:
+                    current = methodCall.Arguments.FirstOrDefault();
+                    continue;
             }
         }
 
-        return QueryOperation.Sequence;
+        sequenceOperations.Reverse();
+        return new QueryPipelinePlan(sequenceOperations, terminalOperation);
     }
 
     public static object? Apply<T>(Expression expression, IEnumerable<T> data)
     {
-        return Determine(expression) switch
+        var plan = Analyze(expression);
+        IEnumerable<T> sequence = data;
+
+        foreach (var descriptor in plan.SequenceOperations)
         {
-            QueryOperation.ToList => ToList(data),
-            QueryOperation.Count => Count(data),
-            QueryOperation.LongCount => LongCount(data),
-            QueryOperation.Any => Any(data),
-            QueryOperation.First => First(data),
-            QueryOperation.FirstOrDefault => FirstOrDefault(data),
-            _ => data
+            sequence = descriptor.Operation switch
+            {
+                QueryOperation.Take => Take(sequence, descriptor.IntValue ?? 0),
+                QueryOperation.Skip => Skip(sequence, descriptor.IntValue ?? 0),
+                _ => sequence
+            };
+        }
+
+        return plan.TerminalOperation switch
+        {
+            QueryOperation.Sequence => sequence,
+            QueryOperation.ToList => ToList(sequence),
+            QueryOperation.Count => Count(sequence),
+            QueryOperation.LongCount => LongCount(sequence),
+            QueryOperation.Any => Any(sequence),
+            QueryOperation.First => First(sequence),
+            QueryOperation.FirstOrDefault => FirstOrDefault(sequence),
+            _ => sequence
         };
     }
 
@@ -230,6 +254,62 @@ internal static class QueryOperationResolver
             return item!;
         }
         return default;
+    }
+
+    private static IEnumerable<T> Take<T>(IEnumerable<T> data, int count)
+    {
+        if (count <= 0)
+        {
+            yield break;
+        }
+
+        var taken = 0;
+        foreach (var item in data)
+        {
+            yield return item;
+            taken++;
+            if (taken >= count)
+            {
+                yield break;
+            }
+        }
+    }
+
+    private static IEnumerable<T> Skip<T>(IEnumerable<T> data, int count)
+    {
+        if (count <= 0)
+        {
+            foreach (var item in data)
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        using var enumerator = data.GetEnumerator();
+        while (count > 0 && enumerator.MoveNext())
+        {
+            count--;
+        }
+
+        while (enumerator.MoveNext())
+        {
+            yield return enumerator.Current;
+        }
+    }
+
+    private static int ExtractIntegerArgument(MethodCallExpression methodCall, int index)
+    {
+        var argument = methodCall.Arguments[index];
+        if (argument is System.Linq.Expressions.ConstantExpression constant && constant.Value is int value)
+        {
+            return value;
+        }
+
+        var lambda = Expression.Lambda(argument);
+        var compiled = lambda.Compile();
+        var result = compiled.DynamicInvoke();
+        return Convert.ToInt32(result);
     }
 }
 

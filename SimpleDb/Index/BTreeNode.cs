@@ -408,7 +408,7 @@ public sealed class BTreeNode
     /// 检查节点是否需要合并
     /// </summary>
     /// <returns>是否需要合并</returns>
-    public bool NeedsMerge() => _keys.Count < MinKeys && Parent != null;
+    public bool NeedsMerge() => _keys.Count < MinKeys;
 
     /// <summary>
     /// 获取节点的统计信息

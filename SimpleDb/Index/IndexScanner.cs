@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using SimpleDb.Attributes;
 using SimpleDb.Bson;
@@ -56,18 +58,31 @@ public static class IndexScanner
         // 按优先级排序
         indexedProperties.Sort((a, b) => a.Attribute.Priority.CompareTo(b.Attribute.Priority));
 
-        // 为每个属性创建索引
-        foreach (var (property, indexAttr) in indexedProperties)
-        {
-            var indexName = GenerateIndexName(indexAttr, property.Name);
-            var fields = new[] { property.Name };
+        // 按索引名称分组（支持复合索引）
+        var groupedIndexes = new Dictionary<string, List<(PropertyInfo Property, IndexAttribute Attribute)>>();
 
+        foreach (var entry in indexedProperties)
+        {
+            var indexName = GenerateIndexName(entry.Attribute, entry.Property.Name);
+            if (!groupedIndexes.TryGetValue(indexName, out var list))
+            {
+                list = new List<(PropertyInfo, IndexAttribute)>();
+                groupedIndexes[indexName] = list;
+            }
+            list.Add(entry);
+        }
+
+        foreach (var (indexName, entries) in groupedIndexes)
+        {
             if (!indexManager.IndexExists(indexName))
             {
-                var created = indexManager.CreateIndex(indexName, fields, indexAttr.Unique);
+                var fields = entries.Select(e => e.Property.Name).ToArray();
+                var unique = entries.Any(e => e.Attribute.Unique);
+
+                var created = indexManager.CreateIndex(indexName, fields, unique);
                 if (created)
                 {
-                    Console.WriteLine($"✅ 自动创建索引: {indexName} on {entityType.Name}.{property.Name} (Unique={indexAttr.Unique})");
+                    Console.WriteLine($"✅ 自动创建索引: {indexName} on {entityType.Name}[{string.Join(", ", fields)}] (Unique={unique})");
                 }
             }
         }

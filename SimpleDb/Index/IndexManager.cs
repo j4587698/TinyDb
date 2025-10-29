@@ -10,6 +10,7 @@ public sealed class IndexManager : IDisposable
 {
     private readonly ConcurrentDictionary<string, BTreeIndex> _indexes;
     private readonly string _collectionName;
+    private readonly object _indexLock = new();
     private bool _disposed;
 
     /// <summary>
@@ -128,7 +129,7 @@ public sealed class IndexManager : IDisposable
             }
         }
 
-        return bestIndex;
+        return bestScore > 0 ? bestIndex : null;
     }
 
     /// <summary>
@@ -173,20 +174,22 @@ public sealed class IndexManager : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        foreach (var index in _indexes.Values)
+        lock (_indexLock)
         {
-            try
+            foreach (var index in _indexes.Values)
             {
-                var key = ExtractIndexKey(index, document);
-                if (key != null)
+                try
                 {
-                    index.Insert(key, documentId);
+                    var key = ExtractIndexKey(index, document);
+                    if (key != null)
+                    {
+                        index.Insert(key, documentId);
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                // 记录索引插入错误，但继续处理其他索引
-                Console.WriteLine($"Error inserting document into index {index.Name}: {ex.Message}");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error inserting document into index {index.Name}: {ex.Message}");
+                }
             }
         }
     }
@@ -202,20 +205,22 @@ public sealed class IndexManager : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        foreach (var index in _indexes.Values)
+        lock (_indexLock)
         {
-            try
+            foreach (var index in _indexes.Values)
             {
-                var key = ExtractIndexKey(index, document);
-                if (key != null)
+                try
                 {
-                    index.Delete(key, documentId);
+                    var key = ExtractIndexKey(index, document);
+                    if (key != null)
+                    {
+                        index.Delete(key, documentId);
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                // 记录索引删除错误，但继续处理其他索引
-                Console.WriteLine($"Error deleting document from index {index.Name}: {ex.Message}");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error deleting document from index {index.Name}: {ex.Message}");
+                }
             }
         }
     }
@@ -233,33 +238,32 @@ public sealed class IndexManager : IDisposable
         if (newDocument == null) throw new ArgumentNullException(nameof(newDocument));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        foreach (var index in _indexes.Values)
+        lock (_indexLock)
         {
-            try
+            foreach (var index in _indexes.Values)
             {
-                var oldKey = ExtractIndexKey(index, oldDocument);
-                var newKey = ExtractIndexKey(index, newDocument);
-
-                // 如果键没有变化，跳过
-                if (oldKey != null && newKey != null && oldKey.Equals(newKey))
-                    continue;
-
-                // 删除旧键
-                if (oldKey != null)
+                try
                 {
-                    index.Delete(oldKey, documentId);
-                }
+                    var oldKey = ExtractIndexKey(index, oldDocument);
+                    var newKey = ExtractIndexKey(index, newDocument);
 
-                // 插入新键
-                if (newKey != null)
-                {
-                    index.Insert(newKey, documentId);
+                    if (oldKey != null && newKey != null && oldKey.Equals(newKey))
+                        continue;
+
+                    if (oldKey != null)
+                    {
+                        index.Delete(oldKey, documentId);
+                    }
+
+                    if (newKey != null)
+                    {
+                        index.Insert(newKey, documentId);
+                    }
                 }
-            }
-            catch (Exception ex)
-            {
-                // 记录索引更新错误，但继续处理其他索引
-                Console.WriteLine($"Error updating document in index {index.Name}: {ex.Message}");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error updating document in index {index.Name}: {ex.Message}");
+                }
             }
         }
     }

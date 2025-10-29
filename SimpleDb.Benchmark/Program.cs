@@ -1,9 +1,11 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
+using BenchmarkDotNet.Jobs;
 using SimpleDb.Core;
 using SimpleDb.Collections;
 using SimpleDb.Attributes;
 using SimpleDb.Bson;
+using System.IO;
 
 namespace SimpleDb.Benchmark;
 
@@ -16,6 +18,17 @@ public class Program
 
         // 先运行快速批量测试
         QuickBatchTest.RunTest();
+
+        var skipFullBenchmark = string.Equals(
+            Environment.GetEnvironmentVariable("SIMPLEDB_BENCH_SKIP_FULL"),
+            "1",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (skipFullBenchmark)
+        {
+            Console.WriteLine("\n⚠️ 已根据环境变量 SIMPLEDB_BENCH_SKIP_FULL 跳过 BenchmarkDotNet 基准测试。");
+            return;
+        }
 
         Console.WriteLine("\n" + new string('=', 60));
 
@@ -31,12 +44,17 @@ public class Program
 /// 快速索引性能基准测试
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob]
+[SimpleJob(RuntimeMoniker.Net90, warmupCount: 1, iterationCount: 5, launchCount: 1)]
 public class QuickIndexBenchmark
 {
     private SimpleDbEngine? _engine;
     private ILiteCollection<QuickUser>? _collection;
     private const string DatabaseFile = "quick_benchmark.db";
+    private const int SeedCount = 1000;
+    private ObjectId _firstSeededUserId;
+
+    [Params(true, false)]
+    public bool SynchronousWrites { get; set; }
 
     /// <summary>
     /// 快速测试用户实体
@@ -59,40 +77,41 @@ public class QuickIndexBenchmark
         public decimal Salary { get; set; }
     }
 
-    [GlobalSetup]
-    public void Setup()
-    {
-        if (System.IO.File.Exists(DatabaseFile))
-        {
-            System.IO.File.Delete(DatabaseFile);
-        }
+    [IterationSetup(Target = nameof(Insert1000_Individual))]
+    public void IterationSetup_InsertIndividual() => SetupInsertIteration();
 
-        var options = new SimpleDbOptions
-        {
-            DatabaseName = "QuickBenchmarkDb",
-            PageSize = 16384,
-            CacheSize = 1000,
-            EnableJournaling = false
-        };
+    [IterationCleanup(Target = nameof(Insert1000_Individual))]
+    public void IterationCleanup_InsertIndividual() => CleanupIteration();
 
-        _engine = new SimpleDbEngine(DatabaseFile, options);
-        _collection = _engine.GetCollection<QuickUser>("quick_users");
+    [IterationSetup(Target = nameof(Insert1000_Batch))]
+    public void IterationSetup_InsertBatch() => SetupInsertIteration();
 
-        Console.WriteLine($"✅ 快速基准测试环境已设置");
-    }
+    [IterationCleanup(Target = nameof(Insert1000_Batch))]
+    public void IterationCleanup_InsertBatch() => CleanupIteration();
 
-    [GlobalCleanup]
-    public void Cleanup()
-    {
-        _engine?.Dispose();
+    [IterationSetup(Target = nameof(QueryWithoutIndex))]
+    public void IterationSetup_QueryWithoutIndex() => SetupQueryIteration();
 
-        if (System.IO.File.Exists(DatabaseFile))
-        {
-            System.IO.File.Delete(DatabaseFile);
-        }
+    [IterationCleanup(Target = nameof(QueryWithoutIndex))]
+    public void IterationCleanup_QueryWithoutIndex() => CleanupIteration();
 
-        Console.WriteLine($"✅ 快速基准测试环境已清理");
-    }
+    [IterationSetup(Target = nameof(QueryWithIndex))]
+    public void IterationSetup_QueryWithIndex() => SetupQueryIteration();
+
+    [IterationCleanup(Target = nameof(QueryWithIndex))]
+    public void IterationCleanup_QueryWithIndex() => CleanupIteration();
+
+    [IterationSetup(Target = nameof(QueryWithUniqueIndex))]
+    public void IterationSetup_QueryWithUniqueIndex() => SetupQueryIteration();
+
+    [IterationCleanup(Target = nameof(QueryWithUniqueIndex))]
+    public void IterationCleanup_QueryWithUniqueIndex() => CleanupIteration();
+
+    [IterationSetup(Target = nameof(FindById))]
+    public void IterationSetup_FindById() => SetupQueryIteration();
+
+    [IterationCleanup(Target = nameof(FindById))]
+    public void IterationCleanup_FindById() => CleanupIteration();
 
     /// <summary>
     /// 插入1000条记录 - 逐个插入版本
@@ -100,13 +119,6 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void Insert1000_Individual()
     {
-        // 清空集合
-        var allUsers = _collection!.FindAll().ToList();
-        foreach (var user in allUsers)
-        {
-            _collection.Delete(user.Id);
-        }
-
         // 逐个插入1000条测试数据
         for (int i = 0; i < 1000; i++)
         {
@@ -117,7 +129,7 @@ public class QuickIndexBenchmark
                 Age = 20 + (i % 50),
                 Salary = 30000 + (i % 100) * 100
             };
-            _collection.Insert(user);
+            _collection!.Insert(user);
         }
     }
 
@@ -127,13 +139,6 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void Insert1000_Batch()
     {
-        // 清空集合
-        var allUsers = _collection!.FindAll().ToList();
-        foreach (var user in allUsers)
-        {
-            _collection.Delete(user.Id);
-        }
-
         // 批量插入1000条测试数据
         var users = new List<QuickUser>();
         for (int i = 0; i < 1000; i++)
@@ -146,7 +151,7 @@ public class QuickIndexBenchmark
                 Salary = 30000 + (i % 100) * 100
             });
         }
-        _collection.Insert(users);
+        _collection!.Insert(users);
     }
 
     /// <summary>
@@ -155,9 +160,6 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void QueryWithoutIndex()
     {
-        // 确保有数据
-        EnsureDataExists(1000);
-
         var results = _collection!.Query()
             .Where(u => u.Salary >= 30000 && u.Salary < 40000)
             .Take(100)
@@ -175,9 +177,6 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void QueryWithIndex()
     {
-        // 确保有数据
-        EnsureDataExists(1000);
-
         var results = _collection!.Query()
             .Where(u => u.Age == 25)
             .ToList();
@@ -194,9 +193,6 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void QueryWithUniqueIndex()
     {
-        // 确保有数据
-        EnsureDataExists(1000);
-
         var results = _collection!.Query()
             .Where(u => u.Email == "user25@quick.com")
             .ToList();
@@ -213,34 +209,35 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void FindById()
     {
-        // 确保有数据
-        EnsureDataExists(1000);
-
-        var firstUser = _collection!.Query().FirstOrDefault();
-        if (firstUser == null)
-        {
-            throw new InvalidOperationException("No data found");
-        }
-
-        var result = _collection.FindById(firstUser.Id);
+        var result = _collection!.FindById(_firstSeededUserId);
         if (result == null)
         {
             throw new InvalidOperationException("Unexpected null result");
         }
     }
 
-    /// <summary>
-    /// 确保测试数据存在
-    /// </summary>
-    private void EnsureDataExists(int count)
+    private void CreateEngine()
     {
-        var existingCount = _collection!.FindAll().Count();
-        if (existingCount >= count)
-        {
-            return;
-        }
+        DisposeEngine();
 
-        for (int i = existingCount; i < count; i++)
+        var options = new SimpleDbOptions
+        {
+            DatabaseName = "QuickBenchmarkDb",
+            PageSize = 16384,
+            CacheSize = 1000,
+            EnableJournaling = false,
+            SynchronousWrites = SynchronousWrites
+        };
+
+        _engine = new SimpleDbEngine(DatabaseFile, options);
+        _collection = _engine.GetCollection<QuickUser>("quick_users");
+    }
+
+    private void SeedData(int count)
+    {
+        if (_collection == null) throw new InvalidOperationException("Collection not initialized");
+
+        for (int i = 0; i < count; i++)
         {
             var user = new QuickUser
             {
@@ -250,6 +247,38 @@ public class QuickIndexBenchmark
                 Salary = 30000 + (i % 100) * 100
             };
             _collection.Insert(user);
+            if (i == 0)
+            {
+                _firstSeededUserId = user.Id;
+            }
+        }
+    }
+
+    private void SetupInsertIteration()
+    {
+        CreateEngine();
+    }
+
+    private void SetupQueryIteration()
+    {
+        CreateEngine();
+        SeedData(SeedCount);
+    }
+
+    private void CleanupIteration()
+    {
+        DisposeEngine();
+    }
+
+    private void DisposeEngine()
+    {
+        _engine?.Dispose();
+        _engine = null;
+        _collection = null;
+
+        if (File.Exists(DatabaseFile))
+        {
+            File.Delete(DatabaseFile);
         }
     }
 }

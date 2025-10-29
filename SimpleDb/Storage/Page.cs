@@ -144,6 +144,33 @@ public sealed class Page : IDisposable
     }
 
     /// <summary>
+    /// 获取页面的快照数据
+    /// </summary>
+    /// <param name="includeUnusedTail">是否包含未使用的数据区尾部</param>
+    /// <returns>页面字节数组</returns>
+    public byte[] Snapshot(bool includeUnusedTail = true)
+    {
+        ThrowIfDisposed();
+        lock (_lock)
+        {
+            int length;
+            if (includeUnusedTail)
+            {
+                length = _data.Length;
+            }
+            else
+            {
+                var usedBytes = DataSize - Header.FreeBytes;
+                length = PageHeader.Size + Math.Max(usedBytes, 0);
+            }
+
+            var result = new byte[length];
+            Array.Copy(_data, 0, result, 0, length);
+            return result;
+        }
+    }
+
+    /// <summary>
     /// 更新页面头部
     /// </summary>
     /// <param name="header">新的页面头部</param>
@@ -301,13 +328,14 @@ public sealed class Page : IDisposable
             Header.PageType = PageType.Empty;
             Header.PrevPageID = 0;
             Header.NextPageID = 0;
-            Header.FreeBytes = 0; // 按照测试期望
             Header.ItemCount = 0;
             Header.Version = 0;
 
             // 将Header写入字节数组
             WriteHeader();
-            MarkDirty();
+
+            var freeBytes = (ushort)Math.Min(DataSize, ushort.MaxValue);
+            UpdateStats(freeBytes, 0);
         }
     }
 

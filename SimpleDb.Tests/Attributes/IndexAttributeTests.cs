@@ -1,22 +1,28 @@
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using SimpleDb.Attributes;
-using SimpleDb.Core;
+using SimpleDb.Bson;
 using SimpleDb.Collections;
+using SimpleDb.Core;
 using SimpleDb.Index;
-using Xunit;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
 
 namespace SimpleDb.Tests.Attributes;
 
 /// <summary>
 /// IndexAttribute 测试
 /// </summary>
-public class IndexAttributeTests : IDisposable
+public class IndexAttributeTests
 {
-    private readonly SimpleDbEngine _engine;
+    private string _databasePath = null!;
+    private SimpleDbEngine _engine = null!;
 
-    public IndexAttributeTests()
+    [Before(Test)]
+    public void Setup()
     {
-        // 创建临时数据库
-        var testDbFile = Path.GetTempFileName();
+        _databasePath = Path.Combine(Path.GetTempPath(), $"index_attr_{Guid.NewGuid():N}.db");
         var options = new SimpleDbOptions
         {
             DatabaseName = "IndexAttributeTestDb",
@@ -24,109 +30,101 @@ public class IndexAttributeTests : IDisposable
             CacheSize = 100
         };
 
-        _engine = new SimpleDbEngine(testDbFile, options);
+        _engine = new SimpleDbEngine(_databasePath, options);
     }
 
-    public void Dispose()
+    [After(Test)]
+    public void Cleanup()
     {
         _engine?.Dispose();
+        if (File.Exists(_databasePath))
+        {
+            File.Delete(_databasePath);
+        }
     }
 
-    [Fact]
-    public void IndexAttribute_ShouldCreateSingleIndex()
+    [Test]
+    public async Task IndexAttribute_ShouldCreateSingleIndex()
     {
-        // Act
         var collection = _engine.GetCollection<TestUser>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        Assert.True(indexManager.IndexExists("idx_name"));
-        Assert.False(indexManager.IndexExists("idx_name").Unique);
+        await Assert.That(indexManager.IndexExists("idx_name")).IsTrue();
+        var index = indexManager.GetIndex("idx_name");
+        await Assert.That(index).IsNotNull();
+        await Assert.That(index!.IsUnique).IsFalse();
     }
 
-    [Fact]
-    public void IndexAttribute_ShouldCreateUniqueIndex()
+    [Test]
+    public async Task IndexAttribute_ShouldCreateUniqueIndex()
     {
-        // Act
         var collection = _engine.GetCollection<TestUserWithUniqueEmail>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        Assert.True(indexManager.IndexExists("uidx_email"));
+        await Assert.That(indexManager.IndexExists("uidx_email")).IsTrue();
         var index = indexManager.GetIndex("uidx_email");
-        Assert.True(index.IsUnique);
+        await Assert.That(index).IsNotNull();
+        await Assert.That(index!.IsUnique).IsTrue();
     }
 
-    [Fact]
-    public void IndexAttribute_ShouldCreateIndexWithCustomName()
+    [Test]
+    public async Task IndexAttribute_ShouldCreateIndexWithCustomName()
     {
-        // Act
         var collection = _engine.GetCollection<TestUserWithCustomIndex>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        Assert.True(indexManager.IndexExists("custom_name_index"));
+        await Assert.That(indexManager.IndexExists("custom_name_index")).IsTrue();
     }
 
-    [Fact]
-    public void CompositeIndexAttribute_ShouldCreateCompositeIndex()
+    [Test]
+    public async Task CompositeIndexAttribute_ShouldCreateCompositeIndex()
     {
-        // Act
         var collection = _engine.GetCollection<TestUserWithCompositeIndex>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        Assert.True(indexManager.IndexExists("idx_name_age"));
+        await Assert.That(indexManager.IndexExists("idx_name_age")).IsTrue();
         var index = indexManager.GetIndex("idx_name_age");
-        Assert.Equal(2, index.Fields.Count);
-        Assert.Contains("name", index.Fields);
-        Assert.Contains("age", index.Fields);
+        await Assert.That(index).IsNotNull();
+        await Assert.That(index!.Fields).Contains("Name");
+        await Assert.That(index.Fields).Contains("Age");
     }
 
-    [Fact]
-    public void IndexAttribute_ShouldRespectPriority()
+    [Test]
+    public async Task IndexAttribute_ShouldRespectPriority()
     {
-        // Act
         var collection = _engine.GetCollection<TestUserWithMultipleIndexes>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        // 高优先级索引应该先创建
-        Assert.True(indexManager.IndexExists("high_priority_idx"));
-        Assert.True(indexManager.IndexExists("normal_idx"));
-        Assert.True(indexManager.IndexExists("low_priority_idx"));
+        await Assert.That(indexManager.IndexExists("high_priority_idx")).IsTrue();
+        await Assert.That(indexManager.IndexExists("normal_idx")).IsTrue();
+        await Assert.That(indexManager.IndexExists("low_priority_idx")).IsTrue();
     }
 
-    [Fact]
-    public void IndexScanner_ShouldGetEntityIndexes()
+    [Test]
+    public async Task IndexScanner_ShouldGetEntityIndexes()
     {
-        // Act
         var indexes = IndexScanner.GetEntityIndexes(typeof(TestUserWithMultipleIndexes));
 
-        // Assert
-        Assert.Equal(3, indexes.Count);
+        await Assert.That(indexes.Count).IsEqualTo(3);
 
-        var nameIndex = indexes.FirstOrDefault(i => i.Fields.Contains("name"));
-        var ageIndex = indexes.FirstOrDefault(i => i.Fields.Contains("age"));
-        var emailIndex = indexes.FirstOrDefault(i => i.Fields.Contains("email"));
+        var nameIndex = indexes.FirstOrDefault(i => i.Fields.Any(f => string.Equals(f, "name", StringComparison.OrdinalIgnoreCase)));
+        var ageIndex = indexes.FirstOrDefault(i => i.Fields.Any(f => string.Equals(f, "age", StringComparison.OrdinalIgnoreCase)));
+        var emailIndex = indexes.FirstOrDefault(i => i.Fields.Any(f => string.Equals(f, "email", StringComparison.OrdinalIgnoreCase)));
 
-        Assert.NotNull(nameIndex);
-        Assert.NotNull(ageIndex);
-        Assert.NotNull(emailIndex);
+        await Assert.That(nameIndex).IsNotNull();
+        await Assert.That(ageIndex).IsNotNull();
+        await Assert.That(emailIndex).IsNotNull();
 
-        // 验证优先级排序
-        Assert.True(nameIndex.Priority < ageIndex.Priority);
-        Assert.True(ageIndex.Priority < emailIndex.Priority);
+        await Assert.That(nameIndex!.Priority < ageIndex!.Priority).IsTrue();
+        await Assert.That(ageIndex.Priority < emailIndex!.Priority).IsTrue();
     }
 
-    [Fact]
-    public void AutoIndex_ShouldWorkWithInsertOperations()
+    [Test]
+    public async Task AutoIndex_ShouldWorkWithInsertOperations()
     {
-        // Arrange
         var collection = _engine.GetCollection<TestUser>("auto_test_users");
         var indexManager = collection.GetIndexManager();
 
-        // Act
         var user = new TestUser
         {
             Name = "Test User",
@@ -135,40 +133,35 @@ public class IndexAttributeTests : IDisposable
         };
         collection.Insert(user);
 
-        // Assert
-        Assert.True(indexManager.IndexExists("idx_name"));
-        Assert.True(indexManager.IndexExists("idx_age"));
-        Assert.True(indexManager.IndexExists("idx_email"));
+        await Assert.That(indexManager.IndexExists("idx_name")).IsTrue();
+        await Assert.That(indexManager.IndexExists("idx_age")).IsTrue();
+        await Assert.That(indexManager.IndexExists("idx_email")).IsTrue();
 
-        // 验证索引数据
         var nameIndex = indexManager.GetIndex("idx_name");
-        Assert.Equal(1, nameIndex.EntryCount);
+        await Assert.That(nameIndex).IsNotNull();
+        await Assert.That(nameIndex!.EntryCount).IsEqualTo(1);
     }
 
-    [Fact]
-    public void CompositeIndex_ShouldSupportUniqueConstraint()
+    [Test]
+    public async Task CompositeIndex_ShouldSupportUniqueConstraint()
     {
-        // Act
         var collection = _engine.GetCollection<TestUserWithUniqueComposite>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        Assert.True(indexManager.IndexExists("unique_name_email"));
+        await Assert.That(indexManager.IndexExists("unique_name_email")).IsTrue();
         var index = indexManager.GetIndex("unique_name_email");
-        Assert.True(index.IsUnique);
+        await Assert.That(index).IsNotNull();
+        await Assert.That(index!.IsUnique).IsTrue();
     }
 
-    [Fact]
-    public void IndexAttribute_ShouldHandleDuplicateIndexNames()
+    [Test]
+    public async Task IndexAttribute_ShouldHandleDuplicateIndexNames()
     {
-        // Act
         var collection = _engine.GetCollection<TestUserWithDuplicateIndexes>("test_users");
 
-        // Assert
         var indexManager = collection.GetIndexManager();
-        // 应该只创建一个索引，因为名称相同
         var indexes = indexManager.IndexNames.Where(name => name.Contains("duplicate")).ToList();
-        Assert.Single(indexes);
+        await Assert.That(indexes.Count).IsEqualTo(1);
     }
 }
 
@@ -200,12 +193,10 @@ public class TestUserWithUniqueEmail
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
 
-    public string Name { get; set; } = "";
-
     [Index(Unique = true)]
     public string Email { get; set; } = "";
 
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string Name { get; set; } = "";
 }
 
 /// <summary>
@@ -216,64 +207,56 @@ public class TestUserWithCustomIndex
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
 
-    [Index("custom_name_index")]
+    [Index(Name = "custom_name_index")]
     public string Name { get; set; } = "";
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>
 /// 测试用户实体 - 复合索引
 /// </summary>
 [Entity("test_users")]
-[CompositeIndex("idx_name_age")]
 public class TestUserWithCompositeIndex
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
 
+    [Index(Name = "idx_name_age", Priority = 1)]
     public string Name { get; set; } = "";
 
+    [Index(Name = "idx_name_age", Priority = 2)]
     public int Age { get; set; }
-
-    public string Email { get; set; } = "";
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>
-/// 测试用户实体 - 多个索引
+/// 测试用户实体 - 多个索引，测试优先级
 /// </summary>
 [Entity("test_users")]
 public class TestUserWithMultipleIndexes
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
 
-    [Index(Priority = 1)]
+    [Index(Name = "high_priority_idx", Priority = 1)]
     public string Name { get; set; } = "";
 
-    [Index(Priority = 5)]
+    [Index(Name = "normal_idx", Priority = 5)]
     public int Age { get; set; }
 
-    [Index(Priority = 10)]
+    [Index(Name = "low_priority_idx", Priority = 10)]
     public string Email { get; set; } = "";
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>
 /// 测试用户实体 - 唯一复合索引
 /// </summary>
 [Entity("test_users")]
-[CompositeIndex("unique_name_email", true, "Name", "Email")]
 public class TestUserWithUniqueComposite
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
 
+    [Index(Name = "unique_name_email", Priority = 1, Unique = true)]
     public string Name { get; set; } = "";
 
+    [Index(Name = "unique_name_email", Priority = 2, Unique = true)]
     public string Email { get; set; } = "";
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>
@@ -284,11 +267,9 @@ public class TestUserWithDuplicateIndexes
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();
 
-    [Index("duplicate_index")]
-    public string Name { get; set; } = "";
+    [Index(Name = "duplicate_index")]
+    public string Field1 { get; set; } = "";
 
-    [Index("duplicate_index")]
-    public string Email { get; set; } = "";
-
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    [Index(Name = "duplicate_index")]
+    public string Field2 { get; set; } = "";
 }

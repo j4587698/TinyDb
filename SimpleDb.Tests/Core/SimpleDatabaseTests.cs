@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Threading.Tasks;
 using SimpleDb.Core;
 using SimpleDb.Collections;
 using SimpleDb.Tests.TestEntities;
@@ -49,6 +50,50 @@ public class SimpleDatabaseTests
         // Assert
         await Assert.That(users).IsNotNull();
         await Assert.That(users.CollectionName).IsEqualTo("users");
+    }
+
+    [Test]
+    public async Task DefaultOptions_Should_Use_Synced_WriteConcern()
+    {
+        var options = new SimpleDbOptions();
+        await Assert.That(options.WriteConcern).IsEqualTo(WriteConcern.Synced);
+    }
+
+    [Test]
+    public async Task None_WriteConcern_Should_Flush_In_Background()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"bg_flush_{Guid.NewGuid():N}.db");
+        try
+        {
+            var options = new SimpleDbOptions
+            {
+                DatabaseName = "BackgroundFlushDb",
+                PageSize = 4096,
+                CacheSize = 32,
+                EnableJournaling = false,
+                WriteConcern = WriteConcern.None,
+                BackgroundFlushInterval = TimeSpan.FromMilliseconds(20),
+                JournalFlushDelay = TimeSpan.Zero
+            };
+
+            using var engine = new SimpleDbEngine(tempPath, options);
+
+            var initialSize = engine.GetStatistics().FileSize;
+            var users = engine.GetCollection<User>("users");
+            users.Insert(new User { Name = "BG", Age = 30, Email = "bg@example.com" });
+
+            await Task.Delay(200);
+
+            var sizeAfter = engine.GetStatistics().FileSize;
+            await Assert.That(sizeAfter).IsGreaterThan(initialSize);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 
     [Test]
@@ -116,5 +161,25 @@ public class SimpleDatabaseTests
         var result = _engine.DropCollection("missing");
 
         await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task Insert_Many_Documents_Should_ReUse_Data_Pages()
+    {
+        const int insertCount = 200;
+        var users = _engine.GetCollection<User>("users");
+
+        for (int i = 0; i < insertCount; i++)
+        {
+            users.Insert(new User
+            {
+                Name = $"BulkUser{i}",
+                Age = 20 + (i % 50),
+                Email = $"bulk{i}@example.com"
+            });
+        }
+
+        var stats = _engine.GetStatistics();
+        await Assert.That(stats.UsedPages).IsLessThan((uint)(insertCount / 2));
     }
 }

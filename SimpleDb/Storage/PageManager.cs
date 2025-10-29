@@ -208,6 +208,7 @@ public sealed class PageManager : IDisposable
     private Page CreateNewPage(uint pageID, PageType pageType)
     {
         var page = new Page(pageID, (int)_pageSize, pageType);
+        page.UpdateStats((ushort)Math.Min(page.DataSize, ushort.MaxValue), 0);
         AddToCache(page);
 
         // 计算新的文件大小
@@ -302,7 +303,7 @@ public sealed class PageManager : IDisposable
             page.Header.FreeBytes = (ushort)(page.DataSize);
             page.UpdateChecksum(); // 更新校验和
 
-            SavePage(page, forceFlush: true); // 强制刷新到磁盘确保更改持久化
+            SavePage(page, forceFlush: false);
 
             // 从缓存中彻底移除该页面的所有实例
             while (_pageCache.TryRemove(pageID, out _))
@@ -354,6 +355,67 @@ public sealed class PageManager : IDisposable
 
         // 最后刷新磁盘流
         await _diskStream.FlushAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// 从 WAL 恢复页面数据
+    /// </summary>
+    /// <param name="pageID">页面 ID</param>
+    /// <param name="pageData">页面数据</param>
+    internal void RestorePage(uint pageID, byte[] pageData)
+    {
+        ThrowIfDisposed();
+        if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
+        if (pageData == null) throw new ArgumentNullException(nameof(pageData));
+        lock (_allocationLock)
+        {
+            byte[] buffer;
+            if (pageData.Length == _pageSize)
+            {
+                buffer = pageData;
+            }
+            else if (pageData.Length < _pageSize)
+            {
+                buffer = new byte[_pageSize];
+                Array.Copy(pageData, buffer, pageData.Length);
+            }
+            else
+            {
+                throw new ArgumentException($"Page data length must be less or equal to {(int)_pageSize} bytes", nameof(pageData));
+            }
+
+            var pageOffset = CalculatePageOffset(pageID);
+            _diskStream.WritePage(pageOffset, buffer);
+
+            if (_pageCache.TryRemove(pageID, out var cachedPage))
+            {
+                cachedPage.Dispose();
+                _lruCache.Remove(pageID);
+            }
+
+            _fileSize = Math.Max(_fileSize, pageOffset + _pageSize);
+        }
+    }
+
+    /// <summary>
+    /// 判断是否有脏页面
+    /// </summary>
+    public bool HasDirtyPages()
+    {
+        ThrowIfDisposed();
+
+        lock (_allocationLock)
+        {
+            foreach (var page in _pageCache.Values)
+            {
+                if (page.IsDirty)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -516,6 +578,10 @@ public sealed class PageManager : IDisposable
         {
             if (_pageCache.TryRemove(pageID, out var removedPage))
             {
+                if (removedPage.IsDirty)
+                {
+                    SavePage(removedPage);
+                }
                 removedPage.Dispose();
             }
             _lruCache.Remove(pageID);
