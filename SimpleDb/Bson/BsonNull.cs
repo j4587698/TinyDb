@@ -49,8 +49,37 @@ public sealed class BsonNull : BsonValue
     {
         if (conversionType == typeof(object)) return null!;
         if (conversionType == typeof(BsonNull)) return this;
+        if (Nullable.GetUnderlyingType(conversionType) != null) return null!;
         if (!conversionType.IsValueType) return null!;
-        return Activator.CreateInstance(conversionType)!;
+
+        if (conversionType.IsEnum)
+        {
+            return Enum.ToObject(conversionType, 0)!;
+        }
+
+        if (conversionType == typeof(Guid)) return Guid.Empty;
+        if (conversionType == typeof(ObjectId)) return ObjectId.Empty;
+        if (conversionType == typeof(DateTime)) return default(DateTime);
+        if (conversionType == typeof(DateTimeOffset)) return default(DateTimeOffset);
+        if (conversionType == typeof(TimeSpan)) return default(TimeSpan);
+
+        return Type.GetTypeCode(conversionType) switch
+        {
+            TypeCode.Boolean => false,
+            TypeCode.Byte => (byte)0,
+            TypeCode.SByte => (sbyte)0,
+            TypeCode.Int16 => (short)0,
+            TypeCode.UInt16 => (ushort)0,
+            TypeCode.Int32 => 0,
+            TypeCode.UInt32 => 0u,
+            TypeCode.Int64 => 0L,
+            TypeCode.UInt64 => 0UL,
+            TypeCode.Single => 0f,
+            TypeCode.Double => 0d,
+            TypeCode.Decimal => 0m,
+            TypeCode.Char => '\0',
+            _ => throw new NotSupportedException($"不支持将BsonNull转换为 {conversionType}.")
+        };
     }
     public override ushort ToUInt16(IFormatProvider? provider) => 0;
     public override uint ToUInt32(IFormatProvider? provider) => 0;

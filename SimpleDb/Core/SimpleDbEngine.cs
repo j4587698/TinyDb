@@ -517,10 +517,14 @@ public sealed class SimpleDbEngine : IDisposable
 
     private BsonDocument PrepareDocumentForInsert(string collectionName, BsonDocument document, out BsonValue id)
     {
-        if (!document.TryGetValue("_id", out id) || id.IsNull)
+        if (!document.TryGetValue("_id", out var existingId) || existingId is null || existingId.IsNull)
         {
             id = ObjectId.NewObjectId();
             document = document.Set("_id", id);
+        }
+        else
+        {
+            id = existingId;
         }
 
         if (!DocumentBelongsToCollection(document, collectionName))

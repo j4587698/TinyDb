@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 
 namespace SimpleDb.Query;
 
@@ -301,15 +303,52 @@ internal static class QueryOperationResolver
     private static int ExtractIntegerArgument(MethodCallExpression methodCall, int index)
     {
         var argument = methodCall.Arguments[index];
-        if (argument is System.Linq.Expressions.ConstantExpression constant && constant.Value is int value)
+        if (TryEvaluateExpression(argument, out var value) && value != null)
         {
-            return value;
+            return Convert.ToInt32(value, CultureInfo.InvariantCulture);
         }
 
-        var lambda = Expression.Lambda(argument);
-        var compiled = lambda.Compile();
-        var result = compiled.DynamicInvoke();
-        return Convert.ToInt32(result);
+        throw new InvalidOperationException($"无法解析表达式参数 {argument} 为整数。");
+    }
+
+    private static bool TryEvaluateExpression(Expression expression, out object? value)
+    {
+        switch (expression)
+        {
+            case global::System.Linq.Expressions.ConstantExpression constant:
+                value = constant.Value;
+                return true;
+
+            case global::System.Linq.Expressions.MemberExpression memberExpression:
+                object? instance = null;
+                if (memberExpression.Expression != null)
+                {
+                    if (!TryEvaluateExpression(memberExpression.Expression, out instance))
+                    {
+                        value = null;
+                        return false;
+                    }
+                }
+
+                value = memberExpression.Member switch
+                {
+                    FieldInfo field => field.GetValue(instance),
+                    PropertyInfo property => property.GetValue(instance),
+                    _ => null
+                };
+                return value != null;
+
+            case global::System.Linq.Expressions.UnaryExpression unary when unary.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked:
+                if (TryEvaluateExpression(unary.Operand, out var operandValue) && operandValue != null)
+                {
+                    value = Convert.ChangeType(operandValue, unary.Type, CultureInfo.InvariantCulture);
+                    return true;
+                }
+                break;
+        }
+
+        value = null;
+        return false;
     }
 }
 

@@ -16,7 +16,7 @@ public static class IndexDemo
     /// <summary>
     /// 运行索引演示
     /// </summary>
-    public static async Task RunAsync()
+    public static Task RunAsync()
     {
         Console.WriteLine("=== SimpleDb 索引功能演示 ===");
         Console.WriteLine();
@@ -41,16 +41,16 @@ public static class IndexDemo
         Console.WriteLine("✅ 数据库引擎创建成功！");
 
         // 演示基本索引操作
-        await BasicIndexDemo(users);
+        BasicIndexDemo(users);
 
         // 演示复合索引
-        await CompositeIndexDemo(users);
+        CompositeIndexDemo(users);
 
         // 演示唯一索引
-        await UniqueIndexDemo(users);
+        UniqueIndexDemo(users);
 
         // 演示索引性能
-        await IndexPerformanceDemo(users);
+        IndexPerformanceDemo(users);
 
         // 演示索引管理
         IndexManagementDemo(engine);
@@ -63,12 +63,14 @@ public static class IndexDemo
         {
             System.IO.File.Delete(testDbFile);
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
     /// 基本索引操作演示
     /// </summary>
-    private static async Task BasicIndexDemo(ILiteCollection<IndexUser> users)
+    private static void BasicIndexDemo(ILiteCollection<IndexUser> users)
     {
         Console.WriteLine("--- 基本索引操作演示 ---");
 
@@ -122,7 +124,7 @@ public static class IndexDemo
     /// <summary>
     /// 复合索引演示
     /// </summary>
-    private static async Task CompositeIndexDemo(ILiteCollection<IndexUser> users)
+    private static void CompositeIndexDemo(ILiteCollection<IndexUser> users)
     {
         Console.WriteLine("--- 复合索引演示 ---");
 
@@ -176,7 +178,7 @@ public static class IndexDemo
     /// <summary>
     /// 唯一索引演示
     /// </summary>
-    private static async Task UniqueIndexDemo(ILiteCollection<IndexUser> users)
+    private static void UniqueIndexDemo(ILiteCollection<IndexUser> users)
     {
         Console.WriteLine("--- 唯一索引演示 ---");
 
@@ -234,7 +236,7 @@ public static class IndexDemo
     /// <summary>
     /// 索引性能演示
     /// </summary>
-    private static async Task IndexPerformanceDemo(ILiteCollection<IndexUser> users)
+    private static void IndexPerformanceDemo(ILiteCollection<IndexUser> users)
     {
         Console.WriteLine("--- 索引性能演示 ---");
 

@@ -16,7 +16,7 @@ public static class AutoIndexDemo
     /// <summary>
     /// 运行自动索引演示
     /// </summary>
-    public static async Task RunAsync()
+    public static Task RunAsync()
     {
         Console.WriteLine("=== SimpleDb 自动索引功能演示 ===");
         Console.WriteLine();
@@ -39,16 +39,16 @@ public static class AutoIndexDemo
         Console.WriteLine("✅ 数据库引擎创建成功！");
 
         // 演示基本的自动索引创建
-        await BasicAutoIndexDemo(engine);
+        BasicAutoIndexDemo(engine);
 
         // 演示唯一索引
-        await UniqueIndexDemo(engine);
+        UniqueIndexDemo(engine);
 
         // 演示复合索引
-        await CompositeIndexDemo(engine);
+        CompositeIndexDemo(engine);
 
         // 演示索引优先级
-        await IndexPriorityDemo(engine);
+        IndexPriorityDemo(engine);
 
         // 演示索引信息查询
         IndexInfoQueryDemo(engine);
@@ -61,12 +61,14 @@ public static class AutoIndexDemo
         {
             System.IO.File.Delete(testDbFile);
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>
     /// 基本自动索引演示
     /// </summary>
-    private static async Task BasicAutoIndexDemo(SimpleDbEngine engine)
+    private static void BasicAutoIndexDemo(SimpleDbEngine engine)
     {
         Console.WriteLine("--- 基本自动索引演示 ---");
 
@@ -141,7 +143,7 @@ public static class AutoIndexDemo
     /// <summary>
     /// 唯一索引演示
     /// </summary>
-    private static async Task UniqueIndexDemo(SimpleDbEngine engine)
+    private static void UniqueIndexDemo(SimpleDbEngine engine)
     {
         Console.WriteLine("--- 唯一索引演示 ---");
 
@@ -194,7 +196,7 @@ public static class AutoIndexDemo
     /// <summary>
     /// 复合索引演示
     /// </summary>
-    private static async Task CompositeIndexDemo(SimpleDbEngine engine)
+    private static void CompositeIndexDemo(SimpleDbEngine engine)
     {
         Console.WriteLine("--- 复合索引演示 ---");
 
@@ -267,7 +269,7 @@ public static class AutoIndexDemo
     /// <summary>
     /// 索引优先级演示
     /// </summary>
-    private static async Task IndexPriorityDemo(SimpleDbEngine engine)
+    private static void IndexPriorityDemo(SimpleDbEngine engine)
     {
         Console.WriteLine("--- 索引优先级演示 ---");
 

@@ -70,7 +70,7 @@ public static class TransactionDemo
     /// <summary>
     /// 基本事务操作演示
     /// </summary>
-    private static async Task BasicTransactionDemo(ILiteCollection<Account> accounts)
+    private static Task BasicTransactionDemo(ILiteCollection<Account> accounts)
     {
         Console.WriteLine("--- 基本事务操作演示 ---");
 
@@ -121,12 +121,13 @@ public static class TransactionDemo
         accounts.Delete(account2.Id);
 
         Console.WriteLine();
+        return Task.CompletedTask;
     }
 
     /// <summary>
     /// 事务回滚演示
     /// </summary>
-    private static async Task TransactionRollbackDemo(ILiteCollection<Account> accounts)
+    private static Task TransactionRollbackDemo(ILiteCollection<Account> accounts)
     {
         Console.WriteLine("--- 事务回滚演示 ---");
 
@@ -166,12 +167,13 @@ public static class TransactionDemo
         accounts.Delete(account.Id);
 
         Console.WriteLine();
+        return Task.CompletedTask;
     }
 
     /// <summary>
     /// 保存点演示
     /// </summary>
-    private static async Task SavepointDemo(ILiteCollection<Account> accounts)
+    private static Task SavepointDemo(ILiteCollection<Account> accounts)
     {
         Console.WriteLine("--- 保存点演示 ---");
 
@@ -226,6 +228,7 @@ public static class TransactionDemo
         accounts.Delete(account.Id);
 
         Console.WriteLine();
+        return Task.CompletedTask;
     }
 
     /// <summary>

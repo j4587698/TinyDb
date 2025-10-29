@@ -1,3 +1,4 @@
+using System;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -100,11 +101,45 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
                 var propertyType = property.Type.ToString();
 
                 // 检查是否有BsonIgnore属性
-                var propertySymbol = semanticModel.GetDeclaredSymbol(property);
+                var propertySymbol = semanticModel.GetDeclaredSymbol(property) as IPropertySymbol;
                 var hasIgnoreAttribute = propertySymbol?.GetAttributes()
                     .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute") ?? false;
 
-                var propInfo = new PropertyInfo(propertyName, propertyType, false, hasIgnoreAttribute);
+                var typeSymbol = propertySymbol?.Type;
+                var isValueType = typeSymbol?.IsValueType ?? false;
+                var isNullableValueType = typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+                                           namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+                var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
+                                              propertySymbol?.NullableAnnotation == NullableAnnotation.Annotated;
+
+                var fullyQualifiedType = typeSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? propertyType;
+                var nonNullableType = propertyType;
+                var fullyQualifiedNonNullableType = fullyQualifiedType;
+
+                if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
+                {
+                    var underlyingType = nullableType.TypeArguments[0];
+                    nonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+                    fullyQualifiedNonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                }
+                else if (!isValueType && propertyType.EndsWith("?", StringComparison.Ordinal))
+                {
+                    nonNullableType = propertyType.TrimEnd('?').Trim();
+                    fullyQualifiedNonNullableType = fullyQualifiedType.TrimEnd('?').Trim();
+                }
+
+                var propInfo = new PropertyInfo(
+                    propertyName,
+                    propertyType,
+                    isId: false,
+                    isIgnored: hasIgnoreAttribute,
+                    hasIgnoreAttribute: hasIgnoreAttribute,
+                    isValueType: isValueType,
+                    isNullableValueType: isNullableValueType,
+                    isNullableReferenceType: isNullableReferenceType,
+                    nonNullableType: nonNullableType,
+                    fullyQualifiedType: fullyQualifiedType,
+                    fullyQualifiedNonNullableType: fullyQualifiedNonNullableType);
                 properties.Add(propInfo);
             }
         }
@@ -252,7 +287,8 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
         if (classInfo.IdProperty != null)
         {
             var idProp = classInfo.IdProperty;
-            var isObjectId = idProp.Type == "ObjectId";
+            var normalizedIdType = NormalizeTypeName(idProp.NonNullableType);
+            var isObjectId = normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal);
 
             sb.AppendLine();
             sb.AppendLine("        /// <summary>");
@@ -269,15 +305,15 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
             {
                 sb.AppendLine($"            return new BsonObjectId(entity.{idProp.Name});");
             }
-            else if (idProp.Type == "string")
+            else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine($"            return new BsonString(entity.{idProp.Name} ?? \"\");");
             }
-            else if (idProp.Type == "int")
+            else if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine($"            return new BsonInt32(entity.{idProp.Name});");
             }
-            else if (idProp.Type == "long")
+            else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine($"            return new BsonInt64(entity.{idProp.Name});");
             }
@@ -303,17 +339,17 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
                 sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonObjectId.Value;");
             }
-            else if (idProp.Type == "string")
+            else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonString bsonString)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonString.Value ?? \"\";");
             }
-            else if (idProp.Type == "int")
+            else if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonInt32 bsonInt32)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonInt32.Value;");
             }
-            else if (idProp.Type == "long")
+            else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonInt64 bsonInt64)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonInt64.Value;");
@@ -338,7 +374,33 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
             }
             else
             {
-                sb.AppendLine($"            return entity.{idProp.Name} != null;");
+                if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.AppendLine($"            return !string.IsNullOrWhiteSpace(entity.{idProp.Name});");
+                }
+                else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
+                {
+                    if (idProp.IsNullableValueType)
+                    {
+                        sb.AppendLine($"            return entity.{idProp.Name}.HasValue && entity.{idProp.Name}.Value != Guid.Empty;");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"            return entity.{idProp.Name} != Guid.Empty;");
+                    }
+                }
+                else if (idProp.IsNullableValueType)
+                {
+                    sb.AppendLine($"            return entity.{idProp.Name}.HasValue && !System.Collections.Generic.EqualityComparer<{idProp.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProp.Name}.Value, default);");
+                }
+                else if (idProp.IsValueType)
+                {
+                    sb.AppendLine($"            return !System.Collections.Generic.EqualityComparer<{idProp.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProp.Name}, default);");
+                }
+                else
+                {
+                    sb.AppendLine($"            return entity.{idProp.Name} != null;");
+                }
             }
 
             sb.AppendLine("        }");
@@ -663,7 +725,8 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
         if (classInfo.IdProperty == null) return;
 
         var idProperty = classInfo.IdProperty;
-        var isObjectId = idProperty.Type == "ObjectId";
+        var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
+        var isObjectId = normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal);
 
         sb.AppendLine();
         sb.AppendLine("        /// <summary>");
@@ -724,11 +787,71 @@ public class SimpleDbSourceGenerator : IIncrementalGenerator
         }
         else
         {
-            sb.AppendLine($"            return entity.{idProperty.Name} != null;");
+            if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine($"            return !string.IsNullOrWhiteSpace(entity.{idProperty.Name});");
+            }
+            else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
+            {
+                if (idProperty.IsNullableValueType)
+                {
+                    sb.AppendLine($"            return entity.{idProperty.Name}.HasValue && entity.{idProperty.Name}.Value != Guid.Empty;");
+                }
+                else
+                {
+                    sb.AppendLine($"            return entity.{idProperty.Name} != Guid.Empty;");
+                }
+            }
+            else if (idProperty.IsNullableValueType)
+            {
+                sb.AppendLine($"            return entity.{idProperty.Name}.HasValue && !System.Collections.Generic.EqualityComparer<{idProperty.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProperty.Name}.Value, default);");
+            }
+            else if (idProperty.IsValueType)
+            {
+                sb.AppendLine($"            return !System.Collections.Generic.EqualityComparer<{idProperty.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProperty.Name}, default);");
+            }
+            else
+            {
+                sb.AppendLine($"            return entity.{idProperty.Name} != null;");
+            }
         }
 
         sb.AppendLine("        }");
     }
+
+    private static string NormalizeTypeName(string type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return type;
+
+        var normalized = type.Trim();
+        if (normalized.StartsWith("global::", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring("global::".Length);
+        }
+
+        return normalized switch
+        {
+            "System.String" => "string",
+            "System.Guid" => "Guid",
+            "System.Int32" => "int",
+            "System.Int64" => "long",
+            "System.Int16" => "short",
+            "System.UInt32" => "uint",
+            "System.UInt64" => "ulong",
+            "System.UInt16" => "ushort",
+            "System.Byte" => "byte",
+            "System.SByte" => "sbyte",
+            "System.Boolean" => "bool",
+            "System.Decimal" => "decimal",
+            "System.Double" => "double",
+            "System.Single" => "float",
+            "System.DateTime" => "DateTime",
+            "System.DateTimeOffset" => "DateTimeOffset",
+            "System.TimeSpan" => "TimeSpan",
+            _ => normalized
+        };
+    }
+
 }
 
 /// <summary>
@@ -763,14 +886,37 @@ public class PropertyInfo
     public bool IsId { get; set; }
     public bool IsIgnored { get; }
     public bool HasIgnoreAttribute { get; set; }
+    public bool IsValueType { get; }
+    public bool IsNullableValueType { get; }
+    public bool IsNullableReferenceType { get; }
+    public string NonNullableType { get; }
+    public string FullyQualifiedType { get; }
+    public string FullyQualifiedNonNullableType { get; }
 
-    public PropertyInfo(string name, string type, bool isId = false, bool isIgnored = false, bool hasIgnoreAttribute = false)
+    public PropertyInfo(
+        string name,
+        string type,
+        bool isId = false,
+        bool isIgnored = false,
+        bool hasIgnoreAttribute = false,
+        bool isValueType = false,
+        bool isNullableValueType = false,
+        bool isNullableReferenceType = false,
+        string? nonNullableType = null,
+        string? fullyQualifiedType = null,
+        string? fullyQualifiedNonNullableType = null)
     {
         Name = name;
         Type = type;
         IsId = isId;
         IsIgnored = isIgnored;
         HasIgnoreAttribute = hasIgnoreAttribute;
+        IsValueType = isValueType;
+        IsNullableValueType = isNullableValueType;
+        IsNullableReferenceType = isNullableReferenceType;
+        NonNullableType = nonNullableType ?? type.TrimEnd('?');
+        FullyQualifiedType = fullyQualifiedType ?? type;
+        FullyQualifiedNonNullableType = fullyQualifiedNonNullableType ?? NonNullableType;
     }
 }
 

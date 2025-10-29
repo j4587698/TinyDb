@@ -48,7 +48,7 @@ public partial class AutoStringLog
 /// </summary>
 public static class AutoIdSimpleDemo
 {
-    public static async Task RunAsync()
+    public static Task RunAsync()
     {
         Console.WriteLine("=== SimpleDb 自动ID生成演示 ===\n");
 
@@ -82,6 +82,8 @@ public static class AutoIdSimpleDemo
         {
             File.Delete(demoDbPath);
         }
+
+        return Task.CompletedTask;
     }
 
     private static void DemonstrateAutoIntId(SimpleDbEngine engine)

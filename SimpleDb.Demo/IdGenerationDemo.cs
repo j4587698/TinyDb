@@ -106,7 +106,7 @@ public static class IdGenerationDemo
         }
     }
 
-    private static async Task DemonstrateIntIdentityAsync(SimpleDbEngine engine)
+    private static Task DemonstrateIntIdentityAsync(SimpleDbEngine engine)
     {
         Console.WriteLine("1. Int自增ID演示:");
         var stopwatch = Stopwatch.StartNew();
@@ -129,9 +129,10 @@ public static class IdGenerationDemo
 
         stopwatch.Stop();
         Console.WriteLine($"   耗时: {stopwatch.ElapsedMilliseconds}ms\n");
+        return Task.CompletedTask;
     }
 
-    private static async Task DemonstrateLongIdentityAsync(SimpleDbEngine engine)
+    private static Task DemonstrateLongIdentityAsync(SimpleDbEngine engine)
     {
         Console.WriteLine("2. Long自增ID演示:");
         var stopwatch = Stopwatch.StartNew();
@@ -154,6 +155,7 @@ public static class IdGenerationDemo
 
         stopwatch.Stop();
         Console.WriteLine($"   耗时: {stopwatch.ElapsedMilliseconds}ms\n");
+        return Task.CompletedTask;
     }
 
     private static async Task DemonstrateGuidV7Async(SimpleDbEngine engine)
@@ -221,7 +223,7 @@ public static class IdGenerationDemo
         Console.WriteLine($"   耗时: {stopwatch.ElapsedMilliseconds}ms\n");
     }
 
-    private static async Task DemonstrateObjectIdAsync(SimpleDbEngine engine)
+    private static Task DemonstrateObjectIdAsync(SimpleDbEngine engine)
     {
         Console.WriteLine("5. ObjectId演示:");
         var stopwatch = Stopwatch.StartNew();
@@ -245,9 +247,10 @@ public static class IdGenerationDemo
 
         stopwatch.Stop();
         Console.WriteLine($"   耗时: {stopwatch.ElapsedMilliseconds}ms\n");
+        return Task.CompletedTask;
     }
 
-    private static async Task DemonstrateCustomSequenceAsync(SimpleDbEngine engine)
+    private static Task DemonstrateCustomSequenceAsync(SimpleDbEngine engine)
     {
         Console.WriteLine("6. 自定义序列演示:");
         var stopwatch = Stopwatch.StartNew();
@@ -268,5 +271,6 @@ public static class IdGenerationDemo
 
         stopwatch.Stop();
         Console.WriteLine($"   耗时: {stopwatch.ElapsedMilliseconds}ms\n");
+        return Task.CompletedTask;
     }
 }

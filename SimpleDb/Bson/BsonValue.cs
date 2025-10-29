@@ -64,7 +64,7 @@ public abstract class BsonValue : IComparable<BsonValue>, IEquatable<BsonValue>,
     /// <summary>
     /// 隐式转换：从 string 到 BsonValue
     /// </summary>
-    public static implicit operator BsonValue(string? value) => new BsonString(value);
+    public static implicit operator BsonValue(string? value) => value is null ? BsonNull.Value : new BsonString(value);
 
     /// <summary>
     /// 隐式转换：从 int 到 BsonValue

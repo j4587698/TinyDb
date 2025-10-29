@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using SimpleDb.Attributes;
@@ -18,7 +19,7 @@ public static class IndexScanner
     /// <param name="engine">数据库引擎</param>
     /// <param name="entityType">实体类型</param>
     /// <param name="collectionName">集合名称</param>
-    public static void ScanAndCreateIndexes(SimpleDbEngine engine, Type entityType, string collectionName)
+    public static void ScanAndCreateIndexes(SimpleDbEngine engine, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType, string collectionName)
     {
         if (engine == null) throw new ArgumentNullException(nameof(engine));
         if (entityType == null) throw new ArgumentNullException(nameof(entityType));
@@ -41,7 +42,7 @@ public static class IndexScanner
     /// </summary>
     /// <param name="indexManager">索引管理器</param>
     /// <param name="entityType">实体类型</param>
-    private static void ScanPropertyIndexes(IndexManager indexManager, Type entityType)
+    private static void ScanPropertyIndexes(IndexManager indexManager, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var indexedProperties = new List<(PropertyInfo Property, IndexAttribute Attribute)>();
 
@@ -93,7 +94,7 @@ public static class IndexScanner
     /// </summary>
     /// <param name="indexManager">索引管理器</param>
     /// <param name="entityType">实体类型</param>
-    private static void ScanCompositeIndexes(IndexManager indexManager, Type entityType)
+    private static void ScanCompositeIndexes(IndexManager indexManager, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var compositeIndexes = entityType.GetCustomAttributes<CompositeIndexAttribute>();
 
@@ -133,7 +134,7 @@ public static class IndexScanner
     /// </summary>
     /// <param name="entityType">实体类型</param>
     /// <returns>索引信息列表</returns>
-    public static List<EntityIndexInfo> GetEntityIndexes(Type entityType)
+    public static List<EntityIndexInfo> GetEntityIndexes([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var indexes = new List<EntityIndexInfo>();
 
