@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+      <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" />
+    <PackageReference Include="TUnit" Version="0.80.0" />
+      <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TinyDb\TinyDb.csproj" />
+    <ProjectReference Include="..\TinyDb.Demo\TinyDb.Demo.csproj" />
+    <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" />
+  </ItemGroup>
+
+</Project>
