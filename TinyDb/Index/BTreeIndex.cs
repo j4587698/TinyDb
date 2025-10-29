@@ -181,14 +181,26 @@ public sealed class BTreeIndex : IDisposable
 
         // 内部节点，找到合适的子节点
         var childIndex = node.FindKeyPosition(key);
-        var child = childIndex < node.ChildCount ? node.GetChild(childIndex) : node.GetChild(childIndex - 1);
+        int actualChildIndex;
+        BTreeNode child;
+
+        if (childIndex < node.ChildCount)
+        {
+            child = node.GetChild(childIndex);
+            actualChildIndex = childIndex;
+        }
+        else
+        {
+            child = node.GetChild(childIndex - 1);
+            actualChildIndex = childIndex - 1;
+        }
 
         var deleted = DeleteRecursive(child, key, documentId);
 
         if (deleted && child.NeedsMerge())
         {
-            // 子节点需要合并或重平衡
-            RebalanceOrMerge(node, childIndex);
+            // 子节点需要合并或重平衡，使用实际的子节点索引
+            RebalanceOrMerge(node, actualChildIndex);
         }
 
         return deleted;
