@@ -520,24 +520,38 @@ public sealed class QueryExecutor
         if (left == null) return -1;
         if (right == null) return 1;
 
+        // 优先处理数值类型，避免 Decimal 与其他数值类型比较时触发运行时异常
+        if (IsNumericType(left) && IsNumericType(right))
+        {
+            if (left is decimal || right is decimal)
+            {
+                var leftDecimal = Convert.ToDecimal(left);
+                var rightDecimal = Convert.ToDecimal(right);
+                return leftDecimal.CompareTo(rightDecimal);
+            }
+
+            var leftDouble = Convert.ToDouble(left);
+            var rightDouble = Convert.ToDouble(right);
+            return leftDouble.CompareTo(rightDouble);
+        }
+
         // 尝试转换为可比较的类型
         if (left is IComparable leftComparable)
         {
-            return leftComparable.CompareTo(right);
+            try
+            {
+                return leftComparable.CompareTo(right);
+            }
+            catch (ArgumentException)
+            {
+                // 如果类型不兼容，回退到字符串比较
+            }
         }
 
         // 如果都是字符串，进行字符串比较
         if (left is string leftStr && right is string rightStr)
         {
             return string.Compare(leftStr, rightStr, StringComparison.Ordinal);
-        }
-
-        // 尝试数值比较
-        if (IsNumericType(left) && IsNumericType(right))
-        {
-            var leftDecimal = Convert.ToDecimal(left);
-            var rightDecimal = Convert.ToDecimal(right);
-            return leftDecimal.CompareTo(rightDecimal);
         }
 
         // 最后尝试字符串比较

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -310,18 +311,31 @@ public sealed class SimpleDbEngine : IDisposable
             var collectionPage = _pageManager.GetPage(_header.CollectionInfoPage);
             var collectionData = collectionPage.ReadData(32, collectionPage.DataSize - 32); // 跳过标识符
 
-            if (collectionData.Length > 0)
+            if (collectionData.Length >= 5)
             {
-                var document = BsonSerializer.DeserializeDocument(collectionData);
-                foreach (var kvp in document)
+                var declaredLength = BitConverter.ToInt32(collectionData, 0);
+
+                if (declaredLength > 0 &&
+                    declaredLength <= collectionData.Length &&
+                    collectionData[declaredLength - 1] == 0)
                 {
-                    if (kvp.Value is BsonString collectionName)
+                    var documentBytes = collectionData.AsSpan(0, declaredLength).ToArray();
+                    var document = BsonSerializer.DeserializeDocument(documentBytes);
+
+                    foreach (var kvp in document)
                     {
-                        // 创建集合实例但不立即加载
-                        _collections.TryAdd(collectionName.Value, null!);
+                        if (kvp.Value is BsonString collectionName)
+                        {
+                            // 创建集合实例但不立即加载
+                            _collections.TryAdd(collectionName.Value, null!);
+                        }
                     }
                 }
             }
+        }
+        catch (Exception ex) when (ex is EndOfStreamException or FormatException or InvalidOperationException or OverflowException)
+        {
+            // AOT 模式下可能读取到未初始化的系统页面，忽略这些无效数据以保持向后兼容
         }
         catch (Exception ex)
         {
@@ -353,11 +367,8 @@ public sealed class SimpleDbEngine : IDisposable
     }
 
     /// <summary>
-    /// 获取文档集合
+    /// 获取（或懒加载创建）指定名称的文档集合
     /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <param name="name">集合名称</param>
-    /// <returns>文档集合</returns>
     public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(string? name = null) where T : class, new()
     {
         ThrowIfDisposed();
