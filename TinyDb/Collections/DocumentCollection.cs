@@ -81,13 +81,28 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         // 转换为BSON文档（AOT兼容）
         var document = AotBsonMapper.ToDocument(entity);
 
-        // 插入到数据库
-        var id = _engine.InsertDocument(_name, document);
+        // 检查是否在事务中
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            // 在事务中，记录操作而不是直接写入
+            var documentId = ((Transaction)currentTransaction).RecordInsert(_name, document);
 
-        // 更新实体的ID（如果需要）
-        UpdateEntityId(entity, id);
+            // 更新实体的ID（如果需要）
+            UpdateEntityId(entity, documentId);
 
-        return id;
+            return documentId;
+        }
+        else
+        {
+            // 不在事务中，直接插入到数据库
+            var id = _engine.InsertDocument(_name, document);
+
+            // 更新实体的ID（如果需要）
+            UpdateEntityId(entity, id);
+
+            return id;
+        }
     }
 
     /// <summary>

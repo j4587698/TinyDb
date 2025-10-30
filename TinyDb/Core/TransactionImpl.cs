@@ -62,7 +62,18 @@ internal sealed class Transaction : ITransaction
             throw new InvalidOperationException($"Transaction cannot be committed in state {State}");
         }
 
-        _manager.CommitTransaction(this);
+        try
+        {
+            _manager.CommitTransaction(this);
+        }
+        finally
+        {
+            // 清除事务上下文
+            if (_manager._engine != null)
+            {
+                _manager._engine.ClearCurrentTransaction();
+            }
+        }
     }
 
     /// <summary>
@@ -71,12 +82,31 @@ internal sealed class Transaction : ITransaction
     public void Rollback()
     {
         ThrowIfDisposed();
-        if (State != TransactionState.Active)
+
+        // 允许在Active和Failed状态下回滚
+        if (State != TransactionState.Active && State != TransactionState.Failed)
         {
             throw new InvalidOperationException($"Transaction cannot be rolled back in state {State}");
         }
 
-        _manager.RollbackTransaction(this);
+        try
+        {
+            // 如果事务已经失败，先重置状态为Active以便回滚
+            if (State == TransactionState.Failed)
+            {
+                State = TransactionState.Active;
+            }
+
+            _manager.RollbackTransaction(this);
+        }
+        finally
+        {
+            // 清除事务上下文
+            if (_manager._engine != null)
+            {
+                _manager._engine.ClearCurrentTransaction();
+            }
+        }
     }
 
     /// <summary>
@@ -148,7 +178,7 @@ internal sealed class Transaction : ITransaction
             null,
             document);
 
-        _operations.Add(operation);
+        // 通过管理器添加操作，避免重复添加
         _manager.RecordOperation(this, operation);
         return documentId;
     }
@@ -175,7 +205,7 @@ internal sealed class Transaction : ITransaction
             originalDocument,
             newDocument);
 
-        _operations.Add(operation);
+        // 通过管理器添加操作，避免重复添加
         _manager.RecordOperation(this, operation);
     }
 
@@ -200,7 +230,7 @@ internal sealed class Transaction : ITransaction
             document,
             null);
 
-        _operations.Add(operation);
+        // 通过管理器添加操作，避免重复添加
         _manager.RecordOperation(this, operation);
     }
 

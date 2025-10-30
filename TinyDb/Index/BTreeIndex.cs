@@ -89,12 +89,19 @@ public sealed class BTreeIndex : IDisposable
             var result = InsertRecursive(_root!, key, documentId);
             if (result.NeedSplit)
             {
-                var newRoot = new BTreeNode(_maxKeys, false);
-                var newSibling = _root!.Split();
-                var promotedKey = _root.GetKey(_root.KeyCount - 1);
+                var splitResult = _root!.SplitWithPromotedKey();
+                var newSibling = splitResult.NewNode;
+                var promotedKey = splitResult.PromotedKey;
 
-                newRoot.InsertChild(promotedKey, _root);
-                newRoot.InsertChild(newSibling.GetKey(0), newSibling);
+                // B+树根节点分裂：
+                // 1. 创建新的内部节点作为根
+                // 2. 原根节点变成左子节点
+                // 3. 新节点变成右子节点
+                // 4. 提升的键作为新根的唯一键，指向右子节点
+
+                // 创建新的根节点并正确初始化
+                var newRoot = new BTreeNode(_maxKeys, false);
+                newRoot.InitializeAsRoot(_root!, promotedKey, newSibling);
 
                 _root = newRoot;
                 _nodeCount++;
@@ -124,16 +131,32 @@ public sealed class BTreeIndex : IDisposable
 
         // 内部节点，找到合适的子节点
         var childIndex = node.FindKeyPosition(key);
-        var child = childIndex < node.ChildCount ? node.GetChild(childIndex) : node.GetChild(childIndex - 1);
+
+        // B+树内部节点的插入逻辑与查找逻辑相同
+        if (childIndex >= node.KeyCount)
+        {
+            // key大于所有键，选择最后一个子节点
+            childIndex = node.ChildCount - 1;
+        }
+        else if (childIndex < node.KeyCount && node.GetKey(childIndex).Equals(key))
+        {
+            // key等于某个键，选择右子节点
+            childIndex++;
+        }
+        // 否则选择对应键的左子节点（索引等于键的索引）
+
+        var child = node.GetChild(childIndex);
 
         var childResult = InsertRecursive(child, key, documentId);
 
         if (childResult.NeedSplit)
         {
             // 子节点需要分裂
-            var newSibling = child.Split();
-            var promotedKey = child.GetKey(child.KeyCount - 1);
+            var childSplitResult = child.SplitWithPromotedKey();
+            var newSibling = childSplitResult.NewNode;
+            var promotedKey = childSplitResult.PromotedKey;
 
+            // 使用节点的InsertChild方法插入提升的键和新的子节点
             node.InsertChild(promotedKey, newSibling);
             _nodeCount++;
 
@@ -181,26 +204,28 @@ public sealed class BTreeIndex : IDisposable
 
         // 内部节点，找到合适的子节点
         var childIndex = node.FindKeyPosition(key);
-        int actualChildIndex;
-        BTreeNode child;
 
-        if (childIndex < node.ChildCount)
+        // B+树内部节点的删除逻辑与查找逻辑相同
+        if (childIndex >= node.KeyCount)
         {
-            child = node.GetChild(childIndex);
-            actualChildIndex = childIndex;
+            // key大于所有键，选择最后一个子节点
+            childIndex = node.ChildCount - 1;
         }
-        else
+        else if (childIndex < node.KeyCount && node.GetKey(childIndex).Equals(key))
         {
-            child = node.GetChild(childIndex - 1);
-            actualChildIndex = childIndex - 1;
+            // key等于某个键，选择右子节点
+            childIndex++;
         }
+        // 否则选择对应键的左子节点（索引等于键的索引）
+
+        var child = node.GetChild(childIndex);
 
         var deleted = DeleteRecursive(child, key, documentId);
 
         if (deleted && child.NeedsMerge())
         {
-            // 子节点需要合并或重平衡，使用实际的子节点索引
-            RebalanceOrMerge(node, actualChildIndex);
+            // 子节点需要合并或重平衡，使用子节点索引
+            RebalanceOrMerge(node, childIndex);
         }
 
         return deleted;
@@ -249,11 +274,25 @@ public sealed class BTreeIndex : IDisposable
     /// <param name="childIndex">子节点索引</param>
     private void MergeNodes(BTreeNode parent, int childIndex)
     {
+        // 确保有足够的子节点进行合并
+        if (parent.ChildCount < 2)
+            return; // 无法合并
+
+        // 确保childIndex在有效范围内，并且有右兄弟可以合并
         if (childIndex >= parent.ChildCount - 1)
             childIndex--; // 合并到左兄弟
 
+        // 再次验证边界
+        if (childIndex < 0 || childIndex + 1 >= parent.ChildCount)
+            return; // 边界无效，无法合并
+
         var leftChild = parent.GetChild(childIndex);
         var rightChild = parent.GetChild(childIndex + 1);
+
+        // 确保有对应的分隔键
+        if (childIndex >= parent.KeyCount)
+            return; // 没有分隔键
+
         var separatorKey = parent.GetKey(childIndex);
 
         leftChild.Merge(rightChild, separatorKey);
@@ -347,7 +386,25 @@ public sealed class BTreeIndex : IDisposable
         while (node != null && !node.IsLeaf)
         {
             var childIndex = node.FindKeyPosition(key);
-            node = childIndex < node.ChildCount ? node.GetChild(childIndex) : null;
+
+            // B+树内部节点的查找逻辑：
+            // FindKeyPosition返回第一个>=key的键的索引
+            // 如果key小于所有键，应该选择第一个子节点（索引0）
+            // 如果key等于某个键，应该选择该键的右子节点（索引+1）
+            // 如果key大于所有键，应该选择最后一个子节点
+            if (childIndex >= node.KeyCount)
+            {
+                // key大于所有键，选择最后一个子节点
+                childIndex = node.ChildCount - 1;
+            }
+            else if (childIndex < node.KeyCount && node.GetKey(childIndex).Equals(key))
+            {
+                // key等于某个键，选择右子节点
+                childIndex++;
+            }
+            // 否则选择对应键的左子节点（索引等于键的索引）
+
+            node = node.GetChild(childIndex);
         }
         return node;
     }
@@ -426,7 +483,10 @@ public sealed class BTreeIndex : IDisposable
             }
 
             var childIndex = node.FindKeyPosition(key);
-            node = childIndex < node.ChildCount ? node.GetChild(childIndex) : null;
+            // 确保childIndex在有效范围内
+            if (childIndex >= node.ChildCount)
+                childIndex = node.ChildCount - 1;
+            node = node.GetChild(childIndex);
         }
         return results;
     }

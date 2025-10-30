@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,6 +30,7 @@ public sealed class TinyDbEngine : IDisposable
     private readonly TransactionManager _transactionManager;
     private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
     private readonly object _lock = new();
+    private readonly AsyncLocal<Transaction?> _currentTransaction = new();
     private DatabaseHeader _header;
     private bool _disposed;
     private bool _isInitialized;
@@ -165,7 +167,7 @@ public sealed class TinyDbEngine : IDisposable
                     {
                         _header.UserData = _options.UserData;
                     }
-                    WriteHeader();
+                    // 注意：这里不立即写入头部，等待系统页面初始化完成后统一写入
                 }
                 else
                 {
@@ -175,6 +177,17 @@ public sealed class TinyDbEngine : IDisposable
                     // 验证头部
                     if (!_header.IsValid())
                     {
+                        // 输出详细的头部信息用于调试
+                        var calculatedChecksum = _header.CalculateChecksum();
+                        Console.WriteLine($"数据库头部验证失败:");
+                        Console.WriteLine($"  文件: {_filePath}");
+                        Console.WriteLine($"  Magic: 0x{_header.Magic:X8} (期望: 0x{DatabaseHeader.MagicNumber:X8})");
+                        Console.WriteLine($"  Version: 0x{_header.DatabaseVersion:X8} (期望: 0x{DatabaseHeader.Version:X8})");
+                        Console.WriteLine($"  存储的校验和: {_header.Checksum}");
+                        Console.WriteLine($"  计算的校验和: {calculatedChecksum}");
+                        Console.WriteLine($"  页面大小: {_header.PageSize}");
+                        Console.WriteLine($"  总页数: {_header.TotalPages}");
+                        Console.WriteLine($"  已用页数: {_header.UsedPages}");
                         throw new InvalidOperationException($"Invalid database header in file '{_filePath}'");
                     }
 
@@ -240,6 +253,20 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     private void WriteHeader()
     {
+        // 同步PageManager的实际总页数到数据库头部
+        var actualTotalPages = _pageManager.TotalPages;
+        if (actualTotalPages != _header.TotalPages)
+        {
+            _header.TotalPages = actualTotalPages;
+        }
+
+        // 同步已用页数（基于PageManager的统计）
+        var stats = _pageManager.GetStatistics();
+        if (stats.UsedPages != _header.UsedPages)
+        {
+            _header.UsedPages = stats.UsedPages;
+        }
+
         _header.UpdateModification();
         var headerData = _header.ToByteArray();
 
@@ -256,6 +283,8 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     private void InitializeSystemPages()
     {
+        bool isNewDatabase = _header.CollectionInfoPage == 0 && _header.IndexInfoPage == 0;
+
         // 如果是新数据库，创建系统页面
         if (_header.CollectionInfoPage == 0)
         {
@@ -272,7 +301,11 @@ public sealed class TinyDbEngine : IDisposable
             _header.JournalInfoPage = AllocateSystemPage(PageType.Journal, "JournalInfo");
         }
 
-        WriteHeader();
+        // 只在新数据库创建系统页面后写入头部，确保校验和正确
+        if (isNewDatabase)
+        {
+            WriteHeader();
+        }
     }
 
     /// <summary>
@@ -374,7 +407,8 @@ public sealed class TinyDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        var collectionName = name ?? typeof(T).Name;
+        // 优先使用显式指定的名称，然后检查Entity特性，最后使用类型名称
+        var collectionName = name ?? GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name;
 
         return (ILiteCollection<T>)_collections.GetOrAdd(collectionName, _ =>
         {
@@ -385,6 +419,15 @@ public sealed class TinyDbEngine : IDisposable
     }
 
     /// <summary>
+    /// 从Entity特性获取集合名称
+    /// </summary>
+    private static string? GetCollectionNameFromEntityAttribute<T>() where T : class
+    {
+        var entityAttribute = typeof(T).GetCustomAttribute<Attributes.EntityAttribute>();
+        return entityAttribute?.CollectionName;
+    }
+
+    /// <summary>
     /// 开始事务
     /// </summary>
     /// <returns>事务实例</returns>
@@ -392,7 +435,32 @@ public sealed class TinyDbEngine : IDisposable
     {
         ThrowIfDisposed();
         EnsureInitialized();
-        return _transactionManager.BeginTransaction();
+        var transaction = _transactionManager.BeginTransaction();
+
+        // 设置当前事务上下文
+        if (transaction is Transaction concreteTransaction)
+        {
+            _currentTransaction.Value = concreteTransaction;
+        }
+
+        return transaction;
+    }
+
+    /// <summary>
+    /// 获取当前活动事务
+    /// </summary>
+    /// <returns>当前事务，如果没有则返回null</returns>
+    internal Transaction? GetCurrentTransaction()
+    {
+        return _currentTransaction.Value;
+    }
+
+    /// <summary>
+    /// 清除当前事务上下文
+    /// </summary>
+    internal void ClearCurrentTransaction()
+    {
+        _currentTransaction.Value = null;
     }
 
     /// <summary>
@@ -1029,19 +1097,92 @@ public sealed class TinyDbEngine : IDisposable
         var collectionState = GetCollectionState(collectionName);
         var snapshot = collectionState.DocumentLocations.ToArray();
 
+        // 获取基础文档（已提交的数据）
+        IEnumerable<BsonDocument> baseDocuments;
         if (snapshot.Length == 0)
         {
-            return FindAllByScanning(collectionName, collectionState);
+            baseDocuments = FindAllByScanning(collectionName, collectionState);
         }
-
-        var documents = FetchDocumentsByLocations(collectionName, collectionState, snapshot);
-
-        if (documents.Count < snapshot.Length)
+        else
         {
-            return FindAllByScanning(collectionName, collectionState);
+            var documents = FetchDocumentsByLocations(collectionName, collectionState, snapshot);
+            if (documents.Count < snapshot.Length)
+            {
+                baseDocuments = FindAllByScanning(collectionName, collectionState);
+            }
+            else
+            {
+                baseDocuments = documents;
+            }
         }
 
-        return documents;
+        // 检查是否有活动事务，如果有则合并事务中的临时操作
+        var currentTransaction = GetCurrentTransaction();
+        if (currentTransaction != null && currentTransaction.State == TransactionState.Active)
+        {
+            return MergeTransactionOperations(collectionName, baseDocuments, currentTransaction);
+        }
+
+        return baseDocuments;
+    }
+
+    /// <summary>
+    /// 合并事务操作到基础文档集合中
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="baseDocuments">基础文档（已提交的数据）</param>
+    /// <param name="transaction">当前事务</param>
+    /// <returns>合并后的文档列表</returns>
+    private IEnumerable<BsonDocument> MergeTransactionOperations(string collectionName, IEnumerable<BsonDocument> baseDocuments, Transaction transaction)
+    {
+        // 创建结果集，从基础文档开始
+        var results = new Dictionary<string, BsonDocument>();
+
+        // 添加所有基础文档
+        foreach (var doc in baseDocuments)
+        {
+            if (doc.TryGetValue("_id", out var id) && id != null && !id.IsNull)
+            {
+                results[id.ToString()] = doc;
+            }
+        }
+
+        // 应用事务操作
+        foreach (var operation in transaction.Operations)
+        {
+            if (operation.CollectionName != collectionName)
+                continue;
+
+            var docId = operation.DocumentId?.ToString();
+            if (docId == null)
+                continue;
+
+            switch (operation.OperationType)
+            {
+                case TransactionOperationType.Insert:
+                    // 添加新插入的文档
+                    if (operation.NewDocument != null)
+                    {
+                        results[docId] = operation.NewDocument;
+                    }
+                    break;
+
+                case TransactionOperationType.Update:
+                    // 更新现有文档
+                    if (operation.NewDocument != null)
+                    {
+                        results[docId] = operation.NewDocument;
+                    }
+                    break;
+
+                case TransactionOperationType.Delete:
+                    // 删除文档
+                    results.Remove(docId);
+                    break;
+            }
+        }
+
+        return results.Values;
     }
 
     private IEnumerable<BsonDocument> FindAllByScanning(string collectionName, CollectionState state)
@@ -1364,6 +1505,16 @@ public sealed class TinyDbEngine : IDisposable
     }
 
     /// <summary>
+    /// 获取WAL是否启用
+    /// </summary>
+    /// <returns>WAL是否启用</returns>
+    public bool GetWalEnabled()
+    {
+        ThrowIfDisposed();
+        return _writeAheadLog.IsEnabled;
+    }
+
+    /// <summary>
     /// 获取数据库统计信息
     /// </summary>
     /// <returns>统计信息</returns>
@@ -1401,9 +1552,42 @@ public sealed class TinyDbEngine : IDisposable
     public void Flush()
     {
         ThrowIfDisposed();
-        EnsureInitialized();
+        if (!_isInitialized)
+        {
+            // 如果未初始化，只刷新页面但不保存头部
+            _flushScheduler.FlushAsync().GetAwaiter().GetResult();
+            return;
+        }
 
-        _flushScheduler.FlushAsync().GetAwaiter().GetResult();
+        try
+        {
+            // 先刷新所有页面
+            _flushScheduler.FlushAsync().GetAwaiter().GetResult();
+
+            // 强制同步磁盘流，确保所有页面数据已完全写入
+            _diskStream.Flush();
+
+            // 然后保存数据库头部（包含最新的校验和）
+            WriteHeader();
+
+            // 再次强制同步，确保头部也已写入
+            _diskStream.Flush();
+        }
+        catch (Exception)
+        {
+            // 即使出现异常也要尝试保存头部
+            try
+            {
+                WriteHeader();
+                _diskStream.Flush();
+            }
+            catch
+            {
+                // 如果保存头部也失败，记录错误但不抛出异常
+                Console.WriteLine("Warning: Failed to save database header during flush.");
+            }
+            throw; // 重新抛出原始异常
+        }
     }
 
     /// <summary>
@@ -1415,7 +1599,268 @@ public sealed class TinyDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
+        // 首先刷新所有页面
         await _flushScheduler.FlushAsync(cancellationToken).ConfigureAwait(false);
+
+        // 然后保存数据库头部（包含最新的校验和）
+        WriteHeader();
+    }
+
+    /// <summary>
+    /// 删除文档（内部使用，不持久化，用于事务回滚）
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="id">文档ID</param>
+    /// <returns>删除的文档数量</returns>
+    internal int DeleteDocumentInternal(string collectionName, BsonValue id)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+
+        if (id == null || id.IsNull)
+        {
+            return 0;
+        }
+
+        if (!TryGetDocumentKey(id, out var documentKey))
+        {
+            return 0;
+        }
+
+        var collectionState = GetCollectionState(collectionName);
+        var state = collectionState.PageState;
+        var indexManager = GetIndexManager(collectionName);
+
+        if (!TryEnsureDocumentLocation(collectionName, collectionState, id, out _, out _, out _))
+        {
+            return 0;
+        }
+
+        var deletedEntry = default(PageDocumentEntry?);
+
+        lock (state.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(collectionName, collectionState, id, documentKey, out var page, out var entries, out var entryIndex))
+            {
+                return 0;
+            }
+
+            var entry = entries[entryIndex];
+
+            entries.RemoveAt(entryIndex);
+            collectionState.DocumentLocations.TryRemove(documentKey, out _);
+
+            if (entries.Count == 0)
+            {
+                RewritePageWithDocuments(collectionName, collectionState, page, entries);
+
+                if (state.PageId == page.PageID)
+                {
+                    state.PageId = 0;
+                }
+
+                _pageManager.FreePage(page.PageID);
+
+                lock (_lock)
+                {
+                    _header.UsedPages--;
+                    // 注意：这里不调用WriteHeader()，因为这是事务回滚操作
+                }
+            }
+            else
+            {
+                RewritePageWithDocuments(collectionName, collectionState, page, entries);
+            }
+
+            deletedEntry = entry;
+        }
+
+        if (deletedEntry == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            indexManager?.DeleteDocument(deletedEntry.Value.Document, id);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Failed to update indexes for deleted document {id}: {ex.Message}");
+        }
+
+        // 注意：这里不调用EnsureWriteDurability()，因为这是事务回滚操作
+
+        return 1;
+    }
+
+    /// <summary>
+    /// 更新文档（内部使用，不持久化，用于事务回滚）
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="document">更新的文档</param>
+    /// <returns>更新的文档数量</returns>
+    internal int UpdateDocumentInternal(string collectionName, BsonDocument document)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+
+        if (!document.TryGetValue("_id", out var id))
+        {
+            throw new ArgumentException("Document must have _id field for update", nameof(document));
+        }
+
+        if (!TryGetDocumentKey(id, out var documentKey))
+        {
+            throw new ArgumentException("Document must have a valid _id value for update", nameof(document));
+        }
+
+        var collectionState = GetCollectionState(collectionName);
+        var state = collectionState.PageState;
+        var indexManager = GetIndexManager(collectionName);
+
+        if (!TryEnsureDocumentLocation(collectionName, collectionState, id, out _, out _, out _))
+        {
+            return 0;
+        }
+
+        BsonDocument? oldDocumentSnapshot = null;
+        BsonDocument? newDocumentSnapshot = null;
+        var updated = false;
+
+        lock (state.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(collectionName, collectionState, id, documentKey, out var page, out var entries, out var entryIndex))
+            {
+                return 0;
+            }
+
+            var oldEntry = entries[entryIndex];
+            var updatedDocument = document;
+
+            if (!DocumentBelongsToCollection(updatedDocument, collectionName))
+            {
+                updatedDocument = updatedDocument.Set("_collection", collectionName);
+            }
+
+            if (!updatedDocument.TryGetValue("_id", out var newId) || !newId.Equals(id))
+            {
+                updatedDocument = updatedDocument.Set("_id", id);
+            }
+
+            var newDocumentBytes = BsonSerializer.SerializeDocument(updatedDocument);
+            if (GetEntrySize(newDocumentBytes.Length) > page.DataSize)
+            {
+                throw new InvalidOperationException($"Document is too large: {newDocumentBytes.Length} bytes, max {page.DataSize - DocumentLengthPrefixSize} bytes");
+            }
+
+            entries[entryIndex] = new PageDocumentEntry(updatedDocument, newDocumentBytes);
+
+            RewritePageWithDocuments(collectionName, collectionState, page, entries);
+
+            oldDocumentSnapshot = oldEntry.Document;
+            newDocumentSnapshot = updatedDocument;
+            updated = true;
+        }
+
+        if (!updated)
+        {
+            return 0;
+        }
+
+        try
+        {
+            indexManager?.UpdateDocument(oldDocumentSnapshot!, newDocumentSnapshot!, id);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
+        }
+
+        // 注意：这里不调用EnsureWriteDurability()，因为这是事务回滚操作
+
+        return 1;
+    }
+
+    /// <summary>
+    /// 插入文档到指定集合（内部使用，不持久化，用于事务回滚）
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="document">文档</param>
+    /// <returns>文档ID</returns>
+    internal BsonValue InsertDocumentInternal(string collectionName, BsonDocument document)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+
+        var preparedDocument = PrepareDocumentForInsert(collectionName, document, out var id);
+        var indexManager = GetIndexManager(collectionName);
+        var collectionState = GetCollectionState(collectionName);
+        var result = InsertPreparedDocumentInternal(collectionName, preparedDocument, id, collectionState, indexManager, updateIndexes: true);
+        // 注意：这里不调用EnsureWriteDurability()，因为这是事务回滚操作
+        return result;
+    }
+
+    /// <summary>
+    /// 插入准备好的文档（内部使用，不持久化）
+    /// </summary>
+    private BsonValue InsertPreparedDocumentInternal(string collectionName, BsonDocument document, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
+    {
+        var documentBytes = BsonSerializer.SerializeDocument(document);
+        var requiredSize = GetEntrySize(documentBytes.Length);
+
+        var state = collectionState.PageState;
+        bool isNewPage;
+        uint pageId;
+        ushort entryIndex;
+
+        lock (state.SyncRoot)
+        {
+            Page page;
+            (page, isNewPage) = GetWritableDataPageLocked(collectionName, state, requiredSize);
+            entryIndex = page.Header.ItemCount;
+            AppendDocumentToPage(page, documentBytes);
+            pageId = page.PageID;
+
+            if (page.Header.FreeBytes < MinimumFreeSpaceThreshold)
+            {
+                state.PageId = 0;
+            }
+            else
+            {
+                state.PageId = page.PageID;
+            }
+
+            // 注意：这里不调用PersistPage(page)，因为这是事务回滚操作
+        }
+
+        if (TryGetDocumentKey(id, out var documentKey))
+        {
+            collectionState.DocumentLocations[documentKey] = new DocumentLocation(pageId, entryIndex);
+        }
+
+        if (isNewPage)
+        {
+            lock (_lock)
+            {
+                _header.UsedPages++;
+                // 注意：这里不调用WriteHeader()，因为这是事务回滚操作
+            }
+        }
+
+        if (updateIndexes && indexManager != null)
+        {
+            try
+            {
+                indexManager.InsertDocument(document, id);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
+            }
+        }
+
+        return id;
     }
 
     /// <summary>

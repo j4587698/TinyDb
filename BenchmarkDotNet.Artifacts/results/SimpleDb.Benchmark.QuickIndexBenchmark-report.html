@@ -2,7 +2,7 @@
 <html lang='en'>
 <head>
 <meta charset='utf-8' />
-<title>SimpleDb.Benchmark.QuickIndexBenchmark-20251029-083929</title>
+<title>SimpleDb.Benchmark.QuickIndexBenchmark-20251029-090053</title>
 
 <style type="text/css">
 	table { border-collapse: collapse; display: block; width: 100%; overflow: auto; }
@@ -14,7 +14,7 @@
 <body>
 <pre><code>
 BenchmarkDotNet v0.15.4, Linux Ubuntu 24.04.3 LTS (Noble Numbat)
-AMD EPYC 7763 3.24GHz, 1 CPU, 4 logical and 2 physical cores
+AMD EPYC 7763 3.05GHz, 1 CPU, 4 logical and 2 physical cores
 .NET SDK 9.0.305
   [Host]     : .NET 9.0.10 (9.0.10, 9.0.1025.47515), X64 RyuJIT x86-64-v3
   Job-AKCAMQ : .NET 9.0.10 (9.0.10, 9.0.1025.47515), X64 RyuJIT x86-64-v3
@@ -26,18 +26,18 @@ LaunchCount=1  UnrollFactor=1  WarmupCount=1
 <table>
 <thead><tr><th>Method         </th><th>SynchronousWrites</th><th>Mean    </th><th>Error   </th><th>StdDev </th><th>Gen0</th><th>Allocated</th>
 </tr>
-</thead><tbody><tr><td>Insert1000_Individual</td><td>False</td><td>5,862,030.0 &mu;s</td><td>2,243,968.4 &mu;s</td><td>582,751.46 &mu;s</td><td>1000.0000</td><td>23228.49 KB</td>
-</tr><tr><td>Insert1000_Batch</td><td>False</td><td>38,409.4 &mu;s</td><td>18,410.3 &mu;s</td><td>4,781.10 &mu;s</td><td>-</td><td>6518.56 KB</td>
-</tr><tr><td>QueryWithoutIndex</td><td>False</td><td>3,114.4 &mu;s</td><td>5,222.3 &mu;s</td><td>808.16 &mu;s</td><td>-</td><td>2934.81 KB</td>
-</tr><tr><td>QueryWithIndex</td><td>False</td><td>663.1 &mu;s</td><td>658.1 &mu;s</td><td>101.84 &mu;s</td><td>-</td><td>450.61 KB</td>
-</tr><tr><td>QueryWithUniqueIndex</td><td>False</td><td>646.4 &mu;s</td><td>698.0 &mu;s</td><td>108.02 &mu;s</td><td>-</td><td>455.13 KB</td>
-</tr><tr><td>FindById</td><td>False</td><td>448.4 &mu;s</td><td>624.6 &mu;s</td><td>96.66 &mu;s</td><td>-</td><td>449.63 KB</td>
-</tr><tr><td>Insert1000_Individual</td><td>True</td><td>5,693,705.5 &mu;s</td><td>1,877,787.1 &mu;s</td><td>487,655.35 &mu;s</td><td>1000.0000</td><td>23206.25 KB</td>
-</tr><tr><td>Insert1000_Batch</td><td>True</td><td>71,072.4 &mu;s</td><td>47,607.4 &mu;s</td><td>7,367.30 &mu;s</td><td>-</td><td>6292.58 KB</td>
-</tr><tr><td>QueryWithoutIndex</td><td>True</td><td>2,907.4 &mu;s</td><td>1,688.3 &mu;s</td><td>438.46 &mu;s</td><td>-</td><td>2934.81 KB</td>
-</tr><tr><td>QueryWithIndex</td><td>True</td><td>747.1 &mu;s</td><td>988.8 &mu;s</td><td>256.79 &mu;s</td><td>-</td><td>450.61 KB</td>
-</tr><tr><td>QueryWithUniqueIndex</td><td>True</td><td>786.0 &mu;s</td><td>762.9 &mu;s</td><td>118.06 &mu;s</td><td>-</td><td>455.13 KB</td>
-</tr><tr><td>FindById</td><td>True</td><td>504.9 &mu;s</td><td>524.5 &mu;s</td><td>81.17 &mu;s</td><td>-</td><td>449.63 KB</td>
+</thead><tbody><tr><td>Insert1000_Individual</td><td>False</td><td>5,486,274.0 &mu;s</td><td>1,461,983.0 &mu;s</td><td>379,672.35 &mu;s</td><td>1000.0000</td><td>23238.09 KB</td>
+</tr><tr><td>Insert1000_Batch</td><td>False</td><td>44,393.3 &mu;s</td><td>29,080.6 &mu;s</td><td>7,552.15 &mu;s</td><td>-</td><td>6389.87 KB</td>
+</tr><tr><td>QueryWithoutIndex</td><td>False</td><td>2,545.5 &mu;s</td><td>1,418.6 &mu;s</td><td>219.53 &mu;s</td><td>-</td><td>2934.81 KB</td>
+</tr><tr><td>QueryWithIndex</td><td>False</td><td>657.1 &mu;s</td><td>860.4 &mu;s</td><td>133.14 &mu;s</td><td>-</td><td>450.61 KB</td>
+</tr><tr><td>QueryWithUniqueIndex</td><td>False</td><td>690.2 &mu;s</td><td>618.7 &mu;s</td><td>95.74 &mu;s</td><td>-</td><td>455.13 KB</td>
+</tr><tr><td>FindById</td><td>False</td><td>441.0 &mu;s</td><td>515.8 &mu;s</td><td>79.82 &mu;s</td><td>-</td><td>449.63 KB</td>
+</tr><tr><td>Insert1000_Individual</td><td>True</td><td>5,913,163.0 &mu;s</td><td>789,081.2 &mu;s</td><td>122,111.19 &mu;s</td><td>1000.0000</td><td>23370.44 KB</td>
+</tr><tr><td>Insert1000_Batch</td><td>True</td><td>75,912.9 &mu;s</td><td>56,955.8 &mu;s</td><td>14,791.25 &mu;s</td><td>-</td><td>6376.51 KB</td>
+</tr><tr><td>QueryWithoutIndex</td><td>True</td><td>3,278.7 &mu;s</td><td>3,416.7 &mu;s</td><td>887.30 &mu;s</td><td>-</td><td>2934.97 KB</td>
+</tr><tr><td>QueryWithIndex</td><td>True</td><td>649.9 &mu;s</td><td>778.3 &mu;s</td><td>120.44 &mu;s</td><td>-</td><td>450.61 KB</td>
+</tr><tr><td>QueryWithUniqueIndex</td><td>True</td><td>693.7 &mu;s</td><td>827.4 &mu;s</td><td>128.04 &mu;s</td><td>-</td><td>455.13 KB</td>
+</tr><tr><td>FindById</td><td>True</td><td>398.6 &mu;s</td><td>707.5 &mu;s</td><td>109.48 &mu;s</td><td>-</td><td>449.63 KB</td>
 </tr></tbody></table>
 </body>
 </html>

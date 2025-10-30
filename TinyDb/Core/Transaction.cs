@@ -262,3 +262,4 @@ public sealed class TransactionSavepoint
         return $"Savepoint[{Name}]: {SavepointId:N} at {CreatedAt:HH:mm:ss.fff} ({OperationCount} operations)";
     }
 }
+

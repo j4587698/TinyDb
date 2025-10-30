@@ -119,6 +119,29 @@ public sealed class BTreeNode
     }
 
     /// <summary>
+    /// 初始化内部节点为根节点（用于分裂）
+    /// </summary>
+    /// <param name="leftChild">左子节点</param>
+    /// <param name="separatorKey">分隔键</param>
+    /// <param name="rightChild">右子节点</param>
+    public void InitializeAsRoot(BTreeNode leftChild, IndexKey separatorKey, BTreeNode rightChild)
+    {
+        if (_isLeaf)
+            throw new InvalidOperationException("Cannot initialize leaf node as root with children");
+
+        _keys.Clear();
+        _children.Clear();
+
+        _keys.Add(separatorKey);
+        _children.Add(leftChild);
+        _children.Add(rightChild);
+
+        // 设置父节点关系
+        leftChild.Parent = this;
+        rightChild.Parent = this;
+    }
+
+    /// <summary>
     /// 查找键的位置
     /// </summary>
     /// <param name="key">要查找的键</param>
@@ -252,33 +275,55 @@ public sealed class BTreeNode
     /// <summary>
     /// 分裂节点
     /// </summary>
-    /// <returns>分裂后的新节点</returns>
-    public BTreeNode Split()
+    /// <returns>分裂结果，包含新节点和提升键</returns>
+    public SplitResult SplitWithPromotedKey()
     {
-        var mid = _keys.Count / 2;
         var newNode = new BTreeNode(MaxKeys, _isLeaf);
         newNode.Parent = Parent; // 新节点的父节点与当前节点相同
+        IndexKey promotedKey;
 
         if (_isLeaf)
         {
-            // 叶子节点分裂
+            // 叶子节点分裂：B+树叶子节点应该平分键
+            var mid = _keys.Count / 2;
+
+            // 新节点获得后一半键
             newNode._keys.AddRange(_keys.GetRange(mid, _keys.Count - mid));
             newNode._documentIdLists.AddRange(_documentIdLists.GetRange(mid, _documentIdLists.Count - mid));
 
+            // 原节点保留前一半键
             _keys.RemoveRange(mid, _keys.Count - mid);
             _documentIdLists.RemoveRange(mid, _documentIdLists.Count - mid);
+
+            // 提升键是新节点的第一个键
+            promotedKey = newNode._keys[0];
         }
         else
         {
-            // 内部节点分裂
+            // 内部节点分裂：提升中间键
+            var mid = _keys.Count / 2;
+            promotedKey = _keys[mid]; // 提升中间键
+
+            // 将中间键之后的键和子节点移动到新节点
             newNode._keys.AddRange(_keys.GetRange(mid + 1, _keys.Count - mid - 1));
             newNode._children.AddRange(_children.GetRange(mid + 1, _children.Count - mid - 1));
 
+            // 移除中间键和右侧的键/子节点
             _keys.RemoveRange(mid, _keys.Count - mid);
             _children.RemoveRange(mid + 1, _children.Count - mid - 1);
         }
 
-        return newNode;
+        return new SplitResult { NewNode = newNode, PromotedKey = promotedKey };
+    }
+
+    /// <summary>
+    /// 分裂节点（向后兼容）
+    /// </summary>
+    /// <returns>分裂后的新节点</returns>
+    public BTreeNode Split()
+    {
+        var result = SplitWithPromotedKey();
+        return result.NewNode;
     }
 
     /// <summary>
@@ -438,6 +483,15 @@ public sealed class BTreeNode
         var type = _isLeaf ? "Leaf" : "Internal";
         return $"BTreeNode({type}): {_keys.Count} keys, {_children.Count} children, {DocumentCount} documents";
     }
+}
+
+/// <summary>
+/// 分裂结果
+/// </summary>
+public sealed class SplitResult
+{
+    public BTreeNode NewNode { get; init; } = null!;
+    public IndexKey PromotedKey { get; init; } = null!;
 }
 
 /// <summary>

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Linq;
 using TinyDb.Core;
 using TinyDb.Tests.TestEntities;
+using TinyDb.IdGeneration;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -21,6 +22,9 @@ public class TransactionACIDTests
     [Before(Test)]
     public void Setup()
     {
+        // 重置所有ID序列，避免测试间的数据污染
+        IdentitySequences.ResetAll();
+
         _testFile = Path.GetTempFileName();
         _engine = new TinyDbEngine(_testFile);
     }

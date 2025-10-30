@@ -60,7 +60,7 @@ public class AOTSerializationBoundaryTests
 
         // Assert - 验证序列化结果
         await Assert.That(bsonDoc).IsNotNull();
-        await Assert.That(bsonDoc.Contains("_id")).IsTrue();
+        await Assert.That(bsonDoc.ContainsKey("_id")).IsTrue();
         await Assert.That(((BsonString)bsonDoc["_id"]).Value).IsEqualTo(complexEntity.Id);
 
         // 验证反序列化结果
@@ -112,15 +112,15 @@ public class AOTSerializationBoundaryTests
 
         // Assert - 验证循环引用被正确处理
         await Assert.That(bsonDoc).IsNotNull();
-        await Assert.That(bsonDoc.Contains("_id")).IsTrue();
+        await Assert.That(bsonDoc.ContainsKey("_id")).IsTrue();
         await Assert.That(((BsonString)bsonDoc["_id"]).Value).IsEqualTo(parent.Id);
 
         // 验证基本属性被序列化
-        await Assert.That(bsonDoc.Contains("Name")).IsTrue();
-        await Assert.That(((BsonString)bsonDoc["Name"]).Value).IsEqualTo(parent.Name);
+        await Assert.That(bsonDoc.ContainsKey("name")).IsTrue();
+        await Assert.That(((BsonString)bsonDoc["name"]).Value).IsEqualTo(parent.Name);
 
         // Children可能被忽略或简化，以避免循环引用
-        if (bsonDoc.Contains("Children"))
+        if (bsonDoc.ContainsKey("Children"))
         {
             var childrenArray = (BsonArray)bsonDoc["Children"];
             await Assert.That(childrenArray).IsNotNull();
@@ -158,13 +158,13 @@ public class AOTSerializationBoundaryTests
         await Assert.That(bsonDoc).IsNotNull();
 
         // null字符串应该被跳过或特殊处理
-        if (bsonDoc.Contains("StringNull"))
+        if (bsonDoc.ContainsKey("StringNull"))
         {
             await Assert.That(bsonDoc["StringNull"].IsNull).IsTrue();
         }
 
         // 空字符串应该被序列化
-        if (bsonDoc.Contains("StringEmpty"))
+        if (bsonDoc.ContainsKey("StringEmpty"))
         {
             await Assert.That(((BsonString)bsonDoc["StringEmpty"]).Value).IsEqualTo("");
         }
@@ -260,13 +260,11 @@ public class AOTSerializationBoundaryTests
     public async Task VersionCompatibility_ShouldHandleMissingFields()
     {
         // Arrange - 创建旧版本对象（缺少某些字段）
-        var oldVersionBson = new BsonDocument
-        {
-            ["_id"] = "version_test_001",
-            ["Name"] = "Old Version Entity",
-            ["Age"] = 25
+        var oldVersionBson = new BsonDocument()
+            .Set("_id", "version_test_001")
+            .Set("name", "Old Version Entity")
+            .Set("age", 25);
             // 注意：缺少新版本字段如 "CreatedAt", "IsActive" 等
-        };
 
         // Act - 反序列化为新版本对象
         var newVersionEntity = BsonMapper.ToObject<VersionTestEntity>(oldVersionBson);
@@ -395,7 +393,7 @@ public class AOTSerializationBoundaryTests
 
             // 如果没有抛出异常，验证结果的合理性
             await Assert.That(bsonDoc).IsNotNull();
-            await Assert.That(bsonDoc.Contains("_id")).IsTrue();
+            await Assert.That(bsonDoc.ContainsKey("_id")).IsTrue();
         }
         catch (Exception ex)
         {

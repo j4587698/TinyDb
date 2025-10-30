@@ -9,7 +9,6 @@ namespace TinyDb.Serialization;
 /// 表示针对特定实体类型由源生成器生成的AOT辅助适配器
 /// </summary>
 public sealed class AotEntityAdapter<T>
-    where T : class, new()
 {
     public Func<T, BsonDocument> ToDocument { get; }
     public Func<BsonDocument, T> FromDocument { get; }
@@ -43,7 +42,6 @@ public static partial class AotHelperRegistry
     private static readonly ConcurrentDictionary<Type, object> _adapters = new();
 
     internal static bool TryGetAdapter<T>([NotNullWhen(true)] out AotEntityAdapter<T>? adapter)
-        where T : class, new()
     {
         if (_adapters.TryGetValue(typeof(T), out var raw))
         {
@@ -56,7 +54,6 @@ public static partial class AotHelperRegistry
     }
 
     public static void Register<T>(AotEntityAdapter<T> adapter)
-        where T : class, new()
     {
         _adapters[typeof(T)] = adapter;
     }

@@ -11,7 +11,6 @@ namespace TinyDb.Serialization;
 /// 缓存实体类型的元数据，避免在AOT环境中频繁反射。
 /// </summary>
 internal static class EntityMetadata<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
-    where T : class, new()
 {
     private static readonly Lazy<PropertyInfo[]> _properties = new(() =>
         typeof(T)

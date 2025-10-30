@@ -24,8 +24,36 @@ public static class BsonConversion
             DateTime dt => new BsonDateTime(dt),
             Guid guid => new BsonBinary(guid, BsonBinary.BinarySubType.Uuid),
             ObjectId oid => new BsonObjectId(oid),
+            Enum enumValue => ConvertEnumToBsonValue(enumValue),
+            IDictionary<string, object> dict when dict != null => ConvertDictionaryToBsonDocument(dict),
             _ => new BsonString(value.ToString() ?? string.Empty)
         };
+    }
+
+    /// <summary>
+    /// 将枚举转换为BsonValue
+    /// </summary>
+    private static BsonValue ConvertEnumToBsonValue(Enum enumValue)
+    {
+        // 将枚举转换为其基础类型（通常是int32）或字符串表示
+        var underlyingType = Enum.GetUnderlyingType(enumValue.GetType());
+        var convertedValue = Convert.ChangeType(enumValue, underlyingType);
+        return ToBsonValue(convertedValue!);
+    }
+
+    /// <summary>
+    /// 将Dictionary转换为BsonDocument
+    /// </summary>
+    private static BsonDocument ConvertDictionaryToBsonDocument(IDictionary<string, object> dictionary)
+    {
+        var document = new BsonDocument();
+        foreach (var kvp in dictionary)
+        {
+            var key = kvp.Key;
+            var value = ToBsonValue(kvp.Value);
+            document = document.Set(key, value);
+        }
+        return document;
     }
 
     /// <summary>
@@ -44,6 +72,61 @@ public static class BsonConversion
         if (bsonValue.IsNull) return null;
 
         targetType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+        // 处理枚举类型
+        if (targetType.IsEnum)
+        {
+            return ConvertFromBsonValueToEnum(bsonValue, targetType);
+        }
+
+        // 处理集合类型
+        if (targetType.IsGenericType)
+        {
+            var genericTypeDefinition = targetType.GetGenericTypeDefinition();
+
+            // 处理 List<T>
+            if (genericTypeDefinition == typeof(List<>))
+            {
+                if (bsonValue is BsonArray array)
+                {
+                    var elementType = targetType.GetGenericArguments()[0];
+                    var list = Activator.CreateInstance(targetType);
+
+                    foreach (var item in array)
+                    {
+                        var convertedItem = FromBsonValue(item, elementType);
+                        targetType.GetMethod("Add")?.Invoke(list, new[] { convertedItem });
+                    }
+
+                    return list;
+                }
+            }
+
+            // 处理 Dictionary<string, T>
+            if (genericTypeDefinition == typeof(Dictionary<,>) &&
+                targetType.GetGenericArguments()[0] == typeof(string))
+            {
+                if (bsonValue is BsonDocument document)
+                {
+                    var valueType = targetType.GetGenericArguments()[1];
+                    var dictionary = Activator.CreateInstance(targetType);
+
+                    foreach (var kvp in document)
+                    {
+                        var convertedValue = FromBsonValue(kvp.Value, valueType);
+                        targetType.GetMethod("Add")?.Invoke(dictionary, new[] { kvp.Key, convertedValue });
+                    }
+
+                    return dictionary;
+                }
+            }
+        }
+
+        // 处理枚举类型（在switch之前特殊处理，因为枚举也是值类型）
+        if (targetType.IsEnum)
+        {
+            return ConvertFromBsonValueToEnum(bsonValue, targetType);
+        }
 
         return targetType switch
         {
@@ -90,5 +173,76 @@ public static class BsonConversion
                 bsonValue is BsonObjectId oid ? oid.Value : ObjectId.Parse(bsonValue.ToString()),
             _ => bsonValue.ToString()
         };
+    }
+
+    /// <summary>
+    /// 将BsonValue转换为枚举
+    /// </summary>
+    private static object ConvertFromBsonValueToEnum(BsonValue bsonValue, Type enumType)
+    {
+        try
+        {
+            var underlyingType = Enum.GetUnderlyingType(enumType);
+            object? convertedValue;
+
+            // 先转换为底层类型
+            if (underlyingType == typeof(int))
+            {
+                convertedValue = bsonValue switch
+                {
+                    BsonInt32 i32 => i32.Value,
+                    BsonInt64 i64 => checked((int)i64.Value),
+                    BsonDouble dbl => Convert.ToInt32(dbl.Value),
+                    BsonString str => int.Parse(str.Value),
+                    _ => Convert.ToInt32(bsonValue.ToString())
+                };
+            }
+            else if (underlyingType == typeof(long))
+            {
+                convertedValue = bsonValue switch
+                {
+                    BsonInt64 i64 => i64.Value,
+                    BsonInt32 i32 => i32.Value,
+                    BsonDouble dbl => Convert.ToInt64(dbl.Value),
+                    BsonString str => long.Parse(str.Value),
+                    _ => Convert.ToInt64(bsonValue.ToString())
+                };
+            }
+            else if (underlyingType == typeof(short))
+            {
+                convertedValue = bsonValue switch
+                {
+                    BsonInt32 i32 => (short)i32.Value,
+                    BsonInt64 i64 => checked((short)i64.Value),
+                    BsonDouble dbl => Convert.ToInt16(dbl.Value),
+                    BsonString str => short.Parse(str.Value),
+                    _ => Convert.ToInt16(bsonValue.ToString())
+                };
+            }
+            else if (underlyingType == typeof(byte))
+            {
+                convertedValue = bsonValue switch
+                {
+                    BsonInt32 i32 => (byte)i32.Value,
+                    BsonInt64 i64 => checked((byte)i64.Value),
+                    BsonDouble dbl => Convert.ToByte(dbl.Value),
+                    BsonString str => byte.Parse(str.Value),
+                    _ => Convert.ToByte(bsonValue.ToString())
+                };
+            }
+            else
+            {
+                // 默认处理为字符串
+                convertedValue = bsonValue.ToString();
+            }
+
+            // 转换为枚举
+            return Enum.ToObject(enumType, convertedValue!);
+        }
+        catch
+        {
+            // 如果数字转换失败，尝试字符串转换
+            return Enum.Parse(enumType, bsonValue.ToString(), ignoreCase: true);
+        }
     }
 }

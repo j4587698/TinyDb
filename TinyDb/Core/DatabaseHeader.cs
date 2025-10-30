@@ -249,17 +249,25 @@ public struct DatabaseHeader
     /// <returns>校验和</returns>
     public uint CalculateChecksum()
     {
-        // 简单的 CRC32 实现，这里使用累加作为示例
+        // 保存当前校验和
+        var originalChecksum = Checksum;
+
+        // 临时将校验和设置为0以计算正确的校验和
+        Checksum = 0;
+
         var data = ToByteArray();
         uint checksum = 0;
 
         for (int i = 0; i < Size; i++)
         {
-            if (i >= 44 && i < 48) // 跳过校验和字段本身
+            if (i >= 52 && i < 56) // 跳过校验和字段本身 (52-55字节)
                 continue;
 
             checksum += data[i];
         }
+
+        // 恢复原始校验和
+        Checksum = originalChecksum;
 
         return checksum;
     }

@@ -8,7 +8,6 @@ namespace TinyDb.Serialization;
 /// 为实体类型提供AOT友好的ID访问操作。
 /// </summary>
 public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
-    where T : class, new()
 {
     public static BsonValue GetId(T entity)
     {

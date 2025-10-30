@@ -9,7 +9,7 @@ namespace TinyDb.Core;
 /// </summary>
 public sealed class TransactionManager : IDisposable
 {
-    private readonly TinyDbEngine _engine;
+    internal readonly TinyDbEngine _engine;
     private readonly Dictionary<Guid, Transaction> _activeTransactions;
     private readonly object _lock = new();
     private bool _disposed;
@@ -275,9 +275,9 @@ public sealed class TransactionManager : IDisposable
     /// <param name="transaction">事务</param>
     private static void ValidateOperations(Transaction transaction)
     {
-        // 检查重复的文档ID插入
+        // 检查重复的文档ID插入（只检查非null ID的重复）
         var insertOperations = transaction.Operations
-            .Where(op => op.OperationType == TransactionOperationType.Insert)
+            .Where(op => op.OperationType == TransactionOperationType.Insert && op.DocumentId != null)
             .GroupBy(op => new { op.CollectionName, op.DocumentId })
             .Where(group => group.Count() > 1)
             .SelectMany(group => group)
@@ -370,26 +370,26 @@ public sealed class TransactionManager : IDisposable
         switch (operation.OperationType)
         {
             case TransactionOperationType.Insert:
-                // 插入操作的回滚：删除新插入的文档
+                // 插入操作的回滚：删除新插入的文档（使用内部方法，不持久化）
                 if (operation.DocumentId != null)
                 {
-                    _engine.DeleteDocument(operation.CollectionName, operation.DocumentId);
+                    _engine.DeleteDocumentInternal(operation.CollectionName, operation.DocumentId);
                 }
                 break;
 
             case TransactionOperationType.Update:
-                // 更新操作的回滚：恢复原始文档
+                // 更新操作的回滚：恢复原始文档（使用内部方法，不持久化）
                 if (operation.OriginalDocument != null)
                 {
-                    _engine.UpdateDocument(operation.CollectionName, operation.OriginalDocument);
+                    _engine.UpdateDocumentInternal(operation.CollectionName, operation.OriginalDocument);
                 }
                 break;
 
             case TransactionOperationType.Delete:
-                // 删除操作的回滚：恢复原始文档
+                // 删除操作的回滚：恢复原始文档（使用内部方法，不持久化）
                 if (operation.OriginalDocument != null)
                 {
-                    _engine.InsertDocument(operation.CollectionName, operation.OriginalDocument);
+                    _engine.InsertDocumentInternal(operation.CollectionName, operation.OriginalDocument);
                 }
                 break;
 
