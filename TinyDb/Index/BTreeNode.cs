@@ -200,8 +200,8 @@ public sealed class BTreeNode
         {
             // 键已存在，在对应位置的文档列表前面插入新的文档ID
             _documentIdLists[position].Insert(0, documentId);
-            // 不增加KeyCount，因为key是相同的
-            return _documentIdLists.Count > MaxKeys;
+            // 不增加KeyCount，因为key是相同的，返回false表示没有插入新键
+            return false;
         }
 
         // 插入新键和文档ID列表
@@ -294,6 +294,15 @@ public sealed class BTreeNode
             // 原节点保留前一半键
             _keys.RemoveRange(mid, _keys.Count - mid);
             _documentIdLists.RemoveRange(mid, _documentIdLists.Count - mid);
+
+            // 设置叶子节点链表指针
+            newNode.NextSibling = this.NextSibling;
+            newNode.PreviousSibling = this;
+            if (this.NextSibling != null)
+            {
+                this.NextSibling.PreviousSibling = newNode;
+            }
+            this.NextSibling = newNode;
 
             // 提升键是新节点的第一个键
             promotedKey = newNode._keys[0];
@@ -443,6 +452,16 @@ public sealed class BTreeNode
     /// 父节点
     /// </summary>
     public BTreeNode? Parent { get; set; }
+
+    /// <summary>
+    /// 下一个兄弟叶子节点（仅叶子节点使用）
+    /// </summary>
+    public BTreeNode? NextSibling { get; set; }
+
+    /// <summary>
+    /// 上一个兄弟叶子节点（仅叶子节点使用）
+    /// </summary>
+    public BTreeNode? PreviousSibling { get; set; }
 
     /// <summary>
     /// 数据大小（字节）

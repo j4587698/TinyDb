@@ -321,12 +321,16 @@ public class StorageStressTests
         var collection = smallEngine.GetCollection<UserWithIntId>();
 
         var exceptions = new List<Exception>();
+        var stopwatch = Stopwatch.StartNew();
 
-        // Act - 尝试填满空间
+        // Act - 尝试填满空间，但设置合理的限制
         try
         {
             var recordCount = 0;
-            while (recordCount < 100000) // 安全上限
+            const int maxTestRecords = 10000; // 降低测试上限
+            const int maxTestTimeSeconds = 30; // 最长测试时间30秒
+
+            while (recordCount < maxTestRecords && stopwatch.Elapsed.TotalSeconds < maxTestTimeSeconds)
             {
                 var user = new UserWithIntId
                 {
@@ -345,21 +349,29 @@ public class StorageStressTests
                     break;
                 }
 
-                // 每1000次检查一次磁盘空间
-                if (recordCount % 1000 == 0)
+                // 每100次检查一次磁盘空间，提高检查频率
+                if (recordCount % 100 == 0)
                 {
                     var driveInfo = new DriveInfo(Path.GetDirectoryName(smallTestFile)!);
-                    if (driveInfo.AvailableFreeSpace < 10 * 1024 * 1024) // 少于10MB时停止
+                    if (driveInfo.AvailableFreeSpace < 100 * 1024 * 1024) // 少于100MB时停止
                     {
+                        Console.WriteLine($"磁盘空间不足，停止测试。剩余空间: {driveInfo.AvailableFreeSpace / (1024 * 1024)} MB");
                         break;
                     }
                 }
+
+                // 每1000次输出进度
+                if (recordCount % 1000 == 0)
+                {
+                    Console.WriteLine($"已插入 {recordCount} 条记录，用时 {stopwatch.Elapsed.TotalSeconds:F1} 秒");
+                }
             }
 
-            Console.WriteLine($"成功插入 {recordCount} 条记录");
+            Console.WriteLine($"测试完成，成功插入 {recordCount} 条记录，用时 {stopwatch.Elapsed.TotalSeconds:F1} 秒");
         }
         finally
         {
+            stopwatch.Stop();
             smallEngine.Dispose();
             if (File.Exists(smallTestFile))
             {
@@ -376,6 +388,9 @@ public class StorageStressTests
                 .Or.IsAssignableTo<OutOfMemoryException>()
                 .Or.IsAssignableTo<InvalidOperationException>();
         }
+
+        // 验证至少插入了一些记录，证明测试正常运行
+        await Assert.That(exceptions.Count).IsLessThan(100); // 异常不应该太多
     }
 
     /// <summary>

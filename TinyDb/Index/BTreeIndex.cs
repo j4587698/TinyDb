@@ -107,6 +107,8 @@ public sealed class BTreeIndex : IDisposable
                 _nodeCount++;
             }
 
+            // 只有当真正插入了新键时才增加EntryCount
+            // InsertRecursive.Inserted现在会正确反映是否插入了新键
             if (result.Inserted)
                 _entryCount++;
 
@@ -416,9 +418,8 @@ public sealed class BTreeIndex : IDisposable
     /// <returns>下一个叶子节点</returns>
     private BTreeNode? GetNextLeafNode(BTreeNode currentNode)
     {
-        // 简化实现：这里需要维护叶子节点的链表结构
-        // 实际实现中应该在每个节点中存储指向下一个叶子节点的指针
-        return null;
+        // 使用叶子节点的兄弟链表指针来获取下一个叶子节点
+        return currentNode.NextSibling;
     }
 
     /// <summary>
@@ -631,10 +632,13 @@ public sealed class BTreeIndex : IDisposable
     /// <returns>是否有效</returns>
     private bool ValidateNode(BTreeNode node)
     {
-        // 检查键的顺序
+        // 检查键的顺序 - 对于非唯一索引，允许重复键，但仍要求非递减顺序
         for (int i = 1; i < node.KeyCount; i++)
         {
-            if (node.GetKey(i - 1).CompareTo(node.GetKey(i)) >= 0)
+            // 对于非唯一索引，重复键是允许的，所以使用 > 而不是 >=
+            // 对于唯一索引，重复键是不允许的，所以保持 >=
+            var comparison = node.GetKey(i - 1).CompareTo(node.GetKey(i));
+            if (_unique ? comparison >= 0 : comparison > 0)
                 return false;
         }
 
