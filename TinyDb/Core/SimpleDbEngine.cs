@@ -29,6 +29,7 @@ public sealed class TinyDbEngine : IDisposable
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly TransactionManager _transactionManager;
     private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
+    private readonly LargeDocumentStorage _largeDocumentStorage;
     private readonly object _lock = new();
     private readonly AsyncLocal<Transaction?> _currentTransaction = new();
     private DatabaseHeader _header;
@@ -131,6 +132,7 @@ public sealed class TinyDbEngine : IDisposable
         _indexManagers = new ConcurrentDictionary<string, IndexManager>();
         _collectionStates = new ConcurrentDictionary<string, CollectionState>();
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
+        _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
 
         RecoverFromWriteAheadLog();
         InitializeDatabase();
@@ -811,6 +813,107 @@ public sealed class TinyDbEngine : IDisposable
     private BsonValue InsertPreparedDocument(string collectionName, BsonDocument document, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
     {
         var documentBytes = BsonSerializer.SerializeDocument(document);
+
+        // 检查是否需要大文档存储
+        if (LargeDocumentStorage.RequiresLargeDocumentStorage(documentBytes.Length, GetMaxDocumentSize()))
+        {
+            // 使用大文档存储
+            return InsertLargeDocument(collectionName, document, documentBytes, id, collectionState, indexManager, updateIndexes);
+        }
+        else
+        {
+            // 使用常规单页面存储
+            return InsertRegularDocument(collectionName, document, documentBytes, id, collectionState, indexManager, updateIndexes);
+        }
+    }
+
+    /// <summary>
+    /// 插入大文档（跨页面存储）
+    /// </summary>
+    private BsonValue InsertLargeDocument(string collectionName, BsonDocument document, byte[] documentBytes, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
+    {
+        try
+        {
+            // 存储大文档并获取索引页面ID
+            var largeDocumentIndexPageId = _largeDocumentStorage.StoreLargeDocument(documentBytes, collectionName);
+
+            // 存储大文档索引页面ID作为特殊文档
+            var indexDocument = new BsonDocument
+            {
+                ["_id"] = id,
+                ["_collection"] = collectionName,
+                ["_largeDocumentIndex"] = largeDocumentIndexPageId,
+                ["_largeDocumentSize"] = documentBytes.Length,
+                ["_isLargeDocument"] = true
+            };
+
+            var indexDocumentBytes = BsonSerializer.SerializeDocument(indexDocument);
+            var requiredSize = GetEntrySize(indexDocumentBytes.Length);
+
+            var state = collectionState.PageState;
+            bool isNewPage;
+            uint pageId;
+            ushort entryIndex;
+
+            lock (state.SyncRoot)
+            {
+                Page page;
+                (page, isNewPage) = GetWritableDataPageLocked(collectionName, state, requiredSize);
+                entryIndex = page.Header.ItemCount;
+                AppendDocumentToPage(page, indexDocumentBytes);
+                pageId = page.PageID;
+
+                if (page.Header.FreeBytes < MinimumFreeSpaceThreshold)
+                {
+                    state.PageId = 0;
+                }
+                else
+                {
+                    state.PageId = page.PageID;
+                }
+
+                PersistPage(page);
+            }
+
+            if (TryGetDocumentKey(id, out var documentKey))
+            {
+                collectionState.DocumentLocations[documentKey] = new DocumentLocation(pageId, entryIndex);
+            }
+
+            if (isNewPage)
+            {
+                lock (_lock)
+                {
+                    _header.UsedPages++;
+                    WriteHeader();
+                }
+            }
+
+            if (updateIndexes && indexManager != null)
+            {
+                try
+                {
+                    indexManager.InsertDocument(document, id);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Warning: Failed to update indexes for large document {id}: {ex.Message}");
+                }
+            }
+
+            return id;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to insert large document {id}: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// 插入常规文档（单页面存储）
+    /// </summary>
+    private BsonValue InsertRegularDocument(string collectionName, BsonDocument document, byte[] documentBytes, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
+    {
         var requiredSize = GetEntrySize(documentBytes.Length);
 
         var state = collectionState.PageState;

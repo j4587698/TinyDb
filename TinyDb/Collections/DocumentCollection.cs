@@ -177,8 +177,30 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         // 转换为BSON文档（AOT兼容）
         var document = AotBsonMapper.ToDocument(entity);
 
-        // 更新到数据库
-        return _engine.UpdateDocument(_name, document);
+        // 检查是否在事务中
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            // 在事务中，需要先获取原始文档用于回滚
+            var originalDocument = _engine.FindById(_name, id);
+            if (originalDocument == null)
+            {
+                // 如果原始文档不存在，这是插入操作
+                ((Transaction)currentTransaction).RecordInsert(_name, document);
+                return 1;
+            }
+            else
+            {
+                // 记录更新操作
+                ((Transaction)currentTransaction).RecordUpdate(_name, originalDocument, document);
+                return 1;
+            }
+        }
+        else
+        {
+            // 不在事务中，直接更新到数据库
+            return _engine.UpdateDocument(_name, document);
+        }
     }
 
     /// <summary>
@@ -213,7 +235,28 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (id == null || id.IsNull) return 0;
 
-        return _engine.DeleteDocument(_name, id);
+        // 检查是否在事务中
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            // 在事务中，需要先获取要删除的文档用于回滚
+            var documentToDelete = _engine.FindById(_name, id);
+            if (documentToDelete == null)
+            {
+                return 0; // 文档不存在，无需删除
+            }
+            else
+            {
+                // 记录删除操作
+                ((Transaction)currentTransaction).RecordDelete(_name, documentToDelete);
+                return 1;
+            }
+        }
+        else
+        {
+            // 不在事务中，直接删除
+            return _engine.DeleteDocument(_name, id);
+        }
     }
 
     /// <summary>

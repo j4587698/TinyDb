@@ -38,5 +38,15 @@ public enum PageType : byte
     /// <summary>
     /// 扩展页面（预留）
     /// </summary>
-    Extension = 0x06
+    Extension = 0x06,
+
+    /// <summary>
+    /// 大文档索引页面
+    /// </summary>
+    LargeDocumentIndex = 0x07,
+
+    /// <summary>
+    /// 大文档数据页面
+    /// </summary>
+    LargeDocumentData = 0x08
 }

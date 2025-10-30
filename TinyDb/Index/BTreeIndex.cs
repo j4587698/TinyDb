@@ -622,7 +622,10 @@ public sealed class BTreeIndex : IDisposable
     public bool Validate()
     {
         ThrowIfDisposed();
-        return _root != null && ValidateNode(_root);
+        lock (_syncRoot)
+        {
+            return _root != null && ValidateNode(_root);
+        }
     }
 
     /// <summary>
