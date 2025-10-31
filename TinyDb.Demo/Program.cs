@@ -6,6 +6,7 @@ using TinyDb.Collections;
 using TinyDb.Bson;
 using TinyDb.Attributes;
 using TinyDb.Demo.Demos;
+using TinyDb.Metadata;
 
 namespace TinyDb.Demo;
 
@@ -28,6 +29,11 @@ public class Program
         await SimpleCrudDemo.RunAsync();
 
         Console.WriteLine("\n" + new string('=', 60));
+        Console.WriteLine("2. 元数据系统演示");
+        Console.WriteLine(new string('=', 60));
+        await MetadataDemo.RunAsync();
+
+        Console.WriteLine("\n" + new string('=', 60));
         Console.WriteLine("✅ 所有演示完成！");
         Console.WriteLine("📊 演示数据基于真实运行结果");
         Console.WriteLine("🔧 如需生产使用，请进行充分测试");
@@ -39,7 +45,7 @@ public class Program
         var demoFiles = new[]
         {
             "demo.db", "crud_demo.db", "linq_demo.db",
-            "transaction_demo.db", "performance_demo.db"
+            "transaction_demo.db", "performance_demo.db", "metadata_demo.db"
         };
 
         foreach (var file in demoFiles)
