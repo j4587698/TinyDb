@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using TinyDb.Bson;
+using TinyDb.Serialization;
 
 namespace TinyDb.Storage;
 
@@ -101,6 +102,7 @@ internal class LargeDocumentStorage
         var offset = 0;
 
         var currentPageId = header.FirstDataPageId;
+        var visitedPages = 0;
         for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
         {
             var dataPage = _pageManager.GetPage(currentPageId);
@@ -122,11 +124,17 @@ internal class LargeDocumentStorage
             Buffer.BlockCopy(dataBytes, 0, result, offset, dataToRead);
             offset += dataToRead;
             currentPageId = dataHeader.NextPageId;
+            visitedPages++;
         }
 
         if (offset != header.TotalLength)
         {
             throw new InvalidOperationException($"Data length mismatch: expected {header.TotalLength}, read {offset}");
+        }
+
+        if (visitedPages != header.PageCount)
+        {
+            throw new InvalidOperationException($"Data page count mismatch: expected {header.PageCount}, visited {visitedPages}");
         }
 
         return result;
@@ -175,11 +183,12 @@ internal class LargeDocumentStorage
             var header = ReadIndexPageHeader(indexPage);
 
             // 验证索引页面头部
-            if (header.DocumentIdentifier != 0xFFFFFFFF || header.TotalLength <= 0 || header.PageCount <= 0)
+            if (header.DocumentIdentifier != -1 || header.TotalLength <= 0 || header.PageCount <= 0)
                 return false;
 
             // 验证数据页面链
             var currentPageId = header.FirstDataPageId;
+            var visitedPages = 0;
             for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
             {
                 var dataPage = _pageManager.GetPage(currentPageId);
@@ -196,10 +205,14 @@ internal class LargeDocumentStorage
                     return false;
 
                 currentPageId = dataHeader.NextPageId;
+                visitedPages++;
             }
 
             // 检查是否正好遍历完所有页面
-            return currentPageId == 0 && (header.PageCount == 1 || header.FirstDataPageId != 0);
+            return currentPageId == 0 &&
+                   visitedPages == header.PageCount &&
+                   header.PageCount > 0 &&
+                   header.FirstDataPageId != 0;
         }
         catch
         {
@@ -277,7 +290,7 @@ internal class LargeDocumentStorage
         var header = new byte[LargeDocumentHeaderSize];
         var offset = 0;
 
-        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(offset, sizeof(int)), 0xFFFFFFFF); // DocumentIdentifier
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(offset, sizeof(int)), -1); // DocumentIdentifier (0xFFFFFFFF)
         offset += sizeof(int);
 
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(offset, sizeof(int)), totalLength);
@@ -286,7 +299,7 @@ internal class LargeDocumentStorage
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(offset, sizeof(int)), pageCount);
         offset += sizeof(int);
 
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(offset, sizeof(uint)), firstDataPageId);
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(offset, sizeof(int)), (int)firstDataPageId);
 
         page.WriteData(0, header);
     }
@@ -307,7 +320,7 @@ internal class LargeDocumentStorage
         var pageCount = BinaryPrimitives.ReadInt32LittleEndian(headerBytes.AsSpan(offset, sizeof(int)));
         offset += sizeof(int);
 
-        var firstDataPageId = BinaryPrimitives.ReadUInt32LittleEndian(headerBytes.AsSpan(offset, sizeof(uint)));
+        var firstDataPageId = (uint)BinaryPrimitives.ReadInt32LittleEndian(headerBytes.AsSpan(offset, sizeof(int)));
 
         return new LargeDocumentIndexHeader
         {

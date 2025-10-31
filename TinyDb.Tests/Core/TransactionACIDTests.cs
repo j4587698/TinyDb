@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using TinyDb.Core;
 using TinyDb.Tests.TestEntities;
 using TinyDb.IdGeneration;
@@ -188,18 +189,25 @@ public class TransactionACIDTests
         var exceptions = new List<Exception>();
         var results = new List<string>();
 
-        // Act - 并发执行事务
+        var insertedIdSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCommitSource = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Act - 并发执行事务并验证未提交数据不可见
         var task1 = Task.Run(() =>
         {
             try
             {
                 using var transaction = _engine.BeginTransaction();
                 var user = new UserWithIntId { Name = "Task1User", Age = 25 };
-                var id = collection1.Insert(user);
+                collection1.Insert(user);
+                insertedIdSource.TrySetResult(user.Id);
+
+                allowCommitSource.Task.Wait();
                 transaction.Commit();
+
                 lock (results)
                 {
-                    results.Add($"Task1:Inserted_{id}");
+                    results.Add($"Task1:Inserted_{user.Id}");
                 }
             }
             catch (Exception ex)
@@ -211,17 +219,28 @@ public class TransactionACIDTests
             }
         });
 
-        var task2 = Task.Run(() =>
+        var task2 = Task.Run(async () =>
         {
             try
             {
-                using var transaction = _engine.BeginTransaction();
-                var user = new UserWithLongId { Name = "Task2User", Age = 30 };
-                var id = collection2.Insert(user);
-                transaction.Commit();
-                lock (results)
+                var pendingId = await insertedIdSource.Task;
+
+                using (var readTransaction = _engine.BeginTransaction())
                 {
-                    results.Add($"Task2:Inserted_{id}");
+                    var visibleBeforeCommit = collection1.FindById(pendingId);
+                    await Assert.That(visibleBeforeCommit).IsNull();
+                    readTransaction.Commit();
+                }
+
+                using (var transaction = _engine.BeginTransaction())
+                {
+                    var user = new UserWithLongId { Name = "Task2User", Age = 30 };
+                    var id = collection2.Insert(user);
+                    transaction.Commit();
+                    lock (results)
+                    {
+                        results.Add($"Task2:Inserted_{id}");
+                    }
                 }
             }
             catch (Exception ex)
@@ -230,6 +249,10 @@ public class TransactionACIDTests
                 {
                     exceptions.Add(ex);
                 }
+            }
+            finally
+            {
+                allowCommitSource.TrySetResult();
             }
         });
 
@@ -238,12 +261,10 @@ public class TransactionACIDTests
         // Assert - 验证隔离性
         await Assert.That(exceptions).IsEmpty();
         await Assert.That(results).HasCount(2);
-
-        // 验证两个事务都成功提交
         await Assert.That(results.Any(r => r.StartsWith("Task1"))).IsTrue();
         await Assert.That(results.Any(r => r.StartsWith("Task2"))).IsTrue();
 
-        // 验证数据完整性
+        // 验证最终数据完整性
         var users1 = collection1.FindAll().ToList();
         var users2 = collection2.FindAll().ToList();
 

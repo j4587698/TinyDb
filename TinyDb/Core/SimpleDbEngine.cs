@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -72,14 +73,20 @@ public sealed class TinyDbEngine : IDisposable
 
     private readonly struct PageDocumentEntry
     {
-        public PageDocumentEntry(BsonDocument document, byte[] rawBytes)
+        public PageDocumentEntry(BsonDocument document, byte[] rawBytes, bool isLargeDocument = false, uint largeDocumentIndexPageId = 0, int largeDocumentSize = 0)
         {
             Document = document;
             RawBytes = rawBytes;
+            IsLargeDocument = isLargeDocument;
+            LargeDocumentIndexPageId = largeDocumentIndexPageId;
+            LargeDocumentSize = largeDocumentSize;
         }
 
         public BsonDocument Document { get; }
         public byte[] RawBytes { get; }
+        public bool IsLargeDocument { get; }
+        public uint LargeDocumentIndexPageId { get; }
+        public int LargeDocumentSize { get; }
 
         public BsonValue Id => Document.TryGetValue("_id", out var id) ? id : BsonNull.Value;
     }
@@ -733,38 +740,44 @@ public sealed class TinyDbEngine : IDisposable
             return false;
         }
 
-        try
+        var pageState = state.PageState;
+        lock (pageState.SyncRoot)
         {
-            page = _pageManager.GetPage(location.PageId);
-        }
-        catch
-        {
-            state.DocumentLocations.TryRemove(documentKey, out _);
-            return false;
+            try
+            {
+                page = _pageManager.GetPage(location.PageId);
+            }
+            catch
+            {
+                state.DocumentLocations.TryRemove(documentKey, out _);
+                return false;
+            }
+
+            if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
+            {
+                state.DocumentLocations.TryRemove(documentKey, out _);
+                return false;
+            }
+
+            entries = ReadDocumentsFromPage(page);
+            if (location.EntryIndex >= entries.Count)
+            {
+                state.DocumentLocations.TryRemove(documentKey, out _);
+                return false;
+            }
+
+            var entry = entries[location.EntryIndex];
+            if (!DocumentBelongsToCollection(entry.Document, collectionName) || !entry.Id.Equals(id))
+            {
+                state.DocumentLocations.TryRemove(documentKey, out _);
+                return false;
+            }
+
+            entryIndex = location.EntryIndex;
+            return true;
         }
 
-        if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
-        {
-            state.DocumentLocations.TryRemove(documentKey, out _);
-            return false;
-        }
-
-        entries = ReadDocumentsFromPage(page);
-        if (location.EntryIndex >= entries.Count)
-        {
-            state.DocumentLocations.TryRemove(documentKey, out _);
-            return false;
-        }
-
-        var entry = entries[location.EntryIndex];
-        if (!DocumentBelongsToCollection(entry.Document, collectionName) || !entry.Id.Equals(id))
-        {
-            state.DocumentLocations.TryRemove(documentKey, out _);
-            return false;
-        }
-
-        entryIndex = location.EntryIndex;
-        return true;
+        return false;
     }
 
     private bool TryEnsureDocumentLocation(string collectionName, CollectionState state, BsonValue id, out Page page, out List<PageDocumentEntry> entries, out ushort entryIndex)
@@ -827,26 +840,72 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private static BsonDocument CreateLargeDocumentIndexDocument(BsonValue id, string collectionName, uint indexPageId, int size)
+    {
+        var indexDocument = new BsonDocument();
+        indexDocument = indexDocument.Set("_id", id);
+        indexDocument = indexDocument.Set("_collection", BsonConversion.ToBsonValue(collectionName));
+        indexDocument = indexDocument.Set("_largeDocumentIndex", BsonConversion.ToBsonValue((long)indexPageId));
+        indexDocument = indexDocument.Set("_largeDocumentSize", BsonConversion.ToBsonValue(size));
+        indexDocument = indexDocument.Set("_isLargeDocument", BsonConversion.ToBsonValue(true));
+        return indexDocument;
+    }
+
+    private bool TryMaterializeLargeDocument(BsonDocument storedDocument, out BsonDocument materializedDocument, out uint indexPageId, out int largeDocumentSize)
+    {
+        materializedDocument = storedDocument;
+        indexPageId = 0;
+        largeDocumentSize = 0;
+
+        if (!storedDocument.TryGetValue("_isLargeDocument", out var flagValue) ||
+            flagValue is not BsonBoolean { Value: true })
+        {
+            return false;
+        }
+
+        if (!storedDocument.TryGetValue("_largeDocumentIndex", out var indexValue) || indexValue.IsNull)
+        {
+            throw new InvalidOperationException("Large document metadata is missing '_largeDocumentIndex'.");
+        }
+
+        indexPageId = indexValue switch
+        {
+            BsonInt32 int32 => unchecked((uint)int32.Value),
+            BsonInt64 int64 => unchecked((uint)int64.Value),
+            BsonDouble dbl => unchecked((uint)dbl.Value),
+            _ => (uint)indexValue.ToUInt32(CultureInfo.InvariantCulture)
+        };
+
+        if (storedDocument.TryGetValue("_largeDocumentSize", out var sizeValue) && !sizeValue.IsNull)
+        {
+            largeDocumentSize = sizeValue switch
+            {
+                BsonInt32 int32 => int32.Value,
+                BsonInt64 int64 => (int)int64.Value,
+                BsonDouble dbl => System.Convert.ToInt32(dbl.Value, CultureInfo.InvariantCulture),
+                _ => sizeValue.ToInt32(CultureInfo.InvariantCulture)
+            };
+        }
+
+        var largeDocumentBytes = _largeDocumentStorage.ReadLargeDocument(indexPageId);
+        materializedDocument = BsonSerializer.DeserializeDocument(largeDocumentBytes);
+        return true;
+    }
+
     /// <summary>
     /// 插入大文档（跨页面存储）
     /// </summary>
     private BsonValue InsertLargeDocument(string collectionName, BsonDocument document, byte[] documentBytes, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
     {
+        return InsertLargeDocumentCore(collectionName, document, documentBytes, id, collectionState, indexManager, updateIndexes, persistPage: true, updateHeader: true, writeHeader: true);
+    }
+
+    private BsonValue InsertLargeDocumentCore(string collectionName, BsonDocument document, byte[] documentBytes, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes, bool persistPage, bool updateHeader, bool writeHeader)
+    {
         try
         {
-            // 存储大文档并获取索引页面ID
             var largeDocumentIndexPageId = _largeDocumentStorage.StoreLargeDocument(documentBytes, collectionName);
-
-            // 存储大文档索引页面ID作为特殊文档
-            var indexDocument = new BsonDocument
-            {
-                ["_id"] = id,
-                ["_collection"] = collectionName,
-                ["_largeDocumentIndex"] = largeDocumentIndexPageId,
-                ["_largeDocumentSize"] = documentBytes.Length,
-                ["_isLargeDocument"] = true
-            };
-
+            var indexDocument = CreateLargeDocumentIndexDocument(id, collectionName, largeDocumentIndexPageId, documentBytes.Length);
             var indexDocumentBytes = BsonSerializer.SerializeDocument(indexDocument);
             var requiredSize = GetEntrySize(indexDocumentBytes.Length);
 
@@ -872,7 +931,10 @@ public sealed class TinyDbEngine : IDisposable
                     state.PageId = page.PageID;
                 }
 
-                PersistPage(page);
+                if (persistPage)
+                {
+                    PersistPage(page);
+                }
             }
 
             if (TryGetDocumentKey(id, out var documentKey))
@@ -880,12 +942,15 @@ public sealed class TinyDbEngine : IDisposable
                 collectionState.DocumentLocations[documentKey] = new DocumentLocation(pageId, entryIndex);
             }
 
-            if (isNewPage)
+            if (isNewPage && updateHeader)
             {
                 lock (_lock)
                 {
                     _header.UsedPages++;
-                    WriteHeader();
+                    if (writeHeader)
+                    {
+                        WriteHeader();
+                    }
                 }
             }
 
@@ -914,6 +979,11 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     private BsonValue InsertRegularDocument(string collectionName, BsonDocument document, byte[] documentBytes, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
     {
+        return InsertRegularDocumentCore(collectionName, document, documentBytes, id, collectionState, indexManager, updateIndexes, persistPage: true, updateHeader: true, writeHeader: true);
+    }
+
+    private BsonValue InsertRegularDocumentCore(string collectionName, BsonDocument document, byte[] documentBytes, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes, bool persistPage, bool updateHeader, bool writeHeader)
+    {
         var requiredSize = GetEntrySize(documentBytes.Length);
 
         var state = collectionState.PageState;
@@ -938,7 +1008,10 @@ public sealed class TinyDbEngine : IDisposable
                 state.PageId = page.PageID;
             }
 
-            PersistPage(page);
+            if (persistPage)
+            {
+                PersistPage(page);
+            }
         }
 
         if (TryGetDocumentKey(id, out var documentKey))
@@ -946,12 +1019,15 @@ public sealed class TinyDbEngine : IDisposable
             collectionState.DocumentLocations[documentKey] = new DocumentLocation(pageId, entryIndex);
         }
 
-        if (isNewPage)
+        if (isNewPage && updateHeader)
         {
             lock (_lock)
             {
                 _header.UsedPages++;
-                WriteHeader();
+                if (writeHeader)
+                {
+                    WriteHeader();
+                }
             }
         }
 
@@ -1021,7 +1097,15 @@ public sealed class TinyDbEngine : IDisposable
             offset += documentLength;
 
             var document = BsonSerializer.DeserializeDocument(documentBytes);
-            documents.Add(new PageDocumentEntry(document, documentBytes));
+
+            if (TryMaterializeLargeDocument(document, out var materializedDocument, out var indexPageId, out var largeDocumentSize))
+            {
+                documents.Add(new PageDocumentEntry(materializedDocument, documentBytes, true, indexPageId, largeDocumentSize));
+            }
+            else
+            {
+                documents.Add(new PageDocumentEntry(document, documentBytes));
+            }
         }
 
         return documents;
@@ -1131,55 +1215,59 @@ public sealed class TinyDbEngine : IDisposable
         var totalPages = _pageManager.TotalPages;
         var candidatePageId = state.PageState.PageId;
 
-        for (uint pageId = 1; pageId <= totalPages; pageId++)
+        var pageState = state.PageState;
+        lock (pageState.SyncRoot)
         {
-            Page page;
-            try
+            for (uint pageId = 1; pageId <= totalPages; pageId++)
             {
-                page = _pageManager.GetPage(pageId);
-            }
-            catch
-            {
-                continue;
-            }
-
-            if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
-            {
-                continue;
-            }
-
-            var entries = ReadDocumentsFromPage(page);
-            var hasCollectionDocument = false;
-            for (ushort entryIndex = 0; entryIndex < entries.Count; entryIndex++)
-            {
-                var entry = entries[entryIndex];
-                if (!DocumentBelongsToCollection(entry.Document, collectionName))
+                Page page;
+                try
+                {
+                    page = _pageManager.GetPage(pageId);
+                }
+                catch
                 {
                     continue;
                 }
 
-                hasCollectionDocument = true;
-
-                if (TryGetDocumentKey(entry.Id, out var key))
+                if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
                 {
-                    state.DocumentLocations[key] = new DocumentLocation(page.PageID, entryIndex);
+                    continue;
                 }
 
-                if (entry.Id.Equals(id))
+                var entries = ReadDocumentsFromPage(page);
+                var hasCollectionDocument = false;
+                for (ushort entryIndex = 0; entryIndex < entries.Count; entryIndex++)
                 {
-                    if (page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
+                    var entry = entries[entryIndex];
+                    if (!DocumentBelongsToCollection(entry.Document, collectionName))
                     {
-                        candidatePageId = page.PageID;
+                        continue;
                     }
 
-                    state.PageState.PageId = candidatePageId;
-                    return entry.Document;
-                }
-            }
+                    hasCollectionDocument = true;
 
-            if (hasCollectionDocument && page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
-            {
-                candidatePageId = page.PageID;
+                    if (TryGetDocumentKey(entry.Id, out var key))
+                    {
+                        state.DocumentLocations[key] = new DocumentLocation(page.PageID, entryIndex);
+                    }
+
+                    if (entry.Id.Equals(id))
+                    {
+                        if (page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
+                        {
+                            candidatePageId = page.PageID;
+                        }
+
+                        state.PageState.PageId = candidatePageId;
+                        return entry.Document;
+                    }
+                }
+
+                if (hasCollectionDocument && page.Header.FreeBytes >= MinimumFreeSpaceThreshold)
+                {
+                    candidatePageId = page.PageID;
+                }
             }
         }
 
@@ -1316,51 +1404,55 @@ public sealed class TinyDbEngine : IDisposable
             list.Add(kvp);
         }
 
-        foreach (var group in pageGroups)
+        var pageState = state.PageState;
+        lock (pageState.SyncRoot)
         {
-            var pageId = group.Key;
-            var locations = group.Value;
+            foreach (var group in pageGroups)
+            {
+                var pageId = group.Key;
+                var locations = group.Value;
 
-            Page page;
-            try
-            {
-                page = _pageManager.GetPage(pageId);
-            }
-            catch
-            {
-                foreach (var location in locations)
+                Page page;
+                try
                 {
-                    state.DocumentLocations.TryRemove(location.Key, out _);
+                    page = _pageManager.GetPage(pageId);
                 }
-                continue;
-            }
-
-            if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
-            {
-                foreach (var location in locations)
+                catch
                 {
-                    state.DocumentLocations.TryRemove(location.Key, out _);
-                }
-                continue;
-            }
-
-            var entries = ReadDocumentsFromPage(page);
-            foreach (var location in locations)
-            {
-                if (location.Value.EntryIndex >= entries.Count)
-                {
-                    state.DocumentLocations.TryRemove(location.Key, out _);
+                    foreach (var location in locations)
+                    {
+                        state.DocumentLocations.TryRemove(location.Key, out _);
+                    }
                     continue;
                 }
 
-                var entry = entries[location.Value.EntryIndex];
-                if (!DocumentBelongsToCollection(entry.Document, collectionName))
+                if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
                 {
-                    state.DocumentLocations.TryRemove(location.Key, out _);
+                    foreach (var location in locations)
+                    {
+                        state.DocumentLocations.TryRemove(location.Key, out _);
+                    }
                     continue;
                 }
 
-                documents.Add(entry.Document);
+                var entries = ReadDocumentsFromPage(page);
+                foreach (var location in locations)
+                {
+                    if (location.Value.EntryIndex >= entries.Count)
+                    {
+                        state.DocumentLocations.TryRemove(location.Key, out _);
+                        continue;
+                    }
+
+                    var entry = entries[location.Value.EntryIndex];
+                    if (!DocumentBelongsToCollection(entry.Document, collectionName))
+                    {
+                        state.DocumentLocations.TryRemove(location.Key, out _);
+                        continue;
+                    }
+
+                    documents.Add(entry.Document);
+                }
             }
         }
 
@@ -1401,6 +1493,11 @@ public sealed class TinyDbEngine : IDisposable
         BsonDocument? newDocumentSnapshot = null;
         var updated = false;
 
+        PageDocumentEntry oldEntry;
+        uint? newLargeDocumentIndexPageId = null;
+        var requiresLargeStorage = false;
+        var rewriteCompleted = false;
+
         lock (state.SyncRoot)
         {
             if (!TryResolveDocumentLocation(collectionName, collectionState, id, documentKey, out var page, out var entries, out var entryIndex))
@@ -1408,7 +1505,7 @@ public sealed class TinyDbEngine : IDisposable
                 return 0;
             }
 
-            var oldEntry = entries[entryIndex];
+            oldEntry = entries[entryIndex];
             var updatedDocument = document;
 
             if (!DocumentBelongsToCollection(updatedDocument, collectionName))
@@ -1422,18 +1519,64 @@ public sealed class TinyDbEngine : IDisposable
             }
 
             var newDocumentBytes = BsonSerializer.SerializeDocument(updatedDocument);
-            if (GetEntrySize(newDocumentBytes.Length) > page.DataSize)
+            requiresLargeStorage = LargeDocumentStorage.RequiresLargeDocumentStorage(newDocumentBytes.Length, GetMaxDocumentSize());
+
+            try
             {
-                throw new InvalidOperationException($"Document is too large: {newDocumentBytes.Length} bytes, max {page.DataSize - DocumentLengthPrefixSize} bytes");
+                if (requiresLargeStorage)
+                {
+                    newLargeDocumentIndexPageId = _largeDocumentStorage.StoreLargeDocument(newDocumentBytes, collectionName);
+                    var indexDocument = CreateLargeDocumentIndexDocument(id, collectionName, newLargeDocumentIndexPageId.Value, newDocumentBytes.Length);
+                    var indexDocumentBytes = BsonSerializer.SerializeDocument(indexDocument);
+                    entries[entryIndex] = new PageDocumentEntry(updatedDocument, indexDocumentBytes, true, newLargeDocumentIndexPageId.Value, newDocumentBytes.Length);
+                }
+                else
+                {
+                    if (GetEntrySize(newDocumentBytes.Length) > page.DataSize)
+                    {
+                        throw new InvalidOperationException($"Document is too large: {newDocumentBytes.Length} bytes, max {page.DataSize - DocumentLengthPrefixSize} bytes");
+                    }
+
+                    entries[entryIndex] = new PageDocumentEntry(updatedDocument, newDocumentBytes);
+                }
+
+                RewritePageWithDocuments(collectionName, collectionState, page, entries);
+
+                oldDocumentSnapshot = oldEntry.Document;
+                newDocumentSnapshot = updatedDocument;
+                updated = true;
+                rewriteCompleted = true;
             }
+            finally
+            {
+                if (!rewriteCompleted && newLargeDocumentIndexPageId.HasValue)
+                {
+                    try
+                    {
+                        _largeDocumentStorage.DeleteLargeDocument(newLargeDocumentIndexPageId.Value);
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        Console.WriteLine($"Warning: Failed to cleanup large document {id} after update error: {cleanupEx.Message}");
+                    }
+                }
+            }
+        }
 
-            entries[entryIndex] = new PageDocumentEntry(updatedDocument, newDocumentBytes);
-
-            RewritePageWithDocuments(collectionName, collectionState, page, entries);
-
-            oldDocumentSnapshot = oldEntry.Document;
-            newDocumentSnapshot = updatedDocument;
-            updated = true;
+        if (updated && oldEntry.IsLargeDocument)
+        {
+            var shouldDeleteOld = !requiresLargeStorage || (newLargeDocumentIndexPageId.HasValue && newLargeDocumentIndexPageId.Value != oldEntry.LargeDocumentIndexPageId);
+            if (shouldDeleteOld)
+            {
+                try
+                {
+                    _largeDocumentStorage.DeleteLargeDocument(oldEntry.LargeDocumentIndexPageId);
+                }
+                catch (Exception cleanupEx)
+                {
+                    Console.WriteLine($"Warning: Failed to delete obsolete large document {id}: {cleanupEx.Message}");
+                }
+            }
         }
 
         if (!updated)
@@ -1527,6 +1670,18 @@ public sealed class TinyDbEngine : IDisposable
         if (deletedEntry == null)
         {
             return 0;
+        }
+
+        if (deletedEntry.Value.IsLargeDocument)
+        {
+            try
+            {
+                _largeDocumentStorage.DeleteLargeDocument(deletedEntry.Value.LargeDocumentIndexPageId);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to delete large document payload for {id}: {ex.Message}");
+            }
         }
 
         try
@@ -1783,6 +1938,18 @@ public sealed class TinyDbEngine : IDisposable
             return 0;
         }
 
+        if (deletedEntry.Value.IsLargeDocument)
+        {
+            try
+            {
+                _largeDocumentStorage.DeleteLargeDocument(deletedEntry.Value.LargeDocumentIndexPageId);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: Failed to delete large document payload for {id} during rollback: {ex.Message}");
+            }
+        }
+
         try
         {
             indexManager?.DeleteDocument(deletedEntry.Value.Document, id);
@@ -1831,6 +1998,11 @@ public sealed class TinyDbEngine : IDisposable
         BsonDocument? newDocumentSnapshot = null;
         var updated = false;
 
+        PageDocumentEntry oldEntry;
+        uint? newLargeDocumentIndexPageId = null;
+        var requiresLargeStorage = false;
+        var rewriteCompleted = false;
+
         lock (state.SyncRoot)
         {
             if (!TryResolveDocumentLocation(collectionName, collectionState, id, documentKey, out var page, out var entries, out var entryIndex))
@@ -1838,7 +2010,7 @@ public sealed class TinyDbEngine : IDisposable
                 return 0;
             }
 
-            var oldEntry = entries[entryIndex];
+            oldEntry = entries[entryIndex];
             var updatedDocument = document;
 
             if (!DocumentBelongsToCollection(updatedDocument, collectionName))
@@ -1852,18 +2024,64 @@ public sealed class TinyDbEngine : IDisposable
             }
 
             var newDocumentBytes = BsonSerializer.SerializeDocument(updatedDocument);
-            if (GetEntrySize(newDocumentBytes.Length) > page.DataSize)
+            requiresLargeStorage = LargeDocumentStorage.RequiresLargeDocumentStorage(newDocumentBytes.Length, GetMaxDocumentSize());
+
+            try
             {
-                throw new InvalidOperationException($"Document is too large: {newDocumentBytes.Length} bytes, max {page.DataSize - DocumentLengthPrefixSize} bytes");
+                if (requiresLargeStorage)
+                {
+                    newLargeDocumentIndexPageId = _largeDocumentStorage.StoreLargeDocument(newDocumentBytes, collectionName);
+                    var indexDocument = CreateLargeDocumentIndexDocument(id, collectionName, newLargeDocumentIndexPageId.Value, newDocumentBytes.Length);
+                    var indexDocumentBytes = BsonSerializer.SerializeDocument(indexDocument);
+                    entries[entryIndex] = new PageDocumentEntry(updatedDocument, indexDocumentBytes, true, newLargeDocumentIndexPageId.Value, newDocumentBytes.Length);
+                }
+                else
+                {
+                    if (GetEntrySize(newDocumentBytes.Length) > page.DataSize)
+                    {
+                        throw new InvalidOperationException($"Document is too large: {newDocumentBytes.Length} bytes, max {page.DataSize - DocumentLengthPrefixSize} bytes");
+                    }
+
+                    entries[entryIndex] = new PageDocumentEntry(updatedDocument, newDocumentBytes);
+                }
+
+                RewritePageWithDocuments(collectionName, collectionState, page, entries);
+
+                oldDocumentSnapshot = oldEntry.Document;
+                newDocumentSnapshot = updatedDocument;
+                updated = true;
+                rewriteCompleted = true;
             }
+            finally
+            {
+                if (!rewriteCompleted && newLargeDocumentIndexPageId.HasValue)
+                {
+                    try
+                    {
+                        _largeDocumentStorage.DeleteLargeDocument(newLargeDocumentIndexPageId.Value);
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        Console.WriteLine($"Warning: Failed to cleanup large document {id} after update rollback error: {cleanupEx.Message}");
+                    }
+                }
+            }
+        }
 
-            entries[entryIndex] = new PageDocumentEntry(updatedDocument, newDocumentBytes);
-
-            RewritePageWithDocuments(collectionName, collectionState, page, entries);
-
-            oldDocumentSnapshot = oldEntry.Document;
-            newDocumentSnapshot = updatedDocument;
-            updated = true;
+        if (updated && oldEntry.IsLargeDocument)
+        {
+            var shouldDeleteOld = !requiresLargeStorage || (newLargeDocumentIndexPageId.HasValue && newLargeDocumentIndexPageId.Value != oldEntry.LargeDocumentIndexPageId);
+            if (shouldDeleteOld)
+            {
+                try
+                {
+                    _largeDocumentStorage.DeleteLargeDocument(oldEntry.LargeDocumentIndexPageId);
+                }
+                catch (Exception cleanupEx)
+                {
+                    Console.WriteLine($"Warning: Failed to delete obsolete large document {id} during rollback: {cleanupEx.Message}");
+                }
+            }
         }
 
         if (!updated)
@@ -1910,60 +2128,13 @@ public sealed class TinyDbEngine : IDisposable
     private BsonValue InsertPreparedDocumentInternal(string collectionName, BsonDocument document, BsonValue id, CollectionState collectionState, IndexManager? indexManager, bool updateIndexes)
     {
         var documentBytes = BsonSerializer.SerializeDocument(document);
-        var requiredSize = GetEntrySize(documentBytes.Length);
 
-        var state = collectionState.PageState;
-        bool isNewPage;
-        uint pageId;
-        ushort entryIndex;
-
-        lock (state.SyncRoot)
+        if (LargeDocumentStorage.RequiresLargeDocumentStorage(documentBytes.Length, GetMaxDocumentSize()))
         {
-            Page page;
-            (page, isNewPage) = GetWritableDataPageLocked(collectionName, state, requiredSize);
-            entryIndex = page.Header.ItemCount;
-            AppendDocumentToPage(page, documentBytes);
-            pageId = page.PageID;
-
-            if (page.Header.FreeBytes < MinimumFreeSpaceThreshold)
-            {
-                state.PageId = 0;
-            }
-            else
-            {
-                state.PageId = page.PageID;
-            }
-
-            // 注意：这里不调用PersistPage(page)，因为这是事务回滚操作
+            return InsertLargeDocumentCore(collectionName, document, documentBytes, id, collectionState, indexManager, updateIndexes, persistPage: true, updateHeader: true, writeHeader: false);
         }
 
-        if (TryGetDocumentKey(id, out var documentKey))
-        {
-            collectionState.DocumentLocations[documentKey] = new DocumentLocation(pageId, entryIndex);
-        }
-
-        if (isNewPage)
-        {
-            lock (_lock)
-            {
-                _header.UsedPages++;
-                // 注意：这里不调用WriteHeader()，因为这是事务回滚操作
-            }
-        }
-
-        if (updateIndexes && indexManager != null)
-        {
-            try
-            {
-                indexManager.InsertDocument(document, id);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
-            }
-        }
-
-        return id;
+        return InsertRegularDocumentCore(collectionName, document, documentBytes, id, collectionState, indexManager, updateIndexes, persistPage: true, updateHeader: true, writeHeader: false);
     }
 
     /// <summary>

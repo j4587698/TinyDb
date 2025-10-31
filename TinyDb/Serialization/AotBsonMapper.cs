@@ -268,7 +268,22 @@ public static class AotBsonMapper
                 }
                 else
                 {
-                    value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
+                    try
+                    {
+                        value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 如果BsonConversion无法处理复杂类型，使用FromDocument递归处理
+                        if (bsonValue is BsonDocument innerDoc && IsComplexObjectType(property.PropertyType))
+                        {
+                            value = FromDocument(property.PropertyType, innerDoc);
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
                 }
 
                 property.SetValue(entity, value);
@@ -307,7 +322,30 @@ public static class AotBsonMapper
                 }
                 else
                 {
-                    value = BsonConversion.FromBsonValue(bsonValue, field.FieldType);
+                    try
+                    {
+                        value = BsonConversion.FromBsonValue(bsonValue, field.FieldType);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 如果BsonConversion无法处理复杂类型，使用FromDocument递归处理
+                        if (bsonValue is BsonDocument innerDoc && IsComplexObjectType(field.FieldType))
+                        {
+                            value = FromDocument(field.FieldType, innerDoc);
+                        }
+                        else if (bsonValue is BsonArray array && IsCollectionType(field.FieldType))
+                        {
+                            value = ConvertBsonArrayToCollection(array, field.FieldType);
+                        }
+                        else if (bsonValue is BsonDocument dictionaryDoc && IsDictionaryType(field.FieldType))
+                        {
+                            value = ConvertBsonDocumentToDictionary(dictionaryDoc, field.FieldType);
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
                 }
 
                 field.SetValue(entity, value);
@@ -364,7 +402,22 @@ public static class AotBsonMapper
                 }
                 else
                 {
-                    value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
+                    try
+                    {
+                        value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // 如果BsonConversion无法处理复杂类型，使用FromDocument递归处理
+                        if (bsonValue is BsonDocument innerDoc && IsComplexObjectType(property.PropertyType))
+                        {
+                            value = FromDocument(property.PropertyType, innerDoc);
+                        }
+                        else
+                        {
+                            throw;
+                        }
+                    }
                 }
 
                 property.SetValue(boxedEntity, value);
@@ -472,9 +525,10 @@ public static class AotBsonMapper
     /// </summary>
     private static object FromDocument(Type targetType, BsonDocument document)
     {
-        var method = typeof(AotBsonMapper).GetMethod("FromDocument", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-        var genericMethod = method?.MakeGenericMethod(targetType);
-        return genericMethod?.Invoke(null, new[] { document }) ?? throw new InvalidOperationException($"Failed to create FromDocument method for type {targetType}");
+        // AOT环境下直接使用FallbackFromDocument，避免泛型方法调用失败
+        var fallbackMethod = typeof(AotBsonMapper).GetMethod("FallbackFromDocument", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var genericFallbackMethod = fallbackMethod?.MakeGenericMethod(targetType);
+        return genericFallbackMethod?.Invoke(null, new[] { document }) ?? throw new InvalidOperationException($"Failed to create FallbackFromDocument method for type {targetType}");
     }
 
     /// <summary>

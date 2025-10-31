@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using TinyDb.Bson;
@@ -98,5 +99,69 @@ public class BTreeIndexExtendedTests
 
         await Assert.That(_index.EntryCount).IsEqualTo(0);
         await Assert.That(_index.Find(key)).IsEmpty();
+    }
+
+    [Test]
+    public async Task CompositeKeys_ShouldMaintainLexicographicalOrderInRange()
+    {
+        using var compositeIndex = new BTreeIndex("composite_index", new[] { "Category", "Sku" }, false, 4);
+
+        var entries = new (IndexKey Key, BsonValue DocumentId)[]
+        {
+            (new IndexKey(new BsonValue[] { new BsonString("A"), new BsonString("001") }), new BsonString("A-001")),
+            (new IndexKey(new BsonValue[] { new BsonString("A"), new BsonString("002") }), new BsonString("A-002")),
+            (new IndexKey(new BsonValue[] { new BsonString("B"), new BsonString("001") }), new BsonString("B-001")),
+            (new IndexKey(new BsonValue[] { new BsonString("B"), new BsonString("003") }), new BsonString("B-003")),
+            (new IndexKey(new BsonValue[] { new BsonString("C"), new BsonString("001") }), new BsonString("C-001"))
+        };
+
+        foreach (var (key, documentId) in entries)
+        {
+            await Assert.That(compositeIndex.Insert(key, documentId)).IsTrue();
+        }
+
+        var rangeResults = compositeIndex.FindRange(
+                new IndexKey(new BsonValue[] { new BsonString("A"), new BsonString("002") }),
+                new IndexKey(new BsonValue[] { new BsonString("B"), new BsonString("003") }))
+            .OfType<BsonString>()
+            .Select(v => v.Value)
+            .ToList();
+
+        await Assert.That(rangeResults.Count).IsEqualTo(3);
+        await Assert.That(rangeResults[0]).IsEqualTo("A-002");
+        await Assert.That(rangeResults[1]).IsEqualTo("B-001");
+        await Assert.That(rangeResults[2]).IsEqualTo("B-003");
+    }
+
+    [Test]
+    public async Task FindRange_ShouldTraverseMultipleLeafNodes()
+    {
+        var insertedIds = new List<string>();
+        for (var i = 1; i <= 12; i++)
+        {
+            var key = new IndexKey(new BsonValue[] { new BsonInt32(i) });
+            var documentId = new BsonString($"doc_{i}");
+            _index.Insert(key, documentId);
+            insertedIds.Add(documentId.Value);
+        }
+
+        var results = _index.FindRange(
+                new IndexKey(new BsonValue[] { new BsonInt32(3) }),
+                new IndexKey(new BsonValue[] { new BsonInt32(9) }))
+            .OfType<BsonString>()
+            .Select(v => v.Value)
+            .ToList();
+
+        var expected = insertedIds.Where(id =>
+        {
+            var number = int.Parse(id.Split('_')[1], CultureInfo.InvariantCulture);
+            return number >= 3 && number <= 9;
+        }).ToList();
+
+        await Assert.That(results.Count).IsEqualTo(expected.Count);
+        for (var i = 0; i < expected.Count; i++)
+        {
+            await Assert.That(results[i]).IsEqualTo(expected[i]);
+        }
     }
 }

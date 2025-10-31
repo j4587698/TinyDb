@@ -239,6 +239,8 @@ public sealed class BTreeNode
             _children.Add(child);
         }
 
+        child.Parent = this;
+
         return _keys.Count > MaxKeys;
     }
 
@@ -356,6 +358,10 @@ public sealed class BTreeNode
             // 内部节点合并
             _keys.Add(separatorKey);
             _keys.AddRange(other._keys);
+            foreach (var child in other._children)
+            {
+                child.Parent = this;
+            }
             _children.AddRange(other._children);
         }
     }
@@ -379,31 +385,38 @@ public sealed class BTreeNode
             // 叶子节点借键
             if (isLeftSibling)
             {
-                // 从右兄弟借第一个键
-                var borrowedKey = sibling._keys[0];
-                var borrowedDocs = sibling._documentIdLists[0];
+                // 从左兄弟借最后一个键
+                var borrowedIndex = sibling._keys.Count - 1;
+                if (borrowedIndex < 0)
+                    throw new InvalidOperationException("Left sibling has no keys to borrow.");
+
+                var borrowedKey = sibling._keys[borrowedIndex];
+                var borrowedDocs = sibling._documentIdLists[borrowedIndex];
+
+                sibling._keys.RemoveAt(borrowedIndex);
+                sibling._documentIdLists.RemoveAt(borrowedIndex);
 
                 _keys.Insert(0, borrowedKey);
                 _documentIdLists.Insert(0, borrowedDocs);
 
-                sibling._keys.RemoveAt(0);
-                sibling._documentIdLists.RemoveAt(0);
-
-                newSeparatorKey = sibling._keys.Count > 0 ? sibling._keys[0] : separatorKey;
+                newSeparatorKey = _keys[0];
             }
             else
             {
-                // 从左兄弟借第一个键（最接近当前节点的键）
+                // 从右兄弟借第一个键
+                if (sibling._keys.Count == 0)
+                    throw new InvalidOperationException("Right sibling has no keys to borrow.");
+
                 var borrowedKey = sibling._keys[0];
                 var borrowedDocs = sibling._documentIdLists[0];
+
+                sibling._keys.RemoveAt(0);
+                sibling._documentIdLists.RemoveAt(0);
 
                 _keys.Add(borrowedKey);
                 _documentIdLists.Add(borrowedDocs);
 
-                sibling._keys.RemoveAt(0);
-                sibling._documentIdLists.RemoveAt(0);
-
-                newSeparatorKey = borrowedKey;
+                newSeparatorKey = sibling._keys.Count > 0 ? sibling._keys[0] : borrowedKey;
             }
         }
         else
@@ -411,31 +424,43 @@ public sealed class BTreeNode
             // 内部节点借键
             if (isLeftSibling)
             {
-                // 从右兄弟借第一个键和子节点
-                var borrowedKey = sibling._keys[0];
-                var borrowedChild = sibling._children[0];
+                // 从左兄弟借最后一个键和子节点
+                var borrowedKeyIndex = sibling._keys.Count - 1;
+                var borrowedChildIndex = sibling._children.Count - 1;
+                if (borrowedKeyIndex < 0 || borrowedChildIndex < 0)
+                    throw new InvalidOperationException("Left sibling has no entries to borrow.");
+
+                var borrowedKey = sibling._keys[borrowedKeyIndex];
+                var borrowedChild = sibling._children[borrowedChildIndex];
+
+                sibling._keys.RemoveAt(borrowedKeyIndex);
+                sibling._children.RemoveAt(borrowedChildIndex);
+
+                borrowedChild.Parent = this;
 
                 _keys.Insert(0, separatorKey);
                 _children.Insert(0, borrowedChild);
 
-                sibling._keys.RemoveAt(0);
-                sibling._children.RemoveAt(0);
-
-                newSeparatorKey = sibling._keys.Count > 0 ? sibling._keys[0] : separatorKey;
+                newSeparatorKey = borrowedKey;
             }
             else
             {
-                // 从左兄弟借最后一个键和子节点
-                var borrowedKey = sibling._keys[^1];
-                var borrowedChild = sibling._children[^1];
+                // 从右兄弟借第一个键和子节点
+                if (sibling._keys.Count == 0 || sibling._children.Count == 0)
+                    throw new InvalidOperationException("Right sibling has no entries to borrow.");
+
+                var borrowedKey = sibling._keys[0];
+                var borrowedChild = sibling._children[0];
+
+                sibling._keys.RemoveAt(0);
+                sibling._children.RemoveAt(0);
+
+                borrowedChild.Parent = this;
 
                 _keys.Add(separatorKey);
                 _children.Add(borrowedChild);
 
-                sibling._keys.RemoveAt(sibling._keys.Count - 1);
-                sibling._children.RemoveAt(sibling._children.Count - 1);
-
-                newSeparatorKey = borrowedKey;
+                newSeparatorKey = sibling._keys.Count > 0 ? sibling._keys[0] : borrowedKey;
             }
         }
 

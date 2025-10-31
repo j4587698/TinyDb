@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Index;
 using TUnit.Assertions;
@@ -345,8 +348,112 @@ public class BTreeNodeTests
         // Assert
         await Assert.That(node1.KeyCount).IsEqualTo(2);
         await Assert.That(node2.KeyCount).IsEqualTo(1);
-        await Assert.That(newSeparator).IsEqualTo(new IndexKey(new BsonString("b")));
+        await Assert.That(newSeparator).IsEqualTo(new IndexKey(new BsonString("c")));
     }
+
+    [Test]
+    public async Task BorrowFromSibling_Leaf_WithLeftSibling_Should_Work()
+    {
+        // Arrange
+        var target = new BTreeNode(4, true);
+        var leftSibling = new BTreeNode(4, true);
+        var separator = new IndexKey(new BsonString("separator"));
+
+        leftSibling.Insert(new IndexKey(new BsonString("a")), new BsonInt32(1));
+        leftSibling.Insert(new IndexKey(new BsonString("b")), new BsonInt32(2));
+        leftSibling.Insert(new IndexKey(new BsonString("c")), new BsonInt32(3));
+        target.Insert(new IndexKey(new BsonString("d")), new BsonInt32(4));
+
+        // Act
+        var newSeparator = target.BorrowFromSibling(leftSibling, true, separator);
+
+        // Assert
+        await Assert.That(target.KeyCount).IsEqualTo(2);
+        await Assert.That(leftSibling.KeyCount).IsEqualTo(2);
+        await Assert.That(((BsonString)target.GetKey(0).Values.First()).Value).IsEqualTo("c");
+        await Assert.That(newSeparator).IsEqualTo(new IndexKey(new BsonString("c")));
+    }
+
+    [Test]
+    public async Task BorrowFromSibling_Internal_WithLeftSibling_Should_AdoptBorrowedKey()
+    {
+        // Arrange
+        var target = new BTreeNode(4, false);
+        var leftSibling = new BTreeNode(4, false);
+        var borrowedChild = new BTreeNode(4, true);
+        var leftChild0 = new BTreeNode(4, true);
+        var leftChild1 = new BTreeNode(4, true);
+        var targetChild0 = new BTreeNode(4, true);
+        var targetChild1 = new BTreeNode(4, true);
+        var separator = new IndexKey(new BsonInt32(4));
+
+        SetChildren(leftSibling, leftChild0, leftChild1, borrowedChild);
+        SetKeys(leftSibling, new IndexKey(new BsonInt32(2)), new IndexKey(new BsonInt32(3)));
+        leftChild0.Parent = leftSibling;
+        leftChild1.Parent = leftSibling;
+        borrowedChild.Parent = leftSibling;
+
+        SetChildren(target, targetChild0, targetChild1);
+        SetKeys(target, new IndexKey(new BsonInt32(5)));
+        targetChild0.Parent = target;
+        targetChild1.Parent = target;
+
+        // Act
+        var newSeparator = target.BorrowFromSibling(leftSibling, true, separator);
+
+        // Assert
+        var leftValues = GetKeyValues(leftSibling);
+        await Assert.That(leftValues.Length).IsEqualTo(1);
+        await Assert.That(leftValues[0]).IsEqualTo(2);
+
+        var targetValues = GetKeyValues(target);
+        await Assert.That(targetValues.Length).IsEqualTo(2);
+        await Assert.That(targetValues[0]).IsEqualTo(4);
+        await Assert.That(targetValues[1]).IsEqualTo(5);
+        await Assert.That(newSeparator).IsEqualTo(new IndexKey(new BsonInt32(3)));
+        await Assert.That(target.ChildCount).IsEqualTo(3);
+        await Assert.That(target.GetChild(0)).IsSameReferenceAs(borrowedChild);
+        await Assert.That(target.GetChild(0).Parent).IsSameReferenceAs(target);
+    }
+
+    [Test]
+    public async Task BorrowFromSibling_Internal_WithRightSibling_Should_UpdateSeparator()
+    {
+        // Arrange
+        var target = new BTreeNode(4, false);
+        var rightSibling = new BTreeNode(4, false);
+        var separator = new IndexKey(new BsonInt32(4));
+
+        var targetChild0 = new BTreeNode(4, true);
+        var targetChild1 = new BTreeNode(4, true);
+        SetChildren(target, targetChild0, targetChild1);
+        SetKeys(target, new IndexKey(new BsonInt32(2)));
+        targetChild0.Parent = target;
+        targetChild1.Parent = target;
+
+        var borrowedChild = new BTreeNode(4, true);
+        var rightChild1 = new BTreeNode(4, true);
+        SetChildren(rightSibling, borrowedChild, rightChild1);
+        SetKeys(rightSibling, new IndexKey(new BsonInt32(6)));
+        borrowedChild.Parent = rightSibling;
+        rightChild1.Parent = rightSibling;
+
+        // Act
+        var newSeparator = target.BorrowFromSibling(rightSibling, false, separator);
+
+        // Assert
+        var targetValues = GetKeyValues(target);
+        await Assert.That(targetValues.Length).IsEqualTo(2);
+        await Assert.That(targetValues[0]).IsEqualTo(2);
+        await Assert.That(targetValues[1]).IsEqualTo(4);
+
+        await Assert.That(rightSibling.KeyCount).IsEqualTo(0);
+        await Assert.That(newSeparator).IsEqualTo(new IndexKey(new BsonInt32(6)));
+        await Assert.That(target.ChildCount).IsEqualTo(3);
+        await Assert.That(target.GetChild(target.ChildCount - 1)).IsSameReferenceAs(borrowedChild);
+        await Assert.That(borrowedChild.Parent).IsSameReferenceAs(target);
+    }
+
 
     [Test]
     public async Task IsFull_Should_Return_True_When_MaxKeys_Reached()
@@ -439,5 +546,30 @@ public class BTreeNodeTests
         // Assert
         await Assert.That(node.KeyCount).IsEqualTo(1);
         await Assert.That(node.GetKey(0)).IsEqualTo(key2);
+    }
+
+    private static void SetKeys(BTreeNode node, params IndexKey[] keys)
+    {
+        var keysField = typeof(BTreeNode).GetField("_keys", BindingFlags.NonPublic | BindingFlags.Instance);
+        var list = (List<IndexKey>)(keysField?.GetValue(node) ?? throw new InvalidOperationException("Keys list not found"));
+        list.Clear();
+        list.AddRange(keys);
+    }
+
+    private static void SetChildren(BTreeNode node, params BTreeNode[] children)
+    {
+        var childrenField = typeof(BTreeNode).GetField("_children", BindingFlags.NonPublic | BindingFlags.Instance);
+        var list = (List<BTreeNode>)(childrenField?.GetValue(node) ?? throw new InvalidOperationException("Children list not found"));
+        list.Clear();
+        list.AddRange(children);
+    }
+
+    private static int[] GetKeyValues(BTreeNode node)
+    {
+        return Enumerable.Range(0, node.KeyCount)
+            .Select(i => node.GetKey(i))
+            .Select(k => (BsonInt32)k.Values.First())
+            .Select(v => v.Value)
+            .ToArray();
     }
 }

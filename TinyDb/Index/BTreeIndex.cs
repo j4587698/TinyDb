@@ -201,7 +201,22 @@ public sealed class BTreeIndex : IDisposable
     {
         if (node.IsLeaf)
         {
-            return node.Delete(key, documentId);
+            var previousFirstKey = node.KeyCount > 0 ? node.GetKey(0) : null;
+            var removed = node.Delete(key, documentId);
+            if (removed)
+            {
+                var newFirstKey = node.KeyCount > 0 ? node.GetKey(0) : null;
+                var firstKeyChanged = previousFirstKey == null
+                    ? newFirstKey != null
+                    : newFirstKey == null || !previousFirstKey.Equals(newFirstKey);
+
+                if (firstKeyChanged && node.Parent != null)
+                {
+                    UpdateParentKeys(node.Parent);
+                }
+            }
+
+            return removed;
         }
 
         // 内部节点，找到合适的子节点
@@ -249,6 +264,7 @@ public sealed class BTreeIndex : IDisposable
                 var separatorKey = parent.GetKey(childIndex - 1);
                 var newSeparatorKey = parent.GetChild(childIndex).BorrowFromSibling(leftSibling, true, separatorKey);
                 parent.SetKey(childIndex - 1, newSeparatorKey);
+                UpdateParentKeys(parent);
                 return;
             }
         }
@@ -261,12 +277,14 @@ public sealed class BTreeIndex : IDisposable
                 var separatorKey = parent.GetKey(childIndex);
                 var newSeparatorKey = parent.GetChild(childIndex).BorrowFromSibling(rightSibling, false, separatorKey);
                 parent.SetKey(childIndex, newSeparatorKey);
+                UpdateParentKeys(parent);
                 return;
             }
         }
 
         // 需要合并
         MergeNodes(parent, childIndex);
+        UpdateParentKeys(parent);
     }
 
     /// <summary>
@@ -295,12 +313,22 @@ public sealed class BTreeIndex : IDisposable
         if (childIndex >= parent.KeyCount)
             return; // 没有分隔键
 
-        var separatorKey = parent.GetKey(childIndex);
+        IndexKey separatorKey;
+        if (rightChild.KeyCount > 0)
+        {
+            separatorKey = rightChild.GetKey(0);
+        }
+        else
+        {
+            separatorKey = parent.GetKey(childIndex);
+        }
 
         leftChild.Merge(rightChild, separatorKey);
+        RecalculateSeparatorKeys(leftChild);
 
         // 从父节点中移除分隔键和右兄弟
         parent.RemoveKeyAt(childIndex);
+        rightChild.Parent = null;
         parent.RemoveChildAt(childIndex + 1);
         _nodeCount--;
 
@@ -308,8 +336,65 @@ public sealed class BTreeIndex : IDisposable
         if (parent == _root && parent.KeyCount == 0 && !parent.IsLeaf)
         {
             _root = leftChild;
+            leftChild.Parent = null;
             _nodeCount--;
         }
+    }
+
+    /// <summary>
+    /// 更新父节点及祖先节点的分隔键
+    /// </summary>
+    /// <param name="node">起始节点</param>
+    private void UpdateParentKeys(BTreeNode node)
+    {
+        var current = node;
+        while (current != null)
+        {
+            RecalculateSeparatorKeys(current);
+            current = current.Parent;
+        }
+    }
+
+    /// <summary>
+    /// 重新计算节点的分隔键
+    /// </summary>
+    /// <param name="node">目标节点</param>
+    private static void RecalculateSeparatorKeys(BTreeNode node)
+    {
+        if (node.IsLeaf || node.ChildCount <= 1)
+            return;
+
+        for (var i = 1; i < node.ChildCount; i++)
+        {
+            var child = node.GetChild(i);
+            var separatorKey = GetLeftmostKey(child);
+            if (separatorKey == null)
+                continue;
+
+            if (i - 1 < node.KeyCount)
+            {
+                node.SetKey(i - 1, separatorKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 获取子树中的最小键
+    /// </summary>
+    /// <param name="node">子树根节点</param>
+    /// <returns>最小键</returns>
+    private static IndexKey? GetLeftmostKey(BTreeNode node)
+    {
+        var current = node;
+        while (!current.IsLeaf)
+        {
+            if (current.ChildCount == 0)
+                return null;
+
+            current = current.GetChild(0);
+        }
+
+        return current.KeyCount > 0 ? current.GetKey(0) : null;
     }
 
     /// <summary>

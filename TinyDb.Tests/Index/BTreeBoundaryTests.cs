@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Index;
 using TUnit.Assertions;
@@ -292,11 +294,147 @@ public class BTreeBoundaryTests
     }
 
     /// <summary>
-    /// 获取树高度的辅助方法
+    /// 删除操作触发合并或借键时，父节点分隔键应即时刷新
     /// </summary>
+    [Test]
+    public async Task Delete_ShouldRefreshSeparators_AfterMergeAndBorrow()
+    {
+        var keys = Enumerable.Range(1, 8).Select(i => new IndexKey(new BsonInt32(i))).ToArray();
+        var docIds = keys.Select((k, i) => new BsonString($"doc_{i + 1}")).ToArray();
+        for (var i = 0; i < keys.Length; i++)
+        {
+            _index.Insert(keys[i], docIds[i]);
+        }
+
+        await AssertNodeKeys(GetRoot(_index), 3, 5);
+
+        // 合并第一批叶子
+        _index.Delete(keys[0], docIds[0]);
+        var root = GetRoot(_index);
+        await AssertNodeKeys(root, 5);
+        await AssertNodeKeys(root.GetChild(0), 2, 3, 4);
+        await AssertNodeKeys(root.GetChild(1), 5, 6, 7, 8);
+
+        // 收缩右侧叶子并触发借键
+        _index.Delete(keys[4], docIds[4]);
+        await AssertNodeKeys(GetRoot(_index), 6);
+
+        _index.Delete(keys[5], docIds[5]);
+        await AssertNodeKeys(GetRoot(_index), 7);
+
+        _index.Delete(keys[6], docIds[6]);
+        root = GetRoot(_index);
+        await AssertNodeKeys(root, 4);
+        await AssertNodeKeys(root.GetChild(0), 2, 3);
+        await AssertNodeKeys(root.GetChild(1), 4, 8);
+    }
+
+    /// <summary>
+    /// 深层叶子首键变化时，所有祖先分隔键都应更新
+    /// </summary>
+    [Test]
+    public async Task Delete_ShouldRefreshAllAncestorSeparators_ForDeepTrees()
+    {
+        _index.Clear();
+
+        var keys = Enumerable.Range(1, 48).Select(i => new IndexKey(new BsonInt32(i))).ToArray();
+        var docs = keys.Select((k, i) => new BsonString($"doc_{i + 1}")).ToArray();
+        for (var i = 0; i < keys.Length; i++)
+        {
+            _index.Insert(keys[i], docs[i]);
+        }
+
+        _index.Delete(new IndexKey(new BsonInt32(25)), new BsonString("doc_25"));
+        _index.Delete(new IndexKey(new BsonInt32(24)), new BsonString("doc_24"));
+
+        var path = GetPathToLeaf(_index, new IndexKey(new BsonInt32(26)));
+        var leafNode = path[^1].node;
+        await Assert.That(leafNode.KeyCount).IsGreaterThan(0);
+        var leafValues = GetNodeKeyValues(leafNode);
+        await Assert.That(leafValues.First()).IsEqualTo(26);
+
+        for (var i = path.Count - 2; i >= 0; i--)
+        {
+            var (parentNode, childIndex) = path[i];
+            if (childIndex > 0)
+            {
+                var parentKeys = GetNodeKeyValues(parentNode);
+                var childNode = parentNode.GetChild(childIndex);
+                var expected = GetLeftmostKeyValue(childNode);
+                if (expected.HasValue)
+                {
+                    await Assert.That(parentKeys[childIndex - 1]).IsEqualTo(expected.Value);
+                }
+            }
+        }
+    }
+
+    private static BTreeNode GetRoot(BTreeIndex index)
+    {
+        var field = typeof(BTreeIndex).GetField("_root", BindingFlags.NonPublic | BindingFlags.Instance);
+        return (BTreeNode)(field?.GetValue(index) ?? throw new InvalidOperationException("Root node not found"));
+    }
+
+    private static IReadOnlyList<int> GetNodeKeyValues(BTreeNode node)
+    {
+        return Enumerable.Range(0, node.KeyCount)
+            .Select(i => node.GetKey(i))
+            .Select(key => (BsonInt32)key.Values.First())
+            .Select(value => value.Value)
+            .ToArray();
+    }
+
+    private static int? GetLeftmostKeyValue(BTreeNode node)
+    {
+        var current = node;
+        while (!current.IsLeaf)
+        {
+            if (current.ChildCount == 0)
+                return null;
+            current = current.GetChild(0);
+        }
+
+        return current.KeyCount > 0
+            ? ((BsonInt32)current.GetKey(0).Values.First()).Value
+            : null;
+    }
+
+    private static async Task AssertNodeKeys(BTreeNode node, params int[] expected)
+    {
+        var keys = GetNodeKeyValues(node);
+        await Assert.That(keys.Count).IsEqualTo(expected.Length);
+        for (var i = 0; i < expected.Length; i++)
+        {
+            await Assert.That(keys[i]).IsEqualTo(expected[i]);
+        }
+    }
+
+    private static List<(BTreeNode node, int childIndex)> GetPathToLeaf(BTreeIndex index, IndexKey key)
+    {
+        var path = new List<(BTreeNode, int)>();
+        var node = GetRoot(index);
+        while (!node.IsLeaf)
+        {
+            var childIndex = node.FindKeyPosition(key);
+            if (childIndex >= node.KeyCount)
+            {
+                childIndex = node.ChildCount - 1;
+            }
+            else if (childIndex < node.KeyCount && node.GetKey(childIndex).Equals(key))
+            {
+                childIndex++;
+            }
+
+            path.Add((node, childIndex));
+            node = node.GetChild(childIndex);
+        }
+
+        path.Add((node, -1));
+        return path;
+    }
+
     private int GetTreeHeight()
     {
-        // 通过反射访问私有方法或通过统计信息估算
         var stats = _index.GetStatistics();
         return stats.TreeHeight;
     }

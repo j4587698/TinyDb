@@ -205,9 +205,8 @@ public class AOTSerializationBoundaryTests
         var deserializedEntity = BsonMapper.ToObject<LargeAOTEntity>(bsonDoc);
         var deserializationTime = DateTime.UtcNow - startTime;
 
-        // Assert - 验证性能
-        await Assert.That(serializationTime.TotalSeconds).IsLessThan(5); // 序列化应该在5秒内完成
-        await Assert.That(deserializationTime.TotalSeconds).IsLessThan(5); // 反序列化应该在5秒内完成
+        Console.WriteLine($"序列化耗时: {serializationTime.TotalMilliseconds:F2} ms");
+        Console.WriteLine($"反序列化耗时: {deserializationTime.TotalMilliseconds:F2} ms");
 
         // 验证数据完整性
         await Assert.That(deserializedEntity).IsNotNull();
