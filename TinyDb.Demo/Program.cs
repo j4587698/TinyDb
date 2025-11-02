@@ -15,7 +15,7 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        Console.WriteLine("=== SimpleDb v0.1 演示程序 ===");
+        Console.WriteLine("=== TinyDb v0.1 演示程序 ===");
         Console.WriteLine("⚠️ 这是一个早期测试版本，不建议生产环境使用");
         Console.WriteLine("📝 如果要在生产环境使用，请进行充分的测试");
         Console.WriteLine();
