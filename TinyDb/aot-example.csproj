@@ -1,0 +1,57 @@
+<!--
+  这是使用 TinyDb NuGet 包时的 AOT 兼容配置示例
+  将以下内容添加到您的项目文件中
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework> <!-- 或 net9.0 -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- AOT 兼容性配置 -->
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>
+
+    <!-- 修剪配置 -->
+    <TrimMode>link</TrimMode>
+    <DebuggerSupport>false</DebuggerSupport>
+    <EnableUnsafeUTF7Encoding>true</EnableUnsafeUTF7Encoding>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- SourceGenerator 优化 -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>Generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="TinyDb" Version="0.1.0" />
+  </ItemGroup>
+
+  <!-- 修剪警告抑制（如果需要） -->
+  <ItemGroup>
+    <!-- 以下警告在 AOT 编译中是正常的，表示需要动态访问的类型信息 -->
+    <!--
+    <TrimmerRootAssembly Include="TinyDb" />
+    <TrimmerRootAssembly Include="System.Reflection" />
+    <TrimmerRootAssembly Include="System.Linq.Expressions" />
+    -->
+  </ItemGroup>
+
+  <!-- AOT 兼容性注释示例 -->
+  <!--
+  在您的代码中，对泛型类型和方法使用以下注释：
+
+  [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
+  public class MyEntity { ... }
+
+  或者使用 SourceGenerator 生成的元数据：
+
+  [GeneratedMetadata]
+  public partial class MyEntity { ... }
+  -->
+
+</Project>

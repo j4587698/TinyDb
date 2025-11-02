@@ -1,0 +1,48 @@
+{
+  "AotCompatibility": {
+    "IsAotCompatible": true,
+    "SupportedFrameworks": [
+      "net8.0",
+      "net9.0"
+    ],
+    "SourceGenerator": {
+      "Enabled": true,
+      "SupportedFeatures": [
+        "EntityMetadataGeneration",
+        "SerializationOptimization",
+        "AotFriendlyCodeGeneration"
+      ]
+    },
+    "KnownLimitations": [
+      "Dynamic reflection requires trimming annotations",
+      "Generic type resolution may require DynamicallyAccessedMemberTypes attributes"
+    ],
+    "BestPractices": [
+      "Use [DynamicallyAccessedMembers] attributes on generic parameters",
+      "Prefer compiled expressions over reflection when possible",
+      "Enable PublishAot for full AOT compilation"
+    ]
+  },
+  "Trimming": {
+    "IsTrimmingCompatible": true,
+    "RequiresAnnotations": true,
+    "TrimmingWarnings": [
+      "IL2070: 'this' argument does not satisfy 'DynamicallyAccessedMemberTypes'",
+      "IL2075: 'this' argument does not satisfy 'DynamicallyAccessedMemberTypes'",
+      "IL2087: 'type' argument does not satisfy 'DynamicallyAccessedMemberTypes'",
+      "IL2090: 'this' argument does not satisfy 'DynamicallyAccessedMemberTypes'",
+      "IL2091: 'T' generic argument does not satisfy 'DynamicallyAccessedMemberTypes'",
+      "IL3050: Using member 'System.Reflection.MethodInfo.MakeGenericMethod'"
+    ]
+  },
+  "NativeAOT": {
+    "IsNativeAotCompatible": true,
+    "SupportedPlatforms": [
+      "win-x64",
+      "linux-x64",
+      "osx-x64",
+      "linux-arm64",
+      "osx-arm64"
+    ]
+  }
+}
