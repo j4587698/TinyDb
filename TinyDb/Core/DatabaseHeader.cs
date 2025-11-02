@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -111,6 +112,12 @@ public struct DatabaseHeader
     /// 是否启用日志
     /// </summary>
     public bool EnableJournaling;
+
+    private const int SecurityMarkerLength = 4;
+    private const int SecuritySaltLength = DatabaseSecurityMetadata.SaltLength;
+    private const int SecurityKeyLength = DatabaseSecurityMetadata.KeyHashLength;
+    private const int SecurityBlockLength = SecurityMarkerLength + SecuritySaltLength + SecurityKeyLength;
+    private static readonly byte[] SecurityMarker = { (byte)'S', (byte)'E', (byte)'C', (byte)'1' };
 
     /// <summary>
     /// 保留字段
@@ -226,6 +233,54 @@ public struct DatabaseHeader
                 _userData[i] = 0;
             }
         }
+    }
+
+    public bool TryGetSecurityMetadata(out DatabaseSecurityMetadata metadata)
+    {
+        metadata = default;
+
+        if (_reserved.Length < SecurityBlockLength)
+        {
+            return false;
+        }
+
+        var span = _reserved.AsSpan();
+        if (!span.Slice(0, SecurityMarkerLength).SequenceEqual(SecurityMarker))
+        {
+            return false;
+        }
+
+        var salt = new byte[SecuritySaltLength];
+        var keyHash = new byte[SecurityKeyLength];
+        span.Slice(SecurityMarkerLength, SecuritySaltLength).CopyTo(salt);
+        span.Slice(SecurityMarkerLength + SecuritySaltLength, SecurityKeyLength).CopyTo(keyHash);
+
+        metadata = new DatabaseSecurityMetadata(salt, keyHash);
+        return true;
+    }
+
+    public void SetSecurityMetadata(in DatabaseSecurityMetadata metadata)
+    {
+        if (metadata.Salt.Length != SecuritySaltLength)
+            throw new ArgumentException($"Salt must be {SecuritySaltLength} bytes", nameof(metadata));
+        if (metadata.KeyHash.Length != SecurityKeyLength)
+            throw new ArgumentException($"Key hash must be {SecurityKeyLength} bytes", nameof(metadata));
+
+        var span = _reserved.AsSpan();
+        SecurityMarker.CopyTo(span);
+        metadata.Salt.CopyTo(span.Slice(SecurityMarkerLength, SecuritySaltLength));
+        metadata.KeyHash.CopyTo(span.Slice(SecurityMarkerLength + SecuritySaltLength, SecurityKeyLength));
+        span.Slice(SecurityBlockLength).Clear();
+    }
+
+    public void ClearSecurityMetadata()
+    {
+        if (_reserved.Length < SecurityBlockLength)
+        {
+            return;
+        }
+
+        _reserved.AsSpan(0, SecurityBlockLength).Clear();
     }
 
     /// <summary>
@@ -404,9 +459,32 @@ public struct DatabaseHeader
     /// <summary>
     /// 重写 ToString 方法
     /// </summary>
-    public override string ToString()
+public override string ToString()
+{
+    return $"DatabaseHeader[{DatabaseName}]: v{DatabaseVersion >> 16}.{(DatabaseVersion >> 8) & 0xFF}.{DatabaseVersion & 0xFF}, " +
+           $"PageSize={PageSize}, Pages={UsedPages}/{TotalPages}, Created={new DateTime(CreatedAt, DateTimeKind.Utc):yyyy-MM-dd}";
+}
+}
+
+public readonly struct DatabaseSecurityMetadata
+{
+    public const int SaltLength = 16;
+    public const int KeyHashLength = 32;
+
+    public DatabaseSecurityMetadata(byte[] salt, byte[] keyHash)
     {
-        return $"DatabaseHeader[{DatabaseName}]: v{DatabaseVersion >> 16}.{(DatabaseVersion >> 8) & 0xFF}.{DatabaseVersion & 0xFF}, " +
-               $"PageSize={PageSize}, Pages={UsedPages}/{TotalPages}, Created={new DateTime(CreatedAt, DateTimeKind.Utc):yyyy-MM-dd}";
+        if (salt == null) throw new ArgumentNullException(nameof(salt));
+        if (keyHash == null) throw new ArgumentNullException(nameof(keyHash));
+        if (salt.Length != SaltLength)
+            throw new ArgumentException($"Salt must be {SaltLength} bytes", nameof(salt));
+        if (keyHash.Length != KeyHashLength)
+            throw new ArgumentException($"Key hash must be {KeyHashLength} bytes", nameof(keyHash));
+
+        Salt = salt;
+        KeyHash = keyHash;
     }
+
+    public byte[] Salt { get; }
+
+    public byte[] KeyHash { get; }
 }

@@ -84,6 +84,11 @@ public sealed class TinyDbOptions
     public byte[]? EncryptionKey { get; set; }
 
     /// <summary>
+    /// 数据库访问密码
+    /// </summary>
+    public string? Password { get; set; }
+
+    /// <summary>
     /// 最大事务大小（文档数量）
     /// </summary>
     public int MaxTransactionSize { get; set; } = 10000;
@@ -211,6 +216,7 @@ public sealed class TinyDbOptions
             EnableCompression = EnableCompression,
             EnableEncryption = EnableEncryption,
             EncryptionKey = EncryptionKey?.ToArray(),
+            Password = Password,
             MaxTransactionSize = MaxTransactionSize,
             MaxTransactions = MaxTransactions,
             TransactionTimeout = TransactionTimeout,

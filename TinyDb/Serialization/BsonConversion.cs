@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using TinyDb.Bson;
 
 namespace TinyDb.Serialization;
@@ -14,6 +15,15 @@ public static class BsonConversion
         {
             null => BsonNull.Value,
             BsonValue bson => bson,
+            byte[] bytes => new BsonBinary(bytes),
+            ReadOnlyMemory<byte> rom => new BsonBinary(rom.ToArray()),
+            Memory<byte> mem => new BsonBinary(mem.ToArray()),
+            byte b => new BsonInt32(b),
+            sbyte sb => new BsonInt32(sb),
+            short s => new BsonInt32(s),
+            ushort us => new BsonInt32(us),
+            uint ui => new BsonInt64(ui),
+            ulong ul => new BsonInt64(unchecked((long)ul)),
             string str => new BsonString(str),
             int i => new BsonInt32(i),
             long l => new BsonInt64(l),
@@ -171,6 +181,81 @@ public static class BsonConversion
                     : Guid.Parse(bsonValue.ToString()),
             var t when t == typeof(ObjectId) =>
                 bsonValue is BsonObjectId oid ? oid.Value : ObjectId.Parse(bsonValue.ToString()),
+            var t when t == typeof(byte) =>
+                bsonValue switch
+                {
+                    BsonInt32 i32 => checked((byte)i32.Value),
+                    BsonInt64 i64 => checked((byte)i64.Value),
+                    BsonDouble dbl => checked((byte)dbl.Value),
+                    BsonString str => byte.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => Convert.ToByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
+            var t when t == typeof(sbyte) =>
+                bsonValue switch
+                {
+                    BsonInt32 i32 => checked((sbyte)i32.Value),
+                    BsonInt64 i64 => checked((sbyte)i64.Value),
+                    BsonDouble dbl => checked((sbyte)dbl.Value),
+                    BsonString str => sbyte.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => Convert.ToSByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
+            var t when t == typeof(short) =>
+                bsonValue switch
+                {
+                    BsonInt32 i32 => checked((short)i32.Value),
+                    BsonInt64 i64 => checked((short)i64.Value),
+                    BsonDouble dbl => checked((short)dbl.Value),
+                    BsonString str => short.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => Convert.ToInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
+            var t when t == typeof(ushort) =>
+                bsonValue switch
+                {
+                    BsonInt32 i32 => checked((ushort)i32.Value),
+                    BsonInt64 i64 => checked((ushort)i64.Value),
+                    BsonDouble dbl => checked((ushort)dbl.Value),
+                    BsonString str => ushort.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => Convert.ToUInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
+            var t when t == typeof(uint) =>
+                bsonValue switch
+                {
+                    BsonInt64 i64 => checked((uint)i64.Value),
+                    BsonInt32 i32 => checked((uint)i32.Value),
+                    BsonDouble dbl => checked((uint)dbl.Value),
+                    BsonString str => uint.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => Convert.ToUInt32(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
+            var t when t == typeof(ulong) =>
+                bsonValue switch
+                {
+                    BsonInt64 i64 => unchecked((ulong)i64.Value),
+                    BsonInt32 i32 => unchecked((ulong)i32.Value),
+                    BsonDouble dbl => checked((ulong)dbl.Value),
+                    BsonString str => ulong.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => Convert.ToUInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
+            var t when t == typeof(byte[]) =>
+                bsonValue switch
+                {
+                    BsonBinary bin => bin.Bytes.ToArray(),
+                    BsonString str => Convert.FromBase64String(str.Value),
+                    _ => throw new InvalidOperationException($"Cannot convert '{bsonValue.GetType().Name}' to byte[].")
+                },
+            var t when t == typeof(ReadOnlyMemory<byte>) =>
+                bsonValue switch
+                {
+                    BsonBinary bin => new ReadOnlyMemory<byte>(bin.Bytes.ToArray()),
+                    BsonString str => new ReadOnlyMemory<byte>(Convert.FromBase64String(str.Value)),
+                    _ => throw new InvalidOperationException($"Cannot convert '{bsonValue.GetType().Name}' to ReadOnlyMemory<byte>.")
+                },
+            var t when t == typeof(Memory<byte>) =>
+                bsonValue switch
+                {
+                    BsonBinary bin => new Memory<byte>(bin.Bytes.ToArray()),
+                    BsonString str => new Memory<byte>(Convert.FromBase64String(str.Value)),
+                    _ => throw new InvalidOperationException($"Cannot convert '{bsonValue.GetType().Name}' to Memory<byte>.")
+                },
             _ => bsonValue.ToString()
         };
     }

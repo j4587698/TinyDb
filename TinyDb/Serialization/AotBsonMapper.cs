@@ -506,6 +506,11 @@ public static class AotBsonMapper
     /// </summary>
     private static bool IsCollectionType(Type type)
     {
+        if (type == typeof(byte[]))
+        {
+            return false;
+        }
+
         // 包含数组类型
         if (type.IsArray)
         {

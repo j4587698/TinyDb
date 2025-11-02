@@ -1,13 +1,16 @@
+using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Bson;
+using TinyDb.Security;
 using TinyDb.Collections;
 using TinyDb.Index;
 using TinyDb.Serialization;
@@ -114,7 +117,7 @@ public sealed class TinyDbEngine : IDisposable
     /// <summary>
     /// 集合数量
     /// </summary>
-    public int CollectionCount => _collections.Count;
+    public int CollectionCount => _collections.Keys.Count(name => !name.StartsWith("__", StringComparison.Ordinal));
 
     /// <summary>
     /// 初始化 SimpleDb 数据库引擎
@@ -153,6 +156,42 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         return interval;
+    }
+
+    /// <summary>
+    /// 验证并初始化数据库级安全配置
+    /// </summary>
+    private void EnsureDatabaseSecurity()
+    {
+        var password = _options.Password;
+        var isSecure = DatabaseSecurity.IsDatabaseSecure(this);
+
+        if (string.IsNullOrEmpty(password))
+        {
+            if (isSecure)
+            {
+                throw new UnauthorizedAccessException("数据库受密码保护，请提供正确密码");
+            }
+
+            return;
+        }
+
+        if (password.Length < 4)
+        {
+            throw new ArgumentException("密码长度至少4位", nameof(TinyDbOptions.Password));
+        }
+
+        if (isSecure)
+        {
+            if (!DatabaseSecurity.AuthenticateDatabase(this, password))
+            {
+                throw new UnauthorizedAccessException("数据库密码验证失败，无法访问数据库");
+            }
+
+            return;
+        }
+
+        DatabaseSecurity.CreateSecureDatabase(this, password);
     }
 
     /// <summary>
@@ -214,9 +253,13 @@ public sealed class TinyDbEngine : IDisposable
                 LoadCollections();
 
                 _isInitialized = true;
+
+                EnsureDatabaseSecurity();
             }
             catch (Exception)
             {
+                _isInitialized = false;
+
                 // 如果初始化失败，清理资源
                 Dispose();
                 throw;
@@ -480,6 +523,29 @@ public sealed class TinyDbEngine : IDisposable
     {
         ThrowIfDisposed();
         return _transactionManager.GetStatistics();
+    }
+
+    internal bool TryGetSecurityMetadata(out DatabaseSecurityMetadata metadata)
+    {
+        return _header.TryGetSecurityMetadata(out metadata);
+    }
+
+    internal void SetSecurityMetadata(DatabaseSecurityMetadata metadata)
+    {
+        lock (_lock)
+        {
+            _header.SetSecurityMetadata(metadata);
+            WriteHeader();
+        }
+    }
+
+    internal void ClearSecurityMetadata()
+    {
+        lock (_lock)
+        {
+            _header.ClearSecurityMetadata();
+            WriteHeader();
+        }
     }
 
     
