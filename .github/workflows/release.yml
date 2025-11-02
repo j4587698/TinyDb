@@ -1,0 +1,168 @@
+name: Release TinyDb to NuGet
+
+on:
+  push:
+    branches: [ main, main ]
+  workflow_dispatch:
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2  # 获取最近2个提交来比较版本
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+
+    - name: Get previous version
+      id: get_previous_version
+      run: |
+        # 获取上一个提交的版本号
+        if git rev-parse HEAD~1 >/dev/null 2>&1; then
+          PREVIOUS_VERSION=$(git show HEAD~1:TinyDb/TinyDb.csproj | grep '<Version>' | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | xargs)
+        else
+          PREVIOUS_VERSION="0.0.0"
+        fi
+        echo "Previous version: $PREVIOUS_VERSION"
+        echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_ENV
+
+    - name: Get current version
+      id: get_current_version
+      run: |
+        # 获取当前提交的版本号
+        CURRENT_VERSION=$(git show HEAD:TinyDb/TinyDb.csproj | grep '<Version>' | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | xargs)
+        echo "Current version: $CURRENT_VERSION"
+        echo "current_version=$CURRENT_VERSION" >> $GITHUB_ENV
+
+    - name: Check if version changed
+      id: check_version
+      run: |
+        if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+          echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
+          echo "version_changed=true" >> $GITHUB_ENV
+          echo "new_version=$CURRENT_VERSION" >> $GITHUB_ENV
+        else
+          echo "Version unchanged: $CURRENT_VERSION"
+          echo "version_changed=false" >> $GitHub_ENV
+        fi
+
+    - name: Build and test
+      if: steps.get_current_version.outputs.version_changed == 'true'
+      run: |
+        echo "Building TinyDb with version $CURRENT_VERSION..."
+
+        # 构建整个解决方案
+        dotnet build TinyDb.sln -c Release
+
+        # 运行测试（可选，但推荐）
+        echo "Running tests..."
+        dotnet test TinyDb.Tests/TinyDb.Tests.csproj -c Release --no-build --logger "console;verbosity=minimal"
+
+        # 构建 NuGet 包
+        echo "Building NuGet package..."
+        dotnet pack TinyDb/TinyDb.csproj -c Release --no-build --output ./nupkg
+
+        # 验证包内容
+        echo "Verifying package contents..."
+        NUPKG_FILE=$(find ./nupkg -name "TinyDb.$CURRENT_VERSION.nupkg" | head -1)
+        if [ -n "$NUPKG_FILE" ]; then
+          echo "✅ Package found: $NUPKG_FILE"
+
+          # 检查包内容
+          TEMP_DIR=$(mktemp -d)
+          unzip -q "$NUPKG_FILE" -d "$TEMP_DIR"
+
+          echo "📋 Package contents:"
+          [ -f "$TEMP_DIR/lib/net8.0/TinyDb.dll" ] && echo "  ✅ .NET 8.0 library"
+          [ -f "$TEMP_DIR/lib/net9.0/TinyDb.dll" ] && echo "  ✅ .NET 9.0 library"
+          [ -f "$TEMP_DIR/analyzers/dotnet/cs/TinyDb.SourceGenerator.dll" ] && echo "  ✅ SourceGenerator analyzer"
+          [ -f "$TEMP_DIR/content/aot-compatibility.json" ] && echo "  ✅ AOT compatibility config"
+          [ -f "$TEMP_DIR/content/aot-example.csproj" ] && echo "  ✅ AOT example config"
+
+          rm -rf "$TEMP_DIR"
+        else
+          echo "❌ Package not found!"
+          exit 1
+        fi
+
+    - name: Create Git Tag
+      if: steps.check_version.outputs.version_changed == 'true'
+      run: |
+        echo "Creating Git tag v$CURRENT_VERSION..."
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag -a "v$CURRENT_VERSION" -m "Release version $CURRENT_VERSION"
+
+    - name: Push Git Tag
+      if: steps.check_version.outputs.version_changed == 'true'
+      run: |
+        echo "Pushing Git tag..."
+        git push origin "v$CURRENT_VERSION"
+
+    -name: Setup NuGet
+      if: steps.check_version.outputs.version_changed == 'true'
+      run: |
+        echo "Setting up NuGet..."
+        dotnet nuget add source --name "github" --username "github-actions" --password "${{ secrets.GITHUB_TOKEN }}" --store-password-in-clear-text
+
+    -name: Publish to NuGet
+      if: steps.check_version.outputs.version_changed == 'true'
+      run: |
+        echo "Publishing to NuGet..."
+        dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source "github" --skip-duplicate --no-symbols
+
+        # 清理
+        rm -rf ./nupkg
+
+    - name: Create Release
+      if: steps.check_version.outputs.version_changed == 'true'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ env.CURRENT_VERSION }}
+        release_name: TinyDb v${{ env.CURRENT_VERSION }}
+        body: |
+          ## 🚀 TinyDb v${{ env.CURRENT_VERSION }
+
+          ### 📦 包信息
+          - **版本:** v${{ env.CURRENT_VERSION }}
+          - **框架:** .NET 8.0 + .NET 9.0
+          - **类型:** NuGet 包
+
+          ### ✨ 主要特性
+          - 🎯 **轻量级 NoSQL 数据库** - 单文件嵌入式数据库
+          - ⚡ **AOT 兼容** - 支持原生编译，性能优异
+          - 🔧 **SourceGenerator** - 自动生成元数据和优化代码
+          - 🔒 **安全支持** - 内置密码保护和加密
+          - 📊 **完整 API** - CRUD、查询、索引、事务
+
+          ### 🛠️ 技术规格
+          - **目标框架:** net8.0, net9.0
+          - **AOT 兼容:** ✅
+          **SourceGenerator:** ✅
+          **包大小:** ~300KB
+
+          ### 📋 安装使用
+          ```bash
+          dotnet add package TinyDb --version ${{ env.CURRENT_VERSION }
+          ```
+
+          ### 🔗 相关链接
+          - 📖 [文档](https://github.com/j4587698/TinyDb)
+          - 📦 [NuGet 包](https://www.nuget.org/packages/TinyDb)
+          - 🐛 [GitHub 仓库](https://github.com/j4587698/TinyDb)
+
+          ---
+          🤖 自动发布于 $(date +'%Y-%m-%d %H:%M:%S')
+        draft: false
+        prerelease: false
