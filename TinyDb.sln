@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyDb.Demo", "TinyDb.Demo\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyDb.Tests", "TinyDb.Tests\TinyDb.Tests.csproj", "{F3F72386-1BC1-4B22-92A9-74AFB119121C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TinyDb.Benchmark", "TinyDb.Benchmark\TinyDb.Benchmark.csproj", "{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -66,6 +68,18 @@ Global
 		{F3F72386-1BC1-4B22-92A9-74AFB119121C}.Release|x64.Build.0 = Release|Any CPU
 		{F3F72386-1BC1-4B22-92A9-74AFB119121C}.Release|x86.ActiveCfg = Release|Any CPU
 		{F3F72386-1BC1-4B22-92A9-74AFB119121C}.Release|x86.Build.0 = Release|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Debug|x64.Build.0 = Debug|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Debug|x86.Build.0 = Debug|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Release|x64.ActiveCfg = Release|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Release|x64.Build.0 = Release|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Release|x86.ActiveCfg = Release|Any CPU
+		{A25BBE19-2A86-4882-9DE6-06DE80B03BCA}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
