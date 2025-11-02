@@ -9,25 +9,25 @@ namespace TinyDb.Serialization;
 /// </summary>
 public static class BsonMapper
 {
-    public static BsonDocument ToDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity)
+    public static BsonDocument ToDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(T entity)
         where T : class, new()
     {
         return AotBsonMapper.ToDocument(entity);
     }
 
-    public static T? ToObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BsonDocument document)
+    public static T? ToObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(BsonDocument document)
         where T : class, new()
     {
         return document == null ? default : AotBsonMapper.FromDocument<T>(document);
     }
 
-    public static BsonValue GetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity)
+    public static BsonValue GetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(T entity)
         where T : class, new()
     {
         return AotIdAccessor<T>.GetId(entity);
     }
 
-    public static void SetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, BsonValue id)
+    public static void SetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(T entity, BsonValue id)
         where T : class, new()
     {
         AotIdAccessor<T>.SetId(entity, id);
@@ -38,8 +38,8 @@ public static class BsonMapper
         return value == null ? BsonNull.Value : BsonConversion.ToBsonValue(value);
     }
 
-    public static object? ConvertFromBsonValue(BsonValue bsonValue, Type targetType)
+    public static object? ConvertFromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type targetType)
     {
-        return BsonConversion.FromBsonValue(bsonValue, targetType);
+        return AotBsonMapper.ConvertValue(bsonValue, targetType);
     }
 }

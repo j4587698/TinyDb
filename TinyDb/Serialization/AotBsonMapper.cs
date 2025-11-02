@@ -1,5 +1,11 @@
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Globalization;
+using TinyDb.Attributes;
 using TinyDb.Bson;
 
 namespace TinyDb.Serialization;
@@ -13,9 +19,110 @@ public static class AotBsonMapper
     [ThreadStatic]
     private static HashSet<object>? _serializingObjects;
 
-    [ThreadStatic]
-    private static HashSet<Type>? _serializingTypes;
-    public static BsonDocument ToDocument<T>(T entity)
+    private const DynamicallyAccessedMemberTypes EntityMemberRequirements =
+        DynamicallyAccessedMemberTypes.PublicConstructors |
+        DynamicallyAccessedMemberTypes.PublicProperties |
+        DynamicallyAccessedMemberTypes.PublicFields |
+        DynamicallyAccessedMemberTypes.PublicMethods;
+
+    private sealed class ReferenceEqualityComparer : IEqualityComparer<object>
+    {
+        public static readonly ReferenceEqualityComparer Instance = new();
+
+        public new bool Equals(object? x, object? y) => ReferenceEquals(x, y);
+
+        public int GetHashCode(object obj) => RuntimeHelpers.GetHashCode(obj);
+    }
+
+    private sealed class ReflectionMetadata
+    {
+        public ReflectionMetadata(
+            PropertyInfo? idProperty,
+            PropertyInfo[] properties,
+            Dictionary<string, PropertyInfo> propertyMap,
+            Dictionary<string, PropertyInfo> camelCasePropertyMap,
+            FieldInfo[] fields,
+            Dictionary<string, FieldInfo> camelCaseFieldMap)
+        {
+            IdProperty = idProperty;
+            Properties = properties;
+            PropertyMap = propertyMap;
+            CamelCasePropertyMap = camelCasePropertyMap;
+            Fields = fields;
+            CamelCaseFieldMap = camelCaseFieldMap;
+        }
+
+        public PropertyInfo? IdProperty { get; }
+
+        public IReadOnlyList<PropertyInfo> Properties { get; }
+
+        public IReadOnlyDictionary<string, PropertyInfo> PropertyMap { get; }
+
+        public IReadOnlyDictionary<string, PropertyInfo> CamelCasePropertyMap { get; }
+
+        public IReadOnlyList<FieldInfo> Fields { get; }
+
+        public IReadOnlyDictionary<string, FieldInfo> CamelCaseFieldMap { get; }
+    }
+
+    private static readonly ConcurrentDictionary<Type, ReflectionMetadata> MetadataCache = new();
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2111", Justification = "Metadata 缓存的访问由源生成器生成的注册代码触发，生成过程会确保所需成员被保留。")]
+    private static ReflectionMetadata GetMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type type)
+    {
+        return MetadataCache.GetOrAdd(type, BuildMetadata);
+    }
+
+    private static ReflectionMetadata BuildMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type type)
+    {
+        var properties = type
+            .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+            .Where(property => property.CanRead && property.GetMethod is { IsStatic: false })
+            .Where(property => property.GetCustomAttribute<BsonIgnoreAttribute>() == null)
+            .ToArray();
+
+        var propertyMap = properties.ToDictionary(property => property.Name, StringComparer.Ordinal);
+        var camelCasePropertyMap = properties.ToDictionary(property => ToCamelCase(property.Name), StringComparer.Ordinal);
+
+        var fields = type
+            .GetFields(BindingFlags.Instance | BindingFlags.Public)
+            .Where(field => !field.IsSpecialName && !field.IsLiteral)
+            .ToArray();
+        var camelCaseFieldMap = fields.ToDictionary(field => ToCamelCase(field.Name), StringComparer.Ordinal);
+
+        var idProperty = ResolveIdProperty(type, propertyMap);
+
+        return new ReflectionMetadata(idProperty, properties, propertyMap, camelCasePropertyMap, fields, camelCaseFieldMap);
+    }
+
+    private static PropertyInfo? ResolveIdProperty(Type type, IReadOnlyDictionary<string, PropertyInfo> propertyMap)
+    {
+        var entityAttribute = type.GetCustomAttribute<EntityAttribute>();
+        if (!string.IsNullOrWhiteSpace(entityAttribute?.IdProperty) &&
+            propertyMap.TryGetValue(entityAttribute.IdProperty!, out var specified))
+        {
+            return specified;
+        }
+
+        foreach (var property in propertyMap.Values)
+        {
+            if (property.GetCustomAttribute<IdAttribute>() != null)
+            {
+                return property;
+            }
+        }
+
+        foreach (var candidate in new[] { "Id", "_id", "ID" })
+        {
+            if (propertyMap.TryGetValue(candidate, out var property))
+            {
+                return property;
+            }
+        }
+
+        return null;
+    }
+    public static BsonDocument ToDocument<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -24,10 +131,10 @@ public static class AotBsonMapper
             return adapter.ToDocument(entity);
         }
 
-        return FallbackToDocument(entity);
+        return FallbackToDocument(typeof(T), entity!);
     }
 
-    public static T FromDocument<T>(BsonDocument document)
+    public static T FromDocument<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(BsonDocument document)
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
@@ -36,10 +143,10 @@ public static class AotBsonMapper
             return adapter.FromDocument(document);
         }
 
-        return FallbackFromDocument<T>(document);
+        return (T)FallbackFromDocument(typeof(T), document);
     }
 
-    public static BsonValue GetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity)
+    public static BsonValue GetId<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity)
         where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -59,25 +166,12 @@ public static class AotBsonMapper
         return value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
     }
 
-    public static void SetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, BsonValue id)
+    public static void SetId<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity, BsonValue id)
         where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
-        {
-            adapter.SetId(entity, id);
-            return;
-        }
-
-        var idProperty = EntityMetadata<T>.IdProperty;
-        if (idProperty == null || id == null || id.IsNull)
-        {
-            return;
-        }
-
-        var converted = BsonConversion.FromBsonValue(id, idProperty.PropertyType);
-        idProperty.SetValue(entity, converted);
+        AotIdAccessor<T>.SetId(entity, id);
     }
 
     public static object? GetPropertyValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, string propertyName)
@@ -96,21 +190,28 @@ public static class AotBsonMapper
             : null;
     }
 
-    private static BsonDocument FallbackToDocument<T>(T entity)
+    public static object? ConvertValue(BsonValue bsonValue, Type targetType)
     {
-        // 初始化ThreadLocal变量
-        _serializingObjects ??= new HashSet<object>();
-        _serializingTypes ??= new HashSet<Type>();
+        if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
+        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
 
-        // 检查循环引用
-        if (_serializingObjects.Contains(entity))
+        return ConvertFromBsonValue(bsonValue, targetType);
+    }
+
+    private static BsonDocument FallbackToDocument([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, object entity)
+    {
+        if (entityType == null) throw new ArgumentNullException(nameof(entityType));
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        if (!entityType.IsValueType && _serializingObjects.Contains(entity))
         {
-            // 检测到循环引用，返回包含id的文档（如果有id属性）
+            var metadata = GetMetadata(entityType);
             var circularDoc = new BsonDocument();
-            var idProperty = EntityMetadata<T>.IdProperty;
-            if (idProperty != null)
+            if (metadata.IdProperty != null)
             {
-                var id = idProperty.GetValue(entity);
+                var id = metadata.IdProperty.GetValue(entity);
                 if (id != null)
                 {
                     circularDoc = circularDoc.Set("_id", BsonConversion.ToBsonValue(id));
@@ -119,352 +220,177 @@ public static class AotBsonMapper
             return circularDoc;
         }
 
-        _serializingObjects.Add(entity);
-        _serializingTypes.Add(typeof(T));
+        if (!entityType.IsValueType)
+        {
+            _serializingObjects.Add(entity);
+        }
 
         try
         {
-            var document = new BsonDocument();
-
-        var idProperty = EntityMetadata<T>.IdProperty;
-        if (idProperty != null)
+            return FallbackToDocumentInternal(entityType, entity);
+        }
+        finally
         {
-            var id = idProperty.GetValue(entity);
+            if (!entityType.IsValueType)
+            {
+                _serializingObjects.Remove(entity);
+            }
+        }
+    }
+
+    private static BsonDocument FallbackToDocumentInternal([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, object entity)
+    {
+        var metadata = GetMetadata(entityType);
+        var document = new BsonDocument();
+
+        if (metadata.IdProperty != null)
+        {
+            var id = metadata.IdProperty.GetValue(entity);
             if (id != null)
             {
                 document = document.Set("_id", BsonConversion.ToBsonValue(id));
             }
         }
 
-        foreach (var property in EntityMetadata<T>.Properties)
+        foreach (var property in metadata.Properties)
         {
-            if (idProperty != null && property.Name == idProperty.Name)
+            if (metadata.IdProperty != null && property.Name == metadata.IdProperty.Name)
             {
                 continue;
             }
 
             var value = property.GetValue(entity);
-
-            var key = ToCamelCase(property.Name);
-            BsonValue bsonValue;
-            if (value == null)
-            {
-                bsonValue = BsonNull.Value;
-            }
-            // 对于Dictionary类型，转换为BsonDocument
-            else if (IsDictionaryType(property.PropertyType))
-            {
-                bsonValue = ConvertDictionaryToBsonDocument(value);
-            }
-            // 对于复杂对象，递归序列化为BsonDocument
-            else if (IsComplexObjectType(property.PropertyType))
-            {
-                bsonValue = ToDocument(property.PropertyType, value);
-            }
-            // 对于集合类型，转换为BsonArray
-            else if (IsCollectionType(property.PropertyType))
-            {
-                bsonValue = ConvertCollectionToBsonArray(value);
-            }
-            else
-            {
-                bsonValue = BsonConversion.ToBsonValue(value);
-            }
-            document = document.Set(key, bsonValue);
+            var bsonValue = ConvertToBsonValue(value);
+            document = document.Set(ToCamelCase(property.Name), bsonValue);
         }
 
-        // 处理公共字段（支持AOT反射测试）
-        var publicFields = typeof(T).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Where(f => !f.IsSpecialName && !f.IsLiteral); // 排除常量字段
-        foreach (var field in publicFields)
+        foreach (var field in metadata.Fields)
         {
             var value = field.GetValue(entity);
-            var key = ToCamelCase(field.Name);
-            BsonValue bsonValue;
-            if (value == null)
-            {
-                bsonValue = BsonNull.Value;
-            }
-            // 对于Dictionary类型，转换为BsonDocument
-            else if (IsDictionaryType(field.FieldType))
-            {
-                bsonValue = ConvertDictionaryToBsonDocument(value);
-            }
-            // 对于复杂对象，递归序列化为BsonDocument
-            else if (IsComplexObjectType(field.FieldType))
-            {
-                bsonValue = ToDocument(field.FieldType, value);
-            }
-            // 对于集合类型，转换为BsonArray
-            else if (IsCollectionType(field.FieldType))
-            {
-                bsonValue = ConvertCollectionToBsonArray(value);
-            }
-            else
-            {
-                bsonValue = BsonConversion.ToBsonValue(value);
-            }
-            document = document.Set(key, bsonValue);
+            var bsonValue = ConvertToBsonValue(value);
+            document = document.Set(ToCamelCase(field.Name), bsonValue);
         }
 
-            return document;
-        }
-        finally
-        {
-            // 清理循环引用检测
-            _serializingObjects?.Remove(entity);
-            _serializingTypes?.Remove(typeof(T));
-        }
+        return document;
     }
 
-    private static T FallbackFromDocument<T>(BsonDocument document)
+    private static object FallbackFromDocument([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, BsonDocument document)
     {
-        // 对于结构体，需要特殊处理，因为结构体是值类型
-        if (typeof(T).IsValueType)
+        if (entityType == null) throw new ArgumentNullException(nameof(entityType));
+        if (document == null) throw new ArgumentNullException(nameof(document));
+
+        if (entityType.IsValueType)
         {
-            return FallbackFromDocumentForStruct<T>(document);
+            var boxed = Activator.CreateInstance(entityType) ?? throw new InvalidOperationException($"Failed to create instance of {entityType.FullName}");
+            return PopulateEntityMembers(entityType, boxed, document, isStruct: true);
         }
 
-        var entity = (T)Activator.CreateInstance(typeof(T))!;
-
-        var idProperty = EntityMetadata<T>.IdProperty;
-        var propertyMap = EntityMetadata<T>.Properties.ToDictionary(prop => ToCamelCase(prop.Name));
-        var fieldMap = typeof(T).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Where(f => !f.IsSpecialName && !f.IsLiteral)
-            .ToDictionary(field => ToCamelCase(field.Name));
-
-        foreach (var (key, bsonValue) in document)
-        {
-            if (key == "_id" && idProperty != null)
-            {
-                AotIdAccessor<T>.SetId(entity, bsonValue);
-                continue;
-            }
-
-            // 首先尝试处理属性
-            if (propertyMap.TryGetValue(key, out var property) && property.CanWrite)
-            {
-                if (bsonValue == null || bsonValue.IsNull)
-                {
-                    property.SetValue(entity, null);
-                    continue;
-                }
-
-                object? value;
-                // 对于Dictionary类型，特殊处理BsonDocument
-                if (bsonValue is BsonDocument dictDoc && IsDictionaryType(property.PropertyType))
-                {
-                    value = ConvertBsonDocumentToDictionary(dictDoc, property.PropertyType);
-                }
-                // 对于复杂对象类型，递归使用AotBsonMapper
-                else if (bsonValue is BsonDocument complexDoc && IsComplexObjectType(property.PropertyType))
-                {
-                    value = FromDocument(property.PropertyType, complexDoc);
-                }
-                // 对于集合类型，特殊处理BsonArray
-                else if (bsonValue is BsonArray bsonArray && IsCollectionType(property.PropertyType))
-                {
-                    value = ConvertBsonArrayToCollection(bsonArray, property.PropertyType);
-                }
-                else
-                {
-                    try
-                    {
-                        value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // 如果BsonConversion无法处理复杂类型，使用FromDocument递归处理
-                        if (bsonValue is BsonDocument innerDoc && IsComplexObjectType(property.PropertyType))
-                        {
-                            value = FromDocument(property.PropertyType, innerDoc);
-                        }
-                        else
-                        {
-                            throw;
-                        }
-                    }
-                }
-
-                property.SetValue(entity, value);
-                continue;
-            }
-
-            // 如果没有对应的属性，尝试处理字段
-            if (fieldMap.TryGetValue(key, out var field))
-            {
-                if (bsonValue == null || bsonValue.IsNull)
-                {
-                    if (field.FieldType.IsValueType)
-                    {
-                        // 值类型字段不能设置为null，跳过
-                        continue;
-                    }
-                    field.SetValue(entity, null);
-                    continue;
-                }
-
-                object? value;
-                // 对于Dictionary类型，特殊处理BsonDocument
-                if (bsonValue is BsonDocument dictDoc && IsDictionaryType(field.FieldType))
-                {
-                    value = ConvertBsonDocumentToDictionary(dictDoc, field.FieldType);
-                }
-                // 对于复杂对象类型，递归使用AotBsonMapper
-                else if (bsonValue is BsonDocument complexDoc && IsComplexObjectType(field.FieldType))
-                {
-                    value = FromDocument(field.FieldType, complexDoc);
-                }
-                // 对于集合类型，特殊处理BsonArray
-                else if (bsonValue is BsonArray bsonArray && IsCollectionType(field.FieldType))
-                {
-                    value = ConvertBsonArrayToCollection(bsonArray, field.FieldType);
-                }
-                else
-                {
-                    try
-                    {
-                        value = BsonConversion.FromBsonValue(bsonValue, field.FieldType);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // 如果BsonConversion无法处理复杂类型，使用FromDocument递归处理
-                        if (bsonValue is BsonDocument innerDoc && IsComplexObjectType(field.FieldType))
-                        {
-                            value = FromDocument(field.FieldType, innerDoc);
-                        }
-                        else if (bsonValue is BsonArray array && IsCollectionType(field.FieldType))
-                        {
-                            value = ConvertBsonArrayToCollection(array, field.FieldType);
-                        }
-                        else if (bsonValue is BsonDocument dictionaryDoc && IsDictionaryType(field.FieldType))
-                        {
-                            value = ConvertBsonDocumentToDictionary(dictionaryDoc, field.FieldType);
-                        }
-                        else
-                        {
-                            throw;
-                        }
-                    }
-                }
-
-                field.SetValue(entity, value);
-            }
-        }
-
+        var entity = Activator.CreateInstance(entityType) ?? throw new InvalidOperationException($"Failed to create instance of {entityType.FullName}");
+        PopulateEntityMembers(entityType, entity, document, isStruct: false);
         return entity;
     }
 
-    /// <summary>
-    /// 专门处理结构体的反序列化，因为结构体是值类型，需要特殊处理
-    /// </summary>
-    private static T FallbackFromDocumentForStruct<T>(BsonDocument document)
+    private static object PopulateEntityMembers([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, object target, BsonDocument document, bool isStruct)
     {
-        // 创建默认结构体实例
-        var entity = (T)Activator.CreateInstance(typeof(T))!;
-
-        // 获取所有属性和字段
-        var propertyMap = EntityMetadata<T>.Properties.ToDictionary(prop => ToCamelCase(prop.Name));
-        var fieldMap = typeof(T).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Where(f => !f.IsSpecialName && !f.IsLiteral)
-            .ToDictionary(field => ToCamelCase(field.Name));
-
-        // 由于结构体是值类型，我们需要使用反射来直接修改字段
-        // 或者使用装箱/拆箱技术
-        object boxedEntity = entity; // 装箱结构体
+        var metadata = GetMetadata(entityType);
 
         foreach (var (key, bsonValue) in document)
         {
-            // 首先尝试处理属性
-            if (propertyMap.TryGetValue(key, out var property) && property.CanWrite)
+            if (key == "_id" && metadata.IdProperty != null)
             {
-                if (bsonValue == null || bsonValue.IsNull)
-                {
-                    property.SetValue(boxedEntity, null);
-                    continue;
-                }
-
-                object? value;
-                // 对于Dictionary类型，特殊处理BsonDocument
-                if (bsonValue is BsonDocument dictDoc && IsDictionaryType(property.PropertyType))
-                {
-                    value = ConvertBsonDocumentToDictionary(dictDoc, property.PropertyType);
-                }
-                // 对于复杂对象类型，递归使用AotBsonMapper
-                else if (bsonValue is BsonDocument complexDoc && IsComplexObjectType(property.PropertyType))
-                {
-                    value = FromDocument(property.PropertyType, complexDoc);
-                }
-                // 对于集合类型，特殊处理BsonArray
-                else if (bsonValue is BsonArray bsonArray && IsCollectionType(property.PropertyType))
-                {
-                    value = ConvertBsonArrayToCollection(bsonArray, property.PropertyType);
-                }
-                else
-                {
-                    try
-                    {
-                        value = BsonConversion.FromBsonValue(bsonValue, property.PropertyType);
-                    }
-                    catch (InvalidOperationException)
-                    {
-                        // 如果BsonConversion无法处理复杂类型，使用FromDocument递归处理
-                        if (bsonValue is BsonDocument innerDoc && IsComplexObjectType(property.PropertyType))
-                        {
-                            value = FromDocument(property.PropertyType, innerDoc);
-                        }
-                        else
-                        {
-                            throw;
-                        }
-                    }
-                }
-
-                property.SetValue(boxedEntity, value);
+                var idValue = ConvertFromBsonValue(bsonValue, metadata.IdProperty.PropertyType);
+                metadata.IdProperty.SetValue(target, idValue);
                 continue;
             }
 
-            // 如果没有对应的属性，尝试处理字段
-            if (fieldMap.TryGetValue(key, out var field))
+            if (metadata.CamelCasePropertyMap.TryGetValue(key, out var property) && property.CanWrite)
             {
-                if (bsonValue == null || bsonValue.IsNull)
-                {
-                    if (field.FieldType.IsValueType)
-                    {
-                        // 值类型字段不能设置为null，跳过
-                        continue;
-                    }
-                    field.SetValue(boxedEntity, null);
-                    continue;
-                }
+                var converted = ConvertFromBsonValue(bsonValue, property.PropertyType);
+                property.SetValue(target, converted);
+                continue;
+            }
 
-                object? value;
-                // 对于Dictionary类型，特殊处理BsonDocument
-                if (bsonValue is BsonDocument dictDoc && IsDictionaryType(field.FieldType))
-                {
-                    value = ConvertBsonDocumentToDictionary(dictDoc, field.FieldType);
-                }
-                // 对于复杂对象类型，递归使用AotBsonMapper
-                else if (bsonValue is BsonDocument complexDoc && IsComplexObjectType(field.FieldType))
-                {
-                    value = FromDocument(field.FieldType, complexDoc);
-                }
-                // 对于集合类型，特殊处理BsonArray
-                else if (bsonValue is BsonArray bsonArray && IsCollectionType(field.FieldType))
-                {
-                    value = ConvertBsonArrayToCollection(bsonArray, field.FieldType);
-                }
-                else
-                {
-                    value = BsonConversion.FromBsonValue(bsonValue, field.FieldType);
-                }
-
-                field.SetValue(boxedEntity, value);
+            if (metadata.CamelCaseFieldMap.TryGetValue(key, out var field))
+            {
+                var converted = ConvertFromBsonValue(bsonValue, field.FieldType);
+                field.SetValue(target, converted);
             }
         }
 
-        // 拆箱并返回修改后的结构体
-        return (T)boxedEntity;
+        return target;
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "实体类型的具体成员由源生成器生成的注册代码保留。")]
+    private static BsonValue ConvertToBsonValue(object? value)
+    {
+        if (value == null)
+        {
+            return BsonNull.Value;
+        }
+
+        if (value is BsonValue bsonValue)
+        {
+            return bsonValue;
+        }
+
+        var runtimeType = value.GetType();
+
+        if (IsDictionaryType(runtimeType))
+        {
+            return ConvertDictionaryToBsonDocument(value);
+        }
+
+        if (IsCollectionType(runtimeType))
+        {
+            return ConvertCollectionToBsonArray((IEnumerable)value);
+        }
+
+        if (IsComplexObjectType(runtimeType))
+        {
+            return FallbackToDocument(runtimeType, value);
+        }
+
+        return BsonConversion.ToBsonValue(value);
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "AOT发布时由源生成器生成的实体注册代码会标记必要构造函数。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "AOT发布时由源生成器生成的实体注册代码会标记必要类型信息。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "AOT发布时由源生成器生成的实体注册代码会标记必要类型信息。")]
+    private static object? ConvertFromBsonValue(BsonValue bsonValue, Type targetType)
+    {
+        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
+
+        if (bsonValue == null || bsonValue.IsNull)
+        {
+            if (!targetType.IsValueType || Nullable.GetUnderlyingType(targetType) != null)
+            {
+                return null;
+            }
+
+            return Activator.CreateInstance(targetType);
+        }
+
+        var nonNullableType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+        if (IsDictionaryType(nonNullableType))
+        {
+            throw new NotSupportedException($"AOT 回退模式不支持将 BSON 文档反序列化为 {nonNullableType.FullName}，请为该类型注册源生成器适配器。");
+        }
+
+        if (IsCollectionType(nonNullableType))
+        {
+            throw new NotSupportedException($"AOT 回退模式不支持将 BSON 数组反序列化为 {nonNullableType.FullName}，请为该类型注册源生成器适配器。");
+        }
+
+        if (IsComplexObjectType(nonNullableType))
+        {
+            if (bsonValue is BsonDocument nestedDoc)
+            {
+                return FallbackFromDocument(nonNullableType, nestedDoc);
+            }
+        }
+
+        return ConvertPrimitiveValue(bsonValue, nonNullableType);
     }
 
     private static string ToCamelCase(string name)
@@ -492,7 +418,7 @@ public static class AotBsonMapper
         }
 
         // 排除集合类型（List<T>, Dictionary<K,V>, 数组等）
-        if (type.IsArray || IsCollectionType(type) || IsDictionaryType(type))
+        if (IsCollectionType(type) || IsDictionaryType(type))
         {
             return false;
         }
@@ -504,125 +430,12 @@ public static class AotBsonMapper
     /// <summary>
     /// 判断是否为集合类型
     /// </summary>
-    private static bool IsCollectionType(Type type)
-    {
-        if (type == typeof(byte[]))
-        {
-            return false;
-        }
-
-        // 包含数组类型
-        if (type.IsArray)
-        {
-            return true;
-        }
-
-        // 包含泛型集合类型（排除Dictionary，Dictionary是复杂对象）
-        return type.IsGenericType &&
-               (type.GetGenericTypeDefinition() == typeof(List<>) ||
-                type.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
-                type.GetGenericTypeDefinition() == typeof(ICollection<>) ||
-                type.GetGenericTypeDefinition() == typeof(IList<>));
-    }
-
-    /// <summary>
-    /// 非泛型的FromDocument方法，用于动态类型反序列化
-    /// </summary>
-    private static object FromDocument(Type targetType, BsonDocument document)
-    {
-        // AOT环境下直接使用FallbackFromDocument，避免泛型方法调用失败
-        var fallbackMethod = typeof(AotBsonMapper).GetMethod("FallbackFromDocument", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        var genericFallbackMethod = fallbackMethod?.MakeGenericMethod(targetType);
-        return genericFallbackMethod?.Invoke(null, new[] { document }) ?? throw new InvalidOperationException($"Failed to create FallbackFromDocument method for type {targetType}");
-    }
-
-    /// <summary>
-    /// 非泛型的ToDocument方法，用于动态类型序列化
-    /// </summary>
-    private static BsonDocument ToDocument(Type targetType, object entity)
-    {
-        var method = typeof(AotBsonMapper).GetMethod("ToDocument", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-        var genericMethod = method?.MakeGenericMethod(targetType);
-        return genericMethod?.Invoke(null, new[] { entity }) as BsonDocument ?? throw new InvalidOperationException($"Failed to create ToDocument method for type {targetType}");
-    }
-
-    /// <summary>
-    /// 将BsonArray转换为集合类型
-    /// </summary>
-    private static object ConvertBsonArrayToCollection(BsonArray bsonArray, Type targetType)
-    {
-        if (bsonArray == null) throw new ArgumentNullException(nameof(bsonArray));
-        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
-
-        // 处理数组类型
-        if (targetType.IsArray)
-        {
-            return ConvertBsonArrayToArray(bsonArray, targetType);
-        }
-
-        // 处理泛型集合类型
-        var genericArgs = targetType.GetGenericArguments();
-        if (genericArgs.Length == 0)
-        {
-            throw new ArgumentException($"Target type {targetType.FullName} is not a generic collection type");
-        }
-        var elementType = genericArgs[0];
-
-        // 创建List<T>的实例
-        var listType = typeof(List<>).MakeGenericType(elementType);
-        var list = Activator.CreateInstance(listType) as System.Collections.IList ?? throw new InvalidOperationException($"Failed to create list of type {listType}");
-
-        // 遍历BsonArray的元素
-        foreach (var bsonValue in bsonArray)
-        {
-            object? element;
-
-            // 如果元素是复杂对象类型
-            if (bsonValue is BsonDocument doc && IsComplexObjectType(elementType))
-            {
-                element = FromDocument(elementType, doc);
-            }
-            // 如果元素是集合类型（嵌套集合）
-            else if (bsonValue is BsonArray nestedArray && IsCollectionType(elementType))
-            {
-                element = ConvertBsonArrayToCollection(nestedArray, elementType);
-            }
-            else
-            {
-                // 使用BsonConversion处理基本类型
-                element = BsonConversion.FromBsonValue(bsonValue, elementType);
-            }
-
-            list.Add(element);
-        }
-
-        // 如果目标类型不是List<T>，尝试转换
-        if (targetType != listType)
-        {
-            // 对于数组类型
-            if (targetType.IsArray)
-            {
-                var array = Array.CreateInstance(elementType, list.Count);
-                for (int i = 0; i < list.Count; i++)
-                {
-                    array.SetValue(list[i], i);
-                }
-                return array;
-            }
-
-            // 对于其他集合类型，尝试构造
-            var constructor = targetType.GetConstructor(new[] { listType });
-            if (constructor != null)
-            {
-                return constructor.Invoke(new[] { list });
-            }
-
-            // 如果无法转换，返回List<T>
-            return list;
-        }
-
-        return list;
-    }
+    private static bool IsCollectionType(Type type) =>
+        type != null &&
+        type != typeof(string) &&
+        type != typeof(byte[]) &&
+        typeof(IEnumerable).IsAssignableFrom(type) &&
+        !IsDictionaryType(type);
 
     /// <summary>
     /// 将集合转换为BsonArray
@@ -631,35 +444,24 @@ public static class AotBsonMapper
     {
         if (collection == null) throw new ArgumentNullException(nameof(collection));
 
+        if (collection is not IEnumerable enumerable)
+        {
+            throw new ArgumentException("集合类型必须实现 IEnumerable 接口。", nameof(collection));
+        }
+
         BsonArray bsonArray = new BsonArray();
 
-        // 如果是IEnumerable，遍历元素
-        if (collection is System.Collections.IEnumerable enumerable)
+        foreach (var item in enumerable)
         {
-            foreach (var item in enumerable)
+            if (item == null)
             {
-                if (item == null)
-                {
-                    bsonArray = bsonArray.AddValue(BsonNull.Value);
-                }
-                // 如果元素是复杂对象，递归序列化
-                else if (IsComplexObjectType(item.GetType()))
-                {
-                    var bsonDoc = ToDocument(item.GetType(), item);
-                    bsonArray = bsonArray.AddValue(bsonDoc);
-                }
-                // 如果元素是集合，递归转换
-                else if (IsCollectionType(item.GetType()))
-                {
-                    var nestedArray = ConvertCollectionToBsonArray(item);
-                    bsonArray = bsonArray.AddValue(nestedArray);
-                }
-                else
-                {
-                    // 基本类型直接转换
-                    bsonArray = bsonArray.AddValue(BsonConversion.ToBsonValue(item));
-                }
+                bsonArray = bsonArray.AddValue(BsonNull.Value);
+                continue;
             }
+
+            var itemType = item.GetType();
+            var bsonValue = ConvertToBsonValue(item);
+            bsonArray = bsonArray.AddValue(bsonValue);
         }
 
         return bsonArray;
@@ -668,19 +470,7 @@ public static class AotBsonMapper
     /// <summary>
     /// 判断是否为Dictionary类型
     /// </summary>
-    private static bool IsDictionaryType(Type type)
-    {
-        if (type == null) return false;
-
-        // 检查是否为Dictionary<K,V>
-        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
-        {
-            return true;
-        }
-
-        // 检查是否实现了IDictionary接口
-        return type.GetInterfaces().Any(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
-    }
+    private static bool IsDictionaryType(Type type) => type != null && typeof(IDictionary).IsAssignableFrom(type);
 
     /// <summary>
     /// 将Dictionary转换为BsonDocument
@@ -689,184 +479,103 @@ public static class AotBsonMapper
     {
         if (dictionary == null) throw new ArgumentNullException(nameof(dictionary));
 
+        if (dictionary is not IDictionary rawDictionary)
+        {
+            throw new ArgumentException($"对象 {dictionary.GetType().FullName} 未实现 IDictionary 接口，无法在AOT回退模式下进行序列化。", nameof(dictionary));
+        }
+
         var bsonDocument = new BsonDocument();
 
-        // 如果是IDictionary<string, object>，直接处理
-        if (dictionary is System.Collections.Generic.IDictionary<string, object> stringDict)
+        foreach (DictionaryEntry entry in rawDictionary)
         {
-            foreach (var kvp in stringDict)
+            if (entry.Key is not string key)
             {
-                var bsonValue = kvp.Value != null ? BsonConversion.ToBsonValue(kvp.Value) : BsonNull.Value;
-                bsonDocument = bsonDocument.Set(kvp.Key, bsonValue);
-            }
-            return bsonDocument;
-        }
-
-        // 使用反射处理其他Dictionary类型
-        var dictType = dictionary.GetType();
-        if (!IsDictionaryType(dictType))
-        {
-            throw new ArgumentException($"Object is not a dictionary: {dictType.FullName}");
-        }
-
-        // 获取Dictionary的键值类型
-        var keyType = dictType.GetGenericArguments()[0];
-        var valueType = dictType.GetGenericArguments()[1];
-
-        // 只有键为string的Dictionary才支持转换为BsonDocument
-        if (keyType != typeof(string))
-        {
-            throw new NotSupportedException($"Only Dictionary<string, T> is supported, but got Dictionary<{keyType.Name}, {valueType.Name}>");
-        }
-
-        // 获取Keys和Values属性
-        var keysProperty = dictType.GetProperty("Keys");
-        var valuesProperty = dictType.GetProperty("Values");
-        var itemProperty = dictType.GetProperty("Item");
-
-        if (keysProperty == null || valuesProperty == null || itemProperty == null)
-        {
-            throw new InvalidOperationException("Dictionary does not have expected Keys, Values, or Item properties");
-        }
-
-        var keys = keysProperty.GetValue(dictionary) as System.Collections.ICollection;
-        var values = valuesProperty.GetValue(dictionary) as System.Collections.ICollection;
-
-        if (keys == null || values == null)
-        {
-            throw new InvalidOperationException("Failed to get Dictionary keys or values");
-        }
-
-        var keysEnumerator = keys.GetEnumerator();
-        var valuesEnumerator = values.GetEnumerator();
-
-        while (keysEnumerator.MoveNext() && valuesEnumerator.MoveNext())
-        {
-            var key = keysEnumerator.Current as string;
-            if (key == null)
-            {
-                throw new NotSupportedException("Dictionary keys must be strings for BSON serialization");
+                throw new NotSupportedException("AOT 回退仅支持字符串键的字典。");
             }
 
-            var value = valuesEnumerator.Current;
-            var bsonValue = value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
+            var bsonValue = entry.Value != null
+                ? ConvertToBsonValue(entry.Value)
+                : BsonNull.Value;
             bsonDocument = bsonDocument.Set(key, bsonValue);
         }
 
         return bsonDocument;
     }
 
-    /// <summary>
-    /// 将BsonDocument转换为Dictionary
-    /// </summary>
-    private static object ConvertBsonDocumentToDictionary(BsonDocument bsonDocument, Type targetType)
+    private static object? ConvertPrimitiveValue(BsonValue bsonValue, Type targetType)
     {
-        if (bsonDocument == null) throw new ArgumentNullException(nameof(bsonDocument));
-        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
-
-        if (!IsDictionaryType(targetType))
+        if (targetType == typeof(BsonValue) || targetType.IsAssignableFrom(bsonValue.GetType()))
         {
-            throw new ArgumentException($"Target type is not a dictionary: {targetType.FullName}");
+            return bsonValue;
         }
 
-        // 获取Dictionary的键值类型
-        var keyType = targetType.GetGenericArguments()[0];
-        var valueType = targetType.GetGenericArguments()[1];
-
-        // 只有键为string的Dictionary才支持
-        if (keyType != typeof(string))
+        return targetType switch
         {
-            throw new NotSupportedException($"Only Dictionary<string, T> is supported, but got Dictionary<{keyType.Name}, {valueType.Name}>");
-        }
-
-        // 创建Dictionary实例
-        var dictType = typeof(Dictionary<,>).MakeGenericType(keyType, valueType);
-        var dictionary = Activator.CreateInstance(dictType) ?? throw new InvalidOperationException($"Failed to create dictionary of type {dictType.FullName}");
-
-        // 使用反射获取Add方法
-        var addMethod = dictType.GetMethod("Add", new[] { keyType, valueType });
-        if (addMethod == null)
-        {
-            throw new InvalidOperationException("Dictionary does not have an Add method");
-        }
-
-        // 遍历BsonDocument的元素
-        foreach (var element in bsonDocument)
-        {
-            var key = element.Key;
-            var bsonValue = element.Value;
-
-            // 转换值
-            object? convertedValue;
-            if (bsonValue == null || bsonValue.IsNull)
+            var t when t == typeof(string) => bsonValue.ToString(),
+            var t when t == typeof(bool) => bsonValue switch
             {
-                convertedValue = null;
-            }
-            else if (bsonValue is BsonDocument nestedDoc && IsComplexObjectType(valueType))
+                BsonBoolean b => b.Value,
+                BsonString s => bool.Parse(s.Value),
+                _ => Convert.ToBoolean(bsonValue.ToString())
+            },
+            var t when t == typeof(int) => bsonValue switch
             {
-                convertedValue = FromDocument(valueType, nestedDoc);
-            }
-            else if (bsonValue is BsonArray bsonArray && IsCollectionType(valueType))
+                BsonInt32 i32 => i32.Value,
+                BsonInt64 i64 => checked((int)i64.Value),
+                BsonDouble dbl => Convert.ToInt32(dbl.Value),
+                BsonString s => int.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToInt32(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(long) => bsonValue switch
             {
-                convertedValue = ConvertBsonArrayToCollection(bsonArray, valueType);
-            }
-            else
+                BsonInt64 i64 => i64.Value,
+                BsonInt32 i32 => i32.Value,
+                BsonDouble dbl => Convert.ToInt64(dbl.Value),
+                BsonString s => long.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(double) => bsonValue switch
             {
-                convertedValue = BsonConversion.FromBsonValue(bsonValue, valueType);
-            }
-
-            // 添加到Dictionary
-            addMethod.Invoke(dictionary, new[] { key, convertedValue });
-        }
-
-        return dictionary;
-    }
-
-    /// <summary>
-    /// 将BsonArray转换为数组类型
-    /// </summary>
-    private static object ConvertBsonArrayToArray(BsonArray bsonArray, Type targetType)
-    {
-        if (bsonArray == null) throw new ArgumentNullException(nameof(bsonArray));
-        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
-        if (!targetType.IsArray) throw new ArgumentException($"Target type {targetType.FullName} is not an array type");
-
-        // 获取数组的元素类型
-        var elementType = targetType.GetElementType() ?? throw new InvalidOperationException($"Cannot get element type for array {targetType.FullName}");
-
-        // 创建数组
-        var array = Array.CreateInstance(elementType, bsonArray.Count);
-
-        // 遍历BsonArray的元素
-        for (int i = 0; i < bsonArray.Count; i++)
-        {
-            var bsonValue = bsonArray[i];
-            object? element;
-
-            // 如果元素是复杂对象类型
-            if (bsonValue is BsonDocument doc && IsComplexObjectType(elementType))
+                BsonDouble dbl => dbl.Value,
+                BsonInt64 i64 => i64.Value,
+                BsonInt32 i32 => i32.Value,
+                BsonString s => double.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToDouble(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(float) =>
+                Convert.ToSingle(ConvertPrimitiveValue(bsonValue, typeof(double)), CultureInfo.InvariantCulture),
+            var t when t == typeof(decimal) => bsonValue switch
             {
-                element = FromDocument(elementType, doc);
-            }
-            // 如果元素是集合类型（嵌套集合）
-            else if (bsonValue is BsonArray nestedArray && IsCollectionType(elementType))
+                BsonDecimal128 dec => dec.Value,
+                BsonDouble dbl => Convert.ToDecimal(dbl.Value, CultureInfo.InvariantCulture),
+                BsonString s => decimal.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToDecimal(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(DateTime) => bsonValue switch
             {
-                element = ConvertBsonArrayToCollection(nestedArray, elementType);
-            }
-            // 如果元素是数组类型（嵌套数组）
-            else if (bsonValue is BsonArray nestedArray2 && elementType.IsArray)
+                BsonDateTime date => date.Value,
+                BsonString s => DateTime.Parse(s.Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                _ => DateTime.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            },
+            var t when t == typeof(Guid) => bsonValue switch
             {
-                element = ConvertBsonArrayToArray(nestedArray2, elementType);
-            }
-            else
+                BsonBinary binary when binary.SubType is BsonBinary.BinarySubType.Uuid or BsonBinary.BinarySubType.UuidLegacy => new Guid(binary.Bytes),
+                BsonString s => Guid.Parse(s.Value),
+                _ => Guid.Parse(bsonValue.ToString())
+            },
+            var t when t == typeof(ObjectId) => bsonValue switch
             {
-                // 使用BsonConversion处理基本类型
-                element = BsonConversion.FromBsonValue(bsonValue, elementType);
-            }
-
-            array.SetValue(element, i);
-        }
-
-        return array;
+                BsonObjectId objectId => objectId.Value,
+                BsonString s => ObjectId.Parse(s.Value),
+                _ => ObjectId.Parse(bsonValue.ToString())
+            },
+            var t when t == typeof(byte[]) => bsonValue switch
+            {
+                BsonBinary binary => binary.Bytes,
+                BsonString s => Convert.FromBase64String(s.Value),
+                _ => throw new InvalidOperationException($"Cannot convert {bsonValue.GetType().Name} to byte[].")
+            },
+            _ => throw new NotSupportedException($"Unsupported conversion from BSON type '{bsonValue.GetType().Name}' to '{targetType.FullName}'. 为此类型注册源生成器适配器以获得完整支持。")
+        };
     }
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 
 namespace TinyDb.Metadata;
@@ -12,7 +13,7 @@ public static class MetadataExtractor
     /// </summary>
     /// <param name="entityType">实体类型</param>
     /// <returns>实体元数据</returns>
-    public static EntityMetadata ExtractEntityMetadata(Type entityType)
+    public static EntityMetadata ExtractEntityMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         if (entityType == null)
             throw new ArgumentNullException(nameof(entityType));

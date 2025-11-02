@@ -76,3 +76,20 @@ DebugTest/
 
 # Spec workflow
 .spec-workflow/
+
+# BenchmarkDotNet artifacts
+BenchmarkDotNet.Artifacts/
+**/*.benchmark.db
+**/quick_benchmark.db
+
+# NuGet build output
+nupkg-output/
+test-nuget/
+
+# SQLite files
+*.sqlite
+*.sqlite3
+
+# Generated source files
+Generated/
+**/Generated/

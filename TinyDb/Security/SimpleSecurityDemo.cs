@@ -13,7 +13,7 @@ public static class SimpleSecurityDemo
     /// <summary>
     /// 运行安全系统演示
     /// </summary>
-    public static async Task RunAsync()
+    public static Task RunAsync()
     {
         Console.WriteLine("=== TinyDb Option方式密码保护演示 ===");
         Console.WriteLine();
@@ -148,6 +148,8 @@ public static class SimpleSecurityDemo
                 }
             }
         }
+
+        return Task.CompletedTask;
     }
 }
 

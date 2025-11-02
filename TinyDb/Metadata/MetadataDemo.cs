@@ -11,7 +11,7 @@ public static class MetadataDemo
     /// <summary>
     /// 运行元数据演示
     /// </summary>
-    public static async Task RunAsync()
+    public static Task RunAsync()
     {
         Console.WriteLine("=== TinyDb 元数据系统演示 ===");
         Console.WriteLine();
@@ -71,6 +71,8 @@ public static class MetadataDemo
         Console.WriteLine();
         Console.WriteLine("✅ 元数据演示完成！");
         Console.WriteLine("🎯 核心库仅提供名称和类型，UI层负责显示逻辑");
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

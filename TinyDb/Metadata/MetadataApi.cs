@@ -1,5 +1,6 @@
-namespace TinyDb.Metadata;
+using System.Diagnostics.CodeAnalysis;
 
+namespace TinyDb.Metadata;
 /// <summary>
 /// 元数据查询API - 核心库提供的元数据查询接口
 /// 这部分是核心库的职责，仅提供基础信息查询
@@ -14,7 +15,7 @@ public static class MetadataApi
     /// <returns>属性信息列表</returns>
     public static List<(string PropertyName, string PropertyType)> GetEntityProperties(
         this MetadataManager metadataManager,
-        Type entityType)
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var metadata = metadataManager.GetEntityMetadata(entityType);
         if (metadata == null)
@@ -33,7 +34,7 @@ public static class MetadataApi
     /// <returns>显示名称</returns>
     public static string GetEntityDisplayName(
         this MetadataManager metadataManager,
-        Type entityType)
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var metadata = metadataManager.GetEntityMetadata(entityType);
         return metadata?.DisplayName ?? entityType.Name;
@@ -48,7 +49,7 @@ public static class MetadataApi
     /// <returns>属性显示名称</returns>
     public static string GetPropertyDisplayName(
         this MetadataManager metadataManager,
-        Type entityType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType,
         string propertyName)
     {
         var metadata = metadataManager.GetEntityMetadata(entityType);
@@ -65,7 +66,7 @@ public static class MetadataApi
     /// <returns>属性类型名称</returns>
     public static string? GetPropertyType(
         this MetadataManager metadataManager,
-        Type entityType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType,
         string propertyName)
     {
         var metadata = metadataManager.GetEntityMetadata(entityType);
@@ -82,7 +83,7 @@ public static class MetadataApi
     /// <returns>是否必需</returns>
     public static bool IsPropertyRequired(
         this MetadataManager metadataManager,
-        Type entityType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType,
         string propertyName)
     {
         var metadata = metadataManager.GetEntityMetadata(entityType);
@@ -99,7 +100,7 @@ public static class MetadataApi
     /// <returns>显示顺序</returns>
     public static int GetPropertyOrder(
         this MetadataManager metadataManager,
-        Type entityType,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType,
         string propertyName)
     {
         var metadata = metadataManager.GetEntityMetadata(entityType);

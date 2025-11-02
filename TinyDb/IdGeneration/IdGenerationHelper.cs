@@ -64,7 +64,7 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
             }
 
             var newId = generator.GenerateId(typeof(T), idProperty, generationAttribute.SequenceName);
-            var convertedValue = TinyDb.Serialization.BsonConversion.FromBsonValue(newId, idProperty.PropertyType);
+            var convertedValue = ConvertGeneratedId(newId, idProperty.PropertyType);
             idProperty.SetValue(entity, convertedValue);
 
             return true;
@@ -105,5 +105,55 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
 
         var generationAttribute = idProperty.GetCustomAttribute<IdGenerationAttribute>();
         return generationAttribute?.Strategy ?? IdGenerationStrategy.None;
+    }
+
+    private static object? ConvertGeneratedId(BsonValue bsonValue, Type targetType)
+    {
+        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
+
+        var nonNullableType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+        var rawValue = bsonValue.RawValue;
+
+        if (rawValue == null)
+        {
+            return null;
+        }
+
+        if (nonNullableType.IsInstanceOfType(rawValue))
+        {
+            return rawValue;
+        }
+
+        if (nonNullableType == typeof(string))
+        {
+            return rawValue.ToString();
+        }
+
+        if (nonNullableType == typeof(Guid))
+        {
+            return rawValue switch
+            {
+                Guid guid => guid,
+                string str => Guid.Parse(str),
+                _ => Guid.Parse(rawValue.ToString() ?? string.Empty)
+            };
+        }
+
+        if (nonNullableType == typeof(ObjectId))
+        {
+            return rawValue switch
+            {
+                ObjectId objectId => objectId,
+                string str => ObjectId.Parse(str),
+                _ => ObjectId.Parse(rawValue.ToString() ?? string.Empty)
+            };
+        }
+
+        if (nonNullableType.IsEnum)
+        {
+            return Enum.Parse(nonNullableType, rawValue.ToString() ?? string.Empty, ignoreCase: true);
+        }
+
+        return Convert.ChangeType(rawValue, nonNullableType);
     }
 }

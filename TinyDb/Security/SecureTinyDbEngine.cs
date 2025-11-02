@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using TinyDb.Core;
 using TinyDb.Collections;
 
@@ -173,7 +174,8 @@ public sealed class SecureTinyDbEngine : IDisposable
     /// <param name="name">集合名称</param>
     /// <returns>集合实例</returns>
     /// <exception cref="UnauthorizedAccessException">未通过身份验证时抛出</exception>
-    public ILiteCollection<T> GetCollection<T>(string? name = null) where T : class, new()
+    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string? name = null)
+        where T : class, new()
     {
         ThrowIfDisposed();
         ThrowIfNotAuthenticated();
@@ -226,7 +228,7 @@ public sealed class SecureTinyDbEngine : IDisposable
     {
         ThrowIfDisposed();
         ThrowIfNotAuthenticated();
-        return _engine.ToString();
+        return _engine.ToString()!;
     }
 
     /// <summary>

@@ -7,7 +7,7 @@ using System.Reflection;
 
 namespace TinyDb.Query;
 
-public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T> : IQueryable<T>
+public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : IQueryable<T>
     where T : class, new()
 {
     private readonly QueryExecutor _executor;
@@ -91,7 +91,7 @@ public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMem
 
 internal static class QueryPipeline
 {
-    public static object? Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExecutor executor, string collectionName, Expression expression)
+    public static object? Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutor executor, string collectionName, Expression expression)
         where T : class, new()
     {
         var predicate = PredicateBuilder<T>.Build(expression);

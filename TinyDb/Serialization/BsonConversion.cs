@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using TinyDb.Bson;
 
@@ -74,7 +75,10 @@ public static class BsonConversion
         return ToBsonValue(value);
     }
 
-    public static object? FromBsonValue(BsonValue bsonValue, Type targetType)
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2070", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
+    public static object? FromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties)] Type targetType)
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
         if (targetType == null) throw new ArgumentNullException(nameof(targetType));

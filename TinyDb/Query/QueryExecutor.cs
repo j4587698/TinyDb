@@ -34,7 +34,7 @@ public sealed class QueryExecutor
     /// <param name="collectionName">集合名称</param>
     /// <param name="expression">查询表达式</param>
     /// <returns>查询结果</returns>
-    public IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
+    public IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
         // 立即验证参数，不延迟执行
@@ -61,7 +61,7 @@ public sealed class QueryExecutor
     /// <typeparam name="T">文档类型</typeparam>
     /// <param name="executionPlan">执行计划</param>
     /// <returns>查询结果</returns>
-    private IEnumerable<T> ExecuteIndexScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExecutionPlan executionPlan)
+    private IEnumerable<T> ExecuteIndexScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
         where T : class, new()
     {
         var indexManager = _engine.GetIndexManager(executionPlan.CollectionName);
@@ -121,7 +121,7 @@ public sealed class QueryExecutor
     /// <typeparam name="T">文档类型</typeparam>
     /// <param name="executionPlan">执行计划</param>
     /// <returns>查询结果</returns>
-    private IEnumerable<T> ExecuteIndexSeek<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExecutionPlan executionPlan)
+    private IEnumerable<T> ExecuteIndexSeek<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
         where T : class, new()
     {
         var indexManager = _engine.GetIndexManager(executionPlan.CollectionName);
@@ -178,7 +178,7 @@ public sealed class QueryExecutor
     /// <param name="collectionName">集合名称</param>
     /// <param name="expression">查询表达式</param>
     /// <returns>查询结果</returns>
-    private IEnumerable<T> ExecuteFullTableScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
+    private IEnumerable<T> ExecuteFullTableScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
         // 获取所有文档

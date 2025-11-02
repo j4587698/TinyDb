@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using TinyDb.Collections;
 using TinyDb.Core;
@@ -26,7 +27,7 @@ public class MetadataManager
     /// 保存实体类型元数据
     /// </summary>
     /// <param name="entityType">实体类型</param>
-    public void SaveEntityMetadata(Type entityType)
+    public void SaveEntityMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var metadata = MetadataExtractor.ExtractEntityMetadata(entityType);
         var collectionName = GetMetadataCollectionName(entityType);
@@ -56,7 +57,7 @@ public class MetadataManager
     /// </summary>
     /// <param name="entityType">实体类型</param>
     /// <returns>实体元数据</returns>
-    public EntityMetadata? GetEntityMetadata(Type entityType)
+    public EntityMetadata? GetEntityMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var collectionName = GetMetadataCollectionName(entityType);
         var collection = _engine.GetCollection<MetadataDocument>(collectionName);
@@ -91,7 +92,7 @@ public class MetadataManager
     /// </summary>
     /// <param name="entityType">实体类型</param>
     /// <returns>是否有元数据</returns>
-    public bool HasMetadata(Type entityType)
+    public bool HasMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var collectionName = GetMetadataCollectionName(entityType);
         return _engine.CollectionExists(collectionName);
@@ -100,7 +101,7 @@ public class MetadataManager
     /// <summary>
     /// 获取元数据集合名称
     /// </summary>
-    private static string GetMetadataCollectionName(Type entityType)
+    private static string GetMetadataCollectionName([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         return $"{METADATA_COLLECTION_PREFIX}{entityType.FullName ?? entityType.Name}";
     }

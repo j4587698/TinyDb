@@ -454,7 +454,7 @@ public sealed class TinyDbEngine : IDisposable
     /// <summary>
     /// 获取（或懒加载创建）指定名称的文档集合
     /// </summary>
-    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(string? name = null) where T : class, new()
+    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string? name = null) where T : class, new()
     {
         ThrowIfDisposed();
         EnsureInitialized();
@@ -842,8 +842,6 @@ public sealed class TinyDbEngine : IDisposable
             entryIndex = location.EntryIndex;
             return true;
         }
-
-        return false;
     }
 
     private bool TryEnsureDocumentLocation(string collectionName, CollectionState state, BsonValue id, out Page page, out List<PageDocumentEntry> entries, out ushort entryIndex)
@@ -2313,7 +2311,7 @@ public sealed class TinyDbEngine : IDisposable
     /// <typeparam name="T">文档类型</typeparam>
     /// <returns>文档集合</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ILiteCollection<T> GetCollectionAOT<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>() where T : class, new()
+    public ILiteCollection<T> GetCollectionAOT<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>() where T : class, new()
     {
         return GetCollection<T>();
     }

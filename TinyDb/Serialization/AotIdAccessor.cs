@@ -1,3 +1,4 @@
+using System;
 using System.Diagnostics.CodeAnalysis;
 using TinyDb.Bson;
 using TinyDb.IdGeneration;
@@ -7,7 +8,7 @@ namespace TinyDb.Serialization;
 /// <summary>
 /// 为实体类型提供AOT友好的ID访问操作。
 /// </summary>
-public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
+public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>
 {
     public static BsonValue GetId(T entity)
     {
@@ -44,7 +45,7 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
             return;
         }
 
-        var converted = BsonConversion.FromBsonValue(id, idProperty.PropertyType);
+        var converted = ConvertIdValue(id, idProperty.PropertyType);
         idProperty.SetValue(entity, converted);
     }
 
@@ -93,5 +94,55 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         if (idProperty == null) return false;
 
         return AutoIdGenerator.GenerateIdIfNeeded(entity, idProperty);
+    }
+
+    private static object? ConvertIdValue(BsonValue bsonValue, Type targetType)
+    {
+        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
+
+        var nonNullableType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+        var rawValue = bsonValue.RawValue;
+
+        if (rawValue == null)
+        {
+            return null;
+        }
+
+        if (nonNullableType.IsInstanceOfType(rawValue))
+        {
+            return rawValue;
+        }
+
+        if (nonNullableType == typeof(string))
+        {
+            return rawValue.ToString();
+        }
+
+        if (nonNullableType == typeof(Guid))
+        {
+            return rawValue switch
+            {
+                Guid guid => guid,
+                string str => Guid.Parse(str),
+                _ => Guid.Parse(rawValue.ToString() ?? string.Empty)
+            };
+        }
+
+        if (nonNullableType == typeof(ObjectId))
+        {
+            return rawValue switch
+            {
+                ObjectId objectId => objectId,
+                string str => ObjectId.Parse(str),
+                _ => ObjectId.Parse(rawValue.ToString() ?? string.Empty)
+            };
+        }
+
+        if (nonNullableType.IsEnum)
+        {
+            return Enum.Parse(nonNullableType, rawValue.ToString() ?? string.Empty, ignoreCase: true);
+        }
+
+        return Convert.ChangeType(rawValue, nonNullableType);
     }
 }
