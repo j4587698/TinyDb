@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
@@ -278,6 +279,7 @@ public class TransactionACIDTests
     /// 测试事务的持久性 (Durability) - 提交后数据持久存在
     /// </summary>
     [Test]
+    [SuppressMessage("TUnit", "TUnit0018", Justification = "测试需模拟引擎重启，显式替换测试级资源引用。")]
     public async Task Transaction_ShouldMaintainDurability()
     {
         // Arrange
@@ -291,22 +293,24 @@ public class TransactionACIDTests
 
         // 重新创建引擎实例（模拟重启）
         _engine.Dispose();
-        var newEngine = new TinyDbEngine(_testFile);
-        var newCollection = newEngine.GetCollection<UserWithIntId>();
+        using (var reopenedEngine = new TinyDbEngine(_testFile))
+        {
+            var newCollection = reopenedEngine.GetCollection<UserWithIntId>();
 
-        // Assert - 验证数据持久性
-        var persistedUser = newCollection.FindById(userId);
-        await Assert.That(persistedUser).IsNotNull();
-        await Assert.That(persistedUser.Name).IsEqualTo("DurableUser");
-        await Assert.That(persistedUser.Age).IsEqualTo(25);
+            // Assert - 验证数据持久性
+            var persistedUser = newCollection.FindById(userId);
+            await Assert.That(persistedUser).IsNotNull();
+            await Assert.That(persistedUser.Name).IsEqualTo("DurableUser");
+            await Assert.That(persistedUser.Age).IsEqualTo(25);
 
-        // 验证所有数据都持久化了
-        var allUsers = newCollection.FindAll().ToList();
-        await Assert.That(allUsers).HasCount(1);
-        await Assert.That(allUsers[0].Id == userId).IsTrue();
+            // 验证所有数据都持久化了
+            var allUsers = newCollection.FindAll().ToList();
+            await Assert.That(allUsers).HasCount(1);
+            await Assert.That(allUsers[0].Id == userId).IsTrue();
+        }
 
-        newEngine.Dispose();
-        _engine = newEngine; // 保存引用以便清理
+        // 重新初始化引擎供后续使用
+        _engine = new TinyDbEngine(_testFile);
     }
 
     /// <summary>
@@ -424,7 +428,7 @@ public class TransactionACIDTests
 
             transaction.Commit();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             transaction.Rollback();
             throw;

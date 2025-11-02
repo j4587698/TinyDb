@@ -348,12 +348,16 @@ public class AOTSerializationBoundaryTests
         // 验证List<T>
         await Assert.That(deserializedEntity.StringList).IsNotNull();
         await Assert.That(deserializedEntity.StringList).HasCount(entity.StringList.Count);
-        await Assert.That(deserializedEntity.StringList).IsEquivalentTo(entity.StringList);
+        await Assert.That(deserializedEntity.StringList!
+                .SequenceEqual(entity.StringList, StringComparer.Ordinal))
+            .IsTrue();
 
         // 验证数组
         await Assert.That(deserializedEntity.IntArray).IsNotNull();
         await Assert.That(deserializedEntity.IntArray).HasCount(entity.IntArray.Length);
-        await Assert.That(deserializedEntity.IntArray).IsEquivalentTo(entity.IntArray);
+        await Assert.That(deserializedEntity.IntArray!
+                .SequenceEqual(entity.IntArray))
+            .IsTrue();
 
         // 验证Dictionary<K,V>
         await Assert.That(deserializedEntity.StringIntDict).IsNotNull();

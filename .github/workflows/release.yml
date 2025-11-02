@@ -40,8 +40,8 @@ jobs:
       run: |
         # 获取当前提交的版本号
         CURRENT_VERSION=$(git show HEAD:TinyDb/TinyDb.csproj | grep '<Version>' | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | xargs)
-        echo "Current version: ${{ env.current_version }}"
-        echo "current_version=${{ env.current_version }}" >> $GITHUB_ENV
+        echo "Current version: $CURRENT_VERSION"
+        echo "current_version=$CURRENT_VERSION" >> $GITHUB_ENV
 
     - name: Check if version changed
       id: check_version
@@ -72,7 +72,7 @@ jobs:
 
         # 构建 NuGet 包
         echo "Building NuGet package..."
-        dotnet pack TinyDb/TinyDb.csproj -c Release --no-build --output ./nupkg
+        dotnet pack TinyDb/TinyDb.csproj -c Release --no-restore --output ./nupkg
 
         # 验证包内容
         echo "Verifying package contents..."
