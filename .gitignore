@@ -13,9 +13,12 @@
 *.db
 *.db-*
 *.db-*
+*.wal
 demo.db
 debug.db
 idtest.db
+*_demo.db
+demo*.db
 
 # User-specific files
 *.user
