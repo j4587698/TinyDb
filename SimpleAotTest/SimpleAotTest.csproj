@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net9.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <PublishAot>true</PublishAot>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="../TinyDb/Bson/*.cs" />
+        <Compile Include="../TinyDb/Core/*.cs" />
+        <Compile Include="../TinyDb/Storage/*.cs" />
+        <Compile Include="../TinyDb/Utils/*.cs" />
+        <Compile Include="../TinyDb/Collections/*.cs" />
+        <Compile Include="../TinyDb/Serialization/*.cs" />
+        <Compile Include="../TinyDb/Attributes/*.cs" />
+        <Compile Include="../TinyDb/Metadata/*.cs" />
+        <Compile Include="../TinyDb/Index/*.cs" />
+        <Compile Include="../TinyDb/Query/*.cs" />
+        <Compile Include="../TinyDb/Security/*.cs" />
+        <Compile Include="../TinyDb/IdGeneration/*.cs" />
+    </ItemGroup>
+
+</Project>
