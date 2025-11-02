@@ -14,8 +14,8 @@
         <Copyright>Copyright © 2024 TinyDb Team</Copyright>
         <IsAotCompatible>true</IsAotCompatible>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
-        <PackageProjectUrl>https://github.com/your-org/tinydb</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/your-org/tinydb</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/j4587698/TinyDb</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/j4587698/TinyDb</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <PackageTags>nosql;database;aot;embedded;lightweight</PackageTags>
     </PropertyGroup>
