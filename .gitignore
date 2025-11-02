@@ -12,18 +12,6 @@
 # TinyDb database files
 *.db
 *.wal
-demo.db
-debug.db
-idtest.db
-*_demo.db
-demo*.db
-simple_crud_demo.db
-transaction_demo.db
-index_demo.db
-metadata_demo.db
-secure_demo.db
-option_secure_demo.db
-advanced_demo.db
 
 # User-specific files
 *.user
@@ -84,11 +72,6 @@ DebugTest/
 
 # BenchmarkDotNet artifacts
 BenchmarkDotNet.Artifacts/
-**/*.benchmark.db
-**/quick_benchmark.db
-
-# TinyDb benchmark databases
-**/tinydb_benchmark.db
 
 # NuGet build output
 nupkg-output/
