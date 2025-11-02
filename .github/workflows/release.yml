@@ -112,13 +112,18 @@ jobs:
       if: env.version_changed == 'true'
       run: |
         echo "Setting up NuGet..."
-        dotnet nuget add source --name "github" --username "github-actions" --password "${{ secrets.GITHUB_TOKEN }}" --store-password-in-clear-text
 
-    - name: Publish to NuGet
+    - name: Publish to NuGet.org
       if: env.version_changed == 'true'
       run: |
-        echo "Publishing to NuGet..."
-        dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source "github" --skip-duplicate --no-symbols
+        echo "Publishing to NuGet.org..."
+        dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+
+    - name: Publish to GitHub Packages
+      if: env.version_changed == 'true'
+      run: |
+        echo "Publishing to GitHub Packages..."
+        dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source https://nuget.pkg.github.com/j4587698/index.json --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
 
         # 清理
         rm -rf ./nupkg
@@ -132,7 +137,7 @@ jobs:
         tag_name: v${{ env.CURRENT_VERSION }}
         release_name: TinyDb v${{ env.CURRENT_VERSION }}
         body: |
-          ## 🚀 TinyDb v${{ env.CURRENT_VERSION }
+          ## 🚀 TinyDb v${{ env.CURRENT_VERSION }}
 
           ### 📦 包信息
           - **版本:** v${{ env.CURRENT_VERSION }}
@@ -154,7 +159,7 @@ jobs:
 
           ### 📋 安装使用
           ```bash
-          dotnet add package TinyDb --version ${{ env.CURRENT_VERSION }
+          dotnet add package TinyDb --version ${{ env.CURRENT_VERSION }}
           ```
 
           ### 🔗 相关链接
