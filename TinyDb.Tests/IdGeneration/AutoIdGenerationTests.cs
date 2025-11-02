@@ -138,9 +138,11 @@ public class AutoIdGenerationTests
 
         // 验证GUID版本（应该是版本7，但由于我们的实现，可能显示为其他版本，主要验证唯一性）
         // Guid.Version 在 .NET 8 中不可用，所以我们通过检查字节来验证版本
-        var versionByte = ids[0].ToByteArray()[7];
-        var version = (versionByte & 0x0F) >> 4;
-        await Assert.That(version).IsGreaterThan(0);
+        var guidBytes = ids[0].ToByteArray();
+        // 根据RFC 4122，版本位位于字节7的高4位 (索引7)
+        var versionByte = guidBytes[7];
+        var version = (versionByte & 0xF0) >> 4; // 取高4位
+        await Assert.That(version).IsEqualTo(7); // 应该是版本7
     }
 
     [Test]

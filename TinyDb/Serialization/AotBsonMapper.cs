@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
@@ -24,6 +25,9 @@ public static class AotBsonMapper
         DynamicallyAccessedMemberTypes.PublicProperties |
         DynamicallyAccessedMemberTypes.PublicFields |
         DynamicallyAccessedMemberTypes.PublicMethods;
+
+    private const DynamicallyAccessedMemberTypes TypeInspectionRequirements =
+        EntityMemberRequirements | DynamicallyAccessedMemberTypes.Interfaces;
 
     private sealed class ReferenceEqualityComparer : IEqualityComparer<object>
     {
@@ -374,12 +378,20 @@ public static class AotBsonMapper
 
         if (IsDictionaryType(nonNullableType))
         {
-            throw new NotSupportedException($"AOT 回退模式不支持将 BSON 文档反序列化为 {nonNullableType.FullName}，请为该类型注册源生成器适配器。");
+            if (bsonValue is BsonDocument doc)
+            {
+                return ConvertDictionary(nonNullableType, doc);
+            }
+            throw new NotSupportedException($"无法将 BSON 类型 {bsonValue.BsonType} 反序列化为字典类型 {nonNullableType.FullName}");
         }
 
         if (IsCollectionType(nonNullableType))
         {
-            throw new NotSupportedException($"AOT 回退模式不支持将 BSON 数组反序列化为 {nonNullableType.FullName}，请为该类型注册源生成器适配器。");
+            if (bsonValue is BsonArray array)
+            {
+                return ConvertCollection(nonNullableType, array);
+            }
+            throw new NotSupportedException($"无法将 BSON 类型 {bsonValue.BsonType} 反序列化为集合类型 {nonNullableType.FullName}");
         }
 
         if (IsComplexObjectType(nonNullableType))
@@ -502,7 +514,205 @@ public static class AotBsonMapper
         return bsonDocument;
     }
 
-    private static object? ConvertPrimitiveValue(BsonValue bsonValue, Type targetType)
+    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "回退路径需要创建泛型字典以保持兼容性，推荐使用 Source Generator 提供的静态适配器。")]
+    private static object? ConvertDictionary([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type dictionaryType, BsonDocument document)
+    {
+        if (document == null) return null;
+
+        var (keyType, valueType, concreteType) = ResolveDictionaryTypes(dictionaryType);
+        if (keyType != typeof(string))
+        {
+            throw new NotSupportedException($"AOT 回退模式仅支持字符串键的字典，但实际键类型为 {keyType.FullName}。");
+        }
+
+        var dictionaryInstance = Activator.CreateInstance(concreteType)
+            ?? throw new InvalidOperationException($"无法创建字典类型 {concreteType.FullName} 的实例。");
+
+        var addMethod = concreteType
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(m => m.Name == "Add" && m.GetParameters().Length == 2);
+        if (addMethod == null)
+        {
+            throw new NotSupportedException($"字典类型 {concreteType.FullName} 缺少可用的 Add 方法，无法在 AOT 回退模式下填充数据。");
+        }
+
+        foreach (var element in document)
+        {
+            var value = ConvertFromBsonValue(element.Value, valueType);
+            addMethod.Invoke(dictionaryInstance, new[] { element.Key, value });
+        }
+
+        return dictionaryInstance;
+    }
+
+    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "回退路径需要创建泛型集合以保持兼容性，推荐使用 Source Generator 提供的静态适配器。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2075", Justification = "回退路径通过反射访问集合的 Add 方法，仅在缺失 Source Generator 适配器时启用。")]
+    private static object? ConvertCollection([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type collectionType, BsonArray array)
+    {
+        if (array == null) return null;
+
+        if (collectionType.IsArray)
+        {
+            var arrayElementType = collectionType.GetElementType()
+                ?? throw new NotSupportedException($"无法确定数组类型 {collectionType.FullName} 的元素类型。");
+
+            var arrayInstance = Array.CreateInstance(arrayElementType, array.Count);
+            for (int i = 0; i < array.Count; i++)
+            {
+                var element = ConvertFromBsonValue(array[i], arrayElementType);
+                arrayInstance.SetValue(element, i);
+            }
+            return arrayInstance;
+        }
+
+        var (elementType, concreteType) = ResolveCollectionTypes(collectionType);
+
+        var candidateType = concreteType;
+        object? instance = TryCreateInstance(candidateType);
+        if (instance == null)
+        {
+            candidateType = typeof(List<>).MakeGenericType(elementType);
+            instance = TryCreateInstance(candidateType);
+        }
+
+        if (instance == null)
+        {
+            throw new InvalidOperationException($"无法创建集合类型 {collectionType.FullName} 的实例。");
+        }
+
+        var addMethod = instance.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(m => m.Name == "Add" && m.GetParameters().Length == 1);
+
+        if (addMethod == null)
+        {
+            throw new NotSupportedException($"集合类型 {instance.GetType().FullName} 缺少可用的 Add 方法，无法在 AOT 回退模式下填充数据。");
+        }
+
+        var addParameterType = addMethod.GetParameters()[0].ParameterType;
+
+        foreach (var bsonValue in array)
+        {
+            var element = ConvertFromBsonValue(bsonValue, addParameterType);
+            addMethod.Invoke(instance, new[] { element });
+        }
+
+        if (collectionType.IsAssignableFrom(instance.GetType()))
+        {
+        return instance;
+    }
+
+        var constructed = TryWrapWithTargetCollection(collectionType, instance);
+        if (constructed != null)
+        {
+            return constructed;
+        }
+
+        throw new NotSupportedException($"AOT 回退模式无法将 {instance.GetType().FullName} 转换为 {collectionType.FullName}。请为该集合类型注册源生成器适配器。");
+    }
+
+    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "回退路径需要创建泛型字典以保持兼容性，推荐使用 Source Generator 提供的静态适配器。")]
+    private static (Type KeyType, Type ValueType, Type ConcreteType) ResolveDictionaryTypes([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type dictionaryType)
+    {
+        var sourceType = dictionaryType;
+        if (!sourceType.IsGenericType || sourceType.GetGenericArguments().Length != 2)
+        {
+            sourceType = dictionaryType.GetInterfaces()
+                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+                ?? throw new NotSupportedException($"字典类型 {dictionaryType.FullName} 未实现泛型 IDictionary<TKey, TValue> 接口，无法在 AOT 回退模式下使用。");
+        }
+
+        var args = sourceType.GetGenericArguments();
+        var keyType = args[0];
+        var valueType = args[1];
+
+        var concreteType = dictionaryType;
+        if (dictionaryType.IsInterface || dictionaryType.IsAbstract)
+        {
+            concreteType = typeof(Dictionary<,>).MakeGenericType(keyType, valueType);
+        }
+
+        return (keyType, valueType, concreteType);
+    }
+
+    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "回退路径需要创建泛型集合以保持兼容性，推荐使用 Source Generator 提供的静态适配器。")]
+    private static (Type ElementType, Type ConcreteType) ResolveCollectionTypes([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type collectionType)
+    {
+        var elementType = ResolveCollectionElementType(collectionType);
+
+        if (collectionType.IsInterface || collectionType.IsAbstract)
+        {
+            var listType = typeof(List<>).MakeGenericType(elementType);
+            return (elementType, listType);
+        }
+
+        return (elementType, collectionType);
+    }
+
+    private static Type ResolveCollectionElementType([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type collectionType)
+    {
+        if (collectionType.IsArray)
+        {
+            return collectionType.GetElementType()
+                   ?? throw new NotSupportedException($"无法确定数组类型 {collectionType.FullName} 的元素类型。");
+        }
+
+        if (collectionType.IsGenericType && collectionType.GetGenericArguments().Length == 1)
+        {
+            return collectionType.GetGenericArguments()[0];
+        }
+
+        var interfaceType = collectionType.GetInterfaces()
+            .FirstOrDefault(i => i.IsGenericType && (i.GetGenericTypeDefinition() == typeof(IEnumerable<>) ||
+                                                     i.GetGenericTypeDefinition() == typeof(ICollection<>) ||
+                                                     i.GetGenericTypeDefinition() == typeof(IList<>)));
+
+        return interfaceType?.GetGenericArguments()[0] ?? typeof(object);
+    }
+
+    private static object? TryCreateInstance([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type type)
+    {
+        try
+        {
+            return Activator.CreateInstance(type);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static object? TryWrapWithTargetCollection([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type targetType, object sourceCollection)
+    {
+        var sourceType = sourceCollection.GetType();
+
+        var matchingCtor = targetType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(ctor =>
+            {
+                var parameters = ctor.GetParameters();
+                return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(sourceCollection);
+            });
+        if (matchingCtor != null)
+        {
+            return matchingCtor.Invoke(new[] { sourceCollection });
+        }
+
+        var enumerableCtor = targetType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(ctor =>
+            {
+                var parameters = ctor.GetParameters();
+                return parameters.Length == 1 && typeof(IEnumerable).IsAssignableFrom(parameters[0].ParameterType);
+            });
+
+        if (enumerableCtor != null)
+        {
+            return enumerableCtor.Invoke(new[] { sourceCollection });
+        }
+
+        return null;
+    }
+
+    private static object ConvertPrimitiveValue(BsonValue bsonValue, Type targetType)
     {
         if (targetType == typeof(BsonValue) || targetType.IsAssignableFrom(bsonValue.GetType()))
         {
@@ -568,6 +778,13 @@ public static class AotBsonMapper
                 BsonObjectId objectId => objectId.Value,
                 BsonString s => ObjectId.Parse(s.Value),
                 _ => ObjectId.Parse(bsonValue.ToString())
+            },
+            var t when t.IsEnum => bsonValue switch
+            {
+                BsonString s => Enum.Parse(t, s.Value, true),
+                BsonInt32 i32 => Enum.ToObject(t, i32.Value),
+                BsonInt64 i64 => Enum.ToObject(t, i64.Value),
+                _ => Enum.Parse(t, bsonValue.ToString(), true)
             },
             var t when t == typeof(byte[]) => bsonValue switch
             {

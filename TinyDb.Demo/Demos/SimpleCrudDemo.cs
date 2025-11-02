@@ -11,7 +11,7 @@ namespace TinyDb.Demo.Demos;
 /// </summary>
 public static class SimpleCrudDemo
 {
-    public static async Task RunAsync()
+    public static Task RunAsync()
     {
         Console.WriteLine("=== 简化CRUD操作演示 ===");
         Console.WriteLine("基于SimpleDb实际API的真实演示");
@@ -108,10 +108,10 @@ public static class SimpleCrudDemo
         Console.WriteLine($"\n数据库统计: {engine.GetStatistics()}");
 
         // 清理
-        engine.Dispose();
         if (File.Exists(dbPath)) File.Delete(dbPath);
 
         Console.WriteLine("✅ 简化CRUD演示完成！");
+        return Task.CompletedTask;
     }
 }
 
