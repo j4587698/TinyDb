@@ -26,12 +26,15 @@ jobs:
     - name: Get previous version
       id: get_previous_version
       run: |
-        # 获取上一个提交的版本号
-        if git rev-parse HEAD~1 >/dev/null 2>&1; then
-          PREVIOUS_VERSION=$(git show HEAD~1:TinyDb/TinyDb.csproj | grep '<Version>' | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | xargs)
+        # 获取最新的Git tag版本号
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        if [ -n "$LATEST_TAG" ]; then
+          # 移除 'v' 前缀（如果存在）
+          PREVIOUS_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
         else
           PREVIOUS_VERSION="0.0.0"
         fi
+        echo "Latest tag: $LATEST_TAG"
         echo "Previous version: $PREVIOUS_VERSION"
         echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_ENV
 
