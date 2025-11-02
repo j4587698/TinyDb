@@ -46,12 +46,15 @@ jobs:
     - name: Check if version changed
       id: check_version
       run: |
-        if [ "${{ env.current_version }}" != "${{ env.previous_version }}" ]; then
-          echo "Version changed from ${{ env.previous_version }} to ${{ env.current_version }}"
+        CURRENT_VERSION="${{ env.current_version }}"
+        PREVIOUS_VERSION="${{ env.previous_version }}"
+
+        if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+          echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
           echo "version_changed=true" >> $GITHUB_ENV
-          echo "new_version=${{ env.current_version }}" >> $GITHUB_ENV
+          echo "new_version=$CURRENT_VERSION" >> $GITHUB_ENV
         else
-          echo "Version unchanged: ${{ env.current_version }}"
+          echo "Version unchanged: $CURRENT_VERSION"
           echo "version_changed=false" >> $GITHUB_ENV
         fi
 
