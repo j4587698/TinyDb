@@ -1,4 +1,6 @@
-# SimpleDB v0.1.0
+# TinyDb v0.1.0
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ⚠️ **早期测试版本警告**
 这是一个早期测试版本，不建议在生产环境中使用。如果要在生产环境使用，请进行充分的测试。
@@ -174,7 +176,20 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishAot=true 
 
 ## 许可证
 
-MIT License
+本项目采用 [MIT 许可证](LICENSE)。
+
+© 2024 TinyDb Contributors
+
+### MIT 许可证摘要
+
+✅ **商业使用** - 您可以将此软件用于商业目的
+✅ **修改** - 您可以修改此软件
+✅ **分发** - 您可以分发此软件
+✅ **私人使用** - 您可以私人使用此软件
+✅ **Sublicensing** - 您可以对您的修改进行子许可
+
+⚠️ **责任** - 软件按"原样"提供，不提供任何担保
+⚠️ **版权** - 必须包含版权声明和许可证文本
 
 ## 联系方式
 

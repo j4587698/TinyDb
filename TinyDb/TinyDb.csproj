@@ -13,6 +13,11 @@
         <Description>TinyDb v0.1 - 早期测试版本，轻量级的AOT兼容单文件NoSQL数据库</Description>
         <Copyright>Copyright © 2024 TinyDb Team</Copyright>
         <IsAotCompatible>true</IsAotCompatible>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageProjectUrl>https://github.com/your-org/tinydb</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/your-org/tinydb</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageTags>nosql;database;aot;embedded;lightweight</PackageTags>
     </PropertyGroup>
 
     <ItemGroup>
