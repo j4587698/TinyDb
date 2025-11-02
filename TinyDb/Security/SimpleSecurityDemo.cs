@@ -45,7 +45,7 @@ public static class SimpleSecurityDemo
             Console.WriteLine($"📊 数据库名: {options.DatabaseName}");
 
             // 添加测试数据
-            var users = engine.GetCollection<DemoUser>("users");
+            var users = engine.GetCollection<DemoUser>();
             var user = new DemoUser
             {
                 Id = ObjectId.NewObjectId(),
@@ -65,7 +65,7 @@ public static class SimpleSecurityDemo
             {
                 var correctOptions = new TinyDbOptions { Password = "MySecurePassword123!" };
                 using var correctEngine = new TinyDbEngine(dbPath, correctOptions);
-                var userCount = correctEngine.GetCollection<DemoUser>("users").Count();
+                var userCount = correctEngine.GetCollection<DemoUser>().Count();
                 Console.WriteLine($"✅ 正确密码访问成功 - 用户数: {userCount}");
             }
             catch (Exception ex)

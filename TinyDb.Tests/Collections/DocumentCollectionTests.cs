@@ -30,7 +30,7 @@ public class DocumentCollectionTests
         };
 
         _engine = new TinyDbEngine(_testDbPath, options);
-        _usersCollection = _engine.GetCollection<User>("users");
+        _usersCollection = _engine.GetCollection<User>();
     }
 
     [After(Test)]

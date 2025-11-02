@@ -49,7 +49,7 @@ public class QueryableTests : IDisposable
     public async Task Constructor_Should_Initialize_Correctly()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
 
         // Act
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -65,7 +65,7 @@ public class QueryableTests : IDisposable
     public async Task Constructor_Should_Throw_For_Null_Executor()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
 
         // Act & Assert
         await Assert.That(() => new Queryable<TestProduct>(null!, collectionName)).Throws<ArgumentNullException>();
@@ -89,7 +89,7 @@ public class QueryableTests : IDisposable
     public async Task GetEnumerator_Should_Return_All_Items_When_No_Filter()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -97,7 +97,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -119,7 +119,7 @@ public class QueryableTests : IDisposable
     public async Task Where_Should_Filter_Correctly()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -127,7 +127,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -147,7 +147,7 @@ public class QueryableTests : IDisposable
     public async Task Where_With_Price_Filter_Should_Work()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -156,7 +156,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -178,7 +178,7 @@ public class QueryableTests : IDisposable
     public async Task Where_With_Category_Filter_Should_Work()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -187,7 +187,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Pen", Price = 2.99m, Category = "Stationery", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -207,7 +207,7 @@ public class QueryableTests : IDisposable
     public async Task Where_With_Complex_Filter_Should_Work()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -216,7 +216,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -236,7 +236,7 @@ public class QueryableTests : IDisposable
     public async Task Count_Should_Return_Correct_Count()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -244,7 +244,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -265,7 +265,7 @@ public class QueryableTests : IDisposable
     public async Task First_Should_Return_First_Matching_Item()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -273,7 +273,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -295,7 +295,7 @@ public class QueryableTests : IDisposable
     public async Task FirstOrDefault_Should_Return_Default_When_No_Match()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
 
         // Act
@@ -309,7 +309,7 @@ public class QueryableTests : IDisposable
     public async Task Any_Should_Return_Correct_Result()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -317,7 +317,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -340,7 +340,7 @@ public class QueryableTests : IDisposable
     public async Task Multiple_Where_Calls_Should_Work()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -349,7 +349,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -373,7 +373,7 @@ public class QueryableTests : IDisposable
     public async Task Queryable_Should_Support_LINQ_Methods()
     {
         // Arrange
-        const string collectionName = "Products";
+        const string collectionName = "products";
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -383,7 +383,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Pen", Price = 2.99m, Category = "Stationery", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>();
         foreach (var product in products)
         {
             collection.Insert(product);

@@ -52,7 +52,7 @@ public class EndToEndDatabaseTests
     {
         using (var engine = new TinyDbEngine(_databasePath, _options))
         {
-            var collection = engine.GetCollection<Order>("orders");
+            var collection = engine.GetCollection<Order>();
 
             var indexCreated = engine.EnsureIndex("orders", "OrderNumber", "order_number_idx", unique: true);
             await Assert.That(indexCreated).IsTrue();
@@ -91,7 +91,7 @@ public class EndToEndDatabaseTests
 
         using (var reopenedEngine = new TinyDbEngine(_databasePath, _options))
         {
-            var collection = reopenedEngine.GetCollection<Order>("orders");
+            var collection = reopenedEngine.GetCollection<Order>();
             var allOrders = collection.FindAll().ToList();
 
             await Assert.That(allOrders).HasCount(3);

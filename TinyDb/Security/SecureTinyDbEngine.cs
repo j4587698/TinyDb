@@ -171,17 +171,17 @@ public sealed class SecureTinyDbEngine : IDisposable
     /// 获取集合（需要身份验证）
     /// </summary>
     /// <typeparam name="T">实体类型</typeparam>
-    /// <param name="name">集合名称</param>
     /// <returns>集合实例</returns>
     /// <exception cref="UnauthorizedAccessException">未通过身份验证时抛出</exception>
-    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string? name = null)
+    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>()
         where T : class, new()
     {
         ThrowIfDisposed();
         ThrowIfNotAuthenticated();
-        return _engine.GetCollection<T>(name);
+        return _engine.GetCollection<T>();
     }
 
+    
     /// <summary>
     /// 获取集合名称列表（需要身份验证）
     /// </summary>

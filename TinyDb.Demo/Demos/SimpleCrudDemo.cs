@@ -22,7 +22,7 @@ public static class SimpleCrudDemo
         if (File.Exists(dbPath)) File.Delete(dbPath);
 
         using var engine = new TinyDbEngine(dbPath);
-        var products = engine.GetCollection<Product>("products");
+        var products = engine.GetCollection<Product>();
 
         // 1. 创建 (Create)
         Console.WriteLine("1. 创建产品记录:");

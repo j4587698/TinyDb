@@ -45,7 +45,7 @@ public class SimpleDatabaseTests
     public async Task Database_Should_Create_Successfully()
     {
         // Arrange & Act
-        var users = _engine.GetCollection<User>("users");
+        var users = _engine.GetCollection<User>();
 
         // Assert
         await Assert.That(users).IsNotNull();
@@ -79,7 +79,7 @@ public class SimpleDatabaseTests
             using var engine = new TinyDbEngine(tempPath, options);
 
             var initialSize = engine.GetStatistics().FileSize;
-            var users = engine.GetCollection<User>("users");
+            var users = engine.GetCollection<User>();
             users.Insert(new User { Name = "BG", Age = 30, Email = "bg@example.com" });
 
             await Task.Delay(200);
@@ -100,8 +100,8 @@ public class SimpleDatabaseTests
     public async Task Database_Should_Handle_Multiple_Collections()
     {
         // Arrange & Act
-        var users = _engine.GetCollection<User>("users");
-        var products = _engine.GetCollection<Product>("products");
+        var users = _engine.GetCollection<User>();
+        var products = _engine.GetCollection<Product>();
 
         // Assert
         await Assert.That(users).IsNotNull();
@@ -114,7 +114,7 @@ public class SimpleDatabaseTests
     public async Task Insert_Should_Create_User_With_ValidId()
     {
         // Arrange
-        var users = _engine.GetCollection<User>("users");
+        var users = _engine.GetCollection<User>();
         var user = new User
         {
             Name = "Test User",
@@ -134,8 +134,8 @@ public class SimpleDatabaseTests
     [Test]
     public async Task GetCollection_Should_Return_Same_Instance_For_Same_Name()
     {
-        var first = _engine.GetCollection<User>("users");
-        var second = _engine.GetCollection<User>("users");
+        var first = _engine.GetCollection<User>();
+        var second = _engine.GetCollection<User>();
 
         await Assert.That(ReferenceEquals(first, second)).IsTrue();
         await Assert.That(_engine.CollectionCount).IsEqualTo(1);
@@ -144,8 +144,8 @@ public class SimpleDatabaseTests
     [Test]
     public async Task DropCollection_Should_Remove_Metadata_From_Current_Session()
     {
-        _engine.GetCollection<User>("users");
-        _engine.GetCollection<Product>("products");
+        _engine.GetCollection<User>();
+        _engine.GetCollection<Product>();
 
         var dropResult = _engine.DropCollection("users");
 
@@ -167,7 +167,7 @@ public class SimpleDatabaseTests
     public async Task Insert_Many_Documents_Should_ReUse_Data_Pages()
     {
         const int insertCount = 200;
-        var users = _engine.GetCollection<User>("users");
+        var users = _engine.GetCollection<User>();
 
         for (int i = 0; i < insertCount; i++)
         {

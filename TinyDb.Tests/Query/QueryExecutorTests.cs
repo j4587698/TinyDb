@@ -3,6 +3,7 @@ using TinyDb.Query;
 using TinyDb.Serialization;
 using TinyDb.Bson;
 using TinyDb.Collections;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -42,6 +43,7 @@ public class QueryExecutorTests : IDisposable
     }
 
     // 测试实体类
+    [Entity("Users")]
     public class TestUser
     {
         public ObjectId? Id { get; set; }
@@ -105,7 +107,7 @@ public class QueryExecutorTests : IDisposable
             new() { Name = "Charlie", Age = 35, Email = "charlie@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
@@ -133,7 +135,7 @@ public class QueryExecutorTests : IDisposable
             new() { Name = "Charlie", Age = 35, Email = "charlie@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
@@ -161,7 +163,7 @@ public class QueryExecutorTests : IDisposable
             new() { Name = "Charlie", Age = 35, Email = "charlie@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
@@ -189,7 +191,7 @@ public class QueryExecutorTests : IDisposable
             new() { Name = "Alice Smith", Age = 35, Email = "alice.smith@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
@@ -216,7 +218,7 @@ public class QueryExecutorTests : IDisposable
             new() { Name = "Diana", Age = 28, Email = "diana@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
@@ -239,7 +241,7 @@ public class QueryExecutorTests : IDisposable
         const string collectionName = "Users";
 
         // Insert a test document with minimal data
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         var testUser = new TestUser { Name = "Test" };
         collection.Insert(testUser);
 
@@ -257,7 +259,7 @@ public class QueryExecutorTests : IDisposable
         const string collectionName = "LargeDataset";
         const int userCount = 1000;
 
-        var collection = _engine.GetCollection<TestUser>(collectionName);
+        var collection = _engine.GetCollection<TestUser>();
         for (int i = 0; i < userCount; i++)
         {
             var user = new TestUser

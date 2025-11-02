@@ -452,15 +452,17 @@ public sealed class TinyDbEngine : IDisposable
     }
 
     /// <summary>
-    /// 获取（或懒加载创建）指定名称的文档集合
+    /// 获取（或懒加载创建）文档集合
     /// </summary>
-    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string? name = null) where T : class, new()
+    /// <typeparam name="T">实体类型</typeparam>
+    /// <returns>集合实例</returns>
+    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>() where T : class, new()
     {
         ThrowIfDisposed();
         EnsureInitialized();
 
-        // 优先使用显式指定的名称，然后检查Entity特性，最后使用类型名称
-        var collectionName = name ?? GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name;
+        // 优先检查Entity特性，然后使用类型名称
+        var collectionName = GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name;
 
         return (ILiteCollection<T>)_collections.GetOrAdd(collectionName, _ =>
         {
@@ -470,6 +472,26 @@ public sealed class TinyDbEngine : IDisposable
         });
     }
 
+    /// <summary>
+    /// 获取指定名称的文档集合（仅用于特殊场景，如元数据管理）
+    /// </summary>
+    /// <typeparam name="T">实体类型</typeparam>
+    /// <param name="collectionName">集合名称</param>
+    /// <returns>集合实例</returns>
+    public ILiteCollection<T> GetCollectionWithName<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName) where T : class, new()
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+
+        return (ILiteCollection<T>)_collections.GetOrAdd(collectionName, _ =>
+        {
+            var collection = new DocumentCollection<T>(this, collectionName);
+            RegisterCollection(collectionName);
+            return collection;
+        });
+    }
+
+    
     /// <summary>
     /// 从Entity特性获取集合名称
     /// </summary>
@@ -2305,17 +2327,7 @@ public sealed class TinyDbEngine : IDisposable
         _indexManagers.Clear();
     }
 
-    /// <summary>
-    /// AOT 友好的泛型方法
-    /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <returns>文档集合</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ILiteCollection<T> GetCollectionAOT<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>() where T : class, new()
-    {
-        return GetCollection<T>();
     }
-}
 
 /// <summary>
 /// 数据库统计信息

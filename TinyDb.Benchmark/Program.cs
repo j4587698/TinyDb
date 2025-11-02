@@ -225,7 +225,7 @@ public class QuickIndexBenchmark
         };
 
         _engine = new TinyDbEngine(DatabaseFile, options);
-        _collection = _engine.GetCollection<QuickUser>("quick_users");
+        _collection = _engine.GetCollection<QuickUser>();
     }
 
     private void SeedData(int count)

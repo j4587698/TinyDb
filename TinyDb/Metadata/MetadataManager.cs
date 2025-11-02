@@ -33,7 +33,7 @@ public class MetadataManager
         var collectionName = GetMetadataCollectionName(entityType);
 
         // 使用MetadataDocument包装类存储元数据
-        var collection = _engine.GetCollection<MetadataDocument>(collectionName);
+        var collection = _engine.GetCollectionWithName<MetadataDocument>(collectionName);
 
         // 转换为MetadataDocument并保存
         var metadataDoc = MetadataDocument.FromEntityMetadata(metadata);
@@ -60,7 +60,7 @@ public class MetadataManager
     public EntityMetadata? GetEntityMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         var collectionName = GetMetadataCollectionName(entityType);
-        var collection = _engine.GetCollection<MetadataDocument>(collectionName);
+        var collection = _engine.GetCollectionWithName<MetadataDocument>(collectionName);
 
         var documents = collection.FindAll().ToList();
 

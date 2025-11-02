@@ -46,7 +46,7 @@ public class IndexAttributeTests
     [Test]
     public async Task IndexAttribute_ShouldCreateSingleIndex()
     {
-        var collection = _engine.GetCollection<TestUser>("test_users");
+        var collection = _engine.GetCollection<TestUser>();
 
         var indexManager = collection.GetIndexManager();
         await Assert.That(indexManager.IndexExists("idx_name")).IsTrue();
@@ -58,7 +58,7 @@ public class IndexAttributeTests
     [Test]
     public async Task IndexAttribute_ShouldCreateUniqueIndex()
     {
-        var collection = _engine.GetCollection<TestUserWithUniqueEmail>("test_users");
+        var collection = _engine.GetCollection<TestUserWithUniqueEmail>();
 
         var indexManager = collection.GetIndexManager();
         await Assert.That(indexManager.IndexExists("uidx_email")).IsTrue();
@@ -70,7 +70,7 @@ public class IndexAttributeTests
     [Test]
     public async Task IndexAttribute_ShouldCreateIndexWithCustomName()
     {
-        var collection = _engine.GetCollection<TestUserWithCustomIndex>("test_users");
+        var collection = _engine.GetCollection<TestUserWithCustomIndex>();
 
         var indexManager = collection.GetIndexManager();
         await Assert.That(indexManager.IndexExists("custom_name_index")).IsTrue();
@@ -79,7 +79,7 @@ public class IndexAttributeTests
     [Test]
     public async Task CompositeIndexAttribute_ShouldCreateCompositeIndex()
     {
-        var collection = _engine.GetCollection<TestUserWithCompositeIndex>("test_users");
+        var collection = _engine.GetCollection<TestUserWithCompositeIndex>();
 
         var indexManager = collection.GetIndexManager();
         await Assert.That(indexManager.IndexExists("idx_name_age")).IsTrue();
@@ -92,7 +92,7 @@ public class IndexAttributeTests
     [Test]
     public async Task IndexAttribute_ShouldRespectPriority()
     {
-        var collection = _engine.GetCollection<TestUserWithMultipleIndexes>("test_users");
+        var collection = _engine.GetCollection<TestUserWithMultipleIndexes>();
 
         var indexManager = collection.GetIndexManager();
         await Assert.That(indexManager.IndexExists("high_priority_idx")).IsTrue();
@@ -122,7 +122,7 @@ public class IndexAttributeTests
     [Test]
     public async Task AutoIndex_ShouldWorkWithInsertOperations()
     {
-        var collection = _engine.GetCollection<TestUser>("auto_test_users");
+        var collection = _engine.GetCollection<TestUser>();
         var indexManager = collection.GetIndexManager();
 
         var user = new TestUser
@@ -145,7 +145,7 @@ public class IndexAttributeTests
     [Test]
     public async Task CompositeIndex_ShouldSupportUniqueConstraint()
     {
-        var collection = _engine.GetCollection<TestUserWithUniqueComposite>("test_users");
+        var collection = _engine.GetCollection<TestUserWithUniqueComposite>();
 
         var indexManager = collection.GetIndexManager();
         await Assert.That(indexManager.IndexExists("unique_name_email")).IsTrue();
@@ -157,7 +157,7 @@ public class IndexAttributeTests
     [Test]
     public async Task IndexAttribute_ShouldHandleDuplicateIndexNames()
     {
-        var collection = _engine.GetCollection<TestUserWithDuplicateIndexes>("test_users");
+        var collection = _engine.GetCollection<TestUserWithDuplicateIndexes>();
 
         var indexManager = collection.GetIndexManager();
         var indexes = indexManager.IndexNames.Where(name => name.Contains("duplicate")).ToList();

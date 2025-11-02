@@ -39,7 +39,7 @@ public class QuickBatchTest
         };
 
         using var engine = new TinyDbEngine(DatabaseFile, options);
-        var collection = engine.GetCollection<TestUser>("test_users");
+        var collection = engine.GetCollection<TestUser>();
 
         Console.WriteLine("✅ 测试环境已设置");
         Console.WriteLine($"⚙️ 写入关注级别: {options.WriteConcern}");
@@ -131,7 +131,7 @@ public class QuickBatchTest
         var sw = Stopwatch.StartNew();
         Parallel.For(0, threadCount, worker =>
         {
-            var collection = engine.GetCollection<ParallelUser>(GetParallelCollectionName(worker));
+            var collection = engine.GetCollectionWithName<ParallelUser>(GetParallelCollectionName(worker));
             var start = worker * perThread;
             var random = new Random(unchecked(start * 486187739) ^ Environment.TickCount);
 

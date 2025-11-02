@@ -319,6 +319,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             }
             else
             {
+                // 对于其他类型，使用BsonConversion辅助方法
                 sb.AppendLine($"            return TinyDb.Serialization.BsonConversion.ConvertToBsonValue(entity.{idProp.Name});");
             }
 
@@ -637,7 +638,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         foreach (var property in classInfo.Properties)
         {
-            sb.AppendLine($"            doc[\"{property.Name}\"] = TinyDb.Serialization.BsonConversion.ConvertToBsonValue(entity.{property.Name});");
+            sb.AppendLine($"            doc[\"{property.Name}\"] = ConvertToBsonValue(entity.{property.Name});");
         }
 
         sb.AppendLine("            return doc;");

@@ -36,7 +36,7 @@ public static class IndexDemo
         };
 
         using var engine = new TinyDbEngine(testDbFile, options);
-        var users = engine.GetCollection<IndexUser>("users");
+        var users = engine.GetCollection<IndexUser>();
 
         Console.WriteLine("✅ 数据库引擎创建成功！");
 
@@ -293,7 +293,7 @@ public static class IndexDemo
     {
         Console.WriteLine("--- 索引管理演示 ---");
 
-        var users = engine.GetCollection<IndexUser>("users");
+        var users = engine.GetCollection<IndexUser>();
         var indexManager = users.GetIndexManager();
 
         // 创建多个索引
@@ -398,7 +398,7 @@ public static class IndexDemo
 /// <summary>
 /// 索引演示用户实体
 /// </summary>
-[Entity("index_users")]
+[Entity("users")]
 public class IndexUser
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();

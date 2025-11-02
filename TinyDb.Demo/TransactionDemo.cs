@@ -37,7 +37,7 @@ public static class TransactionDemo
         };
 
         using var engine = new TinyDbEngine(testDbFile, options);
-        var accounts = engine.GetCollection<Account>("accounts");
+        var accounts = engine.GetCollection<Account>();
 
         Console.WriteLine("✅ 数据库引擎创建成功！");
 
@@ -238,7 +238,7 @@ public static class TransactionDemo
     {
         Console.WriteLine("--- 并发事务演示 ---");
 
-        var accounts = engine.GetCollection<Account>("accounts");
+        var accounts = engine.GetCollection<Account>();
 
         // 创建测试账户
         var sharedAccount = new Account { Name = "共享账户", Balance = 1000 };
