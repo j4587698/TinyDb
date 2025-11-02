@@ -8,7 +8,7 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <PackageId>TinyDb</PackageId>
-        <Version>0.1.1</Version>
+        <Version>0.1.0</Version>
         <Authors>TinyDb Team</Authors>
         <Description>TinyDb v0.1 - 早期测试版本，轻量级的AOT兼容单文件NoSQL数据库，内置源码生成器支持</Description>
         <Copyright>Copyright © 2025 TinyDb Team</Copyright>
