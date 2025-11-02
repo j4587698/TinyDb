@@ -40,25 +40,25 @@ jobs:
       run: |
         # 获取当前提交的版本号
         CURRENT_VERSION=$(git show HEAD:TinyDb/TinyDb.csproj | grep '<Version>' | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | xargs)
-        echo "Current version: $CURRENT_VERSION"
-        echo "current_version=$CURRENT_VERSION" >> $GITHUB_ENV
+        echo "Current version: ${{ env.current_version }}"
+        echo "current_version=${{ env.current_version }}" >> $GITHUB_ENV
 
     - name: Check if version changed
       id: check_version
       run: |
-        if [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
-          echo "Version changed from $PREVIOUS_VERSION to $CURRENT_VERSION"
+        if [ "${{ env.current_version }}" != "${{ env.previous_version }}" ]; then
+          echo "Version changed from ${{ env.previous_version }} to ${{ env.current_version }}"
           echo "version_changed=true" >> $GITHUB_ENV
-          echo "new_version=$CURRENT_VERSION" >> $GITHUB_ENV
+          echo "new_version=${{ env.current_version }}" >> $GITHUB_ENV
         else
-          echo "Version unchanged: $CURRENT_VERSION"
+          echo "Version unchanged: ${{ env.current_version }}"
           echo "version_changed=false" >> $GITHUB_ENV
         fi
 
     - name: Build and test
       if: env.version_changed == 'true'
       run: |
-        echo "Building TinyDb with version $CURRENT_VERSION..."
+        echo "Building TinyDb with version ${{ env.current_version }}..."
 
         # 构建整个解决方案
         dotnet build TinyDb.sln -c Release
@@ -73,7 +73,7 @@ jobs:
 
         # 验证包内容
         echo "Verifying package contents..."
-        NUPKG_FILE=$(find ./nupkg -name "TinyDb.$CURRENT_VERSION.nupkg" | head -1)
+        NUPKG_FILE=$(find ./nupkg -name "TinyDb.${{ env.current_version }}.nupkg" | head -1)
         if [ -n "$NUPKG_FILE" ]; then
           echo "✅ Package found: $NUPKG_FILE"
 
@@ -97,16 +97,16 @@ jobs:
     - name: Create Git Tag
       if: env.version_changed == 'true'
       run: |
-        echo "Creating Git tag v$CURRENT_VERSION..."
+        echo "Creating Git tag v${{ env.current_version }}..."
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git tag -a "v$CURRENT_VERSION" -m "Release version $CURRENT_VERSION"
+        git tag -a "v${{ env.current_version }}" -m "Release version ${{ env.current_version }}"
 
     - name: Push Git Tag
       if: env.version_changed == 'true'
       run: |
         echo "Pushing Git tag..."
-        git push origin "v$CURRENT_VERSION"
+        git push origin "v${{ env.current_version }}"
 
     - name: Setup NuGet
       if: env.version_changed == 'true'
@@ -117,13 +117,13 @@ jobs:
       if: env.version_changed == 'true'
       run: |
         echo "Publishing to NuGet.org..."
-        dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+        dotnet nuget push ./nupkg/TinyDb.${{ env.current_version }}.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
 
     - name: Publish to GitHub Packages
       if: env.version_changed == 'true'
       run: |
         echo "Publishing to GitHub Packages..."
-        dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source https://nuget.pkg.github.com/j4587698/index.json --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+        dotnet nuget push ./nupkg/TinyDb.${{ env.current_version }}.nupkg --source https://nuget.pkg.github.com/j4587698/index.json --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
 
         # 清理
         rm -rf ./nupkg
