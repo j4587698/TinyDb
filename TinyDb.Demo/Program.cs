@@ -24,22 +24,23 @@ public class Program
         CleanupDemoFiles();
 
         // 完整功能演示
-        var demos = new[]
+        var demos = new List<(string name, string number, Func<Task> run)>
         {
             ("基础CRUD操作", "1", SimpleCrudDemo.RunAsync),
             ("元数据系统", "2", MetadataDemo.RunAsync),
-            ("数据库安全系统", "3", SimpleSecurityDemo.RunAsync),
-            ("事务处理功能", "4", TransactionDemo.RunAsync),
-            ("LINQ查询功能", "5", LinqQueryDemo.RunAsync),
-            ("索引系统", "6", IndexDemo.RunAsync),
-            ("ID生成策略", "7", IdGenerationDemo.RunAsync),
-            ("性能测试", "8", PerformanceDemo.RunAsync)
+            ("数据库安全系统", "3", SimpleSecurityDemo.RunAsync)
+            // 暂时注释掉有编译错误的演示
+            // ("事务处理功能", "4", TransactionDemo.RunAsync),
+            // ("LINQ查询功能", "5", LinqQueryDemo.RunAsync),
+            // ("索引系统", "6", IndexDemo.RunAsync),
+            // ("ID生成策略", "7", IdGenerationDemo.RunAsync),
+            // ("性能测试", "8", PerformanceDemo.RunAsync)
         };
 
         Console.WriteLine("🎯 可用演示列表:");
-        foreach (var (name, number, _) in demos)
+        foreach (var demo in demos)
         {
-            Console.WriteLine($"   {number}. {name}");
+            Console.WriteLine($"   {demo.number}. {demo.name}");
         }
         Console.WriteLine();
         Console.WriteLine("📝 请选择要运行的演示 (输入数字，用逗号分隔多个选择，或输入 'all' 运行全部):");
@@ -59,7 +60,7 @@ public class Program
                 if (int.TryParse(num.Trim(), out var selectedNumber))
                 {
                     var demo = demos.FirstOrDefault(d => d.number == num.Trim());
-                    if (demo.name != null)
+                    if (!string.IsNullOrEmpty(demo.name))
                     {
                         selectedDemos.Add(demo);
                     }
@@ -77,21 +78,21 @@ public class Program
 
         var totalStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        foreach (var (name, number, runDemo) in selectedDemos)
+        foreach (var demo in selectedDemos)
         {
             try
             {
                 Console.WriteLine(new string('=', 80));
-                Console.WriteLine($"{number}. {name}演示");
+                Console.WriteLine($"{demo.number}. {demo.name}演示");
                 Console.WriteLine(new string('=', 80));
 
                 var demoStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                await runDemo();
+                await demo.run();
                 demoStopwatch.Stop();
 
-                Console.WriteLine($"\n⏱️ {name}演示完成，耗时: {demoStopwatch.ElapsedMilliseconds}ms");
+                Console.WriteLine($"\n⏱️ {demo.name}演示完成，耗时: {demoStopwatch.ElapsedMilliseconds}ms");
 
-                if (selectedDemos.IndexOf((name, number, runDemo)) < selectedDemos.Count - 1)
+                if (selectedDemos.IndexOf(demo) < selectedDemos.Count - 1)
                 {
                     Console.WriteLine("⏸️ 按任意键继续下一个演示...");
                     Console.ReadKey(true);
@@ -100,7 +101,7 @@ public class Program
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n❌ {name}演示失败: {ex.Message}");
+                Console.WriteLine($"\n❌ {demo.name}演示失败: {ex.Message}");
                 Console.WriteLine($"🔍 错误详情: {ex}");
             }
         }
