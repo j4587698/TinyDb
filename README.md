@@ -1,4 +1,4 @@
-# TinyDb v0.1.0
+# TinyDb
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -281,7 +281,7 @@ dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishAot=true 
 
 本项目采用 [MIT 许可证](LICENSE)。
 
-© 2024 TinyDb Contributors
+© 2025 TinyDb Contributors
 
 ### MIT 许可证摘要
 
