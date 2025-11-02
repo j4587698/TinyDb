@@ -137,7 +137,10 @@ public class AutoIdGenerationTests
         await Assert.That(ids[0]).IsNotEqualTo(ids[2]);
 
         // 验证GUID版本（应该是版本7，但由于我们的实现，可能显示为其他版本，主要验证唯一性）
-        await Assert.That(ids[0].Version).IsGreaterThan(0);
+        // Guid.Version 在 .NET 8 中不可用，所以我们通过检查字节来验证版本
+        var versionByte = ids[0].ToByteArray()[7];
+        var version = (versionByte & 0x0F) >> 4;
+        await Assert.That(version).IsGreaterThan(0);
     }
 
     [Test]
