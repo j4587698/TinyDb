@@ -8,7 +8,7 @@ using TinyDb.Bson;
 using System.IO;
 using System.Threading.Tasks;
 
-namespace SimpleDb.Benchmark;
+namespace TinyDb.Benchmark;
 
 public class QuickBatchTest
 {

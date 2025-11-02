@@ -7,26 +7,26 @@ using TinyDb.Attributes;
 using TinyDb.Bson;
 using System.IO;
 
-namespace SimpleDb.Benchmark;
+namespace TinyDb.Benchmark;
 
 public class Program
 {
     public static void Main(string[] args)
     {
-        Console.WriteLine("=== SimpleDb 快速索引性能测试 ===");
+        Console.WriteLine("=== TinyDb 快速索引性能测试 ===");
         Console.WriteLine();
 
         // 先运行快速批量测试
         QuickBatchTest.RunTest();
 
         var skipFullBenchmark = string.Equals(
-            Environment.GetEnvironmentVariable("SIMPLEDB_BENCH_SKIP_FULL"),
+            Environment.GetEnvironmentVariable("TINYDB_BENCH_SKIP_FULL"),
             "1",
             StringComparison.OrdinalIgnoreCase);
 
         if (skipFullBenchmark)
         {
-            Console.WriteLine("\n⚠️ 已根据环境变量 SIMPLEDB_BENCH_SKIP_FULL 跳过 BenchmarkDotNet 基准测试。");
+            Console.WriteLine("\n⚠️ 已根据环境变量 TINYDB_BENCH_SKIP_FULL 跳过 BenchmarkDotNet 基准测试。");
             return;
         }
 
@@ -160,8 +160,7 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void QueryWithoutIndex()
     {
-        var results = _collection!.Query()
-            .Where(u => u.Salary >= 30000 && u.Salary < 40000)
+        var results = _collection!.Find(u => u.Salary >= 30000 && u.Salary < 40000)
             .Take(100)
             .ToList();
 
@@ -177,9 +176,7 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void QueryWithIndex()
     {
-        var results = _collection!.Query()
-            .Where(u => u.Age == 25)
-            .ToList();
+        var results = _collection!.Find(u => u.Age == 25).ToList();
 
         if (results.Count == 0)
         {
@@ -193,9 +190,7 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void QueryWithUniqueIndex()
     {
-        var results = _collection!.Query()
-            .Where(u => u.Email == "user25@quick.com")
-            .ToList();
+        var results = _collection!.Find(u => u.Email == "user25@quick.com").ToList();
 
         if (results.Count == 0)
         {
@@ -209,7 +204,7 @@ public class QuickIndexBenchmark
     [Benchmark]
     public void FindById()
     {
-        var result = _collection!.FindById(_firstSeededUserId);
+        var result = _collection!.Find(u => u.Id == _firstSeededUserId).FirstOrDefault();
         if (result == null)
         {
             throw new InvalidOperationException("Unexpected null result");
