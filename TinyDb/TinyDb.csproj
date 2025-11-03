@@ -62,26 +62,18 @@
         <None Include="aot-example.csproj" Pack="true" PackagePath="content\" />
     </ItemGroup>
 
-    <!-- NuGet 包内容配置 -->
-    <ItemGroup>
-        <!-- 包含 SourceGenerator 作为分析器 -->
-        <Analyzer Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll"
-                  Pack="true"
-                  PackagePath="analyzers/dotnet/cs" />
+    <!-- 包含SourceGenerator DLL作为分析器 - 静态声明 -->
+    <ItemGroup Condition="Exists('../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll')">
+        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll"
+              Pack="true"
+              PackagePath="analyzers/dotnet/cs" />
     </ItemGroup>
 
-    <!-- 打包前的目标：确保 SourceGenerator 已构建并包含到包中 -->
+    <!-- 打包前的目标：确保 SourceGenerator 已构建 -->
     <Target Name="BuildSourceGeneratorBeforePack" BeforeTargets="GenerateNuspec">
         <MSBuild Projects="../TinyDb.SourceGenerator/TinyDb.SourceGenerator.csproj"
                  Properties="Configuration=Release"
                  Targets="Build" />
-
-        <!-- 确保SourceGenerator DLL被包含在NuGet包中 -->
-        <ItemGroup>
-            <Analyzer Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll"
-                      Pack="true"
-                      PackagePath="analyzers/dotnet/cs" />
-        </ItemGroup>
     </Target>
 
 </Project>

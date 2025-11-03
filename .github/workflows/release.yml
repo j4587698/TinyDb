@@ -75,7 +75,7 @@ jobs:
 
         # 构建 NuGet 包
         echo "Building NuGet package..."
-        dotnet pack TinyDb/TinyDb.csproj -c Release --no-restore --output ./nupkg
+        dotnet pack TinyDb/TinyDb.csproj -c Release --output ./nupkg
 
         # 验证包内容
         echo "Verifying package contents..."
@@ -90,7 +90,18 @@ jobs:
           echo "📋 Package contents:"
           [ -f "$TEMP_DIR/lib/net8.0/TinyDb.dll" ] && echo "  ✅ .NET 8.0 library"
           [ -f "$TEMP_DIR/lib/net9.0/TinyDb.dll" ] && echo "  ✅ .NET 9.0 library"
-          [ -f "$TEMP_DIR/analyzers/dotnet/cs/TinyDb.SourceGenerator.dll" ] && echo "  ✅ SourceGenerator analyzer"
+
+          if [ -f "$TEMP_DIR/analyzers/dotnet/cs/TinyDb.SourceGenerator.dll" ]; then
+            echo "  ✅ SourceGenerator analyzer"
+          else
+            echo "  ❌ SourceGenerator analyzer MISSING!"
+            echo "  🔍 Analyzers directory contents:"
+            find "$TEMP_DIR/analyzers" -type f 2>/dev/null || echo "    No analyzers directory found"
+            echo "  🔍 Full package structure:"
+            find "$TEMP_DIR" -type f | sort
+            exit 1
+          fi
+
           [ -f "$TEMP_DIR/content/aot-compatibility.json" ] && echo "  ✅ AOT compatibility config"
           [ -f "$TEMP_DIR/content/aot-example.csproj" ] && echo "  ✅ AOT example config"
 
