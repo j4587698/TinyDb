@@ -443,7 +443,6 @@ public sealed class LockManager : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error in deadlock detection: {ex.Message}");
             }
         }
     }
@@ -546,7 +545,6 @@ public sealed class LockManager : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during LockManager disposal: {ex.Message}");
             }
             finally
             {

@@ -61,7 +61,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Failed to create auto indexes for collection {_name}: {ex.Message}");
+            // 索引创建失败不阻止操作
         }
     }
 
@@ -166,10 +166,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         var hasValidId = AotIdAccessor<T>.HasValidId(entity);
         if (!hasValidId)
         {
-            // 调试信息
-            var entityId = AotIdAccessor<T>.GetId(entity);
-            Console.WriteLine($"[DEBUG] Update - HasValidId: {hasValidId}, Id: {entityId}, IsNull: {entityId?.IsNull}");
-            throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
+                        throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
         }
 
         var id = AotIdAccessor<T>.GetId(entity);

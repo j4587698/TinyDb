@@ -616,7 +616,6 @@ public sealed class PageManager : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during PageManager disposal: {ex.Message}");
             }
             finally
             {

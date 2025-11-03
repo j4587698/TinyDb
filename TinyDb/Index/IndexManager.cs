@@ -188,7 +188,6 @@ public sealed class IndexManager : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error inserting document into index {index.Name}: {ex.Message}");
                 }
             }
         }
@@ -219,7 +218,6 @@ public sealed class IndexManager : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error deleting document from index {index.Name}: {ex.Message}");
                 }
             }
         }
@@ -262,7 +260,6 @@ public sealed class IndexManager : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error updating document in index {index.Name}: {ex.Message}");
                 }
             }
         }

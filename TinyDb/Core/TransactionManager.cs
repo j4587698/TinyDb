@@ -422,7 +422,6 @@ public sealed class TransactionManager : IDisposable
             catch (Exception ex)
             {
                 // 记录错误但继续运行
-                Console.WriteLine($"Error in transaction timeout check: {ex.Message}");
             }
         }
     }
@@ -445,11 +444,9 @@ public sealed class TransactionManager : IDisposable
                 {
                     expiredTransaction.State = TransactionState.Failed;
                     _activeTransactions.Remove(expiredTransaction.TransactionId);
-                    Console.WriteLine($"Transaction {expiredTransaction.TransactionId} expired and was cleaned up");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error cleaning up expired transaction: {ex.Message}");
                 }
             }
         }
@@ -518,7 +515,6 @@ public sealed class TransactionManager : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during TransactionManager disposal: {ex.Message}");
             }
             finally
             {

@@ -227,15 +227,6 @@ public sealed class TinyDbEngine : IDisposable
                     {
                         // 输出详细的头部信息用于调试
                         var calculatedChecksum = _header.CalculateChecksum();
-                        Console.WriteLine($"数据库头部验证失败:");
-                        Console.WriteLine($"  文件: {_filePath}");
-                        Console.WriteLine($"  Magic: 0x{_header.Magic:X8} (期望: 0x{DatabaseHeader.MagicNumber:X8})");
-                        Console.WriteLine($"  Version: 0x{_header.DatabaseVersion:X8} (期望: 0x{DatabaseHeader.Version:X8})");
-                        Console.WriteLine($"  存储的校验和: {_header.Checksum}");
-                        Console.WriteLine($"  计算的校验和: {calculatedChecksum}");
-                        Console.WriteLine($"  页面大小: {_header.PageSize}");
-                        Console.WriteLine($"  总页数: {_header.TotalPages}");
-                        Console.WriteLine($"  已用页数: {_header.UsedPages}");
                         throw new InvalidOperationException($"Invalid database header in file '{_filePath}'");
                     }
 
@@ -281,7 +272,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: WAL recovery failed: {ex.Message}");
         }
     }
 
@@ -425,7 +415,6 @@ public sealed class TinyDbEngine : IDisposable
         catch (Exception ex)
         {
             // 如果加载集合信息失败，记录警告但继续
-            Console.WriteLine($"Warning: Failed to load collection info: {ex.Message}");
         }
     }
 
@@ -1048,7 +1037,6 @@ public sealed class TinyDbEngine : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Warning: Failed to update indexes for large document {id}: {ex.Message}");
                 }
             }
 
@@ -1125,7 +1113,6 @@ public sealed class TinyDbEngine : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
             }
         }
 
@@ -1643,7 +1630,6 @@ public sealed class TinyDbEngine : IDisposable
                     }
                     catch (Exception cleanupEx)
                     {
-                        Console.WriteLine($"Warning: Failed to cleanup large document {id} after update error: {cleanupEx.Message}");
                     }
                 }
             }
@@ -1660,7 +1646,6 @@ public sealed class TinyDbEngine : IDisposable
                 }
                 catch (Exception cleanupEx)
                 {
-                    Console.WriteLine($"Warning: Failed to delete obsolete large document {id}: {cleanupEx.Message}");
                 }
             }
         }
@@ -1676,7 +1661,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
         }
 
         EnsureWriteDurability();
@@ -1766,7 +1750,6 @@ public sealed class TinyDbEngine : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Failed to delete large document payload for {id}: {ex.Message}");
             }
         }
 
@@ -1776,7 +1759,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Failed to update indexes for deleted document {id}: {ex.Message}");
         }
 
         EnsureWriteDurability();
@@ -1816,7 +1798,6 @@ public sealed class TinyDbEngine : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Failed to insert document into collection '{collectionName}': {ex.Message}");
             }
         }
 
@@ -1928,7 +1909,6 @@ public sealed class TinyDbEngine : IDisposable
             catch
             {
                 // 如果保存头部也失败，记录错误但不抛出异常
-                Console.WriteLine("Warning: Failed to save database header during flush.");
             }
             throw; // 重新抛出原始异常
         }
@@ -2032,7 +2012,6 @@ public sealed class TinyDbEngine : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Failed to delete large document payload for {id} during rollback: {ex.Message}");
             }
         }
 
@@ -2042,7 +2021,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Failed to update indexes for deleted document {id}: {ex.Message}");
         }
 
         // 注意：这里不调用EnsureWriteDurability()，因为这是事务回滚操作
@@ -2148,7 +2126,6 @@ public sealed class TinyDbEngine : IDisposable
                     }
                     catch (Exception cleanupEx)
                     {
-                        Console.WriteLine($"Warning: Failed to cleanup large document {id} after update rollback error: {cleanupEx.Message}");
                     }
                 }
             }
@@ -2165,7 +2142,6 @@ public sealed class TinyDbEngine : IDisposable
                 }
                 catch (Exception cleanupEx)
                 {
-                    Console.WriteLine($"Warning: Failed to delete obsolete large document {id} during rollback: {cleanupEx.Message}");
                 }
             }
         }
@@ -2181,7 +2157,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Failed to update indexes for document {id}: {ex.Message}");
         }
 
         // 注意：这里不调用EnsureWriteDurability()，因为这是事务回滚操作
@@ -2269,7 +2244,6 @@ public sealed class TinyDbEngine : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during TinyDbEngine disposal: {ex.Message}");
             }
             finally
             {

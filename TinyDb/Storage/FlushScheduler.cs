@@ -52,7 +52,6 @@ public sealed class FlushScheduler : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Warning: Background flush failed: {ex.Message}");
             }
         }
     }
@@ -145,7 +144,6 @@ public sealed class FlushScheduler : IDisposable
         }
         catch (AggregateException ex)
         {
-            Console.WriteLine($"Warning: flush scheduler stopped with errors: {ex.InnerException?.Message}");
         }
 
         try
@@ -154,7 +152,6 @@ public sealed class FlushScheduler : IDisposable
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: failed to flush during dispose: {ex.Message}");
         }
 
         _cts.Dispose();

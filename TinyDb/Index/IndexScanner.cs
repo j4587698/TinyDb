@@ -80,11 +80,7 @@ public static class IndexScanner
                 var fields = entries.Select(e => e.Property.Name).ToArray();
                 var unique = entries.Any(e => e.Attribute.Unique);
 
-                var created = indexManager.CreateIndex(indexName, fields, unique);
-                if (created)
-                {
-                    Console.WriteLine($"✅ 自动创建索引: {indexName} on {entityType.Name}[{string.Join(", ", fields)}] (Unique={unique})");
-                }
+                indexManager.CreateIndex(indexName, fields, unique);
             }
         }
     }
@@ -102,11 +98,7 @@ public static class IndexScanner
         {
             if (!indexManager.IndexExists(compositeAttr.Name))
             {
-                var created = indexManager.CreateIndex(compositeAttr.Name, compositeAttr.Fields, compositeAttr.Unique);
-                if (created)
-                {
-                    Console.WriteLine($"✅ 自动创建复合索引: {compositeAttr.Name} on [{string.Join(", ", compositeAttr.Fields)}] (Unique={compositeAttr.Unique})");
-                }
+                indexManager.CreateIndex(compositeAttr.Name, compositeAttr.Fields, compositeAttr.Unique);
             }
         }
     }
@@ -194,12 +186,10 @@ public static class IndexScanner
         {
             // 创建主键索引，_id字段是唯一的
             indexManager.CreateIndex(primaryKeyIndexName, new[] { "_id" }, true);
-            Console.WriteLine($"✅ 自动创建主键索引: {primaryKeyIndexName} on _id (Unique=True)");
         }
         catch (Exception ex)
         {
-            // 主键索引创建失败不应阻止系统启动，但需要记录警告
-            Console.WriteLine($"Warning: Failed to create primary key index {primaryKeyIndexName}: {ex.Message}");
+            // 主键索引创建失败不应阻止系统启动
         }
     }
 }

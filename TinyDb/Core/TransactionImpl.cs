@@ -295,7 +295,6 @@ internal sealed class Transaction : ITransaction
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error during Transaction disposal: {ex.Message}");
             }
             finally
             {
