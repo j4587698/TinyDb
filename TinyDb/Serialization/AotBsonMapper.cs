@@ -194,7 +194,7 @@ public static class AotBsonMapper
             : null;
     }
 
-    public static object? ConvertValue(BsonValue bsonValue, Type targetType)
+    public static object? ConvertValue(BsonValue bsonValue, [DynamicallyAccessedMembers(TypeInspectionRequirements)] Type targetType)
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
         if (targetType == null) throw new ArgumentNullException(nameof(targetType));
@@ -302,21 +302,21 @@ public static class AotBsonMapper
         {
             if (key == "_id" && metadata.IdProperty != null)
             {
-                var idValue = ConvertFromBsonValue(bsonValue, metadata.IdProperty.PropertyType);
+                var idValue = ConvertFromBsonValue(bsonValue, GetPropertyValueType(metadata.IdProperty));
                 metadata.IdProperty.SetValue(target, idValue);
                 continue;
             }
 
             if (metadata.CamelCasePropertyMap.TryGetValue(key, out var property) && property.CanWrite)
             {
-                var converted = ConvertFromBsonValue(bsonValue, property.PropertyType);
+                var converted = ConvertFromBsonValue(bsonValue, GetPropertyValueType(property));
                 property.SetValue(target, converted);
                 continue;
             }
 
             if (metadata.CamelCaseFieldMap.TryGetValue(key, out var field))
             {
-                var converted = ConvertFromBsonValue(bsonValue, field.FieldType);
+                var converted = ConvertFromBsonValue(bsonValue, GetFieldValueType(field));
                 field.SetValue(target, converted);
             }
         }
@@ -360,7 +360,7 @@ public static class AotBsonMapper
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "AOT发布时由源生成器生成的实体注册代码会标记必要构造函数。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "AOT发布时由源生成器生成的实体注册代码会标记必要类型信息。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "AOT发布时由源生成器生成的实体注册代码会标记必要类型信息。")]
-    private static object? ConvertFromBsonValue(BsonValue bsonValue, Type targetType)
+    private static object? ConvertFromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(TypeInspectionRequirements)] Type targetType)
     {
         if (targetType == null) throw new ArgumentNullException(nameof(targetType));
 
@@ -438,6 +438,22 @@ public static class AotBsonMapper
         // 处理复杂对象类型（class 和 struct）
         return type.IsClass || (type.IsValueType && !type.IsEnum && !type.IsPrimitive);
     }
+
+    [return: DynamicallyAccessedMembers(TypeInspectionRequirements)]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2073", Justification = "成员类型信息由源生成器注册的 AOT 适配器保留。")]
+    private static Type GetPropertyValueType(PropertyInfo property) => property.PropertyType;
+
+    [return: DynamicallyAccessedMembers(TypeInspectionRequirements)]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2073", Justification = "成员类型信息由源生成器注册的 AOT 适配器保留。")]
+    private static Type GetFieldValueType(FieldInfo field) => field.FieldType;
+
+    [return: DynamicallyAccessedMembers(TypeInspectionRequirements)]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2073", Justification = "集合元素类型由源生成器注册的 AOT 适配器保留。")]
+    private static Type? GetArrayElementType(Type arrayType) => arrayType.GetElementType();
+
+    [return: DynamicallyAccessedMembers(TypeInspectionRequirements)]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2073", Justification = "方法参数类型由源生成器注册的 AOT 适配器保留。")]
+    private static Type GetParameterType(ParameterInfo parameter) => parameter.ParameterType;
 
     /// <summary>
     /// 判断是否为集合类型
@@ -553,7 +569,7 @@ public static class AotBsonMapper
 
         if (collectionType.IsArray)
         {
-            var arrayElementType = collectionType.GetElementType()
+            var arrayElementType = GetArrayElementType(collectionType)
                 ?? throw new NotSupportedException($"无法确定数组类型 {collectionType.FullName} 的元素类型。");
 
             var arrayInstance = Array.CreateInstance(arrayElementType, array.Count);
@@ -589,7 +605,7 @@ public static class AotBsonMapper
             throw new NotSupportedException($"集合类型 {instance.GetType().FullName} 缺少可用的 Add 方法，无法在 AOT 回退模式下填充数据。");
         }
 
-        var addParameterType = addMethod.GetParameters()[0].ParameterType;
+        var addParameterType = GetParameterType(addMethod.GetParameters()[0]);
 
         foreach (var bsonValue in array)
         {
@@ -653,7 +669,7 @@ public static class AotBsonMapper
     {
         if (collectionType.IsArray)
         {
-            return collectionType.GetElementType()
+            return GetArrayElementType(collectionType)
                    ?? throw new NotSupportedException($"无法确定数组类型 {collectionType.FullName} 的元素类型。");
         }
 
@@ -690,7 +706,7 @@ public static class AotBsonMapper
             .FirstOrDefault(ctor =>
             {
                 var parameters = ctor.GetParameters();
-                return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(sourceCollection);
+                return parameters.Length == 1 && GetParameterType(parameters[0]).IsInstanceOfType(sourceCollection);
             });
         if (matchingCtor != null)
         {
@@ -701,7 +717,7 @@ public static class AotBsonMapper
             .FirstOrDefault(ctor =>
             {
                 var parameters = ctor.GetParameters();
-                return parameters.Length == 1 && typeof(IEnumerable).IsAssignableFrom(parameters[0].ParameterType);
+                return parameters.Length == 1 && typeof(IEnumerable).IsAssignableFrom(GetParameterType(parameters[0]));
             });
 
         if (enumerableCtor != null)

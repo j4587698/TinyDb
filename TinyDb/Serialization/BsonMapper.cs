@@ -38,7 +38,7 @@ public static class BsonMapper
         return value == null ? BsonNull.Value : BsonConversion.ToBsonValue(value);
     }
 
-    public static object? ConvertFromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type targetType)
+    public static object? ConvertFromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.Interfaces)] Type targetType)
     {
         return AotBsonMapper.ConvertValue(bsonValue, targetType);
     }

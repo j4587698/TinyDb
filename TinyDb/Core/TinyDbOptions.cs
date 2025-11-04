@@ -4,7 +4,7 @@ using System.Threading;
 namespace TinyDb.Core;
 
 /// <summary>
-/// SimpleDb 数据库配置选项
+/// TinyDb 数据库配置选项
 /// </summary>
 public sealed class TinyDbOptions
 {
@@ -36,7 +36,7 @@ public sealed class TinyDbOptions
     /// <summary>
     /// 是否启用日志（WAL）
     /// </summary>
-    public bool EnableJournaling { get; set; } = true;
+    public bool EnableJournaling { get; set; } = false;
 
     /// <summary>
     /// 是否启用自动检查点

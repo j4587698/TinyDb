@@ -18,7 +18,7 @@ public static class IndexDemo
     /// </summary>
     public static Task RunAsync()
     {
-        Console.WriteLine("=== SimpleDb 索引功能演示 ===");
+        Console.WriteLine("=== TinyDb 索引功能演示 ===");
         Console.WriteLine();
 
         // 创建临时数据库

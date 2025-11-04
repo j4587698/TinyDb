@@ -14,7 +14,7 @@ public static class SimpleCrudDemo
     public static Task RunAsync()
     {
         Console.WriteLine("=== 简化CRUD操作演示 ===");
-        Console.WriteLine("基于SimpleDb实际API的真实演示");
+        Console.WriteLine("基于TinyDb实际API的真实演示");
         Console.WriteLine();
 
         // 创建临时数据库

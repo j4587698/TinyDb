@@ -12,7 +12,7 @@ public class DiskStreamTests : IDisposable
 
     public DiskStreamTests()
     {
-        _testDirectory = Path.Combine(Path.GetTempPath(), "SimpleDbTests", Guid.NewGuid().ToString());
+        _testDirectory = Path.Combine(Path.GetTempPath(), "TinyDbTests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
         _testFilePath = Path.Combine(_testDirectory, "test.db");
     }

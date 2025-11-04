@@ -19,7 +19,7 @@ using TinyDb.Storage;
 namespace TinyDb.Core;
 
 /// <summary>
-/// SimpleDb 数据库引擎
+/// TinyDb 数据库引擎
 /// </summary>
 public sealed class TinyDbEngine : IDisposable
 {
@@ -120,7 +120,7 @@ public sealed class TinyDbEngine : IDisposable
     public int CollectionCount => _collections.Keys.Count(name => !name.StartsWith("__", StringComparison.Ordinal));
 
     /// <summary>
-    /// 初始化 SimpleDb 数据库引擎
+    /// 初始化 TinyDb 数据库引擎
     /// </summary>
     /// <param name="filePath">数据库文件路径</param>
     /// <param name="options">数据库选项</param>

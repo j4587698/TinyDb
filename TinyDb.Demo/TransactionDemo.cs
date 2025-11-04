@@ -17,7 +17,7 @@ public static class TransactionDemo
     /// </summary>
     public static async Task RunAsync()
     {
-        Console.WriteLine("=== SimpleDb 事务功能演示 ===");
+        Console.WriteLine("=== TinyDb 事务功能演示 ===");
         Console.WriteLine();
 
         // 创建临时数据库

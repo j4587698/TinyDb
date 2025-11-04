@@ -18,7 +18,7 @@ public class QueryExecutorTests : IDisposable
 
     public QueryExecutorTests()
     {
-        _testDirectory = Path.Combine(Path.GetTempPath(), "SimpleDbQueryTests", Guid.NewGuid().ToString());
+        _testDirectory = Path.Combine(Path.GetTempPath(), "TinyDbQueryTests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
         _testDbPath = Path.Combine(_testDirectory, "test.db");
 

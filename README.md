@@ -145,6 +145,8 @@ var advancedOptions = new TinyDbOptions
 using var advancedEngine = new TinyDbEngine("advanced.db", advancedOptions);
 ```
 
+> 💡 日志模式说明：默认情况下 WAL 关闭，仅当显式设置 `EnableJournaling = true` 时 TinyDb 才会进入日志模式并生成 `.wal` 文件；可在需要更强崩溃恢复能力时开启。
+
 ## 运行演示
 
 项目包含完整的演示程序：
@@ -216,7 +218,7 @@ dotnet run --project TinyDb.Demo
 
 ### 🏗️ 存储引擎
 - **页面管理**: 8KB页面大小，高效空间利用
-- **WAL日志**: 预写日志保证数据一致性
+- **可选 WAL 日志**: 仅在日志模式下启用的预写日志，提供更强一致性
 - **事务支持**: ACID事务完整实现
 - **并发控制**: 线程安全的并发访问
 

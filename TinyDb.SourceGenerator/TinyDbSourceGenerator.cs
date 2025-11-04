@@ -9,7 +9,7 @@ using System.Text;
 namespace TinyDb.SourceGenerator;
 
 /// <summary>
-/// SimpleDb AOT 源代码生成器
+/// TinyDb AOT 源代码生成器
 /// </summary>
 [Generator(LanguageNames.CSharp)]
 public class TinyDbSourceGenerator : IIncrementalGenerator
@@ -203,7 +203,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     /// </summary>
     private static bool ShouldGenerateMapper(ClassInfo classInfo)
     {
-        // 排除SimpleDb内部命名空间，但允许Demo项目
+        // 排除TinyDb内部命名空间，但允许Demo项目
         if (!string.IsNullOrEmpty(classInfo.Namespace))
         {
             // 明确排除System命名空间
@@ -212,7 +212,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            // 排除SimpleDb核心命名空间（除了Demo和SourceGenerator）
+            // 排除TinyDb核心命名空间（除了Demo和SourceGenerator）
             if (classInfo.Namespace == "TinyDb" ||
                 (classInfo.Namespace.StartsWith("TinyDb.") &&
                  classInfo.Namespace != "TinyDb.Demo" &&
@@ -230,7 +230,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             "BinaryExpression", "ConstantExpression", "MemberExpression",
             "ParameterExpression", "PropertyAccessor", "BTreeNode", "DatabaseStatistics",
             "TinyDbOptions", "InsertResult", "BTreeNodeStatistics",
-            "SimpleDbEntityAttribute", "SimpleDbIdAttribute", "SimpleDbQueryBuilderAttribute"
+            "TinyDbEntityAttribute", "TinyDbIdAttribute", "TinyDbQueryBuilderAttribute"
         };
 
         if (excludePatterns.Any(pattern => classInfo.Name.Contains(pattern)))

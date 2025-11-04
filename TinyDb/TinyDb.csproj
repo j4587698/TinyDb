@@ -63,8 +63,8 @@
     </ItemGroup>
 
     <!-- 包含SourceGenerator DLL作为分析器 - 静态声明 -->
-    <ItemGroup Condition="Exists('../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll')">
-        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll"
+    <ItemGroup Condition="Exists('../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDbSourceGenerator.dll')">
+        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDbSourceGenerator.dll"
               Pack="true"
               PackagePath="analyzers/dotnet/cs" />
     </ItemGroup>

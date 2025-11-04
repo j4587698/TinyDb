@@ -32,7 +32,7 @@ public struct DatabaseHeader
         CreatedAt = DateTime.UtcNow.Ticks;
         ModifiedAt = DateTime.UtcNow.Ticks;
         Checksum = 0;
-        EnableJournaling = true;
+        EnableJournaling = false;
         _reserved = new byte[60];
         _databaseName = new byte[64];
         _userData = new byte[64];
@@ -201,7 +201,7 @@ public struct DatabaseHeader
     /// </summary>
     /// <param name="pageSize">页面大小</param>
     /// <param name="databaseName">数据库名称</param>
-    public void Initialize(uint pageSize, string databaseName = "TinyDb")
+    public void Initialize(uint pageSize, string databaseName = "TinyDb", bool enableJournaling = false)
     {
         Magic = MagicNumber;
         DatabaseVersion = Version;
@@ -216,7 +216,7 @@ public struct DatabaseHeader
         CreatedAt = now;
         ModifiedAt = now;
         Checksum = 0;
-        EnableJournaling = true;
+        EnableJournaling = enableJournaling;
         DatabaseName = databaseName;
 
         unsafe

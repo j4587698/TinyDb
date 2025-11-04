@@ -50,7 +50,7 @@ public static class AutoIdSimpleDemo
 {
     public static Task RunAsync()
     {
-        Console.WriteLine("=== SimpleDb 自动ID生成演示 ===\n");
+        Console.WriteLine("=== TinyDb 自动ID生成演示 ===\n");
 
         var demoDbPath = "auto_id_demo.db";
 

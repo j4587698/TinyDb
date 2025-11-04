@@ -21,7 +21,7 @@ public class QueryableTests : IDisposable
 
     public QueryableTests()
     {
-        _testDirectory = Path.Combine(Path.GetTempPath(), "SimpleDbQueryableTests", Guid.NewGuid().ToString());
+        _testDirectory = Path.Combine(Path.GetTempPath(), "TinyDbQueryableTests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
         _testDbPath = Path.Combine(_testDirectory, "test.db");
 
