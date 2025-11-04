@@ -186,7 +186,7 @@ public sealed class IndexManager : IDisposable
                         index.Insert(key, documentId);
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
                 }
             }
@@ -216,7 +216,7 @@ public sealed class IndexManager : IDisposable
                         index.Delete(key, documentId);
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
                 }
             }
@@ -258,7 +258,7 @@ public sealed class IndexManager : IDisposable
                         index.Insert(newKey, documentId);
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
                 }
             }

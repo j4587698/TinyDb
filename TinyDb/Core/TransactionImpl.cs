@@ -293,7 +293,7 @@ internal sealed class Transaction : ITransaction
                 _operations.Clear();
                 _savepoints.Clear();
             }
-            catch (Exception ex)
+            catch
             {
             }
             finally

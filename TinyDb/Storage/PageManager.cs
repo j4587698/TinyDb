@@ -614,7 +614,7 @@ public sealed class PageManager : IDisposable
 
                 _diskStream?.Dispose();
             }
-            catch (Exception ex)
+            catch
             {
             }
             finally

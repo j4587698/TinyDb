@@ -59,7 +59,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         {
             IndexScanner.ScanAndCreateIndexes(_engine, typeof(T), _name);
         }
-        catch (Exception ex)
+        catch
         {
             // 索引创建失败不阻止操作
         }

@@ -50,7 +50,7 @@ public sealed class FlushScheduler : IDisposable
             {
                 // 正常退出
             }
-            catch (Exception ex)
+            catch
             {
             }
         }
@@ -142,7 +142,7 @@ public sealed class FlushScheduler : IDisposable
         {
             _backgroundTask?.Wait();
         }
-        catch (AggregateException ex)
+        catch (AggregateException)
         {
         }
 
@@ -150,7 +150,7 @@ public sealed class FlushScheduler : IDisposable
         {
             FlushAsync().GetAwaiter().GetResult();
         }
-        catch (Exception ex)
+        catch
         {
         }
 

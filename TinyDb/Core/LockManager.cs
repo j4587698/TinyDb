@@ -441,7 +441,7 @@ public sealed class LockManager : IDisposable
                 await Task.Delay(TimeSpan.FromSeconds(10)); // 每10秒检查一次
                 DetectAndResolveDeadlocks();
             }
-            catch (Exception ex)
+            catch
             {
             }
         }
@@ -543,7 +543,7 @@ public sealed class LockManager : IDisposable
                 _lockBuckets.Clear();
                 _transactionLocks.Clear();
             }
-            catch (Exception ex)
+            catch
             {
             }
             finally

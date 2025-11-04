@@ -270,7 +270,7 @@ public sealed class TinyDbEngine : IDisposable
                 return Task.CompletedTask;
             }).GetAwaiter().GetResult();
         }
-        catch (Exception ex)
+        catch
         {
         }
     }
@@ -412,7 +412,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             // AOT 模式下可能读取到未初始化的系统页面，忽略这些无效数据以保持向后兼容
         }
-        catch (Exception ex)
+        catch
         {
             // 如果加载集合信息失败，记录警告但继续
         }
@@ -1035,7 +1035,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     indexManager.InsertDocument(document, id);
                 }
-                catch (Exception ex)
+                catch
                 {
                 }
             }
@@ -1111,7 +1111,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 indexManager.InsertDocument(document, id);
             }
-            catch (Exception ex)
+            catch
             {
             }
         }
@@ -1628,7 +1628,7 @@ public sealed class TinyDbEngine : IDisposable
                     {
                         _largeDocumentStorage.DeleteLargeDocument(newLargeDocumentIndexPageId.Value);
                     }
-                    catch (Exception cleanupEx)
+                    catch
                     {
                     }
                 }
@@ -1644,7 +1644,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     _largeDocumentStorage.DeleteLargeDocument(oldEntry.LargeDocumentIndexPageId);
                 }
-                catch (Exception cleanupEx)
+                catch
                 {
                 }
             }
@@ -1659,7 +1659,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             indexManager?.UpdateDocument(oldDocumentSnapshot!, newDocumentSnapshot!, id);
         }
-        catch (Exception ex)
+        catch
         {
         }
 
@@ -1748,7 +1748,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 _largeDocumentStorage.DeleteLargeDocument(deletedEntry.Value.LargeDocumentIndexPageId);
             }
-            catch (Exception ex)
+            catch
             {
             }
         }
@@ -1757,7 +1757,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             indexManager?.DeleteDocument(deletedEntry.Value.Document, id);
         }
-        catch (Exception ex)
+        catch
         {
         }
 
@@ -1796,7 +1796,7 @@ public sealed class TinyDbEngine : IDisposable
                 InsertPreparedDocument(collectionName, preparedDocument, id, collectionState, indexManager, updateIndexes: true);
                 insertedCount++;
             }
-            catch (Exception ex)
+            catch
             {
             }
         }
@@ -2010,7 +2010,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 _largeDocumentStorage.DeleteLargeDocument(deletedEntry.Value.LargeDocumentIndexPageId);
             }
-            catch (Exception ex)
+            catch
             {
             }
         }
@@ -2019,7 +2019,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             indexManager?.DeleteDocument(deletedEntry.Value.Document, id);
         }
-        catch (Exception ex)
+        catch
         {
         }
 
@@ -2124,7 +2124,7 @@ public sealed class TinyDbEngine : IDisposable
                     {
                         _largeDocumentStorage.DeleteLargeDocument(newLargeDocumentIndexPageId.Value);
                     }
-                    catch (Exception cleanupEx)
+                    catch
                     {
                     }
                 }
@@ -2140,7 +2140,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     _largeDocumentStorage.DeleteLargeDocument(oldEntry.LargeDocumentIndexPageId);
                 }
-                catch (Exception cleanupEx)
+                catch
                 {
                 }
             }
@@ -2155,7 +2155,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             indexManager?.UpdateDocument(oldDocumentSnapshot!, newDocumentSnapshot!, id);
         }
-        catch (Exception ex)
+        catch
         {
         }
 
@@ -2242,7 +2242,7 @@ public sealed class TinyDbEngine : IDisposable
                 // 释放磁盘流
                 _diskStream?.Dispose();
             }
-            catch (Exception ex)
+            catch
             {
             }
             finally

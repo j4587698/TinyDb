@@ -419,7 +419,7 @@ public sealed class TransactionManager : IDisposable
                 await Task.Delay(TimeSpan.FromSeconds(30)); // 每30秒检查一次
                 CheckAndCleanupExpiredTransactions();
             }
-            catch (Exception ex)
+            catch
             {
                 // 记录错误但继续运行
             }
@@ -445,7 +445,7 @@ public sealed class TransactionManager : IDisposable
                     expiredTransaction.State = TransactionState.Failed;
                     _activeTransactions.Remove(expiredTransaction.TransactionId);
                 }
-                catch (Exception ex)
+                catch
                 {
                 }
             }
@@ -513,7 +513,7 @@ public sealed class TransactionManager : IDisposable
                     _activeTransactions.Clear();
                 }
             }
-            catch (Exception ex)
+            catch
             {
             }
             finally
