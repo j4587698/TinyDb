@@ -132,6 +132,35 @@ public sealed class TinyDbEngine : IDisposable
 
         _diskStream = new DiskStream(_filePath);
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
+        if (!_options.EnableJournaling)
+        {
+            var walPath = Path.ChangeExtension(_filePath, ".wal");
+            var walHasPendingEntries = false;
+            try
+            {
+                var walInfo = new FileInfo(walPath);
+                walHasPendingEntries = walInfo.Exists && walInfo.Length > 0;
+            }
+            catch
+            {
+                walHasPendingEntries = false;
+            }
+
+            if (walHasPendingEntries)
+            {
+                using var recoveryWal = new WriteAheadLog(_filePath, (int)_options.PageSize, enabled: true);
+                try
+                {
+                    RecoverFromWriteAheadLog(recoveryWal);
+                    recoveryWal.TruncateAsync().GetAwaiter().GetResult();
+                }
+                catch
+                {
+                    // Ignore recovery issues when attempting to drain legacy WAL
+                }
+            }
+        }
+
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling);
         _flushScheduler = new FlushScheduler(
             _pageManager,
@@ -144,7 +173,7 @@ public sealed class TinyDbEngine : IDisposable
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
 
-        RecoverFromWriteAheadLog();
+        RecoverFromWriteAheadLog(_writeAheadLog);
         InitializeDatabase();
     }
 
@@ -210,7 +239,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     // 新数据库，创建头部
                     _header = new DatabaseHeader();
-                    _header.Initialize(_options.PageSize, _options.DatabaseName);
+                    _header.Initialize(_options.PageSize, _options.DatabaseName, _options.EnableJournaling);
                     if (_options.UserData?.Length > 0)
                     {
                         _header.UserData = _options.UserData;
@@ -237,6 +266,9 @@ public sealed class TinyDbEngine : IDisposable
                     }
                 }
 
+                // 同步日志模式设置到头部，用于后续写入
+                _header.EnableJournaling = _options.EnableJournaling;
+
                 // 初始化系统页面
                 InitializeSystemPages();
 
@@ -258,13 +290,13 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
-    private void RecoverFromWriteAheadLog()
+    private void RecoverFromWriteAheadLog(WriteAheadLog wal)
     {
-        if (!_writeAheadLog.IsEnabled) return;
+        if (!wal.IsEnabled) return;
 
         try
         {
-            _writeAheadLog.ReplayAsync((pageId, data) =>
+            wal.ReplayAsync((pageId, data) =>
             {
                 _pageManager.RestorePage(pageId, data);
                 return Task.CompletedTask;
