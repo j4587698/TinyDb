@@ -44,7 +44,7 @@ TinyDb 是一个轻量级的、AOT兼容的单文件NoSQL数据库，专为.NET�
 ### 1. 安装
 
 ```bash
-dotnet add package TinyDb --version 0.1.0
+dotnet add package TinyDb --version 0.1.5
 ```
 
 ### 2. 定义实体
