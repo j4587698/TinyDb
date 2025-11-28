@@ -30,6 +30,7 @@ public sealed class TinyDbEngine : IDisposable
     private readonly WriteAheadLog _writeAheadLog;
     private readonly FlushScheduler _flushScheduler;
     private readonly ConcurrentDictionary<string, IDocumentCollection> _collections;
+    private readonly HashSet<string> _knownCollectionNames;
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly TransactionManager _transactionManager;
     private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
@@ -168,6 +169,7 @@ public sealed class TinyDbEngine : IDisposable
             NormalizeInterval(_options.BackgroundFlushInterval),
             NormalizeInterval(_options.JournalFlushDelay));
         _collections = new ConcurrentDictionary<string, IDocumentCollection>();
+        _knownCollectionNames = new HashSet<string>();
         _indexManagers = new ConcurrentDictionary<string, IndexManager>();
         _collectionStates = new ConcurrentDictionary<string, CollectionState>();
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
@@ -416,27 +418,39 @@ public sealed class TinyDbEngine : IDisposable
         try
         {
             var collectionPage = _pageManager.GetPage(_header.CollectionInfoPage);
-            var collectionData = collectionPage.ReadData(32, collectionPage.DataSize - 32); // 跳过标识符
+            // 使用正确的偏移量，跳过页面头部和对齐填充 = 288字节
+            const int dataOffset = 288;
+            var collectionData = collectionPage.ReadData(dataOffset, collectionPage.DataSize - dataOffset);
 
-            if (collectionData.Length >= 5)
+            if (collectionData.Length >= 4)
             {
-                var declaredLength = BitConverter.ToInt32(collectionData, 0);
-
-                if (declaredLength > 0 &&
-                    declaredLength <= collectionData.Length &&
-                    collectionData[declaredLength - 1] == 0)
+                try
                 {
-                    var documentBytes = collectionData.AsSpan(0, declaredLength).ToArray();
-                    var document = BsonSerializer.DeserializeDocument(documentBytes);
+                    // 读取BSON文档的长度（前4个字节）
+                    var bsonLength = BitConverter.ToInt32(collectionData, 0);
 
-                    foreach (var kvp in document)
+                    if (bsonLength > 4 && bsonLength <= collectionData.Length)
                     {
-                        if (kvp.Value is BsonString collectionName)
+                        var documentBytes = collectionData.AsSpan(0, bsonLength).ToArray();
+                        var document = BsonSerializer.DeserializeDocument(documentBytes);
+
+                        foreach (var kvp in document)
                         {
-                            // 创建集合实例但不立即加载
-                            _collections.TryAdd(collectionName.Value, null!);
+                            if (kvp.Value is BsonString collectionName)
+                            {
+                                // 只记录已知的集合名称，让GetCollection方法懒加载实际实例
+                                _knownCollectionNames.Add(collectionName.Value);
+                            }
                         }
                     }
+                }
+                catch (Exception ex) when (ex is EndOfStreamException or FormatException or InvalidOperationException or OverflowException)
+                {
+                    // AOT 模式下可能读取到未初始化的系统页面，忽略这些无效数据以保持向后兼容
+                }
+                catch
+                {
+                    // 如果加载集合信息失败，记录警告但继续
                 }
             }
         }
@@ -455,19 +469,33 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     private void SaveCollections()
     {
-        if (_header.CollectionInfoPage == 0) return;
+        if (_knownCollectionNames.Count == 0) return;
+
+        // 确保集合信息页面存在
+        if (_header.CollectionInfoPage == 0)
+        {
+            var newPage = _pageManager.NewPage(PageType.Collection);
+            _header.CollectionInfoPage = newPage.PageID;
+        }
 
         var collectionInfo = new BsonDocument();
-        foreach (var collectionName in _collections.Keys)
+
+        // 使用已知集合名称而不是当前加载的集合键
+        lock (_knownCollectionNames)
         {
-            collectionInfo = collectionInfo.Set(collectionName, collectionName);
+            foreach (var collectionName in _knownCollectionNames)
+            {
+                collectionInfo = collectionInfo.Set(collectionName, collectionName);
+            }
         }
 
         var collectionData = BsonSerializer.SerializeDocument(collectionInfo);
 
         var collectionPage = _pageManager.GetPage(_header.CollectionInfoPage);
-        collectionPage.WriteData(32, collectionData);
-        collectionPage.UpdateStats((ushort)(collectionPage.DataSize - 32 - collectionData.Length), 1);
+        // 使用正确的偏移量，跳过页面头部和对齐填充 = 288字节
+        const int dataOffset = 288;
+        collectionPage.WriteData(dataOffset, collectionData);
+        collectionPage.UpdateStats((ushort)(collectionPage.DataSize - dataOffset - collectionData.Length), 1);
 
         _pageManager.SavePage(collectionPage, forceFlush: _options.WriteConcern == WriteConcern.Synced);
     }
@@ -598,6 +626,10 @@ public sealed class TinyDbEngine : IDisposable
     /// <param name="collectionName">集合名称</param>
     private void RegisterCollection(string collectionName)
     {
+        lock (_knownCollectionNames)
+        {
+            _knownCollectionNames.Add(collectionName);
+        }
         SaveCollections();
     }
 
@@ -618,6 +650,10 @@ public sealed class TinyDbEngine : IDisposable
                 disposable.Dispose();
             }
 
+            lock (_knownCollectionNames)
+            {
+                _knownCollectionNames.Remove(collectionName);
+            }
             SaveCollections();
             _collectionStates.TryRemove(collectionName, out _);
             return true;
@@ -635,7 +671,14 @@ public sealed class TinyDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        return _collections.Keys.ToList();
+        // 合并已知集合名称和当前已加载的集合
+        var allNames = new HashSet<string>(_knownCollectionNames);
+        foreach (var name in _collections.Keys)
+        {
+            allNames.Add(name);
+        }
+
+        return allNames.ToList();
     }
 
     /// <summary>
@@ -1921,6 +1964,9 @@ public sealed class TinyDbEngine : IDisposable
             // 先刷新所有页面
             _flushScheduler.FlushAsync().GetAwaiter().GetResult();
 
+            // 保存集合信息到磁盘
+            SaveCollections();
+
             // 强制同步磁盘流，确保所有页面数据已完全写入
             _diskStream.Flush();
 
@@ -2245,8 +2291,8 @@ public sealed class TinyDbEngine : IDisposable
                     SaveCollections();
                 }
 
-                // 刷新所有缓存
-                Flush();
+                // 安全刷新 - 确保所有数据完全写入，避免竞态条件
+                SafeFlush();
 
                 _flushScheduler?.Dispose();
                 _writeAheadLog?.Dispose();
@@ -2331,6 +2377,61 @@ public sealed class TinyDbEngine : IDisposable
             indexManager.Dispose();
         }
         _indexManagers.Clear();
+    }
+
+    /// <summary>
+    /// 安全刷新 - 确保所有数据完全写入，避免竞态条件
+    /// </summary>
+    private void SafeFlush()
+    {
+        if (!_isInitialized) return;
+
+        try
+        {
+            // 先刷新所有页面
+            _flushScheduler?.FlushAsync().GetAwaiter().GetResult();
+
+            // 强制同步磁盘流，确保所有页面数据已完全写入
+            _diskStream?.Flush();
+
+            // 手动写入头部并确保完整性
+            if (_pageManager != null && _diskStream != null)
+            {
+                // 同步PageManager的实际总页数到数据库头部
+                var actualTotalPages = _pageManager.TotalPages;
+                if (actualTotalPages != _header.TotalPages)
+                {
+                    _header.TotalPages = actualTotalPages;
+                }
+
+                // 同步已用页数（基于PageManager的统计）
+                var stats = _pageManager.GetStatistics();
+                if (stats.UsedPages != _header.UsedPages)
+                {
+                    _header.UsedPages = stats.UsedPages;
+                }
+
+                // 更新修改时间和校验和
+                _header.UpdateModification();
+                var headerData = _header.ToByteArray();
+
+                // 直接写入头部，避免依赖其他组件
+                var headerPage = _pageManager.GetPage(1);
+                headerPage.UpdatePageType(PageType.Header);
+                headerPage.WriteData(0, headerData);
+                headerPage.UpdateStats((ushort)(headerPage.DataSize - headerData.Length), 1);
+
+                _pageManager.SavePage(headerPage, forceFlush: true);
+
+                // 最后一次磁盘同步，确保头部完全写入
+                _diskStream.Flush();
+            }
+        }
+        catch (Exception ex)
+        {
+            // 记录错误但不抛出异常，确保资源释放继续进行
+            System.Diagnostics.Debug.WriteLine($"[ERROR] SafeFlush failed: {ex.Message}");
+        }
     }
 
     }

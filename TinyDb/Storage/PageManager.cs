@@ -550,7 +550,7 @@ public sealed class PageManager : IDisposable
     /// <returns>偏移量</returns>
     private long CalculatePageOffset(uint pageID)
     {
-        return (pageID - 1) * _pageSize;
+        return pageID * _pageSize;
     }
 
     /// <summary>
