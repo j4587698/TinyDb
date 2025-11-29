@@ -149,7 +149,7 @@ public sealed class TinyDbEngine : IDisposable
 
             if (walHasPendingEntries)
             {
-                using var recoveryWal = new WriteAheadLog(_filePath, (int)_options.PageSize, enabled: true);
+                using var recoveryWal = new WriteAheadLog(_filePath, (int)_options.PageSize, enabled: true, _options.WalFileNameFormat);
                 try
                 {
                     RecoverFromWriteAheadLog(recoveryWal);
@@ -162,7 +162,7 @@ public sealed class TinyDbEngine : IDisposable
             }
         }
 
-        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling);
+        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
         _flushScheduler = new FlushScheduler(
             _pageManager,
             _writeAheadLog,

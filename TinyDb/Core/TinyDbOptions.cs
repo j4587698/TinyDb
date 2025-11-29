@@ -39,6 +39,11 @@ public sealed class TinyDbOptions
     public bool EnableJournaling { get; set; } = false;
 
     /// <summary>
+    /// WAL文件名格式，支持占位符：{name} = 数据库名称，{ext} = 原扩展名
+    /// </summary>
+    public string? WalFileNameFormat { get; set; } = "{name}-wal.{ext}";
+
+    /// <summary>
     /// 是否启用自动检查点
     /// </summary>
     public bool EnableAutoCheckpoint { get; set; } = true;
@@ -207,6 +212,7 @@ public sealed class TinyDbOptions
             PageSize = PageSize,
             CacheSize = CacheSize,
             EnableJournaling = EnableJournaling,
+            WalFileNameFormat = WalFileNameFormat,
             EnableAutoCheckpoint = EnableAutoCheckpoint,
             Timeout = Timeout,
             ReadOnly = ReadOnly,

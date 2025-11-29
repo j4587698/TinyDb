@@ -9,11 +9,21 @@ namespace TinyDb.Tests.Security;
 
 public class DatabaseSecurityTests
 {
+    /// <summary>
+    /// 生成WAL文件路径，使用默认格式
+    /// </summary>
+    private static string GenerateDefaultWalPath(string dbPath)
+    {
+        var directory = Path.GetDirectoryName(dbPath) ?? string.Empty;
+        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(dbPath);
+        var extension = Path.GetExtension(dbPath).TrimStart('.');
+        return Path.Combine(directory, $"{fileNameWithoutExt}-wal.{extension}");
+    }
     [Test]
     public async Task Engine_Should_Create_And_Enforce_Password_Protection()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"secure_db_{Guid.NewGuid():N}.db");
-        var walPath = $"{dbPath}.wal";
+        var walPath = GenerateDefaultWalPath(dbPath);
 
         try
         {
@@ -45,7 +55,7 @@ public class DatabaseSecurityTests
     public async Task PasswordManager_Should_Manage_Database_Password_Lifecycle()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"manager_db_{Guid.NewGuid():N}.db");
-        var walPath = $"{dbPath}.wal";
+        var walPath = GenerateDefaultWalPath(dbPath);
 
         try
         {

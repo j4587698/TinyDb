@@ -31,14 +31,14 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public bool HasPendingEntries => IsEnabled && _hasPendingEntries;
 
-    public WriteAheadLog(string databaseFilePath, int pageSize, bool enabled)
+    public WriteAheadLog(string databaseFilePath, int pageSize, bool enabled, string? walFileNameFormat = null)
     {
         if (string.IsNullOrWhiteSpace(databaseFilePath))
             throw new ArgumentException("Database file path cannot be null or empty", nameof(databaseFilePath));
 
         _maxRecordSize = Math.Max(pageSize, 0);
         IsEnabled = enabled;
-        _logFilePath = Path.ChangeExtension(databaseFilePath, ".wal");
+        _logFilePath = GenerateWalFilePath(databaseFilePath, walFileNameFormat ?? "{name}-wal.{ext}");
 
         if (!IsEnabled)
         {
@@ -62,6 +62,38 @@ public sealed class WriteAheadLog : IDisposable
 
         _stream.Seek(0, SeekOrigin.End);
         _hasPendingEntries = _stream.Length > 0;
+    }
+
+    /// <summary>
+    /// 生成WAL文件路径，支持格式化占位符
+    /// </summary>
+    /// <param name="databaseFilePath">数据库文件路径</param>
+    /// <param name="format">文件名格式，支持占位符：{name} = 数据库名称，{ext} = 原扩展名</param>
+    /// <returns>WAL文件路径</returns>
+    private static string GenerateWalFilePath(string databaseFilePath, string format)
+    {
+        if (string.IsNullOrWhiteSpace(format))
+        {
+            // 如果格式为空，使用默认行为
+            return Path.ChangeExtension(databaseFilePath, ".wal");
+        }
+
+        var directory = Path.GetDirectoryName(databaseFilePath) ?? string.Empty;
+        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(databaseFilePath);
+        var extension = Path.GetExtension(databaseFilePath).TrimStart('.');
+
+        // 替换占位符
+        var formattedFileName = format
+            .Replace("{name}", fileNameWithoutExt)
+            .Replace("{ext}", extension);
+
+        // 确保文件名以.db结尾（如果格式中没有包含扩展名）
+        if (!Path.HasExtension(formattedFileName) && !string.IsNullOrEmpty(extension))
+        {
+            formattedFileName += $".{extension}";
+        }
+
+        return Path.Combine(directory, formattedFileName);
     }
 
     private void TryDeleteExistingLog()
