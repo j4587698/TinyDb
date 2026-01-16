@@ -241,6 +241,7 @@ public sealed class WriteAheadLog : IDisposable
         if (applyAsync == null) throw new ArgumentNullException(nameof(applyAsync));
 
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        long lastSuccessfulPosition = 0;
         try
         {
             _stream.Flush(true);
@@ -251,6 +252,8 @@ public sealed class WriteAheadLog : IDisposable
             
             while (_stream.Position < _stream.Length)
             {
+                long currentEntryStart = _stream.Position;
+                
                 // 尝试读取完整头部
                 var read = await _stream.ReadAsync(headerBuffer, 0, FullHeaderSize, cancellationToken).ConfigureAwait(false);
                 
@@ -262,6 +265,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (headerBuffer[0] != EntryTypePage)
                 {
+                    Console.Error.WriteLine($"WAL: Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}");
                     break; // 无效类型，停止重放
                 }
 
@@ -276,20 +280,16 @@ public sealed class WriteAheadLog : IDisposable
                 }
                 else
                 {
-                    // 兼容旧格式或处理读取不足的情况 (如果是旧数据可能没有CRC)
-                    // 这里我们简单回退流位置，因为这可能是EOF
-                    // 如果我们改变了格式，旧的日志文件可能不兼容。
-                    // 假设这是新数据库或已截断。
-                    // 为简单起见，如果读不够完整头部，我们视为部分写入/结束。
                     if (read > HeaderSize) 
                     {
-                        // 读到了部分 CRC 数据，这是损坏
+                        Console.Error.WriteLine($"WAL: Incomplete header at {currentEntryStart}");
                         break; 
                     }
                 }
 
                 if (length <= 0 || length > _maxRecordSize)
                 {
+                    Console.Error.WriteLine($"WAL: Invalid record length {length} at {currentEntryStart}");
                     break; // 无效长度
                 }
 
@@ -300,7 +300,6 @@ public sealed class WriteAheadLog : IDisposable
                     var chunk = await _stream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
                     if (chunk == 0)
                     {
-                        offset = length + 1; // 标记为未完成
                         break;
                     }
                     offset += chunk;
@@ -308,6 +307,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (offset != length)
                 {
+                    Console.Error.WriteLine($"WAL: Incomplete data record at {currentEntryStart}");
                     break; // 数据不完整
                 }
 
@@ -317,17 +317,36 @@ public sealed class WriteAheadLog : IDisposable
                     var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value)
                     {
-                        // 校验和不匹配，说明数据损坏，停止重放
-                        // 可能是断电导致的部分写入
+                        Console.Error.WriteLine($"WAL: CRC mismatch at {currentEntryStart}");
                         break;
                     }
                 }
 
                 await applyAsync(pageId, buffer).ConfigureAwait(false);
+                lastSuccessfulPosition = _stream.Position;
+            }
+
+            // 清理或截断日志
+            if (lastSuccessfulPosition < _stream.Length)
+            {
+                // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
+                _stream.SetLength(lastSuccessfulPosition);
+            }
+            else if (lastSuccessfulPosition > 0)
+            {
+                // 全部重放成功，清空日志
+                _stream.SetLength(0);
             }
 
             _stream.Seek(0, SeekOrigin.End);
             _hasPendingEntries = _stream.Length > 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"WAL: Fatal error during replay: {ex.Message}");
+            // 尽力而为：截断到已知正确的位置
+            try { _stream.SetLength(lastSuccessfulPosition); } catch { }
+            throw;
         }
         finally
         {

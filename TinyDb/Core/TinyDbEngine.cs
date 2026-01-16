@@ -114,6 +114,16 @@ public sealed class TinyDbEngine : IDisposable
             if (_isInitialized) return;
             try
             {
+                // 崩溃恢复：重放 WAL 日志
+                if (_writeAheadLog.IsEnabled)
+                {
+                    _writeAheadLog.ReplayAsync((id, data) =>
+                    {
+                        _pageManager.RestorePage(id, data);
+                        return Task.CompletedTask;
+                    }).GetAwaiter().GetResult();
+                }
+
                 if (_diskStream.Size == 0)
                 {
                     _header = new DatabaseHeader();
