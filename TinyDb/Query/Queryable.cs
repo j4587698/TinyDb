@@ -7,7 +7,7 @@ using System.Reflection;
 
 namespace TinyDb.Query;
 
-public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : IQueryable<T>
+public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : IOrderedQueryable<T>
     where T : class, new()
 {
     private readonly QueryExecutor _executor;
@@ -113,10 +113,14 @@ internal enum QueryOperation
     First,
     FirstOrDefault,
     Take,
-    Skip
+    Skip,
+    OrderBy,
+    OrderByDescending,
+    ThenBy,
+    ThenByDescending
 }
 
-internal readonly record struct QueryOperationDescriptor(QueryOperation Operation, int? IntValue);
+internal readonly record struct QueryOperationDescriptor(QueryOperation Operation, object? Value);
 
 internal readonly record struct QueryPipelinePlan(
     IReadOnlyList<QueryOperationDescriptor> SequenceOperations,
@@ -140,6 +144,22 @@ internal static class QueryOperationResolver
                     continue;
                 case nameof(Queryable.Skip):
                     sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.Skip, ExtractIntegerArgument(methodCall, 1)));
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.OrderBy):
+                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.OrderBy, ExtractLambdaArgument(methodCall, 1)));
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.OrderByDescending):
+                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.OrderByDescending, ExtractLambdaArgument(methodCall, 1)));
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.ThenBy):
+                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.ThenBy, ExtractLambdaArgument(methodCall, 1)));
+                    current = methodCall.Arguments[0];
+                    continue;
+                case nameof(Queryable.ThenByDescending):
+                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.ThenByDescending, ExtractLambdaArgument(methodCall, 1)));
                     current = methodCall.Arguments[0];
                     continue;
                 case nameof(Queryable.Count):
@@ -185,8 +205,12 @@ internal static class QueryOperationResolver
         {
             sequence = descriptor.Operation switch
             {
-                QueryOperation.Take => Take(sequence, descriptor.IntValue ?? 0),
-                QueryOperation.Skip => Skip(sequence, descriptor.IntValue ?? 0),
+                QueryOperation.Take => Take(sequence, (int)(descriptor.Value ?? 0)),
+                QueryOperation.Skip => Skip(sequence, (int)(descriptor.Value ?? 0)),
+                QueryOperation.OrderBy => OrderBy(sequence, (LambdaExpression)descriptor.Value!),
+                QueryOperation.OrderByDescending => OrderByDescending(sequence, (LambdaExpression)descriptor.Value!),
+                QueryOperation.ThenBy => ThenBy((IOrderedEnumerable<T>)sequence, (LambdaExpression)descriptor.Value!),
+                QueryOperation.ThenByDescending => ThenByDescending((IOrderedEnumerable<T>)sequence, (LambdaExpression)descriptor.Value!),
                 _ => sequence
             };
         }
@@ -298,6 +322,47 @@ internal static class QueryOperationResolver
         {
             yield return enumerator.Current;
         }
+    }
+
+    private static IOrderedEnumerable<T> OrderBy<T>(IEnumerable<T> source, LambdaExpression keySelector)
+    {
+        return ApplyOrder(source, keySelector, "OrderBy");
+    }
+
+    private static IOrderedEnumerable<T> OrderByDescending<T>(IEnumerable<T> source, LambdaExpression keySelector)
+    {
+        return ApplyOrder(source, keySelector, "OrderByDescending");
+    }
+
+    private static IOrderedEnumerable<T> ThenBy<T>(IOrderedEnumerable<T> source, LambdaExpression keySelector)
+    {
+        return ApplyOrder(source, keySelector, "ThenBy");
+    }
+
+    private static IOrderedEnumerable<T> ThenByDescending<T>(IOrderedEnumerable<T> source, LambdaExpression keySelector)
+    {
+        return ApplyOrder(source, keySelector, "ThenByDescending");
+    }
+
+    private static IOrderedEnumerable<T> ApplyOrder<T>(IEnumerable<T> source, LambdaExpression keySelector, string methodName)
+    {
+        var keyType = keySelector.ReturnType;
+        var method = typeof(Enumerable)
+            .GetMethods()
+            .First(m => m.Name == methodName && m.GetParameters().Length == 2)
+            .MakeGenericMethod(typeof(T), keyType);
+        
+        return (IOrderedEnumerable<T>)method.Invoke(null, new object[] { source, keySelector.Compile() })!;
+    }
+
+    private static LambdaExpression ExtractLambdaArgument(MethodCallExpression methodCall, int index)
+    {
+        var argument = methodCall.Arguments[index];
+        while (argument.NodeType == ExpressionType.Quote && argument is UnaryExpression unary)
+        {
+            argument = unary.Operand;
+        }
+        return (LambdaExpression)argument;
     }
 
     private static int ExtractIntegerArgument(MethodCallExpression methodCall, int index)
