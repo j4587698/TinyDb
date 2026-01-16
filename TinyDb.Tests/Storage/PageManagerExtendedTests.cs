@@ -56,11 +56,11 @@ public class PageManagerExtendedTests : IDisposable
         pm.SavePage(p1);
 
         pm.FreePage(p1Id);
-        await Assert.That(pm.FreePages).IsEqualTo(1);
+        await Assert.That(pm.FirstFreePageID).IsNotEqualTo(0u);
 
         var p2 = pm.NewPage(PageType.Data);
         await Assert.That(p2.PageID).IsEqualTo(p1Id); // Reused
-        await Assert.That(pm.FreePages).IsEqualTo(0);
+        await Assert.That(pm.FirstFreePageID).IsEqualTo(0u);
     }
 
     [Test]

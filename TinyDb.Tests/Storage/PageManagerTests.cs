@@ -46,7 +46,7 @@ public class PageManagerTests : IDisposable
         await Assert.That(pageManager.PageSize).IsEqualTo(TestPageSize);
         await Assert.That(pageManager.MaxCacheSize).IsEqualTo(TestCacheSize);
         await Assert.That(pageManager.CachedPages).IsEqualTo(0);
-        await Assert.That(pageManager.FreePages).IsEqualTo(0);
+        await Assert.That(pageManager.FirstFreePageID).IsEqualTo(0u);
         await Assert.That(pageManager.TotalPages >= 0).IsTrue();
         await Assert.That(File.Exists(_testFilePath)).IsTrue();
     }
@@ -156,7 +156,7 @@ public class PageManagerTests : IDisposable
         pageManager.FreePage(1);
 
         // Assert
-        await Assert.That(pageManager.FreePages).IsGreaterThan(0);
+        await Assert.That(pageManager.FirstFreePageID).IsNotEqualTo(0u);
 
         // Verify page is marked as empty
         var reloadedPage = pageManager.GetPage(1);
