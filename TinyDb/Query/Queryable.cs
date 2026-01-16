@@ -177,8 +177,6 @@ internal sealed class QueryableToEnumerableRewriter : LinqExp.ExpressionVisitor
 
     private static MethodInfo? FindEnumerableMethod(string name, Type[] argTypes, Type[] genericArgs)
     {
-        // 简单查找：名称匹配且参数数量匹配
-        // 注意：Enumerable 方法通常是泛型定义
         var methods = typeof(System.Linq.Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
             .Where(m => m.Name == name && m.GetParameters().Length == argTypes.Length);
 
@@ -189,13 +187,22 @@ internal sealed class QueryableToEnumerableRewriter : LinqExp.ExpressionVisitor
                 try
                 {
                     var concrete = m.MakeGenericMethod(genericArgs);
-                    // 检查参数类型兼容性 (这里简化检查，假设 Queryable 和 Enumerable 签名一一对应)
-                    // 实际应该检查 concrete.GetParameters()[i].ParameterType.IsAssignableFrom(argTypes[i])
-                    return concrete;
+                    var parameters = concrete.GetParameters();
+                    bool match = true;
+                    for (int i = 0; i < parameters.Length; i++)
+                    {
+                        if (!parameters[i].ParameterType.IsAssignableFrom(argTypes[i]))
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+                    
+                    if (match) return concrete;
                 }
                 catch
                 {
-                    // 泛型约束不匹配等
+                    // Ignore invalid generic instantiations
                 }
             }
         }
