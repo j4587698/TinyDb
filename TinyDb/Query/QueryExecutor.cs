@@ -271,7 +271,6 @@ public sealed class QueryExecutor
     {
         if (executionPlan.IndexScanKeys.Count == 0)
         {
-            // 全索引扫描
             return new IndexScanRange
             {
                 MinKey = IndexKey.MinValue,
@@ -281,43 +280,69 @@ public sealed class QueryExecutor
             };
         }
 
-        // 简单的实现：仅基于第一个条件构建范围
-        // 完善的查询引擎应该合并所有针对同一字段的条件
-        var firstKey = executionPlan.IndexScanKeys[0];
-        
-        var minKey = IndexKey.MinValue;
-        var maxKey = IndexKey.MaxValue;
+        var minValues = new List<BsonValue>();
+        var maxValues = new List<BsonValue>();
         bool includeMin = true;
         bool includeMax = true;
+        bool stoppedAtRange = false;
+        ComparisonType lastOp = ComparisonType.Equal;
 
-        switch (firstKey.ComparisonType)
+        foreach (var key in executionPlan.IndexScanKeys)
         {
-            case ComparisonType.Equal:
-                minKey = new IndexKey(firstKey.Value);
-                maxKey = minKey;
-                break;
-            case ComparisonType.GreaterThan:
-                minKey = new IndexKey(firstKey.Value);
-                includeMin = false;
-                break;
-            case ComparisonType.GreaterThanOrEqual:
-                minKey = new IndexKey(firstKey.Value);
-                includeMin = true;
-                break;
-            case ComparisonType.LessThan:
-                maxKey = new IndexKey(firstKey.Value);
-                includeMax = false;
-                break;
-            case ComparisonType.LessThanOrEqual:
-                maxKey = new IndexKey(firstKey.Value);
-                includeMax = true;
-                break;
+            if (key.ComparisonType == ComparisonType.Equal)
+            {
+                minValues.Add(key.Value);
+                maxValues.Add(key.Value);
+            }
+            else
+            {
+                stoppedAtRange = true;
+                lastOp = key.ComparisonType;
+                switch (key.ComparisonType)
+                {
+                    case ComparisonType.GreaterThan:
+                        minValues.Add(key.Value);
+                        maxValues.Add(BsonMaxKey.Value);
+                        includeMin = false;
+                        break;
+                    case ComparisonType.GreaterThanOrEqual:
+                        minValues.Add(key.Value);
+                        maxValues.Add(BsonMaxKey.Value);
+                        includeMin = true;
+                        break;
+                    case ComparisonType.LessThan:
+                        maxValues.Add(key.Value);
+                        includeMax = false;
+                        break;
+                    case ComparisonType.LessThanOrEqual:
+                        maxValues.Add(key.Value);
+                        includeMax = true;
+                        break;
+                }
+                break; 
+            }
+        }
+        
+        // Pad MaxKey to ensure correct prefix/range matching
+        if (!stoppedAtRange)
+        {
+            // All Equals: Prefix match, so we want everything starting with this prefix
+            maxValues.Add(BsonMaxKey.Value);
+        }
+        else
+        {
+            // If we ended with LT/LTE, we need to ensure we include children of the boundary
+            // e.g. A <= 5 should include (5, 1)
+            if (lastOp == ComparisonType.LessThan || lastOp == ComparisonType.LessThanOrEqual)
+            {
+                 maxValues.Add(BsonMaxKey.Value);
+            }
         }
 
         return new IndexScanRange
         {
-            MinKey = minKey,
-            MaxKey = maxKey,
+            MinKey = new IndexKey(minValues.ToArray()),
+            MaxKey = new IndexKey(maxValues.ToArray()),
             IncludeMin = includeMin,
             IncludeMax = includeMax
         };
@@ -336,17 +361,14 @@ public sealed class QueryExecutor
         }
 
         // 只有等值比较才能构建精确键
-        var equalKeys = executionPlan.IndexScanKeys
-            .Where(k => k.ComparisonType == ComparisonType.Equal)
-            .OrderBy(k => k.FieldName)
-            .ToList();
-
-        if (equalKeys.Count != executionPlan.IndexScanKeys.Count)
+        // keys 已经在 QueryOptimizer 中按索引字段顺序提取
+        var values = new List<BsonValue>();
+        foreach (var key in executionPlan.IndexScanKeys)
         {
-            return null; // 不是所有条件都是等值比较，无法构建精确键
+            if (key.ComparisonType != ComparisonType.Equal) return null;
+            values.Add(key.Value);
         }
 
-        var values = equalKeys.Select(k => k.Value).ToArray();
-        return new IndexKey(values);
+        return new IndexKey(values.ToArray());
     }
 }

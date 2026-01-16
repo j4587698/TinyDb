@@ -293,10 +293,28 @@ public sealed class IndexManager : IDisposable
     private IndexKey? ExtractIndexKey(BTreeIndex index, BsonDocument doc)
     {
         if (index.Fields.Count == 0) return null;
-        // 目前仅支持简单的单字段索引
-        if (doc.TryGetValue(index.Fields[0], out var val)) return new IndexKey(val);
-        // 如果是复合索引... (TODO)
-        return null;
+        
+        // 单字段优化
+        if (index.Fields.Count == 1)
+        {
+            return doc.TryGetValue(index.Fields[0], out var val) ? new IndexKey(val) : new IndexKey(BsonNull.Value);
+        }
+
+        // 复合索引
+        var values = new BsonValue[index.Fields.Count];
+        for (int i = 0; i < index.Fields.Count; i++)
+        {
+            if (doc.TryGetValue(index.Fields[i], out var val))
+            {
+                values[i] = val;
+            }
+            else
+            {
+                values[i] = BsonNull.Value;
+            }
+        }
+        
+        return new IndexKey(values);
     }
 
     /// <summary>
