@@ -781,14 +781,34 @@ public sealed class TinyDbEngine : IDisposable
 
     private BsonDocument PrepareDocumentForInsert(string col, BsonDocument doc, out BsonValue id)
     {
-        if (!doc.TryGetValue("_id", out var exId) || exId == null || exId.IsNull)
+        bool hasId = doc.TryGetValue("_id", out var exId) && exId != null && !exId.IsNull;
+        bool hasCol = doc.TryGetValue("_collection", out _);
+
+        if (hasId && hasCol)
+        {
+            id = exId!;
+            return doc;
+        }
+
+        // 优化：使用 Builder 避免多次创建不可变副本
+        var builder = doc.ToBuilder();
+        
+        if (!hasId)
         {
             id = ObjectId.NewObjectId();
-            doc = doc.Set("_id", id);
+            builder["_id"] = id;
         }
-        else id = exId;
-        if (!doc.TryGetValue("_collection", out _)) doc = doc.Set("_collection", col);
-        return doc;
+        else
+        {
+            id = exId!;
+        }
+
+        if (!hasCol)
+        {
+            builder["_collection"] = col;
+        }
+
+        return new BsonDocument(builder);
     }
 
     private static BsonDocument CreateLargeDocumentIndexDocument(BsonValue id, string col, uint pId, int s)

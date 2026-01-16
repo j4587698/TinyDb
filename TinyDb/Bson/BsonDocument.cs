@@ -179,9 +179,25 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// <summary>
     /// 使用不可变字典初始化文档
     /// </summary>
-    private BsonDocument(ImmutableDictionary<string, BsonValue> elements)
+    internal BsonDocument(ImmutableDictionary<string, BsonValue> elements)
     {
         _elements = elements;
+    }
+
+    /// <summary>
+    /// 使用 Builder 初始化文档（内部高效使用）
+    /// </summary>
+    internal BsonDocument(ImmutableDictionary<string, BsonValue>.Builder builder)
+    {
+        _elements = builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// 创建一个可变构建器
+    /// </summary>
+    public ImmutableDictionary<string, BsonValue>.Builder ToBuilder()
+    {
+        return _elements.ToBuilder();
     }
 
     /// <summary>
