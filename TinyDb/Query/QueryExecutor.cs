@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
+using System.Collections.Concurrent;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
@@ -225,41 +226,69 @@ public sealed class QueryExecutor
     private IEnumerable<T> ExecuteFullTableScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
-        // 如果没有查询条件，返回所有文档
-        if (expression == null)
+        var tx = _engine.GetCurrentTransaction();
+        var queryExpression = expression != null ? _expressionParser.Parse(expression) : null;
+
+        // 1. 准备事务覆盖层
+        ConcurrentDictionary<string, BsonDocument?>? txOverlay = null;
+        if (tx != null)
         {
-            // 获取所有文档
-            var documents = _engine.FindAll(collectionName);
-            foreach (var document in documents)
+            txOverlay = new ConcurrentDictionary<string, BsonDocument?>();
+            foreach (var op in tx.Operations)
             {
-                var entity = AotBsonMapper.FromDocument<T>(document);
-                if (entity != null)
+                if (op.CollectionName != collectionName) continue;
+                var k = op.DocumentId?.ToString() ?? "";
+                if (op.OperationType == TransactionOperationType.Delete)
                 {
-                    yield return entity;
+                    txOverlay[k] = null;
                 }
-            }
-            yield break;
-        }
-
-        // 解析查询表达式
-        var queryExpression = _expressionParser.Parse(expression);
-
-        // 获取所有文档
-        var allDocuments = _engine.FindAll(collectionName);
-
-        // 执行查询
-        foreach (var document in allDocuments)
-        {
-            // 优化：直接在 BsonDocument 上评估查询条件，避免不必要的反序列化
-            if (ExpressionEvaluator.Evaluate(queryExpression, document))
-            {
-                var entity = AotBsonMapper.FromDocument<T>(document);
-                if (entity != null)
+                else if (op.NewDocument != null)
                 {
-                    yield return entity;
+                    txOverlay[k] = op.NewDocument;
                 }
             }
         }
+
+        // 2. 构建处理管道
+        var rawPipeline = _engine.FindAllRaw(collectionName)
+            .AsParallel()
+            // 2.1 并行解析
+            .Select(slice => BsonSerializer.DeserializeDocument(slice))
+            // 2.2 过滤集合 (处理共享页面)
+            .Where(doc => !doc.TryGetValue("_collection", out var c) || c.ToString() == collectionName)
+            // 2.3 解析大文档
+            .Select(doc => _engine.ResolveLargeDocument(doc));
+
+        // 2.4 应用事务覆盖
+        IEnumerable<BsonDocument> docs;
+        
+        if (txOverlay != null && !txOverlay.IsEmpty)
+        {
+            docs = rawPipeline
+                .Select(doc => {
+                    var id = doc["_id"].ToString() ?? "";
+                    // 如果ID在事务中有修改，使用事务版本（移除以标记为已处理）
+                    if (txOverlay.TryRemove(id, out var txDoc))
+                    {
+                        return txDoc; // 可能为null（删除）
+                    }
+                    return doc; // 使用磁盘版本
+                })
+                .Where(doc => doc != null)
+                .Select(doc => doc!)
+                .Concat(txOverlay.Values.AsParallel().Where(v => v != null).Select(v => v!)); // 补充仅在事务中存在的新增文档
+        }
+        else
+        {
+            docs = rawPipeline;
+        }
+
+        // 3. 评估与映射 (继续并行化)
+        return docs
+            //.AsParallel() // docs is already ParallelQuery<BsonDocument> due to Concat fixes
+            .Where(doc => queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, doc!))
+            .Select(doc => AotBsonMapper.FromDocument<T>(doc!))
+            .Where(entity => entity != null)!;
     }
 
     /// <summary>

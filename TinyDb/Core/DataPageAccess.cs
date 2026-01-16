@@ -137,6 +137,28 @@ public BsonDocument? ReadDocumentAt(Page p, int index, HashSet<string>? fields) 
 }
 
 public void AppendDocumentToPage(Page p, ReadOnlySpan<byte> bytes) { p.Append(bytes); }
+
+    public IEnumerable<ReadOnlyMemory<byte>> ScanRawDocumentsFromPage(Page p)
+    {
+        int count = p.Header.ItemCount;
+        var mem = p.Memory;
+        int offset = Page.DataStartOffset + InternalReserved;
+        int endOffset = p.PageSize - p.Header.FreeBytes;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (offset + 4 > endOffset) break;
+            int len = BitConverter.ToInt32(mem.Span.Slice(offset, 4));
+            offset += 4;
+
+            if (offset + len > endOffset) break;
+
+            var slice = mem.Slice(offset, len);
+            offset += len;
+
+            yield return slice;
+        }
+    }
 public bool CanFitInPage(Page p, List<PageDocumentEntry> docs)
 {
     long total = 0;

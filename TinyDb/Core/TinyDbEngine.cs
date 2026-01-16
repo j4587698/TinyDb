@@ -711,6 +711,33 @@ public sealed class TinyDbEngine : IDisposable
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
     }
 
+    /// <summary>
+    /// 获取集合中所有文档的原始数据（零拷贝）
+    /// 用于高性能查询引擎，支持并行解析
+    /// </summary>
+    /// <param name="col">集合名称</param>
+    /// <returns>文档原始数据的枚举</returns>
+    internal IEnumerable<ReadOnlyMemory<byte>> FindAllRaw(string col)
+    {
+        var st = GetCollectionState(col);
+        var pages = st.OwnedPages.Keys.ToList();
+        pages.Sort();
+
+        foreach (var pageId in pages)
+        {
+            Page? p = null;
+            try { p = _pageManager.GetPage(pageId); } catch { continue; }
+            if (p == null || p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
+
+            foreach (var slice in _dataPageAccess.ScanRawDocumentsFromPage(p))
+            {
+                // 注意：这里返回的是原始字节，未校验 _collection 字段
+                // 调用者必须在解析后进行校验
+                yield return slice;
+            }
+        }
+    }
+
     internal BsonDocument? FindById(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
@@ -723,7 +750,7 @@ public sealed class TinyDbEngine : IDisposable
         return FindByIdFullScan(col, id, st);
     }
 
-    private BsonDocument ResolveLargeDocument(BsonDocument doc)
+    internal BsonDocument ResolveLargeDocument(BsonDocument doc)
     {
         if (doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null))
         {
