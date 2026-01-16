@@ -1,5 +1,8 @@
+using System;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 
 namespace TinyDb.Bson;
 
@@ -33,7 +36,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         get
         {
             if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
-            return BitConverter.ToInt32(_bytes, 0);
+            return BinaryPrimitives.ReadInt32BigEndian(_bytes);
         }
     }
 
@@ -45,7 +48,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         get
         {
             if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
-            return BitConverter.ToInt32(_bytes, 4) & 0x00FFFFFF;
+            // 3 bytes starting at index 4
+            return (_bytes[4] << 16) | (_bytes[5] << 8) | _bytes[6];
         }
     }
 
@@ -57,7 +61,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         get
         {
             if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
-            return BitConverter.ToInt16(_bytes, 7);
+            return BinaryPrimitives.ReadInt16BigEndian(_bytes.AsSpan(7));
         }
     }
 
@@ -69,9 +73,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         get
         {
             if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
-            // ObjectId uses 3 bytes for counter at index 9.
-            // On Little Endian systems, BitConverter.GetBytes(int) puts lowest bytes first.
-            return _bytes[9] | (_bytes[10] << 8) | (_bytes[11] << 16);
+            // 3 bytes starting at index 9
+            return (_bytes[9] << 16) | (_bytes[10] << 8) | _bytes[11];
         }
     }
 
@@ -131,15 +134,20 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
 
         var timestampSeconds = (int)(timestamp - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
 
-        var timestampBytes = BitConverter.GetBytes(timestampSeconds);
-        var machineBytes = BitConverter.GetBytes(machine);
-        var pidBytes = BitConverter.GetBytes(pid);
-        var counterBytes = BitConverter.GetBytes(counter);
+        BinaryPrimitives.WriteInt32BigEndian(_bytes.AsSpan(0, 4), timestampSeconds);
+        
+        // Machine (3 bytes)
+        _bytes[4] = (byte)(machine >> 16);
+        _bytes[5] = (byte)(machine >> 8);
+        _bytes[6] = (byte)(machine);
 
-        Array.Copy(timestampBytes, 0, _bytes, 0, 4);
-        Array.Copy(machineBytes, 0, _bytes, 4, 3);
-        Array.Copy(pidBytes, 0, _bytes, 7, 2);
-        Array.Copy(counterBytes, 0, _bytes, 9, 3);
+        // Pid (2 bytes)
+        BinaryPrimitives.WriteInt16BigEndian(_bytes.AsSpan(7, 2), pid);
+
+        // Counter (3 bytes)
+        _bytes[9] = (byte)(counter >> 16);
+        _bytes[10] = (byte)(counter >> 8);
+        _bytes[11] = (byte)(counter);
     }
 
     /// <summary>
@@ -152,21 +160,26 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
 
         // 时间戳 (4 bytes)
         var timestamp = (int)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-        var timestampBytes = BitConverter.GetBytes(timestamp);
-        Array.Copy(timestampBytes, 0, bytes, 0, 4);
+        BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(0, 4), timestamp);
 
         // 机器标识 (3 bytes)
         var machineBytes = GetMachineHash();
-        Array.Copy(machineBytes, 0, bytes, 4, 3);
+        // Assuming machineBytes is 3 bytes
+        if (machineBytes.Length >= 3)
+        {
+            bytes[4] = machineBytes[0];
+            bytes[5] = machineBytes[1];
+            bytes[6] = machineBytes[2];
+        }
 
         // 进程ID (2 bytes)
-        var pidBytes = BitConverter.GetBytes(GetCurrentProcessId());
-        Array.Copy(pidBytes, 0, bytes, 7, 2);
+        BinaryPrimitives.WriteInt16BigEndian(bytes.AsSpan(7, 2), GetCurrentProcessId());
 
         // 计数器 (3 bytes)
         var counter = Interlocked.Increment(ref _counter) & 0x00FFFFFF;
-        var counterBytes = BitConverter.GetBytes(counter);
-        Array.Copy(counterBytes, 0, bytes, 9, 3);
+        bytes[9] = (byte)(counter >> 16);
+        bytes[10] = (byte)(counter >> 8);
+        bytes[11] = (byte)(counter);
 
         return new ObjectId(bytes);
     }
@@ -219,7 +232,6 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     public override string ToString()
     {
         if (_bytes == null) return "000000000000000000000000";
-
         var sb = new StringBuilder(24);
         foreach (var b in _bytes)
         {
@@ -236,6 +248,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         if (_bytes == null) return other._bytes == null ? 0 : -1;
         if (other._bytes == null) return 1;
 
+        // 由于使用了 Big-Endian 存储，直接按字节比较即可保证正确的排序（时间戳优先）
         for (int i = 0; i < ObjectIdSize; i++)
         {
             var cmp = _bytes[i].CompareTo(other._bytes[i]);
@@ -266,13 +279,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     public override int GetHashCode()
     {
         if (_bytes == null) return 0;
-
-        var hash = 17;
-        for (int i = 0; i < ObjectIdSize; i += 4)
-        {
-            hash = hash * 31 + BitConverter.ToInt32(_bytes, i);
-        }
-        return hash;
+        // 使用简单的哈希算法，或者直接取前4字节（时间戳）
+        return BinaryPrimitives.ReadInt32LittleEndian(_bytes); // HashCode endianness doesn't strictly matter for correctness, just distribution
     }
 
     /// <summary>
@@ -341,7 +349,6 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     object IConvertible.ToType(Type conversionType, IFormatProvider? provider)
     {
         if (conversionType == typeof(string)) return ToString();
-        if (conversionType == typeof(DateTime)) return Timestamp;
         if (conversionType == typeof(byte[])) return ToByteArray().ToArray();
         if (conversionType == typeof(ObjectId)) return this;
         if (conversionType == typeof(object)) return this;
