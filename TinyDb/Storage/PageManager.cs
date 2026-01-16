@@ -11,10 +11,10 @@ public sealed class PageManager : IDisposable
     private readonly IDiskStream _diskStream;
     private readonly uint _pageSize;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
-    private readonly ConcurrentQueue<uint> _freePages;
     private readonly object _allocationLock = new();
     private readonly LRUCache<uint, Page> _lruCache;
     private uint _nextPageID;
+    private uint _firstFreePageID; // Head of free page linked list
     private long _fileSize;
     private bool _disposed;
 
@@ -29,9 +29,9 @@ public sealed class PageManager : IDisposable
     public int CachedPages => _pageCache.Count;
 
     /// <summary>
-    /// 空闲页面数量
+    /// 第一个空闲页面ID
     /// </summary>
-    public int FreePages => _freePages.Count;
+    public uint FirstFreePageID => _firstFreePageID;
 
     /// <summary>
     /// 总页面数量
@@ -58,12 +58,26 @@ public sealed class PageManager : IDisposable
         _pageSize = pageSize;
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
-        _freePages = new ConcurrentQueue<uint>();
         _lruCache = new LRUCache<uint, Page>(maxCacheSize);
         _fileSize = _diskStream.Size;
+        _nextPageID = 0;
+        _firstFreePageID = 0;
+    }
 
-        // 初始化页面ID和空闲页面列表
-        InitializePageManagement();
+    /// <summary>
+    /// 初始化页面状态（避免全盘扫描）
+    /// </summary>
+    /// <param name="totalPages">总页面数</param>
+    /// <param name="firstFreePageID">第一个空闲页面ID</param>
+    public void Initialize(uint totalPages, uint firstFreePageID)
+    {
+        lock (_allocationLock)
+        {
+            // 如果文件大小不匹配 TotalPages，优先信任文件大小
+            var calculatedTotal = (uint)(_fileSize / _pageSize);
+            _nextPageID = Math.Max(totalPages, calculatedTotal);
+            _firstFreePageID = firstFreePageID;
+        }
     }
 
     /// <summary>
@@ -181,15 +195,20 @@ public sealed class PageManager : IDisposable
         {
             uint pageID;
 
-            // 尝试从空闲页面队列获取
-            if (_freePages.TryDequeue(out pageID))
+            // 尝试从空闲页面链表获取
+            if (_firstFreePageID != 0)
             {
-                // 重新使用空闲页面 - 直接创建新页面，避免从磁盘读取旧数据
-                var reusedPage = new Page(pageID, (int)_pageSize, pageType);
-                reusedPage.ClearData();
-                reusedPage.UpdatePageType(pageType);
-                AddToCache(reusedPage);
-                return reusedPage;
+                pageID = _firstFreePageID;
+                // 读取该页面以获取下一个空闲页面ID
+                var freePage = GetPage(pageID);
+                _firstFreePageID = freePage.Header.NextPageID;
+                
+                // 重置页面状态
+                freePage.ClearData();
+                freePage.UpdatePageType(pageType);
+                freePage.SetLinks(0, 0); 
+                
+                return freePage;
             }
 
             // 分配新页面
@@ -292,28 +311,30 @@ public sealed class PageManager : IDisposable
 
         lock (_allocationLock)
         {
-            // 获取页面并标记为空闲
-            var page = GetPage(pageID, useCache: false); // 不使用缓存，直接从磁盘读取
-            page.ClearData(); // 清除所有数据，重置PageType为Empty
+            // 获取页面
+            var page = GetPage(pageID); 
+            
+            // 标记为空闲并链接到链表头部
+            page.ClearData();
             page.UpdatePageType(PageType.Empty);
+            
+            // NextPageID 指向旧的头部
+            page.SetLinks(0, _firstFreePageID);
+            
+            // 更新头部指针
+            _firstFreePageID = pageID;
 
-            // 确保页面的ItemCount为0，FreeBytes为最大值
             page.Header.ItemCount = 0;
             page.Header.FreeBytes = (ushort)(page.DataSize);
-            page.UpdateChecksum(); // 更新校验和
+            page.UpdateChecksum();
 
             SavePage(page, forceFlush: false);
 
-            // 从缓存中彻底移除该页面的所有实例
-            while (_pageCache.TryRemove(pageID, out _))
+            if (_pageCache.TryRemove(pageID, out _))
             {
-                // 确保所有缓存实例都被移除
+                _lruCache.Remove(pageID);
             }
-            _lruCache.Remove(pageID);
             page.Dispose();
-
-            // 添加到空闲页面队列
-            _freePages.Enqueue(pageID);
         }
     }
 
@@ -468,14 +489,13 @@ public sealed class PageManager : IDisposable
         {
             var dirtyPages = _pageCache.Values.Count(p => p.IsDirty);
             var totalPages = TotalPages;
-            var usedPages = totalPages - (uint)_freePages.Count;
-
+            
             return new PageManagerStatistics
             {
                 PageSize = _pageSize,
                 TotalPages = totalPages,
-                UsedPages = usedPages,
-                FreePages = (uint)_freePages.Count,
+                UsedPages = 0, // Unknown without scan
+                FreePages = 0, // Unknown without scan
                 CachedPages = _pageCache.Count,
                 DirtyPages = dirtyPages,
                 MaxCacheSize = MaxCacheSize,
@@ -486,61 +506,7 @@ public sealed class PageManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// 初始化页面管理
-    /// </summary>
-    private void InitializePageManagement()
-    {
-        lock (_allocationLock)
-        {
-            if (_fileSize == 0)
-            {
-                // 新文件，创建头部页面
-                _nextPageID = 0;
-            }
-            else
-            {
-                // 现有文件，扫描页面以确定最大页面ID和空闲页面
-                ScanExistingPages();
-            }
-        }
-    }
 
-    /// <summary>
-    /// 扫描现有页面
-    /// </summary>
-    private void ScanExistingPages()
-    {
-        // 扫描所有页面
-        var maxPagesToScan = TotalPages;
-        _nextPageID = 0;
-
-        for (uint pageID = 1; pageID <= maxPagesToScan; pageID++)
-        {
-            try
-            {
-                var pageOffset = CalculatePageOffset(pageID);
-                var pageData = _diskStream.ReadPage(pageOffset, (int)_pageSize);
-                var header = PageHeader.FromByteArray(pageData);
-
-                if (header.IsValid() && header.VerifyChecksum(pageData))
-                {
-                    _nextPageID = Math.Max(_nextPageID, pageID);
-
-                    // 如果是空页面，添加到空闲队列
-                    if (header.PageType == PageType.Empty && header.ItemCount == 0)
-                    {
-                        _freePages.Enqueue(pageID);
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                // 忽略损坏的页面
-                continue;
-            }
-        }
-    }
 
     /// <summary>
     /// 计算页面偏移量

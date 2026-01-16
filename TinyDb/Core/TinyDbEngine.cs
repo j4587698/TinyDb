@@ -214,11 +214,15 @@ public sealed class TinyDbEngine : IDisposable
                     _header.Initialize(_options.PageSize, _options.DatabaseName, _options.EnableJournaling);
                     var p1 = _pageManager.NewPage(PageType.Header);
                     _pageManager.SavePage(p1, true);
+                    // 初始化 PageManager (新数据库)
+                    _pageManager.Initialize(1, 0);
                 }
                 else
                 {
                     ReadHeader();
                     if (!_header.IsValid()) throw new InvalidOperationException();
+                    // 初始化 PageManager (现有数据库)
+                    _pageManager.Initialize(_header.TotalPages, _header.FirstFreePage);
                 }
                 _header.EnableJournaling = _options.EnableJournaling;
                 InitializeSystemPages();
@@ -245,6 +249,7 @@ public sealed class TinyDbEngine : IDisposable
     private void WriteHeader()
     {
         _header.TotalPages = _pageManager.TotalPages;
+        _header.FirstFreePage = _pageManager.FirstFreePageID;
         var p = _pageManager.GetPage(1);
         p.WriteData(0, _header.ToByteArray());
         _pageManager.SavePage(p, true);
