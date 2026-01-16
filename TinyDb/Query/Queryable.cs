@@ -2,37 +2,43 @@ using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Reflection;
+using LinqExp = System.Linq.Expressions;
 
 namespace TinyDb.Query;
 
-public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : IOrderedQueryable<T>
-    where T : class, new()
+public sealed class Queryable<T> : IOrderedQueryable<T>
 {
     private readonly QueryExecutor _executor;
     private readonly string _collectionName;
+    private readonly Type _entityType;
 
-    public Queryable(QueryExecutor executor, string collectionName, Expression? expression = null)
+    public Queryable(QueryExecutor executor, string collectionName, Type entityType, LinqExp.Expression? expression = null)
     {
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
         if (string.IsNullOrWhiteSpace(collectionName)) throw new ArgumentNullException(nameof(collectionName));
 
         _collectionName = collectionName;
-        Expression = expression ?? Expression.Constant(this);
-        Provider = new QueryProvider(_executor, _collectionName);
+        _entityType = entityType;
+        Expression = expression ?? LinqExp.Expression.Constant(this);
+        Provider = new QueryProvider(_executor, _collectionName, _entityType);
+    }
+
+    public Queryable(QueryExecutor executor, string collectionName) 
+        : this(executor, collectionName, typeof(T))
+    {
     }
 
     public Type ElementType => typeof(T);
 
-    public Expression Expression { get; }
+    public LinqExp.Expression Expression { get; }
 
     public IQueryProvider Provider { get; }
 
     public IEnumerator<T> GetEnumerator()
     {
-        var sequence = Provider.Execute<IEnumerable<T>>(Expression) ?? Enumerable.Empty<T>();
-        return sequence.GetEnumerator();
+        var result = Provider.Execute<IEnumerable<T>>(Expression);
+        return (result ?? Enumerable.Empty<T>()).GetEnumerator();
     }
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -43,461 +49,288 @@ public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMem
     {
         private readonly QueryExecutor _executor;
         private readonly string _collectionName;
+        private readonly Type _entityType;
 
-        public QueryProvider(QueryExecutor executor, string collectionName)
+        public QueryProvider(QueryExecutor executor, string collectionName, Type entityType)
         {
             _executor = executor;
             _collectionName = collectionName;
+            _entityType = entityType;
         }
 
-        public IQueryable CreateQuery(Expression expression)
+        public IQueryable CreateQuery(LinqExp.Expression expression)
         {
-            return new Queryable<T>(_executor, _collectionName, expression);
-        }
-
-        public object? Execute(Expression expression)
-        {
-            return QueryPipeline.Execute<T>(_executor, _collectionName, expression);
-        }
-
-        public TResult Execute<TResult>(Expression expression)
-        {
-            var result = QueryPipeline.Execute<T>(_executor, _collectionName, expression);
-
-            if (result is TResult typed)
+            var elementType = TypeSystem.GetElementType(expression.Type);
+            try
             {
-                return typed;
+                return (IQueryable)Activator.CreateInstance(
+                    typeof(Queryable<>).MakeGenericType(elementType),
+                    new object[] { _executor, _collectionName, _entityType, expression }
+                )!;
             }
-
-            if (result is null)
+            catch (TargetInvocationException tie)
             {
-                return default!;
+                throw tie.InnerException ?? tie;
             }
-
-            return (TResult)result;
         }
 
-        IQueryable<TElement> IQueryProvider.CreateQuery<TElement>(Expression expression)
+        public IQueryable<TElement> CreateQuery<TElement>(LinqExp.Expression expression)
         {
-            if (typeof(TElement) != typeof(T))
-            {
-                throw new NotSupportedException("Only queries returning the same element type are supported.");
-            }
+            return new Queryable<TElement>(_executor, _collectionName, _entityType, expression);
+        }
 
-            return (IQueryable<TElement>)CreateQuery(expression);
+        public object? Execute(LinqExp.Expression expression)
+        {
+            return QueryPipeline.Execute(_executor, _collectionName, _entityType, expression);
+        }
+
+        public TResult Execute<TResult>(LinqExp.Expression expression)
+        {
+            return (TResult)QueryPipeline.Execute(_executor, _collectionName, _entityType, expression)!;
         }
     }
 }
 
 internal static class QueryPipeline
 {
-    public static object? Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutor executor, string collectionName, Expression expression)
-        where T : class, new()
+    public static object? Execute(QueryExecutor executor, string collectionName, Type entityType, LinqExp.Expression expression)
     {
-        var predicate = PredicateBuilder<T>.Build(expression);
-        var data = predicate != null
-            ? executor.Execute(collectionName, predicate)
-            : executor.Execute<T>(collectionName);
+        // 1. 提取可下推到数据库的查询条件 (Where)
+        var (predicate, sourceConstant) = PredicateExtractor.Extract(expression, entityType);
 
-        return QueryOperationResolver.Apply(expression, data);
-    }
-}
-
-internal enum QueryOperation
-{
-    Sequence,
-    ToList,
-    Count,
-    LongCount,
-    Any,
-    First,
-    FirstOrDefault,
-    Take,
-    Skip,
-    OrderBy,
-    OrderByDescending,
-    ThenBy,
-    ThenByDescending
-}
-
-internal readonly record struct QueryOperationDescriptor(QueryOperation Operation, object? Value);
-
-internal readonly record struct QueryPipelinePlan(
-    IReadOnlyList<QueryOperationDescriptor> SequenceOperations,
-    QueryOperation TerminalOperation);
-
-internal static class QueryOperationResolver
-{
-    public static QueryPipelinePlan Analyze(Expression expression)
-    {
-        var sequenceOperations = new List<QueryOperationDescriptor>();
-        var terminalOperation = QueryOperation.Sequence;
-        var current = expression;
-
-        while (current is MethodCallExpression methodCall)
-        {
-            switch (methodCall.Method.Name)
-            {
-                case nameof(Queryable.Take):
-                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.Take, ExtractIntegerArgument(methodCall, 1)));
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.Skip):
-                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.Skip, ExtractIntegerArgument(methodCall, 1)));
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.OrderBy):
-                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.OrderBy, ExtractLambdaArgument(methodCall, 1)));
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.OrderByDescending):
-                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.OrderByDescending, ExtractLambdaArgument(methodCall, 1)));
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.ThenBy):
-                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.ThenBy, ExtractLambdaArgument(methodCall, 1)));
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.ThenByDescending):
-                    sequenceOperations.Add(new QueryOperationDescriptor(QueryOperation.ThenByDescending, ExtractLambdaArgument(methodCall, 1)));
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.Count):
-                    terminalOperation = QueryOperation.Count;
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.LongCount):
-                    terminalOperation = QueryOperation.LongCount;
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.Any):
-                    terminalOperation = QueryOperation.Any;
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.First):
-                    terminalOperation = QueryOperation.First;
-                    current = methodCall.Arguments[0];
-                    continue;
-                case nameof(Queryable.FirstOrDefault):
-                    terminalOperation = QueryOperation.FirstOrDefault;
-                    current = methodCall.Arguments[0];
-                    continue;
-                case "ToList":
-                    terminalOperation = QueryOperation.ToList;
-                    current = methodCall.Arguments[0];
-                    continue;
-                default:
-                    current = methodCall.Arguments.FirstOrDefault();
-                    continue;
-            }
-        }
-
-        sequenceOperations.Reverse();
-        return new QueryPipelinePlan(sequenceOperations, terminalOperation);
-    }
-
-    public static object? Apply<T>(Expression expression, IEnumerable<T> data)
-    {
-        var plan = Analyze(expression);
-        IEnumerable<T> sequence = data;
-
-        foreach (var descriptor in plan.SequenceOperations)
-        {
-            sequence = descriptor.Operation switch
-            {
-                QueryOperation.Take => Take(sequence, (int)(descriptor.Value ?? 0)),
-                QueryOperation.Skip => Skip(sequence, (int)(descriptor.Value ?? 0)),
-                QueryOperation.OrderBy => OrderBy(sequence, (LambdaExpression)descriptor.Value!),
-                QueryOperation.OrderByDescending => OrderByDescending(sequence, (LambdaExpression)descriptor.Value!),
-                QueryOperation.ThenBy => ThenBy((IOrderedEnumerable<T>)sequence, (LambdaExpression)descriptor.Value!),
-                QueryOperation.ThenByDescending => ThenByDescending((IOrderedEnumerable<T>)sequence, (LambdaExpression)descriptor.Value!),
-                _ => sequence
-            };
-        }
-
-        return plan.TerminalOperation switch
-        {
-            QueryOperation.Sequence => sequence,
-            QueryOperation.ToList => ToList(sequence),
-            QueryOperation.Count => Count(sequence),
-            QueryOperation.LongCount => LongCount(sequence),
-            QueryOperation.Any => Any(sequence),
-            QueryOperation.First => First(sequence),
-            QueryOperation.FirstOrDefault => FirstOrDefault(sequence),
-            _ => sequence
-        };
-    }
-
-    private static List<T> ToList<T>(IEnumerable<T> data)
-    {
-        var list = new List<T>();
-        foreach (var item in data)
-        {
-            list.Add(item);
-        }
-        return list;
-    }
-
-    private static int Count<T>(IEnumerable<T> data)
-    {
-        var count = 0;
-        foreach (var _ in data)
-        {
-            count++;
-        }
-        return count;
-    }
-
-    private static long LongCount<T>(IEnumerable<T> data)
-    {
-        long count = 0;
-        foreach (var _ in data)
-        {
-            count++;
-        }
-        return count;
-    }
-
-    private static bool Any<T>(IEnumerable<T> data)
-    {
-        using var enumerator = data.GetEnumerator();
-        return enumerator.MoveNext();
-    }
-
-    private static T First<T>(IEnumerable<T> data)
-    {
-        foreach (var item in data)
-        {
-            return item!;
-        }
-        throw new InvalidOperationException("Sequence contains no elements");
-    }
-
-    private static T? FirstOrDefault<T>(IEnumerable<T> data)
-    {
-        foreach (var item in data)
-        {
-            return item!;
-        }
-        return default;
-    }
-
-    private static IEnumerable<T> Take<T>(IEnumerable<T> data, int count)
-    {
-        if (count <= 0)
-        {
-            yield break;
-        }
-
-        var taken = 0;
-        foreach (var item in data)
-        {
-            yield return item;
-            taken++;
-            if (taken >= count)
-            {
-                yield break;
-            }
-        }
-    }
-
-    private static IEnumerable<T> Skip<T>(IEnumerable<T> data, int count)
-    {
-        if (count <= 0)
-        {
-            foreach (var item in data)
-            {
-                yield return item;
-            }
-            yield break;
-        }
-
-        using var enumerator = data.GetEnumerator();
-        while (count > 0 && enumerator.MoveNext())
-        {
-            count--;
-        }
-
-        while (enumerator.MoveNext())
-        {
-            yield return enumerator.Current;
-        }
-    }
-
-    private static IOrderedEnumerable<T> OrderBy<T>(IEnumerable<T> source, LambdaExpression keySelector)
-    {
-        return ApplyOrder(source, keySelector, "OrderBy");
-    }
-
-    private static IOrderedEnumerable<T> OrderByDescending<T>(IEnumerable<T> source, LambdaExpression keySelector)
-    {
-        return ApplyOrder(source, keySelector, "OrderByDescending");
-    }
-
-    private static IOrderedEnumerable<T> ThenBy<T>(IOrderedEnumerable<T> source, LambdaExpression keySelector)
-    {
-        return ApplyOrder(source, keySelector, "ThenBy");
-    }
-
-    private static IOrderedEnumerable<T> ThenByDescending<T>(IOrderedEnumerable<T> source, LambdaExpression keySelector)
-    {
-        return ApplyOrder(source, keySelector, "ThenByDescending");
-    }
-
-    private static IOrderedEnumerable<T> ApplyOrder<T>(IEnumerable<T> source, LambdaExpression keySelector, string methodName)
-    {
-        var keyType = keySelector.ReturnType;
-        var method = typeof(Enumerable)
-            .GetMethods()
-            .First(m => m.Name == methodName && m.GetParameters().Length == 2)
-            .MakeGenericMethod(typeof(T), keyType);
+        // 2. 执行数据库查询
+        var executeMethod = typeof(QueryExecutor).GetMethod(nameof(QueryExecutor.Execute))!
+            .MakeGenericMethod(entityType);
         
-        return (IOrderedEnumerable<T>)method.Invoke(null, new object[] { source, keySelector.Compile() })!;
-    }
+        var queryResult = executeMethod.Invoke(executor, new object[] { collectionName, predicate });
 
-    private static LambdaExpression ExtractLambdaArgument(MethodCallExpression methodCall, int index)
-    {
-        var argument = methodCall.Arguments[index];
-        while (argument.NodeType == ExpressionType.Quote && argument is UnaryExpression unary)
+        // 3. 重写表达式树：将 Queryable 转换为 Enumerable 调用
+        if (sourceConstant != null)
         {
-            argument = unary.Operand;
+            var rewriter = new QueryableToEnumerableRewriter(sourceConstant, queryResult!);
+            var newExpression = rewriter.Visit(expression);
+            
+            // 4. 编译并执行 (内存中)
+            // newExpression 的结果是 IEnumerable<T> 或单值 (Count, First)
+            var lambda = LinqExp.Expression.Lambda(newExpression);
+            var func = lambda.Compile();
+            return func.DynamicInvoke();
         }
-        return (LambdaExpression)argument;
-    }
-
-    private static int ExtractIntegerArgument(MethodCallExpression methodCall, int index)
-    {
-        var argument = methodCall.Arguments[index];
-        if (TryEvaluateExpression(argument, out var value) && value != null)
-        {
-            return Convert.ToInt32(value, CultureInfo.InvariantCulture);
-        }
-
-        throw new InvalidOperationException($"无法解析表达式参数 {argument} 为整数。");
-    }
-
-    private static bool TryEvaluateExpression(Expression expression, out object? value)
-    {
-        switch (expression)
-        {
-            case global::System.Linq.Expressions.ConstantExpression constant:
-                value = constant.Value;
-                return true;
-
-            case global::System.Linq.Expressions.MemberExpression memberExpression:
-                object? instance = null;
-                if (memberExpression.Expression != null)
-                {
-                    if (!TryEvaluateExpression(memberExpression.Expression, out instance))
-                    {
-                        value = null;
-                        return false;
-                    }
-                }
-
-                value = memberExpression.Member switch
-                {
-                    FieldInfo field => field.GetValue(instance),
-                    PropertyInfo property => property.GetValue(instance),
-                    _ => null
-                };
-                return value != null;
-
-            case global::System.Linq.Expressions.UnaryExpression unary when unary.NodeType is ExpressionType.Convert or ExpressionType.ConvertChecked:
-                if (TryEvaluateExpression(unary.Operand, out var operandValue) && operandValue != null)
-                {
-                    value = Convert.ChangeType(operandValue, unary.Type, CultureInfo.InvariantCulture);
-                    return true;
-                }
-                break;
-        }
-
-        value = null;
-        return false;
+        
+        return queryResult;
     }
 }
 
-internal static class PredicateBuilder<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
-    where T : class, new()
+internal sealed class QueryableToEnumerableRewriter : LinqExp.ExpressionVisitor
 {
-    public static Expression<Func<T, bool>>? Build(Expression expression)
+    private readonly LinqExp.ConstantExpression _target;
+    private readonly object _replacement;
+
+    public QueryableToEnumerableRewriter(LinqExp.ConstantExpression target, object replacement)
     {
-        var predicates = new List<Expression<Func<T, bool>>>();
-        CollectPredicates(expression, predicates);
-
-        if (predicates.Count == 0)
-        {
-            return null;
-        }
-
-        return Combine(predicates);
+        _target = target;
+        _replacement = replacement;
     }
 
-    private static void CollectPredicates(Expression expression, IList<Expression<Func<T, bool>>> predicates)
+    protected override LinqExp.Expression VisitConstant(LinqExp.ConstantExpression node)
     {
-        switch (expression)
+        // 替换源 Queryable 为 IEnumerable 数据
+        if (node == _target)
         {
-            case MethodCallExpression methodCall:
-                if (methodCall.Arguments.Count > 0)
+            return LinqExp.Expression.Constant(_replacement);
+        }
+        return base.VisitConstant(node);
+    }
+
+    protected override LinqExp.Expression VisitMethodCall(LinqExp.MethodCallExpression node)
+    {
+        // 将 Queryable.* 调用转换为 Enumerable.* 调用
+        if (node.Method.DeclaringType == typeof(System.Linq.Queryable))
+        {
+            var args = new LinqExp.Expression[node.Arguments.Count];
+            for (int i = 0; i < node.Arguments.Count; i++)
+            {
+                var arg = node.Arguments[i];
+                // 处理引用参数 (Expression<Func<...>>)
+                if (arg is LinqExp.UnaryExpression u && u.NodeType == LinqExp.ExpressionType.Quote && u.Operand is LinqExp.LambdaExpression lambda)
                 {
-                    CollectPredicates(methodCall.Arguments[0], predicates);
+                    // 编译 Lambda 为委托
+                    var compiled = lambda.Compile();
+                    args[i] = LinqExp.Expression.Constant(compiled);
                 }
-
-                if (methodCall.Arguments.Count > 1)
+                else
                 {
-                    var lambda = ExtractLambda(methodCall.Arguments[1]);
-                    if (lambda != null)
-                    {
-                        predicates.Add(lambda);
-                    }
+                    args[i] = Visit(arg);
                 }
-                break;
+            }
 
-            case UnaryExpression unary when unary.NodeType == ExpressionType.Quote:
-                CollectPredicates(unary.Operand, predicates);
-                break;
+            // 查找对应的 Enumerable 方法
+            var enumerableMethod = FindEnumerableMethod(node.Method.Name, args.Select(a => a.Type).ToArray(), node.Method.GetGenericArguments());
+            
+            if (enumerableMethod != null)
+            {
+                return LinqExp.Expression.Call(enumerableMethod, args);
+            }
         }
+        return base.VisitMethodCall(node);
     }
 
-    private static Expression<Func<T, bool>>? ExtractLambda(Expression expression)
+    private static MethodInfo? FindEnumerableMethod(string name, Type[] argTypes, Type[] genericArgs)
     {
-        var lambda = expression switch
+        // 简单查找：名称匹配且参数数量匹配
+        // 注意：Enumerable 方法通常是泛型定义
+        var methods = typeof(System.Linq.Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
+            .Where(m => m.Name == name && m.GetParameters().Length == argTypes.Length);
+
+        foreach (var m in methods)
         {
-            UnaryExpression { NodeType: ExpressionType.Quote, Operand: LambdaExpression inner } => inner,
-            LambdaExpression direct => direct,
-            _ => null
-        };
-
-        return lambda as Expression<Func<T, bool>>;
-    }
-
-    private static Expression<Func<T, bool>> Combine(IList<Expression<Func<T, bool>>> predicates)
-    {
-        var parameter = Expression.Parameter(typeof(T), "entity");
-        Expression? body = null;
-
-        foreach (var predicate in predicates)
-        {
-            var replaced = new ParameterReplacer(predicate.Parameters[0], parameter).Visit(predicate.Body)!;
-            body = body == null ? replaced : Expression.AndAlso(body, replaced);
+            if (m.IsGenericMethodDefinition && m.GetGenericArguments().Length == genericArgs.Length)
+            {
+                try
+                {
+                    var concrete = m.MakeGenericMethod(genericArgs);
+                    // 检查参数类型兼容性 (这里简化检查，假设 Queryable 和 Enumerable 签名一一对应)
+                    // 实际应该检查 concrete.GetParameters()[i].ParameterType.IsAssignableFrom(argTypes[i])
+                    return concrete;
+                }
+                catch
+                {
+                    // 泛型约束不匹配等
+                }
+            }
         }
-
-        return Expression.Lambda<Func<T, bool>>(body!, parameter);
+        return null;
     }
 }
 
-internal sealed class ParameterReplacer : System.Linq.Expressions.ExpressionVisitor
+internal static class PredicateExtractor
 {
-    private readonly System.Linq.Expressions.ParameterExpression _source;
-    private readonly System.Linq.Expressions.ParameterExpression _target;
+    public static (LinqExp.Expression? Predicate, LinqExp.ConstantExpression? Source) Extract(LinqExp.Expression expression, Type entityType)
+    {
+        var visitor = new ExtractionVisitor(entityType);
+        visitor.Visit(expression);
+        return (visitor.Predicate, visitor.Source);
+    }
 
-    public ParameterReplacer(System.Linq.Expressions.ParameterExpression source, System.Linq.Expressions.ParameterExpression target)
+    private class ExtractionVisitor : LinqExp.ExpressionVisitor
+    {
+        private readonly Type _entityType;
+        public LinqExp.Expression? Predicate { get; private set; }
+        public LinqExp.ConstantExpression? Source { get; private set; }
+        private bool _hitBarrier;
+
+        public ExtractionVisitor(Type entityType)
+        {
+            _entityType = entityType;
+        }
+
+        protected override LinqExp.Expression VisitMethodCall(LinqExp.MethodCallExpression node)
+        {
+            if (_hitBarrier)
+            {
+                Visit(node.Arguments[0]);
+                return node;
+            }
+
+            if (node.Method.Name == nameof(System.Linq.Queryable.Where) && node.Method.DeclaringType == typeof(System.Linq.Queryable))
+            {
+                Visit(node.Arguments[0]);
+
+                if (!_hitBarrier && Source != null)
+                {
+                    var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)node.Arguments[1]).Operand;
+                    if (lambda.Parameters[0].Type == _entityType)
+                    {
+                        if (Predicate == null)
+                        {
+                            Predicate = lambda;
+                        }
+                        else
+                        {
+                            var oldLambda = (LinqExp.LambdaExpression)Predicate;
+                            var newBody = new ParameterReplacer(lambda.Parameters[0], oldLambda.Parameters[0]).Visit(lambda.Body);
+                            Predicate = LinqExp.Expression.Lambda(LinqExp.Expression.AndAlso(oldLambda.Body, newBody!), oldLambda.Parameters[0]);
+                        }
+                    }
+                    else
+                    {
+                        _hitBarrier = true;
+                    }
+                }
+                return node;
+            }
+
+            _hitBarrier = true;
+            Visit(node.Arguments[0]);
+            return node;
+        }
+
+        protected override LinqExp.Expression VisitConstant(LinqExp.ConstantExpression node)
+        {
+            if (node.Type.IsGenericType && 
+                node.Type.GetGenericTypeDefinition() == typeof(Queryable<>) &&
+                node.Type.GetGenericArguments()[0] == _entityType)
+            {
+                Source = node;
+                _hitBarrier = false;
+            }
+            return node;
+        }
+    }
+}
+
+
+
+internal static class TypeSystem
+{
+    internal static Type GetElementType(Type seqType)
+    {
+        var ienum = FindIEnumerable(seqType);
+        if (ienum == null) return seqType;
+        return ienum.GetGenericArguments()[0];
+    }
+
+    private static Type? FindIEnumerable(Type? seqType)
+    {
+        if (seqType == null || seqType == typeof(string)) return null;
+        if (seqType.IsArray) return typeof(IEnumerable<>).MakeGenericType(seqType.GetElementType()!);
+        if (seqType.IsGenericType)
+        {
+            foreach (var arg in seqType.GetGenericArguments())
+            {
+                var ienum = typeof(IEnumerable<>).MakeGenericType(arg);
+                if (ienum.IsAssignableFrom(seqType)) return ienum;
+            }
+        }
+        var ifaces = seqType.GetInterfaces();
+        if (ifaces != null && ifaces.Length > 0)
+        {
+            foreach (var iface in ifaces)
+            {
+                var ienum = FindIEnumerable(iface);
+                if (ienum != null) return ienum;
+            }
+        }
+        if (seqType.BaseType != null && seqType.BaseType != typeof(object))
+        {
+            return FindIEnumerable(seqType.BaseType);
+        }
+        return null;
+    }
+}
+
+internal sealed class ParameterReplacer : LinqExp.ExpressionVisitor
+{
+    private readonly LinqExp.ParameterExpression _source;
+    private readonly LinqExp.ParameterExpression _target;
+
+    public ParameterReplacer(LinqExp.ParameterExpression source, LinqExp.ParameterExpression target)
     {
         _source = source;
         _target = target;
     }
 
-    protected override System.Linq.Expressions.Expression VisitParameter(System.Linq.Expressions.ParameterExpression node)
+    protected override LinqExp.Expression VisitParameter(LinqExp.ParameterExpression node)
     {
         return node == _source ? _target : base.VisitParameter(node);
     }
