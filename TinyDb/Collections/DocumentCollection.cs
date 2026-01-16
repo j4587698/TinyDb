@@ -55,14 +55,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// </summary>
     private void CreateAutoIndexes()
     {
-        try
-        {
-            IndexScanner.ScanAndCreateIndexes(_engine, typeof(T), _name);
-        }
-        catch
-        {
-            // 索引创建失败不阻止操作
-        }
+        IndexScanner.ScanAndCreateIndexes(_engine, typeof(T), _name);
     }
 
     /// <summary>

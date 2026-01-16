@@ -198,7 +198,10 @@ public sealed class IndexManager : IDisposable
                 var key = ExtractIndexKey(index, document);
                 if (key != null)
                 {
-                    index.Insert(key, documentId);
+                    if (!index.Insert(key, documentId))
+                    {
+                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                    }
                 }
             }
         }
@@ -220,7 +223,15 @@ public sealed class IndexManager : IDisposable
                 var newKey = ExtractIndexKey(index, newDoc);
                 
                 if (oldKey != null) index.Delete(oldKey, id);
-                if (newKey != null) index.Insert(newKey, id);
+                if (newKey != null)
+                {
+                    if (!index.Insert(newKey, id))
+                    {
+                        // Attempt to rollback delete
+                        if (oldKey != null) index.Insert(oldKey, id);
+                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                    }
+                }
             }
         }
     }

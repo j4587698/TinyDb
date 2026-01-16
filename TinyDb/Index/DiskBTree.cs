@@ -553,6 +553,68 @@ public sealed class DiskBTree : IDisposable
 
     private bool CanMerge(DiskBTreeNode left, DiskBTreeNode right, DiskBTreeNode parent, int separatorIndex, int capacity)
     {
+        // Estimate the size of the merged node
+        // It will contain all keys/values from left, all from right, plus the separator from parent.
+        int leftSize = left.CalculateSize();
+        int rightSize = right.CalculateSize();
+        
+        // Rough estimate for the separator key size being added
+        // Since we don't have easy access to BsonValue size here without the helper, 
+        // we'll assume it's comparable to the average key size in the nodes or just safely check sum.
+        // Actually, CalculateSize includes overhead. Merging removes one node overhead but adds separator.
+        // Let's be conservative: sum of sizes should be less than capacity.
+        // Note: CalculateSize() returns the byte size of the node content.
+        
+        return (leftSize + rightSize) <= capacity;
+    }
+    
+    /// <summary>
+    /// 验证树结构。
+    /// </summary>
+    /// <returns>如果有效则为 true。</returns>
+    public bool Validate()
+    {
+        try 
+        {
+            var root = LoadNode(_rootPageId);
+            return ValidateNode(root, null, null);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool ValidateNode(DiskBTreeNode node, IndexKey? minKey, IndexKey? maxKey)
+    {
+        // 1. Validate keys are sorted
+        for (int i = 0; i < node.KeyCount - 1; i++)
+        {
+            if (node.Keys[i].CompareTo(node.Keys[i + 1]) >= 0) return false;
+        }
+
+        // 2. Validate keys are within range [minKey, maxKey]
+        if (node.KeyCount > 0)
+        {
+            if (minKey != null && node.Keys[0].CompareTo(minKey) < 0) return false;
+            if (maxKey != null && node.Keys[node.KeyCount - 1].CompareTo(maxKey) > 0) return false;
+        }
+
+        // 3. Recursively validate children
+        if (!node.IsLeaf)
+        {
+            for (int i = 0; i < node.ChildrenIds.Count; i++)
+            {
+                var child = LoadNode(node.ChildrenIds[i]);
+                if (child.ParentId != node.PageId) return false; // Parent pointer mismatch
+
+                IndexKey? childMin = (i == 0) ? minKey : node.Keys[i - 1];
+                IndexKey? childMax = (i == node.KeyCount) ? maxKey : node.Keys[i];
+
+                if (!ValidateNode(child, childMin, childMax)) return false;
+            }
+        }
+
         return true;
     }
 
@@ -672,11 +734,7 @@ public sealed class DiskBTree : IDisposable
         parent.MarkDirty(); parent.Save(_pm);
     }
 
-    /// <summary>
-    /// 验证树结构。
-    /// </summary>
-    /// <returns>如果有效则为 true。</returns>
-    public bool Validate() => true;
+
 
     private DiskBTreeNode LoadNode(uint id)
     {

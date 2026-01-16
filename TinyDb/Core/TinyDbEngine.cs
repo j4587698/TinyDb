@@ -485,6 +485,8 @@ public sealed class TinyDbEngine : IDisposable
 
         using var stream = BsonSerializer.GetRecyclableStream();
 
+        var exceptions = new List<Exception>();
+
         lock (st.PageState.SyncRoot)
         {
             Page? currentPage = null;
@@ -545,10 +547,9 @@ public sealed class TinyDbEngine : IDisposable
                     docsToUpdateIndex?.Add((doc, id));
                     insertedCount++;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Ignore individual failures in batch? Or break?
-                    // Original logic ignored failures effectively.
+                    exceptions.Add(ex);
                 }
             }
 
@@ -562,11 +563,24 @@ public sealed class TinyDbEngine : IDisposable
         {
             foreach (var (doc, id) in docsToUpdateIndex)
             {
-                idx!.InsertDocument(doc, id);
+                try
+                {
+                    idx!.InsertDocument(doc, id);
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
             }
         }
 
         EnsureWriteDurability();
+
+        if (exceptions.Count > 0)
+        {
+            throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+        }
+
         return insertedCount;
     }
 

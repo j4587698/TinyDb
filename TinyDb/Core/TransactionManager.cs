@@ -461,10 +461,14 @@ public sealed class TransactionManager : IDisposable
                 try
                 {
                     expiredTransaction.State = TransactionState.Failed;
-                    _activeTransactions.Remove(expiredTransaction.TransactionId);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Console.Error.WriteLine($"Error failing expired transaction {expiredTransaction.TransactionId}: {ex}");
+                }
+                finally
+                {
+                    _activeTransactions.Remove(expiredTransaction.TransactionId);
                 }
             }
         }
