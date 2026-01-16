@@ -9,7 +9,7 @@ public sealed class IndexManager : IDisposable
     private readonly ConcurrentDictionary<string, BTreeIndex> _indexes;
     private readonly string _collectionName;
     private readonly PageManager _pm;
-    private readonly object _indexLock = new();
+    private readonly ReaderWriterLockSlim _rwLock = new();
     private bool _disposed;
     
     // 为了兼容性
@@ -72,12 +72,17 @@ public sealed class IndexManager : IDisposable
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
         if (fields == null || fields.Length == 0) throw new ArgumentException("Fields cannot be null or empty", nameof(fields));
         
-        lock (_indexLock)
+        _rwLock.EnterWriteLock();
+        try
         {
             if (_indexes.ContainsKey(name)) return false;
             var normalizedFields = fields.Select(ToCamelCase).ToArray();
             var index = new BTreeIndex(_pm, name, normalizedFields, unique);
             return _indexes.TryAdd(name, index);
+        }
+        finally
+        {
+            _rwLock.ExitWriteLock();
         }
     }
 
@@ -96,12 +101,21 @@ public sealed class IndexManager : IDisposable
     public bool DropIndex(string name)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
-        if (_indexes.TryRemove(name, out var index))
+        
+        _rwLock.EnterWriteLock();
+        try
         {
-            index.Dispose();
-            return true;
+            if (_indexes.TryRemove(name, out var index))
+            {
+                index.Dispose();
+                return true;
+            }
+            return false;
         }
-        return false;
+        finally
+        {
+            _rwLock.ExitWriteLock();
+        }
     }
 
     /// <summary>
@@ -148,14 +162,22 @@ public sealed class IndexManager : IDisposable
         BTreeIndex? bestIndex = null;
         int bestScore = -1;
 
-        foreach (var index in _indexes.Values)
+        _rwLock.EnterReadLock();
+        try
         {
-            var score = CalculateIndexScore(index, fields);
-            if (score > bestScore)
+            foreach (var index in _indexes.Values)
             {
-                bestScore = score;
-                bestIndex = index;
+                var score = CalculateIndexScore(index, fields);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestIndex = index;
+                }
             }
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
         }
 
         return bestScore > 0 ? bestIndex : null;
@@ -191,7 +213,8 @@ public sealed class IndexManager : IDisposable
     /// <param name="documentId">文档的 ID。</param>
     public void InsertDocument(BsonDocument document, BsonValue documentId)
     {
-        lock (_indexLock)
+        _rwLock.EnterReadLock();
+        try
         {
             foreach (var index in _indexes.Values)
             {
@@ -205,6 +228,10 @@ public sealed class IndexManager : IDisposable
                 }
             }
         }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -215,7 +242,8 @@ public sealed class IndexManager : IDisposable
     /// <param name="id">文档 ID。</param>
     public void UpdateDocument(BsonDocument oldDoc, BsonDocument newDoc, BsonValue id)
     {
-        lock (_indexLock)
+        _rwLock.EnterReadLock();
+        try
         {
             foreach (var index in _indexes.Values)
             {
@@ -234,6 +262,10 @@ public sealed class IndexManager : IDisposable
                 }
             }
         }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -243,13 +275,18 @@ public sealed class IndexManager : IDisposable
     /// <param name="id">文档 ID。</param>
     public void DeleteDocument(BsonDocument doc, BsonValue id)
     {
-        lock (_indexLock)
+        _rwLock.EnterReadLock();
+        try
         {
             foreach (var index in _indexes.Values)
             {
                 var key = ExtractIndexKey(index, doc);
                 if (key != null) index.Delete(key, id);
             }
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
         }
     }
 
@@ -269,6 +306,7 @@ public sealed class IndexManager : IDisposable
     {
         if (!_disposed)
         {
+            _rwLock.Dispose();
             foreach (var i in _indexes.Values) i.Dispose();
             
             if (_ownsPageManager)

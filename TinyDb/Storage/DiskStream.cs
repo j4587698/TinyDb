@@ -1,4 +1,5 @@
 using System.IO;
+using System.Threading;
 
 namespace TinyDb.Storage;
 
@@ -11,7 +12,7 @@ public sealed class DiskStream : IDiskStream
     private readonly string _filePath;
     private readonly FileStream _fileStream;
     private bool _disposed;
-    private readonly object _syncRoot = new();
+    private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     /// <summary>
     /// 文件路径
@@ -28,9 +29,14 @@ public sealed class DiskStream : IDiskStream
         get
         {
             ThrowIfDisposed();
-            lock (_syncRoot)
+            _semaphore.Wait();
+            try
             {
                 return _fileStream.Length;
+            }
+            finally
+            {
+                _semaphore.Release();
             }
         }
     }
@@ -43,9 +49,14 @@ public sealed class DiskStream : IDiskStream
         get
         {
             ThrowIfDisposed();
-            lock (_syncRoot)
+            _semaphore.Wait();
+            try
             {
                 return _fileStream.Position;
+            }
+            finally
+            {
+                _semaphore.Release();
             }
         }
     }
@@ -82,45 +93,70 @@ public sealed class DiskStream : IDiskStream
     public int Read(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             return _fileStream.Read(buffer, offset, count);
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
     public void Write(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             _fileStream.Write(buffer, offset, count);
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
     public void Flush()
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             _fileStream.Flush(true);
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
     public long Seek(long offset, SeekOrigin origin)
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             return _fileStream.Seek(offset, origin);
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
     public void SetLength(long length)
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             _fileStream.SetLength(length);
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
@@ -138,7 +174,15 @@ public sealed class DiskStream : IDiskStream
         try 
         {
 #pragma warning disable CA1416 // Validate platform compatibility
-            _fileStream.Lock(position, length);
+            _semaphore.Wait();
+            try
+            {
+                _fileStream.Lock(position, length);
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
 #pragma warning restore CA1416
             return new Tuple<long, long>(position, length);
         }
@@ -178,7 +222,15 @@ public sealed class DiskStream : IDiskStream
             try
             {
 #pragma warning disable CA1416 // Validate platform compatibility
-                _fileStream.Unlock(range.Item1, range.Item2);
+                _semaphore.Wait();
+                try
+                {
+                    _fileStream.Unlock(range.Item1, range.Item2);
+                }
+                finally
+                {
+                    _semaphore.Release();
+                }
 #pragma warning restore CA1416
             }
             catch (PlatformNotSupportedException)
@@ -212,7 +264,8 @@ public sealed class DiskStream : IDiskStream
     public DiskStreamStatistics GetStatistics()
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             return new DiskStreamStatistics
             {
@@ -223,6 +276,10 @@ public sealed class DiskStream : IDiskStream
                 IsWritable = _fileStream.CanWrite,
                 IsSeekable = _fileStream.CanSeek
             };
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
@@ -239,18 +296,18 @@ public sealed class DiskStream : IDiskStream
     /// 异步刷新缓冲区到磁盘
     /// </summary>
     /// <param name="cancellationToken">取消令牌</param>
-    public Task FlushAsync(CancellationToken cancellationToken = default)
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        // 注意：异步操作加同步锁可能不是最佳实践，但在不改变接口签名的情况下，这是一个折衷。
-        // 更好的做法是使用 SemaphoreSlim，但这需要将接口改为 async。
-        // 这里我们简单地在同步锁中调用同步 Flush，或者不做保护（假设调用者负责同步）。
-        // 考虑到 DiskStream 的其他方法是同步的，这里为了安全性，我们还是加锁。
-        lock (_syncRoot)
+        await _semaphore.WaitAsync(cancellationToken);
+        try
         {
-            _fileStream.Flush(true);
+            await _fileStream.FlushAsync(cancellationToken);
         }
-        return Task.CompletedTask;
+        finally
+        {
+            _semaphore.Release();
+        }
     }
 
     /// <summary>
@@ -262,7 +319,8 @@ public sealed class DiskStream : IDiskStream
     public byte[] ReadPage(long pageOffset, int pageSize)
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             _fileStream.Seek(pageOffset, SeekOrigin.Begin);
             var buffer = new byte[pageSize];
@@ -274,11 +332,11 @@ public sealed class DiskStream : IDiskStream
                 bytesRead += read;
             }
             
-            // 如果读取不足，可能需要处理（例如如果是新分配的页面可能为0）
-            // 但 PageManager 应该处理这种情况，或者 DiskStream 应该保证填充0？
-            // 这里我们只返回实际读取的内容，或者保留 buffer（剩余为0）
-            
             return buffer;
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
@@ -290,10 +348,15 @@ public sealed class DiskStream : IDiskStream
     public void WritePage(long pageOffset, byte[] pageData)
     {
         ThrowIfDisposed();
-        lock (_syncRoot)
+        _semaphore.Wait();
+        try
         {
             _fileStream.Seek(pageOffset, SeekOrigin.Begin);
             _fileStream.Write(pageData, 0, pageData.Length);
+        }
+        finally
+        {
+            _semaphore.Release();
         }
     }
 
@@ -304,9 +367,27 @@ public sealed class DiskStream : IDiskStream
     /// <param name="pageSize">页面大小</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>页面数据</returns>
-    public Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default)
+    public async Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(ReadPage(pageOffset, pageSize));
+        ThrowIfDisposed();
+        await _semaphore.WaitAsync(cancellationToken);
+        try
+        {
+            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
+            var buffer = new byte[pageSize];
+            var bytesRead = 0;
+            while (bytesRead < pageSize)
+            {
+                var read = await _fileStream.ReadAsync(buffer, bytesRead, pageSize - bytesRead, cancellationToken);
+                if (read == 0) break;
+                bytesRead += read;
+            }
+            return buffer;
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
     }
 
     /// <summary>
@@ -316,10 +397,19 @@ public sealed class DiskStream : IDiskStream
     /// <param name="pageData">页面数据</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>任务</returns>
-    public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
+    public async Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
     {
-        WritePage(pageOffset, pageData);
-        return Task.CompletedTask;
+        ThrowIfDisposed();
+        await _semaphore.WaitAsync(cancellationToken);
+        try
+        {
+            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
+            await _fileStream.WriteAsync(pageData, 0, pageData.Length, cancellationToken);
+        }
+        finally
+        {
+            _semaphore.Release();
+        }
     }
 
     /// <summary>
@@ -329,6 +419,7 @@ public sealed class DiskStream : IDiskStream
     {
         if (!_disposed)
         {
+            _semaphore.Dispose();
             _fileStream?.Dispose();
             _disposed = true;
         }

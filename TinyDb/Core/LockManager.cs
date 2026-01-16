@@ -69,6 +69,11 @@ public sealed class LockRequest
     public bool IsGranted { get; set; }
 
     /// <summary>
+    /// 是否为死锁受害者
+    /// </summary>
+    public bool IsDeadlockVictim { get; set; }
+
+    /// <summary>
     /// 授予时间
     /// </summary>
     public DateTime? GrantedTime { get; set; }
@@ -514,16 +519,7 @@ public sealed class LockManager : IDisposable
                  {
                      if (!req.IsGranted)
                      {
-                         // 强制过期/取消
-                         // 这里的实现依赖于 LockRequest 没有显式的 "Cancelled" 状态，
-                         // 但如果我们将 GrantedTime 设为 MinValue 或者其他标记，
-                         // 或者直接从桶中移除，让用户侧超时。
-                         // 为简单起见，我们仅依赖超时机制清理，或者我们可以添加 Cancel 方法。
-                         // 更好的做法是让 RequestLock 能够感知取消。
-                         // 鉴于现有代码结构，我们这里仅做日志记录或辅助清理，
-                         // 实际的"解决"目前仍主要依赖超时，因为 LockRequest 缺乏异步取消令牌。
-                         // 为了符合"优化"的要求，我们假设上层有超时重试，
-                         // 或者我们可以扩展 LockRequest 支持 IsCancelled。
+                         req.IsDeadlockVictim = true;
                      }
                  }
              }
