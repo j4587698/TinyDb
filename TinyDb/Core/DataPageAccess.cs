@@ -88,6 +88,54 @@ public PageDocumentEntry? ReadDocumentAt(Page p, int index) {
     } catch { return null; }
 }
 
+public BsonDocument? ReadDocumentAt(Page p, int index, HashSet<string>? fields) {
+    int count = p.Header.ItemCount;
+    if (index >= count) return null;
+    
+    var span = p.ValidDataSpan;
+    int offset = InternalReserved;
+    
+    // Skip previous documents
+    for (int i = 0; i < index; i++) {
+        if (offset + 4 > span.Length) return null;
+        int len = BitConverter.ToInt32(span.Slice(offset, 4));
+        offset += 4 + len;
+    }
+    
+    // Read target document
+    if (offset + 4 > span.Length) return null;
+    int targetLen = BitConverter.ToInt32(span.Slice(offset, 4));
+    offset += 4;
+    if (offset + targetLen > span.Length) return null;
+    
+    var bytes = span.Slice(offset, targetLen).ToArray();
+    try {
+        // Always ensure system fields are loaded to check for large document
+        if (fields != null)
+        {
+            if (!fields.Contains("_isLargeDocument")) fields.Add("_isLargeDocument");
+            if (!fields.Contains("_largeDocumentIndex")) fields.Add("_largeDocumentIndex");
+            if (!fields.Contains("_largeDocumentSize")) fields.Add("_largeDocumentSize");
+        }
+
+        var doc = fields != null 
+            ? BsonSerializer.DeserializeDocument(bytes, fields) 
+            : BsonSerializer.DeserializeDocument(bytes);
+
+        bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
+        if (isL)
+        {
+             uint lId = (uint)doc["_largeDocumentIndex"].ToInt64(null);
+             var largeBytes = _lds.ReadLargeDocument(lId);
+             return fields != null 
+                ? BsonSerializer.DeserializeDocument(largeBytes, fields) 
+                : BsonSerializer.DeserializeDocument(largeBytes);
+        }
+        
+        return doc;
+    } catch { return null; }
+}
+
 public void AppendDocumentToPage(Page p, ReadOnlySpan<byte> bytes) { p.Append(bytes); }
 public bool CanFitInPage(Page p, List<PageDocumentEntry> docs)
 {

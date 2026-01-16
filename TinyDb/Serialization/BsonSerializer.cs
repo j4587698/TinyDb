@@ -140,6 +140,22 @@ public static class BsonSerializer
     }
 
     /// <summary>
+    /// 反序列化为 BsonDocument（仅加载指定字段）
+    /// </summary>
+    /// <param name="data">字节数组</param>
+    /// <param name="fields">需要加载的字段集合</param>
+    /// <returns>BSON 文档</returns>
+    public static BsonDocument DeserializeDocument(byte[] data, HashSet<string> fields)
+    {
+        if (data == null) throw new ArgumentNullException(nameof(data));
+        if (data.Length == 0) return new BsonDocument();
+
+        using var stream = new MemoryStream(data);
+        using var reader = new BsonReader(stream);
+        return reader.ReadDocument(fields);
+    }
+
+    /// <summary>
     /// 反序列化为 BsonDocument (Zero-Copy optimization)
     /// </summary>
     /// <param name="data">内存块</param>
@@ -706,6 +722,129 @@ public sealed class BsonReader : IDisposable
         }
 
         return document;
+    }
+
+    /// <summary>
+    /// 读取 BSON 文档（仅加载指定字段）
+    /// </summary>
+    /// <param name="fields">需要加载的字段集合</param>
+    /// <returns>BSON 文档</returns>
+    public BsonDocument ReadDocument(HashSet<string> fields)
+    {
+        ThrowIfDisposed();
+
+        var documentSize = _reader.ReadInt32();
+        var startPosition = _stream.Position;
+        var document = new BsonDocument();
+
+        while (true)
+        {
+            var type = (BsonType)_reader.ReadByte();
+
+            if (type == BsonType.End)
+                break;
+
+            var key = ReadCString();
+            
+            // 检查字段是否需要加载
+            if (fields == null || fields.Contains(key))
+            {
+                var value = ReadTypedValue(type);
+                document = document.Set(key, value);
+            }
+            else
+            {
+                SkipValue(type);
+            }
+        }
+
+        var endPosition = _stream.Position;
+        var expectedContentSize = documentSize - 4;
+        var actualContentSize = (int)(endPosition - startPosition);
+
+        // 如果我们跳过了某些值，Position 应该是正确的，因为 SkipValue 也会消耗流
+        if (actualContentSize != expectedContentSize)
+        {
+            throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+        }
+
+        return document;
+    }
+
+    /// <summary>
+    /// 跳过 BSON 值
+    /// </summary>
+    /// <param name="type">BSON 类型</param>
+    private void SkipValue(BsonType type)
+    {
+        switch (type)
+        {
+            case BsonType.Null:
+            case BsonType.MinKey:
+            case BsonType.MaxKey:
+                break;
+            case BsonType.Boolean:
+                SkipBytes(1);
+                break;
+            case BsonType.Int32:
+                SkipBytes(4);
+                break;
+            case BsonType.Int64:
+            case BsonType.Double:
+            case BsonType.DateTime:
+            case BsonType.Timestamp:
+                SkipBytes(8);
+                break;
+            case BsonType.ObjectId:
+                SkipBytes(12);
+                break;
+            case BsonType.String:
+            case BsonType.JavaScript:
+            case BsonType.Symbol:
+            case BsonType.Decimal128:
+                var strLen = _reader.ReadInt32();
+                SkipBytes(strLen); // strLen includes null terminator
+                break;
+            case BsonType.Document:
+            case BsonType.Array:
+                var docLen = _reader.ReadInt32();
+                SkipBytes(docLen - 4); // docLen includes the int32 size itself
+                break;
+            case BsonType.Binary:
+                var binLen = _reader.ReadInt32();
+                SkipBytes(1 + binLen); // subtype (1) + data
+                break;
+            case BsonType.RegularExpression:
+                ReadCString(); // Skip pattern
+                ReadCString(); // Skip options
+                break;
+            default:
+                throw new NotSupportedException($"Cannot skip BSON type {type}");
+        }
+    }
+
+    private void SkipBytes(int count)
+    {
+        if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        if (count == 0) return;
+
+        // 使用共享缓冲区读取并丢弃数据，避免分配新数组
+        var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(count, 4096));
+        try
+        {
+            int remaining = count;
+            while (remaining > 0)
+            {
+                int toRead = Math.Min(remaining, buffer.Length);
+                int read = _reader.Read(buffer, 0, toRead);
+                if (read == 0) throw new EndOfStreamException();
+                remaining -= read;
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>
