@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -9,11 +9,12 @@
     <PublishAot>false</PublishAot>
     <!-- MTP 模式下，必须设置为 false 以避免 SDK 注入 VSTest 目标 -->
     <IsTestProject>false</IsTestProject>
+    <!-- 显式禁用 VSTest 导入 -->
     <ImportVSTestTargets>false</ImportVSTestTargets>
+    <GenerateProgramFile>false</GenerateProgramFile>
     
     <!-- 启用新的测试平台 -->
     <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
-    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
     
     <OutputType>Exe</OutputType>
@@ -21,7 +22,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" />
+    <!-- 暂时移除 CodeCoverage 以排除 VSTest 依赖冲突 -->
+    <!-- <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" /> -->
     <PackageReference Include="TUnit" Version="1.6.25" />
   </ItemGroup>
 
