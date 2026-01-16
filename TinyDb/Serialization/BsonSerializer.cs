@@ -134,8 +134,20 @@ public static class BsonSerializer
         if (data == null) throw new ArgumentNullException(nameof(data));
         if (data.Length == 0) return new BsonDocument();
 
-        using var stream = new MemoryStream(data);
-        using var reader = new BsonReader(stream);
+        var reader = new BsonSpanReader(data);
+        return reader.ReadDocument();
+    }
+
+    /// <summary>
+    /// 反序列化为 BsonDocument (Zero-Copy optimization)
+    /// </summary>
+    /// <param name="data">内存块</param>
+    /// <returns>BSON 文档</returns>
+    public static BsonDocument DeserializeDocument(ReadOnlyMemory<byte> data)
+    {
+        if (data.IsEmpty) return new BsonDocument();
+
+        var reader = new BsonSpanReader(data.Span);
         return reader.ReadDocument();
     }
 
@@ -150,28 +162,8 @@ public static class BsonSerializer
         if (data == null) throw new ArgumentNullException(nameof(data));
         if (data.Length == 0) return new BsonDocument();
 
-        using var stream = new MemoryStream(data);
-        using var reader = new BsonReader(stream);
+        var reader = new BsonSpanReader(data);
         return reader.ReadDocument(fields);
-    }
-
-    /// <summary>
-    /// 反序列化为 BsonDocument (Zero-Copy optimization)
-    /// </summary>
-    /// <param name="data">内存块</param>
-    /// <returns>BSON 文档</returns>
-    public static BsonDocument DeserializeDocument(ReadOnlyMemory<byte> data)
-    {
-        if (data.IsEmpty) return new BsonDocument();
-
-        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(data, out var segment))
-        {
-            using var stream = new MemoryStream(segment.Array!, segment.Offset, segment.Count, false);
-            using var reader = new BsonReader(stream);
-            return reader.ReadDocument();
-        }
-        
-        return DeserializeDocument(data.ToArray());
     }
 
     /// <summary>
