@@ -370,7 +370,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         ThrowIfDisposed();
 
-        return FindAll().LongCount();
+        return _engine.GetCachedDocumentCount(_name);
     }
 
     /// <summary>

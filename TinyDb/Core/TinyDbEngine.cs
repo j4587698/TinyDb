@@ -25,17 +25,17 @@ public sealed class TinyDbEngine : IDisposable
 {
     private readonly string _filePath;
     private readonly TinyDbOptions _options;
-    private readonly IDiskStream _diskStream;
-    private readonly PageManager _pageManager;
-    private readonly WriteAheadLog _writeAheadLog;
-    private readonly FlushScheduler _flushScheduler;
+    private IDiskStream _diskStream = null!;
+    private PageManager _pageManager = null!;
+    private WriteAheadLog _writeAheadLog = null!;
+    private FlushScheduler _flushScheduler = null!;
     private readonly ConcurrentDictionary<string, IDocumentCollection> _collections;
     private CollectionMetaStore _collectionMetaStore = null!;
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly TransactionManager _transactionManager;
     private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
-    private readonly LargeDocumentStorage _largeDocumentStorage;
-    private readonly DataPageAccess _dataPageAccess;
+    private LargeDocumentStorage _largeDocumentStorage = null!;
+    private DataPageAccess _dataPageAccess = null!;
     private readonly object _lock = new();
     private readonly AsyncLocal<ITransaction?> _currentTransaction = new();
     private DatabaseHeader _header;
@@ -83,28 +83,112 @@ public sealed class TinyDbEngine : IDisposable
         _options = o ?? new TinyDbOptions();
         _options.Validate();
 
+        _collections = new ConcurrentDictionary<string, IDocumentCollection>(StringComparer.Ordinal);
+        _indexManagers = new ConcurrentDictionary<string, IndexManager>(StringComparer.Ordinal);
+        _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
+        _collectionStates = new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal);
+
+        InitializeComponents(ds);
+    }
+
+    private void InitializeComponents(IDiskStream? ds)
+    {
         if (ds != null)
         {
             _diskStream = ds;
         }
         else
         {
-            var dir = Path.GetDirectoryName(f);
+            var dir = Path.GetDirectoryName(_filePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            _diskStream = new DiskStream(f, FileAccess.ReadWrite, FileShare.ReadWrite);
+            _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.ReadWrite);
         }
 
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
-        _writeAheadLog = new WriteAheadLog(f, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
+        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), NormalizeInterval(_options.JournalFlushDelay));
-        _collections = new ConcurrentDictionary<string, IDocumentCollection>(StringComparer.Ordinal);
-        _indexManagers = new ConcurrentDictionary<string, IndexManager>(StringComparer.Ordinal);
-        _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
-        _collectionStates = new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal);
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
         _dataPageAccess = new DataPageAccess(_pageManager, _largeDocumentStorage, _writeAheadLog);
 
         InitializeDatabase();
+    }
+
+    private void DisposeComponents()
+    {
+        _flushScheduler?.Dispose();
+        _writeAheadLog?.Dispose();
+        _pageManager?.Dispose();
+        _diskStream?.Dispose();
+    }
+
+    /// <summary>
+    /// 压缩数据库（碎片整理）
+    /// 注意：此操作会阻塞所有其他操作，并重建数据库文件。
+    /// </summary>
+    public void CompactDatabase()
+    {
+        ThrowIfDisposed();
+        lock (_lock)
+        {
+            EnsureInitialized();
+            
+            // 1. 刷新当前状态
+            Flush();
+            
+            var tempFile = _filePath + ".compact";
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+            
+            // 使用临时引擎写入新文件
+            using (var tempEngine = new TinyDbEngine(tempFile, _options))
+            {
+                // 2. 迁移数据
+                foreach (var colName in GetCollectionNames())
+                {
+                    // 获取源数据
+                    var docs = FindAll(colName).ToList();
+                    
+                    // 写入目标
+                    var tempCol = tempEngine.GetCollectionWithName<BsonDocument>(colName);
+                    if (docs.Count > 0)
+                    {
+                        tempCol.Insert(docs);
+                    }
+                    
+                    // 3. 重建索引
+                    var idxMgr = GetIndexManager(colName);
+                    var tempIdxMgr = tempEngine.GetIndexManager(colName);
+                    foreach (var stat in idxMgr.GetAllStatistics())
+                    {
+                        tempIdxMgr.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
+                    }
+                }
+            }
+            
+            // 4. 释放当前组件以解除文件锁定
+            DisposeComponents();
+            
+            // 5. 替换文件
+            // 先备份? 可选，这里直接覆盖
+            try 
+            {
+                File.Move(tempFile, _filePath, overwrite: true);
+            }
+            catch
+            {
+                // 移动失败，尝试恢复组件
+                InitializeComponents(null);
+                throw;
+            }
+            
+            // 6. 清理缓存状态
+            _collectionStates.Clear();
+            DisposeIndexManagers(); 
+            _collectionMetaStore = null!;
+            _isInitialized = false;
+            
+            // 7. 重新初始化
+            InitializeComponents(null);
+        }
     }
 
     private void InitializeDatabase()
@@ -802,15 +886,12 @@ public sealed class TinyDbEngine : IDisposable
             {
                 if (_isInitialized) _collectionMetaStore?.SaveCollections(false);
                 SafeFlush();
-                _flushScheduler?.Dispose();
-                _writeAheadLog?.Dispose();
                 foreach (var c in _collections.Values) (c as IDisposable)?.Dispose();
                 _collections.Clear();
                 _collectionStates.Clear();
                 _transactionManager?.Dispose();
                 DisposeIndexManagers();
-                _pageManager?.Dispose();
-                _diskStream?.Dispose();
+                DisposeComponents();
             }
             catch { }
             finally { _disposed = true; _isInitialized = false; }
