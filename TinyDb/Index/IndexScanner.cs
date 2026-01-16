@@ -77,7 +77,7 @@ public static class IndexScanner
         {
             if (!indexManager.IndexExists(indexName))
             {
-                var fields = entries.Select(e => e.Property.Name).ToArray();
+                var fields = entries.Select(e => ToCamelCase(e.Property.Name)).ToArray();
                 var unique = entries.Any(e => e.Attribute.Unique);
 
                 indexManager.CreateIndex(indexName, fields, unique);
@@ -98,7 +98,9 @@ public static class IndexScanner
         {
             if (!indexManager.IndexExists(compositeAttr.Name))
             {
-                indexManager.CreateIndex(compositeAttr.Name, compositeAttr.Fields, compositeAttr.Unique);
+                // Convert fields to camelCase to match BsonMapper behavior
+                var fields = compositeAttr.Fields.Select(ToCamelCase).ToArray();
+                indexManager.CreateIndex(compositeAttr.Name, fields, compositeAttr.Unique);
             }
         }
     }
@@ -139,7 +141,7 @@ public static class IndexScanner
                 indexes.Add(new EntityIndexInfo
                 {
                     Name = GenerateIndexName(indexAttr, property.Name),
-                    Fields = new[] { property.Name },
+                    Fields = new[] { ToCamelCase(property.Name) },
                     IsUnique = indexAttr.Unique,
                     SortDirection = indexAttr.SortDirection,
                     Priority = indexAttr.Priority,
@@ -154,7 +156,7 @@ public static class IndexScanner
             indexes.Add(new EntityIndexInfo
             {
                 Name = compositeAttr.Name,
-                Fields = compositeAttr.Fields,
+                Fields = compositeAttr.Fields.Select(ToCamelCase).ToArray(),
                 IsUnique = compositeAttr.Unique,
                 SortDirection = IndexSortDirection.Ascending, // 复合索引默认升序
                 Priority = 0,
@@ -191,6 +193,13 @@ public static class IndexScanner
         {
             // 主键索引创建失败不应阻止系统启动
         }
+    }
+
+    private static string ToCamelCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
     }
 }
 

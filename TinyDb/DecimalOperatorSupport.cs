@@ -3,6 +3,9 @@ using System.Runtime.CompilerServices;
 
 namespace TinyDb;
 
+/// <summary>
+/// 为 Decimal 类型提供运算符支持的辅助类（主要用于 AOT 环境）。
+/// </summary>
 internal static class DecimalOperatorSupport
 {
     private static bool _initialized;

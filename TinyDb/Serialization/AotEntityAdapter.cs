@@ -57,4 +57,9 @@ public static partial class AotHelperRegistry
     {
         _adapters[typeof(T)] = adapter;
     }
+
+    public static void Clear()
+    {
+        _adapters.Clear();
+    }
 }

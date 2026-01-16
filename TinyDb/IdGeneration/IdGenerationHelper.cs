@@ -134,6 +134,7 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
             return rawValue switch
             {
                 Guid guid => guid,
+                byte[] bytes when bytes.Length == 16 => new Guid(bytes),
                 string str => Guid.Parse(str),
                 _ => Guid.Parse(rawValue.ToString() ?? string.Empty)
             };

@@ -1,0 +1,58 @@
+/home/j4587698/RiderProjects/TinyDb/TinyDb/TinyDb.csproj : warning NU1510: PackageReference System.Collections.Immutable 将不会删除。请考虑从依赖项中移除此包，因为可能不需要它。 [/home/j4587698/RiderProjects/TinyDb/TinyDb.Tests/TinyDb.Tests.csproj]
+/home/j4587698/RiderProjects/TinyDb/TinyDb/TinyDb.csproj : warning NU1510: PackageReference System.Memory 将不会删除。请考虑从依赖项中移除此包，因为可能不需要它。 [/home/j4587698/RiderProjects/TinyDb/TinyDb.Tests/TinyDb.Tests.csproj]
+/home/j4587698/RiderProjects/TinyDb/TinyDb/TinyDb.csproj : warning NU1510: PackageReference System.Threading.Channels 将不会删除。请考虑从依赖项中移除此包，因为可能不需要它。 [/home/j4587698/RiderProjects/TinyDb/TinyDb.Tests/TinyDb.Tests.csproj]
+/home/j4587698/RiderProjects/TinyDb/TinyDb/TinyDb.csproj : warning NU1510: PackageReference System.Collections.Immutable 将不会删除。请考虑从依赖项中移除此包，因为可能不需要它。 [TargetFramework=net8.0]
+/home/j4587698/RiderProjects/TinyDb/TinyDb/TinyDb.csproj : warning NU1510: PackageReference System.Memory 将不会删除。请考虑从依赖项中移除此包，因为可能不需要它。 [TargetFramework=net8.0]
+/home/j4587698/RiderProjects/TinyDb/TinyDb/TinyDb.csproj : warning NU1510: PackageReference System.Threading.Channels 将不会删除。请考虑从依赖项中移除此包，因为可能不需要它。 [TargetFramework=net8.0]
+
+████████╗██╗   ██╗███╗   ██╗██╗████████╗
+╚══██╔══╝██║   ██║████╗  ██║██║╚══██╔══╝
+   ██║   ██║   ██║██╔██╗ ██║██║   ██║
+   ██║   ██║   ██║██║╚██╗██║██║   ██║
+   ██║   ╚██████╔╝██║ ╚████║██║   ██║
+   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝╚═╝   ╚═╝
+
+   TUnit v1.6.25.0 | 64-bit | Ubuntu 24.04.3 LTS | ubuntu.24.04-x64 | .NET 8.0.22 | Microsoft Testing Platform v2.0.2
+
+   Engine Mode: SourceGenerated
+
+[+0/x0/?0] TinyDb.Tests.dll (net8.0|x64)(3s)
+
+失败 FindAll_Should_Handle_Page_Read_Error_By_Skipping (234ms)
+  TUnit.Engine.Exceptions.TestFailedException: IOException: The process cannot access the file '/tmp/eng_corrupt_5db679a8b703494aa2b147be4a95e59c.db' because it is being used by another process.
+    在 Microsoft.Win32.SafeHandles.SafeFileHandle.Init(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Int64& fileLength, UnixFileMode& filePermissions)
+    在 Microsoft.Win32.SafeHandles.SafeFileHandle.Open(String fullPath, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, UnixFileMode openPermissions, Int64& fileLength, UnixFileMode& filePermissions, Boolean failForSymlink, Boolean& wasSymlink, Func`4 createOpenException)
+    在 System.IO.Strategies.OSFileStreamStrategy..ctor(String path, FileMode mode, FileAccess access, FileShare share, FileOptions options, Int64 preallocationSize, Nullable`1 unixCreateMode)
+    在 System.IO.FileStream..ctor(String path, FileMode mode, FileAccess access, FileShare share, Int32 bufferSize, FileOptions options, Int64 preallocationSize)
+    在 System.IO.FileStream..ctor(String path, FileMode mode, FileAccess access, FileShare share)
+    在 TinyDb.Tests.Core.EngineCorruptPageTests.FindAll_Should_Handle_Page_Read_Error_By_Skipping() 位于 /home/j4587698/RiderProjects/TinyDb/TinyDb.Tests/Core/EngineCorruptPageTests.cs:39
+[+154/x1/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 3 测试 (6s)
+
+[+529/x1/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 6 测试 (9s)
+
+[+532/x1/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 3 测试 (12s)
+
+[+534/x1/?0] TinyDb.Tests.dll (net8.0|x64) - Execute_With_Large_Dataset_Should_Perform_Well (15s)
+
+失败 Deadlock_ShouldBeDetectedOrTimedOut (562ms)
+  TUnit.Engine.Exceptions.TestFailedException: AssertionException: Expected to not be empty
+  but collection is empty
+  
+  at Assert.That(exceptions).IsNotEmpty()
+[+536/x2/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentInserts_ShouldBeThreadSafe (18s)
+
+[+536/x2/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentInserts_ShouldBeThreadSafe (21s)
+
+[+540/x2/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Recover_From_Abnormal_Shutdown (24s)
+
+[+543/x2/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Recover_From_Empty_File (27s)
+
+[+561/x2/?0] TinyDb.Tests.dll (net8.0|x64) - EmptyGuidId_ShouldBeReplacedWithGeneratedId (30s)
+
+
+测试运行摘要: 失败! - /home/j4587698/RiderProjects/TinyDb/TinyDb.Tests/bin/Debug/net8.0/TinyDb.Tests.dll (net8.0|x64)
+  总计: 615
+  失败: 2
+  成功: 613
+  已跳过: 0
+  持续时间: 31s 632ms

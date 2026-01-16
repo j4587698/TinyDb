@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text;
 using System.Globalization;
 using TinyDb.Bson;
+using Microsoft.IO;
 
 namespace TinyDb.Serialization;
 
@@ -14,6 +15,18 @@ public static class BsonSerializer
     /// 默认编码
     /// </summary>
     private static readonly Encoding DefaultEncoding = Encoding.UTF8;
+
+    /// <summary>
+    /// 内存流管理器，用于减少内存分配
+    /// </summary>
+    private static readonly RecyclableMemoryStreamManager MemoryStreamManager = new RecyclableMemoryStreamManager(
+        new RecyclableMemoryStreamManager.Options
+        {
+            BlockSize = 4096, // 4KB Block Size (Better for typical documents)
+            LargeBufferMultiple = 1024 * 1024,
+            MaximumSmallPoolFreeBytes = 1024 * 1024 * 100 // 100MB Cache
+        }
+    );
 
     /// <summary>
     /// 序列化 BsonValue
@@ -44,6 +57,47 @@ public static class BsonSerializer
     }
 
     /// <summary>
+    /// 获取可回收的内存流
+    /// </summary>
+    /// <returns>内存流</returns>
+    public static RecyclableMemoryStream GetRecyclableStream()
+    {
+        return MemoryStreamManager.GetStream();
+    }
+
+    /// <summary>
+    /// 序列化 BsonValue 到 BsonWriter
+    /// </summary>
+    /// <param name="value">BSON 值</param>
+    /// <param name="writer">BSON 写入器</param>
+    public static void SerializeValue(BsonValue value, BsonWriter writer)
+    {
+        writer.WriteValue(value);
+    }
+
+    /// <summary>
+    /// 序列化 BsonValue 到流
+    /// </summary>
+    /// <param name="value">BSON 值</param>
+    /// <param name="stream">输出流</param>
+    public static void SerializeValue(BsonValue value, Stream stream)
+    {
+        using var writer = new BsonWriter(stream, true);
+        writer.WriteValue(value);
+    }
+
+    /// <summary>
+    /// 反序列化 BsonValue 从流
+    /// </summary>
+    /// <param name="stream">输入流</param>
+    /// <returns>BSON 值</returns>
+    public static BsonValue DeserializeValue(Stream stream)
+    {
+        using var reader = new BsonReader(stream);
+        return reader.ReadValue();
+    }
+
+    /// <summary>
     /// 序列化 BsonDocument
     /// </summary>
     /// <param name="document">BSON 文档</param>
@@ -52,10 +106,22 @@ public static class BsonSerializer
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        using var stream = new MemoryStream();
+        using var stream = MemoryStreamManager.GetStream();
         using var writer = new BsonWriter(stream);
         writer.WriteDocument(document);
         return stream.ToArray();
+    }
+
+    /// <summary>
+    /// 序列化 BsonDocument 到流
+    /// </summary>
+    /// <param name="document">BSON 文档</param>
+    /// <param name="stream">输出流</param>
+    public static void SerializeDocument(BsonDocument document, Stream stream)
+    {
+        if (document == null) throw new ArgumentNullException(nameof(document));
+        using var writer = new BsonWriter(stream, true);
+        writer.WriteDocument(document);
     }
 
     /// <summary>
@@ -74,6 +140,25 @@ public static class BsonSerializer
     }
 
     /// <summary>
+    /// 反序列化为 BsonDocument (Zero-Copy optimization)
+    /// </summary>
+    /// <param name="data">内存块</param>
+    /// <returns>BSON 文档</returns>
+    public static BsonDocument DeserializeDocument(ReadOnlyMemory<byte> data)
+    {
+        if (data.IsEmpty) return new BsonDocument();
+
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(data, out var segment))
+        {
+            using var stream = new MemoryStream(segment.Array!, segment.Offset, segment.Count, false);
+            using var reader = new BsonReader(stream);
+            return reader.ReadDocument();
+        }
+        
+        return DeserializeDocument(data.ToArray());
+    }
+
+    /// <summary>
     /// 序列化 BsonArray
     /// </summary>
     /// <param name="array">BSON 数组</param>
@@ -82,7 +167,7 @@ public static class BsonSerializer
     {
         if (array == null) throw new ArgumentNullException(nameof(array));
 
-        using var stream = new MemoryStream();
+        using var stream = MemoryStreamManager.GetStream();
         using var writer = new BsonWriter(stream);
         writer.WriteArray(array);
         return stream.ToArray();
@@ -144,16 +229,19 @@ public sealed class BsonWriter : IDisposable
 {
     private readonly Stream _stream;
     private readonly BinaryWriter _writer;
+    private readonly bool _leaveOpen;
     private bool _disposed;
 
     /// <summary>
     /// 初始化 BSON 写入器
     /// </summary>
     /// <param name="stream">输出流</param>
-    public BsonWriter(Stream stream)
+    /// <param name="leaveOpen">是否保持流打开</param>
+    public BsonWriter(Stream stream, bool leaveOpen = false)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
-        _writer = new BinaryWriter(stream, Encoding.UTF8, true);
+        _leaveOpen = leaveOpen;
+        _writer = new BinaryWriter(stream, Encoding.UTF8, true); // BinaryWriter always leaves open because we manage stream disposal
     }
 
     /// <summary>
@@ -208,30 +296,12 @@ public sealed class BsonWriter : IDisposable
             case BsonTimestamp timestamp:
                 WriteTimestamp(timestamp.Value);
                 break;
-            // TODO: 实现其他BSON类型
-            // case BsonUndefined:
-            //     WriteUndefined();
-            //     break;
-            // case BsonJavaScript js when js.Scope == null:
-            //     WriteJavaScript(js.Code);
-            //     break;
-            // case BsonJavaScript jsWithScope when jsWithScope.Scope != null:
-            //     WriteJavaScriptWithScope(jsWithScope.Code, jsWithScope.Scope);
-            //     break;
-            // case BsonSymbol symbol:
-            //     WriteSymbol(symbol.Name);
-            //     break;
-            // case BsonDecimal128 decimal128:
-            //     WriteDecimal128(decimal128.Value);
-            //     break;
-            // case BsonMinKey:
-            //     WriteMinKey();
-            //     break;
-            // case BsonMaxKey:
-            //     WriteMaxKey();
-            //     break;
+            case BsonMinKey _:
+                break;
+            case BsonMaxKey _:
+                break;
             default:
-                throw new NotSupportedException($"BSON type {value.BsonType} is not supported");
+                throw new NotSupportedException($"BSON type {value.BsonType} (CLR type: {value.GetType().Name}) is not supported");
         }
     }
 
@@ -245,6 +315,7 @@ public sealed class BsonWriter : IDisposable
         if (document == null) throw new ArgumentNullException(nameof(document));
 
         // 记录文档开始位置，稍后写入大小
+        _writer.Flush();
         var sizePosition = _stream.Position;
         _writer.Write(0); // 占位符，稍后更新
 
@@ -258,10 +329,12 @@ public sealed class BsonWriter : IDisposable
         _writer.Write((byte)BsonType.End);
 
         // 计算并写入文档大小
+        _writer.Flush();
         var endPosition = _stream.Position;
         var documentSize = (int)(endPosition - sizePosition);
         _stream.Seek(sizePosition, SeekOrigin.Begin);
         _writer.Write(documentSize);
+        _writer.Flush();
         _stream.Seek(endPosition, SeekOrigin.Begin);
     }
 
@@ -275,6 +348,7 @@ public sealed class BsonWriter : IDisposable
         if (array == null) throw new ArgumentNullException(nameof(array));
 
         // 记录数组开始位置，稍后写入大小
+        _writer.Flush();
         var sizePosition = _stream.Position;
         _writer.Write(0); // 占位符，稍后更新
 
@@ -288,10 +362,12 @@ public sealed class BsonWriter : IDisposable
         _writer.Write((byte)BsonType.End);
 
         // 计算并写入数组大小
+        _writer.Flush();
         var endPosition = _stream.Position;
         var arraySize = (int)(endPosition - sizePosition);
         _stream.Seek(sizePosition, SeekOrigin.Begin);
         _writer.Write(arraySize);
+        _writer.Flush();
         _stream.Seek(endPosition, SeekOrigin.Begin);
     }
 
@@ -520,7 +596,10 @@ public sealed class BsonWriter : IDisposable
         if (!_disposed)
         {
             _writer?.Dispose();
-            _stream?.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream?.Dispose();
+            }
             _disposed = true;
         }
     }
@@ -533,16 +612,19 @@ public sealed class BsonReader : IDisposable
 {
     private readonly Stream _stream;
     private readonly BinaryReader _reader;
+    private readonly bool _leaveOpen;
     private bool _disposed;
 
     /// <summary>
     /// 初始化 BSON 读取器
     /// </summary>
     /// <param name="stream">输入流</param>
-    public BsonReader(Stream stream)
+    /// <param name="leaveOpen">是否保持流打开</param>
+    public BsonReader(Stream stream, bool leaveOpen = false)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
-        _reader = new BinaryReader(stream, Encoding.UTF8, true);
+        _leaveOpen = leaveOpen;
+        _reader = new BinaryReader(stream, Encoding.UTF8, true); // BinaryReader always leaves open as we manage disposal
     }
 
     /// <summary>
@@ -570,15 +652,9 @@ public sealed class BsonReader : IDisposable
             BsonType.Binary => ReadBinary(),
             BsonType.RegularExpression => ReadRegularExpression(),
             BsonType.Timestamp => ReadTimestamp(),
+            BsonType.MinKey => BsonMinKey.Value,
+            BsonType.MaxKey => BsonMaxKey.Value,
             BsonType.End => throw new InvalidOperationException("Unexpected end marker"),
-            // TODO: 实现其他BSON类型
-            // BsonType.Undefined => BsonUndefined.Value,
-            // BsonType.JavaScript => ReadJavaScript(),
-            // BsonType.Symbol => ReadSymbol(),
-            // BsonType.JavaScriptWithScope => ReadJavaScriptWithScope(),
-            // BsonType.Decimal128 => ReadDecimal128(),
-            // BsonType.MinKey => BsonMinKey.Value,
-            // BsonType.MaxKey => BsonMaxKey.Value,
             _ => throw new NotSupportedException($"BSON type {type} is not supported")
         };
     }
@@ -688,15 +764,29 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
 
-        var bytes = new List<byte>();
-        byte b;
-
-        while ((b = _reader.ReadByte()) != 0)
+        var buffer = ArrayPool<byte>.Shared.Rent(128);
+        int count = 0;
+        try
         {
-            bytes.Add(b);
-        }
+            byte b;
+            while ((b = _reader.ReadByte()) != 0)
+            {
+                if (count >= buffer.Length)
+                {
+                    var newBuffer = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                    Buffer.BlockCopy(buffer, 0, newBuffer, 0, count);
+                    ArrayPool<byte>.Shared.Return(buffer);
+                    buffer = newBuffer;
+                }
+                buffer[count++] = b;
+            }
 
-        return Encoding.UTF8.GetString(bytes.ToArray());
+            return Encoding.UTF8.GetString(buffer, 0, count);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>
@@ -866,7 +956,10 @@ public sealed class BsonReader : IDisposable
         if (!_disposed)
         {
             _reader?.Dispose();
-            _stream?.Dispose();
+            if (!_leaveOpen)
+            {
+                _stream?.Dispose();
+            }
             _disposed = true;
         }
     }

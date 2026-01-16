@@ -10,6 +10,11 @@ namespace TinyDb.Serialization;
 /// </summary>
 public static class BsonConversion
 {
+    /// <summary>
+    /// 将对象转换为 BsonValue。
+    /// </summary>
+    /// <param name="value">要转换的对象。</param>
+    /// <returns>转换后的 BsonValue。</returns>
     public static BsonValue ToBsonValue(object value)
     {
         return value switch
@@ -75,6 +80,12 @@ public static class BsonConversion
         return ToBsonValue(value);
     }
 
+    /// <summary>
+    /// 将 BsonValue 转换为目标类型的对象。
+    /// </summary>
+    /// <param name="bsonValue">要转换的 BsonValue。</param>
+    /// <param name="targetType">目标类型。</param>
+    /// <returns>转换后的对象。</returns>
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2070", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
@@ -183,6 +194,13 @@ public static class BsonConversion
                 bsonValue is BsonBinary bin && bin.Bytes.Length == 16
                     ? new Guid(bin.Bytes)
                     : Guid.Parse(bsonValue.ToString()),
+            var t when t == typeof(char) =>
+                bsonValue switch
+                {
+                    BsonInt32 i32 => checked((char)i32.Value),
+                    BsonString str when str.Value.Length > 0 => str.Value[0],
+                    _ => Convert.ToChar(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
             var t when t == typeof(ObjectId) =>
                 bsonValue is BsonObjectId oid ? oid.Value : ObjectId.Parse(bsonValue.ToString()),
             var t when t == typeof(byte) =>

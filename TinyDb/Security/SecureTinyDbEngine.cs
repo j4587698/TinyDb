@@ -50,18 +50,15 @@ public sealed class SecureTinyDbEngine : IDisposable
 
         try
         {
-            _engine = new TinyDbEngine(filePath);
+            var options = new TinyDbOptions { Password = password };
+            _engine = new TinyDbEngine(filePath, options);
 
             // 检查数据库是否已存在并受保护
             if (DatabaseSecurity.IsDatabaseSecure(_engine))
             {
-                // 验证密码
-                _isAuthenticated = DatabaseSecurity.AuthenticateDatabase(_engine, password);
-                if (!_isAuthenticated)
-                {
-                    _engine.Dispose();
-                    throw new UnauthorizedAccessException("数据库密码验证失败，无法访问数据库");
-                }
+                // 验证密码 (TinyDbEngine already does this in EnsureDatabaseSecurity, 
+                // but we can double check or just set IsAuthenticated if no exception)
+                _isAuthenticated = true;
             }
             else if (createIfNotExists)
             {
@@ -167,19 +164,17 @@ public sealed class SecureTinyDbEngine : IDisposable
         return DatabaseSecurity.IsDatabaseSecure(_engine);
     }
 
-    /// <summary>
-    /// 获取集合（需要身份验证）
-    /// </summary>
-    /// <typeparam name="T">实体类型</typeparam>
-    /// <returns>集合实例</returns>
-    /// <exception cref="UnauthorizedAccessException">未通过身份验证时抛出</exception>
-    public ILiteCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>()
-        where T : class, new()
-    {
-        ThrowIfDisposed();
-        ThrowIfNotAuthenticated();
-        return _engine.GetCollection<T>();
-    }
+        /// <summary>
+        /// 获取集合（带权限检查）
+        /// </summary>
+        public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>() 
+            where T : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.GetCollection<T>();
+        }
 
     
     /// <summary>

@@ -132,7 +132,14 @@ public sealed class BsonTimestamp : BsonValue
     public override sbyte ToSByte(IFormatProvider? provider) => (sbyte)Value;
     public override float ToSingle(IFormatProvider? provider) => Value;
     public override string ToString(IFormatProvider? provider) => ToString();
-    public override object ToType(Type conversionType, IFormatProvider? provider) => throw new InvalidCastException();
+    public override object ToType(Type conversionType, IFormatProvider? provider)
+    {
+        if (conversionType == typeof(long)) return Value;
+        if (conversionType == typeof(BsonTimestamp)) return this;
+        if (conversionType == typeof(object)) return this;
+        if (conversionType == typeof(string)) return ToString();
+        return Convert.ChangeType(Value, conversionType, provider);
+    }
     public override ushort ToUInt16(IFormatProvider? provider) => (ushort)Value;
     public override uint ToUInt32(IFormatProvider? provider) => (uint)Value;
     public override ulong ToUInt64(IFormatProvider? provider) => (ulong)Value;

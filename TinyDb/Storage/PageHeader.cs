@@ -116,19 +116,21 @@ public class PageHeader
     /// <summary>
     /// 计算校验和（简单的 CRC32 实现）
     /// </summary>
-    public uint CalculateChecksum(byte[] pageData)
-    {
-        if (pageData == null || pageData.Length < Size)
-            return 0;
-
-        // 暂时使用简单的累加校验，实际应用中应使用 CRC32 或更强大的算法
-        uint checksum = 0;
-        for (int i = 0; i < Size; i++)
+        public uint CalculateChecksum(byte[] pageData)
         {
-            checksum += pageData[i];
+            if (pageData == null || pageData.Length < Size)
+                return 0;
+    
+            // 暂时使用简单的累加校验，实际应用中应使用 CRC32 或更强大的算法
+            uint checksum = 0;
+            for (int i = 0; i < pageData.Length; i++)
+            {
+                // 跳过校验和字段本身（起始偏移量 21，长度 4）
+                if (i >= 21 && i < 25) continue;
+                checksum += pageData[i];
+            }
+            return checksum;
         }
-        return checksum;
-    }
 
     /// <summary>
     /// 验证校验和
@@ -139,25 +141,33 @@ public class PageHeader
     }
 
     /// <summary>
+    /// 将头部写入 Span
+    /// </summary>
+    public void WriteTo(Span<byte> destination)
+    {
+        if (destination.Length < Size)
+            throw new ArgumentException("Destination span is too small.", nameof(destination));
+
+        destination[0] = (byte)PageType;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(1), PageID);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5), PrevPageID);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(9), NextPageID);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(13), FreeBytes);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(15), ItemCount);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(17), Version);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(21), Checksum);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(25), CreatedAt);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(33), ModifiedAt);
+    }
+
+    /// <summary>
     /// 转换为字节数组
     /// </summary>
     public byte[] ToByteArray()
     {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream);
-
-        writer.Write((byte)PageType);
-        writer.Write(PageID);
-        writer.Write(PrevPageID);
-        writer.Write(NextPageID);
-        writer.Write(FreeBytes);
-        writer.Write(ItemCount);
-        writer.Write(Version);
-        writer.Write(Checksum);
-        writer.Write(CreatedAt);
-        writer.Write(ModifiedAt);
-
-        return stream.ToArray();
+        var bytes = new byte[Size];
+        WriteTo(bytes);
+        return bytes;
     }
 
     /// <summary>

@@ -1,106 +1,122 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using TinyDb.Bson;
 using TinyDb.Index;
+using TinyDb.Bson;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
 namespace TinyDb.Tests.Index;
 
-public class IndexManagerTests
+public class IndexManagerTests : IDisposable
 {
-    private IndexManager _manager = null!;
+    private readonly string _testCollectionName = "test_collection";
+    private readonly IndexManager _manager;
 
-    [Before(Test)]
-    public void Setup()
+    public IndexManagerTests()
     {
-        _manager = new IndexManager("test_collection");
+        _manager = new IndexManager(_testCollectionName);
     }
 
-    [After(Test)]
-    public void Cleanup()
+    public void Dispose()
     {
-        _manager?.Dispose();
+        _manager.Dispose();
     }
 
     [Test]
-    public async Task CreateIndex_Should_Add_Index()
+    public async Task CreateIndex_Should_Create_New_Index()
     {
-        var created = _manager.CreateIndex("idx_name", new[] { "Name" });
-
-        await Assert.That(created).IsTrue();
+        var result = _manager.CreateIndex("idx_name", new[] { "Name" });
+        
+        await Assert.That(result).IsTrue();
+        await Assert.That(_manager.IndexCount).IsEqualTo(1);
         await Assert.That(_manager.IndexExists("idx_name")).IsTrue();
-
-        var index = _manager.GetIndex("idx_name");
-        await Assert.That(index).IsNotNull();
-        await Assert.That(index!.Fields).Contains("Name");
+        await Assert.That(_manager.GetIndex("idx_name")).IsNotNull();
     }
 
     [Test]
-    public async Task GetBestIndex_Should_Return_Best_Match()
+    public async Task CreateIndex_Duplicate_Should_Return_False()
+    {
+        _manager.CreateIndex("idx_name", new[] { "Name" });
+        var result = _manager.CreateIndex("idx_name", new[] { "Name" });
+        
+        await Assert.That(result).IsFalse();
+        await Assert.That(_manager.IndexCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task DropIndex_Should_Remove_Index()
+    {
+        _manager.CreateIndex("idx_name", new[] { "Name" });
+        var result = _manager.DropIndex("idx_name");
+        
+        await Assert.That(result).IsTrue();
+        await Assert.That(_manager.IndexCount).IsEqualTo(0);
+        await Assert.That(_manager.IndexExists("idx_name")).IsFalse();
+    }
+
+    [Test]
+    public async Task DropIndex_NonExistent_Should_Return_False()
+    {
+        var result = _manager.DropIndex("non_existent");
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task GetBestIndex_Should_Return_Most_Matching_Index()
     {
         _manager.CreateIndex("idx_name", new[] { "Name" });
         _manager.CreateIndex("idx_name_age", new[] { "Name", "Age" });
-        _manager.CreateIndex("idx_age", new[] { "Age" });
 
         var best = _manager.GetBestIndex(new[] { "Name", "Age" });
-
+        
         await Assert.That(best).IsNotNull();
         await Assert.That(best!.Name).IsEqualTo("idx_name_age");
     }
 
     [Test]
-    public async Task InsertDocument_Should_Update_All_Indexes()
+    public async Task InsertDocument_Should_Update_Indexes()
     {
-        _manager.CreateIndex("idx_name", new[] { "Name" });
         _manager.CreateIndex("idx_age", new[] { "Age" });
-
-        var documentId = ObjectId.NewObjectId();
-        var document = CreateDocument(
-            ("_id", (BsonValue)documentId),
-            ("Name", new BsonString("Alice")),
-            ("Age", new BsonInt32(28)));
-
-        _manager.InsertDocument(document, documentId);
-
-        var nameIndex = _manager.GetIndex("idx_name");
-        var ageIndex = _manager.GetIndex("idx_age");
-
-        await Assert.That(nameIndex).IsNotNull();
-        await Assert.That(ageIndex).IsNotNull();
-        await Assert.That(nameIndex!.Find(new IndexKey(new BsonValue[] { new BsonString("Alice") })))
-            .Contains(new BsonObjectId(documentId));
-        await Assert.That(ageIndex!.Find(new IndexKey(new BsonValue[] { new BsonInt32(28) })))
-            .Contains(new BsonObjectId(documentId));
+        var doc = new BsonDocument().Set("age", 25).Set("_id", 1);
+        
+        _manager.InsertDocument(doc, 1);
+        
+        var index = _manager.GetIndex("idx_age");
+        var ids = index!.Find(new IndexKey(25));
+        
+        await Assert.That(ids).Count().IsEqualTo(1);
+        // Note: BTreeIndex.Insert takes BsonValue for docId? 
+        // IndexManager.InsertDocument passes documentId directly.
     }
 
     [Test]
-    public async Task ClearAllIndexes_Should_Reset_Entries()
+    public async Task DeleteDocument_Should_Update_Indexes()
     {
-        _manager.CreateIndex("idx_field", new[] { "Field1" });
-        var documentId = ObjectId.NewObjectId();
-        var document = CreateDocument(
-            ("_id", (BsonValue)documentId),
-            ("Field1", new BsonString("value")));
-        _manager.InsertDocument(document, documentId);
-
-        _manager.ClearAllIndexes();
-
-        var index = _manager.GetIndex("idx_field");
-        await Assert.That(index).IsNotNull();
-        await Assert.That(index!.EntryCount).IsEqualTo(0);
+        _manager.CreateIndex("idx_age", new[] { "Age" });
+        var doc = new BsonDocument().Set("age", 25).Set("_id", 1);
+        _manager.InsertDocument(doc, 1);
+        
+        _manager.DeleteDocument(doc, 1);
+        
+        var index = _manager.GetIndex("idx_age");
+        var ids = index!.Find(new IndexKey(25));
+        
+        await Assert.That(ids).IsEmpty();
     }
 
-    private static BsonDocument CreateDocument(params (string Key, BsonValue Value)[] fields)
+    [Test]
+    public async Task UpdateDocument_Should_Update_Indexes()
     {
-        var elements = new Dictionary<string, BsonValue>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (key, value) in fields)
-        {
-            elements[key] = value;
-        }
-
-        return new BsonDocument(elements);
+        _manager.CreateIndex("idx_age", new[] { "Age" });
+        var oldDoc = new BsonDocument().Set("age", 25).Set("_id", 1);
+        var newDoc = new BsonDocument().Set("age", 30).Set("_id", 1);
+        
+        _manager.InsertDocument(oldDoc, 1);
+        _manager.UpdateDocument(oldDoc, newDoc, 1);
+        
+        var index = _manager.GetIndex("idx_age");
+        var oldIds = index!.Find(new IndexKey(25));
+        var newIds = index!.Find(new IndexKey(30));
+        
+        await Assert.That(oldIds).IsEmpty();
+        await Assert.That(newIds).Count().IsEqualTo(1);
     }
 }

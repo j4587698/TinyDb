@@ -39,7 +39,7 @@ public class PageTests : IDisposable
         await Assert.That(page.Header.PageType).IsEqualTo(PageType.Index);
         await Assert.That(page.Header.PrevPageID).IsEqualTo(0u);
         await Assert.That(page.Header.NextPageID).IsEqualTo(0u);
-        await Assert.That(page.Header.FreeBytes == 0u).IsTrue();
+        await Assert.That(page.Header.FreeBytes == page.DataSize).IsTrue();
         await Assert.That(page.Header.ItemCount == 0u).IsTrue();
         await Assert.That(page.Header.Version == 0u).IsTrue();
     }
@@ -169,7 +169,7 @@ public class PageTests : IDisposable
         await Assert.That(page.Header.NextPageID).IsEqualTo(0u);
         await Assert.That(page.Header.FreeBytes).IsEqualTo((ushort)Math.Min(page.DataSize, ushort.MaxValue));
         await Assert.That(page.Header.ItemCount).IsEqualTo((ushort)0);
-        await Assert.That(page.Header.Version).IsEqualTo(0u);
+        await Assert.That(page.Header.Version).IsEqualTo(4u);
     }
 
     [Test]

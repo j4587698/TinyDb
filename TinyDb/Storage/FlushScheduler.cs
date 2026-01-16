@@ -20,6 +20,13 @@ public sealed class FlushScheduler : IDisposable
     private readonly TimeSpan _journalCoalesceDelay;
     private bool _disposed;
 
+    /// <summary>
+    /// 初始化 FlushScheduler 类的新实例。
+    /// </summary>
+    /// <param name="pageManager">页面管理器。</param>
+    /// <param name="wal">写前日志。</param>
+    /// <param name="backgroundInterval">后台刷新间隔。</param>
+    /// <param name="journalDelay">日志合并延迟。</param>
     public FlushScheduler(PageManager pageManager, WriteAheadLog wal, TimeSpan backgroundInterval, TimeSpan journalDelay)
     {
         _pageManager = pageManager ?? throw new ArgumentNullException(nameof(pageManager));
@@ -33,6 +40,9 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
+    /// <summary>
+    /// 后台循环，定期执行刷新操作。
+    /// </summary>
     private async Task BackgroundLoopAsync()
     {
         var effectiveInterval = _backgroundInterval > TimeSpan.Zero
@@ -56,6 +66,11 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
+    /// <summary>
+    /// 确保数据持久化。
+    /// </summary>
+    /// <param name="concern">写入关注级别。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
     public async Task EnsureDurabilityAsync(WriteConcern concern, CancellationToken cancellationToken = default)
     {
         switch (concern)
@@ -73,11 +88,19 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
+    /// <summary>
+    /// 异步刷新所有挂起的数据和日志。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         return _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken);
     }
 
+    /// <summary>
+    /// 确保日志已刷新。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
     private Task EnsureJournalFlushAsync(CancellationToken cancellationToken)
     {
         if (!_wal.IsEnabled)
@@ -95,6 +118,10 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
+    /// <summary>
+    /// 批量刷新日志。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
     private async Task FlushJournalBatchAsync(CancellationToken cancellationToken)
     {
         try
@@ -122,6 +149,10 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
+    /// <summary>
+    /// 刷新挂起的条目（如果存在）。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
     public async Task FlushPendingAsync(CancellationToken cancellationToken = default)
     {
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages())
@@ -132,6 +163,9 @@ public sealed class FlushScheduler : IDisposable
         await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// 释放资源。
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;

@@ -235,6 +235,92 @@ internal sealed class Transaction : ITransaction
     }
 
     /// <summary>
+    /// 记录创建索引操作
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="indexName">索引名称</param>
+    /// <param name="indexFields">索引字段</param>
+    /// <param name="unique">索引是否唯一</param>
+    internal void RecordCreateIndex(string collectionName, string indexName, string[] indexFields, bool unique)
+    {
+        ThrowIfDisposed();
+        if (State != TransactionState.Active)
+        {
+            throw new InvalidOperationException($"Cannot record operation in transaction state {State}");
+        }
+
+        var operation = new TransactionOperation(
+            TransactionOperationType.CreateIndex,
+            collectionName,
+            null,
+            null,
+            null,
+            null,
+            indexName,
+            indexFields,
+            unique);
+
+        _manager.RecordOperation(this, operation);
+    }
+
+    /// <summary>
+    /// 记录删除索引操作
+    /// </summary>
+    /// <param name="collectionName">集合名称</param>
+    /// <param name="indexName">索引名称</param>
+    internal void RecordDropIndex(string collectionName, string indexName)
+    {
+        ThrowIfDisposed();
+        if (State != TransactionState.Active)
+        {
+            throw new InvalidOperationException($"Cannot record operation in transaction state {State}");
+        }
+
+        // 为了回滚删除索引操作，我们需要知道被删除的索引的定义
+        // 但这里我们简化处理，假设回滚时可以从元数据或其他地方恢复，
+        // 或者在 Apply 时如果失败才回滚。
+        // 对于已提交的 DropIndex，回滚意味着重新创建。
+        // 在 Record 阶段，我们可能需要查询现有索引信息并保存到 OriginalDocument 或专门的字段中
+        // 以便回滚。
+        
+        string[]? indexFields = null;
+        bool unique = false;
+        
+        // 尝试获取现有索引信息用于回滚
+        try
+        {
+            var indexManager = _manager._engine.GetIndexManager(collectionName);
+            var index = indexManager.GetIndex(indexName);
+            if (index != null)
+            {
+                // 注意：这里我们无法直接获取 Fields 和 Unique 属性，因为 GetIndex 返回的是 Index 类
+                // 而我们需要 IndexStatistics 或直接访问 internal 属性。
+                // 假设 IndexStatistics 包含这些信息。
+                var stats = index.GetStatistics();
+                indexFields = stats.Fields;
+                unique = stats.IsUnique;
+            }
+        }
+        catch
+        {
+            // 忽略错误，如果无法获取信息，回滚可能受限
+        }
+
+        var operation = new TransactionOperation(
+            TransactionOperationType.DropIndex,
+            collectionName,
+            null,
+            null,
+            null,
+            null,
+            indexName,
+            indexFields,
+            unique);
+
+        _manager.RecordOperation(this, operation);
+    }
+
+    /// <summary>
     /// 获取事务统计信息
     /// </summary>
     /// <returns>统计信息</returns>

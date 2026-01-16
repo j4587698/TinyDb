@@ -80,6 +80,29 @@ public class MetadataManagerTests
         await Assert.That(updatedDoc.UpdatedAt).IsGreaterThan(initialUpdatedAt);
     }
 
+    [Test]
+    public async Task MetadataManager_Discovery_Methods_Should_Work()
+    {
+        var manager = new MetadataManager(_engine);
+        
+        await Assert.That(manager.HasMetadata(typeof(SpecialMetadataEntity))).IsFalse();
+        await Assert.That(manager.GetRegisteredEntityTypes()).IsEmpty();
+
+        manager.SaveEntityMetadata(typeof(SpecialMetadataEntity));
+
+        await Assert.That(manager.HasMetadata(typeof(SpecialMetadataEntity))).IsTrue();
+        var types = manager.GetRegisteredEntityTypes();
+        await Assert.That(types).Contains(typeof(SpecialMetadataEntity).FullName!);
+    }
+
+    [Test]
+    public async Task GetEntityMetadata_Should_Return_Null_For_Unknown_Type()
+    {
+        var manager = new MetadataManager(_engine);
+        var metadata = manager.GetEntityMetadata(typeof(string)); // System.String is not saved
+        await Assert.That(metadata).IsNull();
+    }
+
     [EntityMetadata("复杂实体", Description = "描述包含;分号和|竖线")]
     private class SpecialMetadataEntity
     {

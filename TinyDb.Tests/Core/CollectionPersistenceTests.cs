@@ -88,7 +88,7 @@ public class CollectionPersistenceTests
             var collections = reopenedEngine.GetCollectionNames().ToList();
             await Assert.That(collections.Contains(collectionToDrop)).IsFalse();
             await Assert.That(collections.Contains(collectionToKeep)).IsTrue();
-            await Assert.That(collections).HasCount(1);
+            await Assert.That(collections).Count().IsEqualTo(1);
         }
     }
 

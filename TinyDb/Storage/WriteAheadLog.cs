@@ -133,7 +133,7 @@ public sealed class WriteAheadLog : IDisposable
     public void AppendPage(Page page)
     {
         if (!IsEnabled || _stream == null) return;
-        var data = page.Snapshot(includeUnusedTail: false);
+        var data = page.Snapshot(includeUnusedTail: true);
         if (data.Length == 0) return;
 
         _mutex.Wait();
@@ -151,10 +151,17 @@ public sealed class WriteAheadLog : IDisposable
     private void WriteEntry(uint pageId, byte[] data)
     {
         if (_stream == null) return;
-        Span<byte> header = stackalloc byte[HeaderSize];
+        
+        // 计算校验和
+        var crc32 = System.IO.Hashing.Crc32.HashToUInt32(data);
+        
+        // 头部格式: [Type(1)] [PageId(4)] [Length(4)] [CRC32(4)]
+        Span<byte> header = stackalloc byte[HeaderSize + 4]; // HeaderSize is 9, +4 for CRC = 13
         header[0] = EntryTypePage;
         BinaryPrimitives.WriteUInt32LittleEndian(header[1..5], pageId);
         BinaryPrimitives.WriteInt32LittleEndian(header[5..9], data.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(header[9..13], crc32);
+        
         _stream.Write(header);
         _stream.Write(data, 0, data.Length);
     }
@@ -162,10 +169,16 @@ public sealed class WriteAheadLog : IDisposable
     private async Task WriteEntryAsync(uint pageId, byte[] data, CancellationToken cancellationToken)
     {
         if (_stream == null) return;
-        byte[] header = new byte[HeaderSize];
+        
+        // 计算校验和
+        var crc32 = System.IO.Hashing.Crc32.HashToUInt32(data);
+        
+        byte[] header = new byte[HeaderSize + 4];
         header[0] = EntryTypePage;
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(1, 4), pageId);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(5, 4), data.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(9, 4), crc32);
+        
         await _stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
         await _stream.WriteAsync(data, 0, data.Length, cancellationToken).ConfigureAwait(false);
     }
@@ -233,10 +246,15 @@ public sealed class WriteAheadLog : IDisposable
             _stream.Flush(true);
             _stream.Seek(0, SeekOrigin.Begin);
 
-            var headerBuffer = new byte[HeaderSize];
+            const int FullHeaderSize = HeaderSize + 4; // 13 bytes
+            var headerBuffer = new byte[FullHeaderSize];
+            
             while (_stream.Position < _stream.Length)
             {
-                var read = await _stream.ReadAsync(headerBuffer, 0, HeaderSize, cancellationToken).ConfigureAwait(false);
+                // 尝试读取完整头部
+                var read = await _stream.ReadAsync(headerBuffer, 0, FullHeaderSize, cancellationToken).ConfigureAwait(false);
+                
+                // 如果连最小头部 (HeaderSize = 9) 都读不够，说明文件结束或损坏
                 if (read < HeaderSize)
                 {
                     break;
@@ -244,15 +262,35 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (headerBuffer[0] != EntryTypePage)
                 {
-                    break;
+                    break; // 无效类型，停止重放
                 }
 
                 var pageId = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer.AsSpan(1, 4));
                 var length = BinaryPrimitives.ReadInt32LittleEndian(headerBuffer.AsSpan(5, 4));
+                
+                // 读取 CRC32 (如果有)
+                uint? expectedCrc = null;
+                if (read >= FullHeaderSize)
+                {
+                    expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer.AsSpan(9, 4));
+                }
+                else
+                {
+                    // 兼容旧格式或处理读取不足的情况 (如果是旧数据可能没有CRC)
+                    // 这里我们简单回退流位置，因为这可能是EOF
+                    // 如果我们改变了格式，旧的日志文件可能不兼容。
+                    // 假设这是新数据库或已截断。
+                    // 为简单起见，如果读不够完整头部，我们视为部分写入/结束。
+                    if (read > HeaderSize) 
+                    {
+                        // 读到了部分 CRC 数据，这是损坏
+                        break; 
+                    }
+                }
 
                 if (length <= 0 || length > _maxRecordSize)
                 {
-                    break;
+                    break; // 无效长度
                 }
 
                 var buffer = new byte[length];
@@ -262,7 +300,7 @@ public sealed class WriteAheadLog : IDisposable
                     var chunk = await _stream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
                     if (chunk == 0)
                     {
-                        offset = length + 1;
+                        offset = length + 1; // 标记为未完成
                         break;
                     }
                     offset += chunk;
@@ -270,7 +308,19 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (offset != length)
                 {
-                    break;
+                    break; // 数据不完整
+                }
+
+                // 验证校验和 (如果存在)
+                if (expectedCrc.HasValue)
+                {
+                    var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
+                    if (actualCrc != expectedCrc.Value)
+                    {
+                        // 校验和不匹配，说明数据损坏，停止重放
+                        // 可能是断电导致的部分写入
+                        break;
+                    }
                 }
 
                 await applyAsync(pageId, buffer).ConfigureAwait(false);

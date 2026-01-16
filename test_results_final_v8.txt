@@ -1,0 +1,151 @@
+
+████████╗██╗   ██╗███╗   ██╗██╗████████╗
+╚══██╔══╝██║   ██║████╗  ██║██║╚══██╔══╝
+   ██║   ██║   ██║██╔██╗ ██║██║   ██║
+   ██║   ██║   ██║██║╚██╗██║██║   ██║
+   ██║   ╚██████╔╝██║ ╚████║██║   ██║
+   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝╚═╝   ╚═╝
+
+   TUnit v1.6.25.0 | 64-bit | Ubuntu 24.04.3 LTS | ubuntu.24.04-x64 | .NET 8.0.22 | Microsoft Testing Platform v2.0.2
+
+   Engine Mode: SourceGenerated
+
+[+5/x0/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 4 测试 (3s)
+
+[+263/x0/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 25 测试 (6s)
+
+[+813/x0/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 4 测试 (9s)
+
+[+814/x0/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 3 测试 (12s)
+
+[+815/x0/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 2 测试 (15s)
+
+[+815/x0/?0] TinyDb.Tests.dll (net8.0|x64) - 正在运行 2 测试 (18s)
+
+[+816/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Execute_With_Large_Dataset_Should_Perform_Well (21s)
+
+[+817/x0/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentReadWrite_ShouldMaintainConsistency (24s)
+
+[+818/x0/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentInserts_ShouldBeThreadSafe (27s)
+
+[+818/x0/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentInserts_ShouldBeThreadSafe (30s)
+
+[+818/x0/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentInserts_ShouldBeThreadSafe (33s)
+
+[+818/x0/?0] TinyDb.Tests.dll (net8.0|x64) - ConcurrentInserts_ShouldBeThreadSafe (36s)
+
+[+823/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Recover_From_Abnormal_Shutdown (39s)
+
+[+823/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Recover_From_Abnormal_Shutdown (42s)
+
+[+823/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Recover_From_Abnormal_Shutdown (45s)
+
+[+823/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Recover_From_Abnormal_Shutdown (48s)
+
+[+834/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Database_Should_Handle_Multiple_Page_Sizes (51s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (54s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (57s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 00s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 03s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 06s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 09s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 12s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 15s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 18s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 21s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 24s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 27s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 30s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 33s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 36s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 39s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 42s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 45s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 48s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 51s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 54s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (1m 57s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 00s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 03s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 06s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 09s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 12s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 15s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 18s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 21s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 24s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 27s)
+
+[+836/x0/?0] TinyDb.Tests.dll (net8.0|x64) - HighConcurrency_Insert_StressTest (2m 30s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 33s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 36s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 39s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 42s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 45s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 48s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 51s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 54s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (2m 57s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (3m 00s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (3m 03s)
+
+[+837/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Mixed_Load_StressTest (3m 06s)
+
+[+864/x0/?0] TinyDb.Tests.dll (net8.0|x64) - GuidV7_WithGuidType_ShouldGenerateGuids (3m 09s)
+
+[+898/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Query_ComplexAnd_ShouldWork (3m 12s)
+
+[+901/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Query_StringFunctions_ShouldWork (3m 15s)
+
+[+906/x0/?0] TinyDb.Tests.dll (net8.0|x64) - Queryable_Any_ShouldWork (3m 18s)
+
+
+测试运行摘要: 已通过! - /home/j4587698/RiderProjects/TinyDb/TinyDb.Tests/bin/Debug/net8.0/TinyDb.Tests.dll (net8.0|x64)
+  总计: 960
+  失败: 0
+  成功: 960
+  已跳过: 0
+  持续时间: 3m 20s 976ms

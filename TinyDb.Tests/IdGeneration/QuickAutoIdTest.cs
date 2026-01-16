@@ -1,8 +1,8 @@
 using TinyDb.Core;
-using TinyDb.Demo;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TestAutoUser = TinyDb.Tests.TestEntities.AutoUser;
+using AutoGuidOrder = TinyDb.Tests.TestEntities.AutoGuidOrder;
 
 namespace TinyDb.Tests.IdGeneration;
 

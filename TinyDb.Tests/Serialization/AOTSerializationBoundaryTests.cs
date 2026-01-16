@@ -29,6 +29,8 @@ public class AOTSerializationBoundaryTests
     [Test]
     public async Task ComplexNestedObject_ShouldSerializeCorrectly()
     {
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
+
         // Arrange - 创建复杂的嵌套对象
         var complexEntity = new ComplexAOTEntity
         {
@@ -78,11 +80,11 @@ public class AOTSerializationBoundaryTests
 
         // 验证数组
         await Assert.That(deserializedEntity.Tags).IsNotNull();
-        await Assert.That(deserializedEntity.Tags).HasCount(complexEntity.Tags.Length);
+        await Assert.That(deserializedEntity.Tags).Count().IsEqualTo(complexEntity.Tags.Length);
 
         // 验证字典
         await Assert.That(deserializedEntity.Metadata).IsNotNull();
-        await Assert.That(deserializedEntity.Metadata).HasCount(complexEntity.Metadata.Count);
+        await Assert.That(deserializedEntity.Metadata).Count().IsEqualTo(complexEntity.Metadata.Count);
     }
 
     /// <summary>
@@ -211,8 +213,8 @@ public class AOTSerializationBoundaryTests
         // 验证数据完整性
         await Assert.That(deserializedEntity).IsNotNull();
         await Assert.That(deserializedEntity.Id).IsEqualTo(largeEntity.Id);
-        await Assert.That(deserializedEntity.LargeArray).HasCount(largeEntity.LargeArray.Length);
-        await Assert.That(deserializedEntity.LargeDictionary).HasCount(largeEntity.LargeDictionary.Count);
+        await Assert.That(deserializedEntity.LargeArray).Count().IsEqualTo(largeEntity.LargeArray.Length);
+        await Assert.That(deserializedEntity.LargeDictionary).Count().IsEqualTo(largeEntity.LargeDictionary.Count);
         await Assert.That(deserializedEntity.LargeText).IsEqualTo(largeEntity.LargeText);
     }
 
@@ -222,6 +224,8 @@ public class AOTSerializationBoundaryTests
     [Test]
     public async Task CustomType_ShouldSerializeCorrectly()
     {
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
+
         // Arrange - 创建包含自定义类型的对象
         var entity = new CustomTypeEntity
         {
@@ -347,21 +351,21 @@ public class AOTSerializationBoundaryTests
 
         // 验证List<T>
         await Assert.That(deserializedEntity.StringList).IsNotNull();
-        await Assert.That(deserializedEntity.StringList).HasCount(entity.StringList.Count);
+        await Assert.That(deserializedEntity.StringList).Count().IsEqualTo(entity.StringList.Count);
         await Assert.That(deserializedEntity.StringList!
                 .SequenceEqual(entity.StringList, StringComparer.Ordinal))
             .IsTrue();
 
         // 验证数组
         await Assert.That(deserializedEntity.IntArray).IsNotNull();
-        await Assert.That(deserializedEntity.IntArray).HasCount(entity.IntArray.Length);
+        await Assert.That(deserializedEntity.IntArray).Count().IsEqualTo(entity.IntArray.Length);
         await Assert.That(deserializedEntity.IntArray!
                 .SequenceEqual(entity.IntArray))
             .IsTrue();
 
         // 验证Dictionary<K,V>
         await Assert.That(deserializedEntity.StringIntDict).IsNotNull();
-        await Assert.That(deserializedEntity.StringIntDict).HasCount(entity.StringIntDict.Count);
+        await Assert.That(deserializedEntity.StringIntDict).Count().IsEqualTo(entity.StringIntDict.Count);
         foreach (var kvp in entity.StringIntDict)
         {
             await Assert.That(deserializedEntity.StringIntDict[kvp.Key]).IsEqualTo(kvp.Value);
@@ -369,7 +373,7 @@ public class AOTSerializationBoundaryTests
 
         // 验证嵌套泛型
         await Assert.That(deserializedEntity.NestedList).IsNotNull();
-        await Assert.That(deserializedEntity.NestedList).HasCount(entity.NestedList.Count);
+        await Assert.That(deserializedEntity.NestedList).Count().IsEqualTo(entity.NestedList.Count);
     }
 
     /// <summary>

@@ -256,7 +256,7 @@ public class IndexKeyTests
 
         // Assert
         await Assert.That(key.Length).IsEqualTo(1);
-        await Assert.That(key[0]).IsEqualTo(value);
+        await Assert.That(key[0].Equals(value)).IsTrue();
     }
 
     [Test]

@@ -99,8 +99,10 @@ public class MetadataManager
     }
 
     /// <summary>
-    /// 获取元数据集合名称
+    /// 获取元数据集合名称。
     /// </summary>
+    /// <param name="entityType">实体类型。</param>
+    /// <returns>元数据集合名称。</returns>
     private static string GetMetadataCollectionName([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
     {
         return $"{METADATA_COLLECTION_PREFIX}{entityType.FullName ?? entityType.Name}";

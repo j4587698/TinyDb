@@ -334,11 +334,36 @@ public sealed class TransactionManager : IDisposable
                 break;
 
             case TransactionOperationType.CreateIndex:
-                // 索引操作的实现
+                // 事务性索引创建
+                // 尝试创建索引，如果失败抛出异常导致事务回滚
+                try 
+                {
+                    var indexManager = _engine.GetIndexManager(operation.CollectionName);
+                    if (operation.IndexFields != null && !string.IsNullOrEmpty(operation.IndexName))
+                    {
+                        indexManager.CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Failed to apply CreateIndex operation: {ex.Message}", ex);
+                }
                 break;
 
             case TransactionOperationType.DropIndex:
-                // 索引操作的实现
+                // 事务性索引删除
+                try
+                {
+                    var indexManager = _engine.GetIndexManager(operation.CollectionName);
+                    if (!string.IsNullOrEmpty(operation.IndexName))
+                    {
+                        indexManager.DropIndex(operation.IndexName);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Failed to apply DropIndex operation: {ex.Message}", ex);
+                }
                 break;
 
             default:
@@ -367,38 +392,31 @@ public sealed class TransactionManager : IDisposable
     /// <param name="operation">操作</param>
     private void RollbackSingleOperation(TransactionOperation operation)
     {
+        // 关键修复：TinyDb 使用延迟写入（Deferred Write）事务模型。
+        // 数据操作（Insert/Update/Delete）仅记录在内存中，只有在 Commit 时才应用到数据库。
+        // 因此，Rollback 时数据库中并没有这些变更，不需要执行反向操作。
+        // 反向操作（如 Insert 对应的 Delete）实际上是有害的，因为它们会尝试删除之前可能存在的数据，
+        // 或者像本例中那样，Insert 撤销 Delete 操作时会错误地重新插入数据。
+        // 所以，对于数据操作，我们什么都不做。内存状态（Operations 列表）会在 RollbackTransaction 结束时被清除。
+
         switch (operation.OperationType)
         {
             case TransactionOperationType.Insert:
-                // 插入操作的回滚：删除新插入的文档（使用内部方法，不持久化）
-                if (operation.DocumentId != null)
-                {
-                    _engine.DeleteDocumentInternal(operation.CollectionName, operation.DocumentId);
-                }
-                break;
-
             case TransactionOperationType.Update:
-                // 更新操作的回滚：恢复原始文档（使用内部方法，不持久化）
-                if (operation.OriginalDocument != null)
-                {
-                    _engine.UpdateDocumentInternal(operation.CollectionName, operation.OriginalDocument);
-                }
-                break;
-
             case TransactionOperationType.Delete:
-                // 删除操作的回滚：恢复原始文档（使用内部方法，不持久化）
-                if (operation.OriginalDocument != null)
-                {
-                    _engine.InsertDocumentInternal(operation.CollectionName, operation.OriginalDocument);
-                }
+                // Do nothing. The operations were deferred and never applied.
                 break;
 
             case TransactionOperationType.CreateIndex:
-                // 创建索引的回滚：删除索引
+                // 索引操作也是延迟的吗？如果是，则也不需要撤销。
+                // 如果它们是立即生效的（通常 DDL 是立即的），则需要撤销。
+                // 假设 RecordCreateIndex 没有立即调用 _engine.EnsureIndex。
+                // 检查 TransactionImpl.RecordCreateIndex -> 确实没有调用 EnsureIndex。
+                // 所以这里也应该什么都不做。
                 break;
 
             case TransactionOperationType.DropIndex:
-                // 删除索引的回滚：重新创建索引
+                // 同上。
                 break;
 
             default:

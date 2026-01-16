@@ -82,6 +82,7 @@ public static class AotBsonMapper
         var properties = type
             .GetProperties(BindingFlags.Instance | BindingFlags.Public)
             .Where(property => property.CanRead && property.GetMethod is { IsStatic: false })
+            .Where(property => property.GetIndexParameters().Length == 0)
             .Where(property => property.GetCustomAttribute<BsonIgnoreAttribute>() == null)
             .ToArray();
 
@@ -126,9 +127,21 @@ public static class AotBsonMapper
 
         return null;
     }
+
+    /// <summary>
+    /// 将实体转换为 BSON 文档。
+    /// </summary>
+    /// <typeparam name="T">实体类型。</typeparam>
+    /// <param name="entity">实体对象。</param>
+    /// <returns>BSON 文档。</returns>
     public static BsonDocument ToDocument<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        if (entity is BsonDocument doc)
+        {
+            return doc;
+        }
 
         if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
@@ -138,6 +151,12 @@ public static class AotBsonMapper
         return FallbackToDocument(typeof(T), entity!);
     }
 
+    /// <summary>
+    /// 将 BSON 文档转换为实体对象。
+    /// </summary>
+    /// <typeparam name="T">实体类型。</typeparam>
+    /// <param name="document">BSON 文档。</param>
+    /// <returns>实体对象。</returns>
     public static T FromDocument<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(BsonDocument document)
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
@@ -150,6 +169,12 @@ public static class AotBsonMapper
         return (T)FallbackFromDocument(typeof(T), document);
     }
 
+    /// <summary>
+    /// 获取实体的 ID 值。
+    /// </summary>
+    /// <typeparam name="T">实体类型。</typeparam>
+    /// <param name="entity">实体对象。</param>
+    /// <returns>BSON 格式的 ID。</returns>
     public static BsonValue GetId<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity)
         where T : class, new()
     {
@@ -170,6 +195,12 @@ public static class AotBsonMapper
         return value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
     }
 
+    /// <summary>
+    /// 设置实体的 ID 值。
+    /// </summary>
+    /// <typeparam name="T">实体类型。</typeparam>
+    /// <param name="entity">实体对象。</param>
+    /// <param name="id">新的 ID 值。</param>
     public static void SetId<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity, BsonValue id)
         where T : class, new()
     {
@@ -178,6 +209,13 @@ public static class AotBsonMapper
         AotIdAccessor<T>.SetId(entity, id);
     }
 
+    /// <summary>
+    /// 获取实体的属性值。
+    /// </summary>
+    /// <typeparam name="T">实体类型。</typeparam>
+    /// <param name="entity">实体对象。</param>
+    /// <param name="propertyName">属性名称。</param>
+    /// <returns>属性值。</returns>
     public static object? GetPropertyValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, string propertyName)
         where T : class, new()
     {
@@ -194,6 +232,12 @@ public static class AotBsonMapper
             : null;
     }
 
+    /// <summary>
+    /// 将 BSON 值转换为目标类型。
+    /// </summary>
+    /// <param name="bsonValue">BSON 值。</param>
+    /// <param name="targetType">目标类型。</param>
+    /// <returns>转换后的对象。</returns>
     public static object? ConvertValue(BsonValue bsonValue, [DynamicallyAccessedMembers(TypeInspectionRequirements)] Type targetType)
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
@@ -245,14 +289,15 @@ public static class AotBsonMapper
     private static BsonDocument FallbackToDocumentInternal([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, object entity)
     {
         var metadata = GetMetadata(entityType);
-        var document = new BsonDocument();
+        // Optimize: Use Dictionary to collect elements first to avoid creating multiple BsonDocument instances via chaining Set()
+        var elements = new Dictionary<string, BsonValue>(metadata.Properties.Count + metadata.Fields.Count + 1);
 
         if (metadata.IdProperty != null)
         {
             var id = metadata.IdProperty.GetValue(entity);
             if (id != null)
             {
-                document = document.Set("_id", BsonConversion.ToBsonValue(id));
+                elements["_id"] = BsonConversion.ToBsonValue(id);
             }
         }
 
@@ -265,17 +310,17 @@ public static class AotBsonMapper
 
             var value = property.GetValue(entity);
             var bsonValue = ConvertToBsonValue(value);
-            document = document.Set(ToCamelCase(property.Name), bsonValue);
+            elements[ToCamelCase(property.Name)] = bsonValue;
         }
 
         foreach (var field in metadata.Fields)
         {
             var value = field.GetValue(entity);
             var bsonValue = ConvertToBsonValue(value);
-            document = document.Set(ToCamelCase(field.Name), bsonValue);
+            elements[ToCamelCase(field.Name)] = bsonValue;
         }
 
-        return document;
+        return new BsonDocument(elements);
     }
 
     private static object FallbackFromDocument([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, BsonDocument document)
@@ -376,6 +421,12 @@ public static class AotBsonMapper
 
         var nonNullableType = Nullable.GetUnderlyingType(targetType) ?? targetType;
 
+        // Special handling for object type - unwrap BsonValue to CLR type
+        if (nonNullableType == typeof(object))
+        {
+            return UnwrapBsonValue(bsonValue);
+        }
+
         if (IsDictionaryType(nonNullableType))
         {
             if (bsonValue is BsonDocument doc)
@@ -405,6 +456,35 @@ public static class AotBsonMapper
         return ConvertPrimitiveValue(bsonValue, nonNullableType);
     }
 
+    /// <summary>
+    /// 解包 BsonValue 为原始 CLR 对象。
+    /// </summary>
+    /// <param name="value">BsonValue。</param>
+    /// <returns>原始对象。</returns>
+    private static object? UnwrapBsonValue(BsonValue value)
+    {
+        return value switch
+        {
+            BsonNull => null,
+            BsonString s => s.Value,
+            BsonInt32 i => i.Value,
+            BsonInt64 l => l.Value,
+            BsonDouble d => d.Value,
+            BsonDecimal128 d => d.Value,
+            BsonBoolean b => b.Value,
+            BsonDateTime dt => dt.Value,
+            BsonObjectId o => o.Value,
+            BsonBinary b when b.SubType is BsonBinary.BinarySubType.Uuid or BsonBinary.BinarySubType.UuidLegacy => new Guid(b.Bytes),
+            BsonBinary b => b.Bytes,
+            _ => value
+        };
+    }
+
+    /// <summary>
+    /// 将字符串转换为驼峰命名法。
+    /// </summary>
+    /// <param name="name">原始字符串。</param>
+    /// <returns>驼峰命名字符串。</returns>
     private static string ToCamelCase(string name)
     {
         if (string.IsNullOrEmpty(name)) return name;
@@ -420,6 +500,7 @@ public static class AotBsonMapper
         // 排除基本类型、字符串、枚举和集合类型
         if (type.IsPrimitive ||
             type == typeof(string) ||
+            type == typeof(byte[]) ||
             type == typeof(DateTime) ||
             type == typeof(Guid) ||
             type == typeof(ObjectId) ||
@@ -742,6 +823,10 @@ public static class AotBsonMapper
             {
                 BsonBoolean b => b.Value,
                 BsonString s => bool.Parse(s.Value),
+                BsonInt32 i => Convert.ToBoolean(i.Value),
+                BsonInt64 l => Convert.ToBoolean(l.Value),
+                BsonDouble d => Convert.ToBoolean(d.Value),
+                BsonDecimal128 dec => Convert.ToBoolean(dec.Value),
                 _ => Convert.ToBoolean(bsonValue.ToString())
             },
             var t when t == typeof(int) => bsonValue switch
@@ -759,6 +844,54 @@ public static class AotBsonMapper
                 BsonDouble dbl => Convert.ToInt64(dbl.Value),
                 BsonString s => long.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(short) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((short)i32.Value),
+                BsonInt64 i64 => checked((short)i64.Value),
+                BsonDouble dbl => Convert.ToInt16(dbl.Value),
+                BsonString s => short.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(byte) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((byte)i32.Value),
+                BsonInt64 i64 => checked((byte)i64.Value),
+                BsonDouble dbl => Convert.ToByte(dbl.Value),
+                BsonString s => byte.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(sbyte) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((sbyte)i32.Value),
+                BsonInt64 i64 => checked((sbyte)i64.Value),
+                BsonDouble dbl => Convert.ToSByte(dbl.Value),
+                BsonString s => sbyte.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToSByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(uint) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((uint)i32.Value),
+                BsonInt64 i64 => checked((uint)i64.Value),
+                BsonDouble dbl => Convert.ToUInt32(dbl.Value),
+                BsonString s => uint.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToUInt32(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(ulong) => bsonValue switch
+            {
+                BsonInt64 i64 => checked((ulong)i64.Value),
+                BsonInt32 i32 => checked((ulong)i32.Value),
+                BsonDouble dbl => Convert.ToUInt64(dbl.Value),
+                BsonString s => ulong.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToUInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(ushort) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((ushort)i32.Value),
+                BsonInt64 i64 => checked((ushort)i64.Value),
+                BsonDouble dbl => Convert.ToUInt16(dbl.Value),
+                BsonString s => ushort.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToUInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
             var t when t == typeof(double) => bsonValue switch
             {

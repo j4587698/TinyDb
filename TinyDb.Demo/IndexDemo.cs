@@ -70,7 +70,7 @@ public static class IndexDemo
     /// <summary>
     /// 基本索引操作演示
     /// </summary>
-    private static void BasicIndexDemo(ILiteCollection<IndexUser> users)
+    private static void BasicIndexDemo(ITinyCollection<IndexUser> users)
     {
         Console.WriteLine("--- 基本索引操作演示 ---");
 
@@ -124,7 +124,7 @@ public static class IndexDemo
     /// <summary>
     /// 复合索引演示
     /// </summary>
-    private static void CompositeIndexDemo(ILiteCollection<IndexUser> users)
+    private static void CompositeIndexDemo(ITinyCollection<IndexUser> users)
     {
         Console.WriteLine("--- 复合索引演示 ---");
 
@@ -178,7 +178,7 @@ public static class IndexDemo
     /// <summary>
     /// 唯一索引演示
     /// </summary>
-    private static void UniqueIndexDemo(ILiteCollection<IndexUser> users)
+    private static void UniqueIndexDemo(ITinyCollection<IndexUser> users)
     {
         Console.WriteLine("--- 唯一索引演示 ---");
 
@@ -236,7 +236,7 @@ public static class IndexDemo
     /// <summary>
     /// 索引性能演示
     /// </summary>
-    private static void IndexPerformanceDemo(ILiteCollection<IndexUser> users)
+    private static void IndexPerformanceDemo(ITinyCollection<IndexUser> users)
     {
         Console.WriteLine("--- 索引性能演示 ---");
 

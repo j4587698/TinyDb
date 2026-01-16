@@ -49,10 +49,10 @@ public class PageManagerPersistenceTests
         // 测试页面偏移量计算
         var tests = new[]
         {
-            (PageID: 1u, ExpectedOffset: 8192L),
-            (PageID: 2u, ExpectedOffset: 16384L),
-            (PageID: 3u, ExpectedOffset: 24576L),
-            (PageID: 10u, ExpectedOffset: 81920L)
+            (PageID: 1u, ExpectedOffset: 0L),
+            (PageID: 2u, ExpectedOffset: 8192L),
+            (PageID: 3u, ExpectedOffset: 16384L),
+            (PageID: 10u, ExpectedOffset: 73728L)
         };
 
         foreach (var (pageId, expectedOffset) in tests)

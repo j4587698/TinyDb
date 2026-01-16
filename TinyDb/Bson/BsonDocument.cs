@@ -370,7 +370,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     public override bool ToBoolean(IFormatProvider? provider) => Count > 0;
     public override byte ToByte(IFormatProvider? provider) => Convert.ToByte(Count, provider);
     public override char ToChar(IFormatProvider? provider) => Convert.ToChar(Count, provider);
-    public override DateTime ToDateTime(IFormatProvider? provider) => Convert.ToDateTime(this, provider);
+    public override DateTime ToDateTime(IFormatProvider? provider) => throw new InvalidCastException();
     public override decimal ToDecimal(IFormatProvider? provider) => Convert.ToDecimal(Count, provider);
     public override double ToDouble(IFormatProvider? provider) => Convert.ToDouble(Count, provider);
     public override short ToInt16(IFormatProvider? provider) => Convert.ToInt16(Count, provider);

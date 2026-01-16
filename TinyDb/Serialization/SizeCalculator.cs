@@ -29,6 +29,10 @@ internal sealed class SizeCalculator
             BsonArray arr => CalculateArraySize(arr),
             BsonDocumentValue docVal => CalculateDocumentSize(docVal.Value),
             BsonArrayValue arrVal => CalculateArraySize(arrVal.Value),
+            BsonBinary b => 4 + 1 + b.Bytes.Length,
+            BsonRegularExpression r => CalculateCStringSize(r.Pattern) + CalculateCStringSize(r.Options),
+            BsonTimestamp => 8,
+            BsonDecimal128 d => CalculateStringSize(d.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             _ => throw new NotSupportedException($"BSON type {value.BsonType} is not supported")
         };
     }

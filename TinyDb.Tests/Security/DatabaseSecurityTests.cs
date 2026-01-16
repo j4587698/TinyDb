@@ -1,5 +1,3 @@
-using System;
-using System.IO;
 using TinyDb.Core;
 using TinyDb.Security;
 using TUnit.Assertions;
@@ -7,88 +5,74 @@ using TUnit.Assertions.Extensions;
 
 namespace TinyDb.Tests.Security;
 
-public class DatabaseSecurityTests
+public class DatabaseSecurityTests : IDisposable
 {
-    /// <summary>
-    /// 生成WAL文件路径，使用默认格式
-    /// </summary>
-    private static string GenerateDefaultWalPath(string dbPath)
+    private readonly string _testDbPath;
+
+    public DatabaseSecurityTests()
     {
-        var directory = Path.GetDirectoryName(dbPath) ?? string.Empty;
-        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(dbPath);
-        var extension = Path.GetExtension(dbPath).TrimStart('.');
-        return Path.Combine(directory, $"{fileNameWithoutExt}-wal.{extension}");
+        _testDbPath = Path.Combine(Path.GetTempPath(), $"sec_test_{Guid.NewGuid():N}.db");
     }
-    [Test]
-    public async Task Engine_Should_Create_And_Enforce_Password_Protection()
+
+    public void Dispose()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"secure_db_{Guid.NewGuid():N}.db");
-        var walPath = GenerateDefaultWalPath(dbPath);
-
-        try
-        {
-            using (var engine = new TinyDbEngine(dbPath, new TinyDbOptions { Password = "StrongPass123!" }))
-            {
-                await Assert.That(DatabaseSecurity.IsDatabaseSecure(engine)).IsTrue();
-            }
-
-            await Assert.That(() => new TinyDbEngine(dbPath)).Throws<UnauthorizedAccessException>();
-
-            using var reopened = new TinyDbEngine(dbPath, new TinyDbOptions { Password = "StrongPass123!" });
-            await Assert.That(DatabaseSecurity.AuthenticateDatabase(reopened, "StrongPass123!")).IsTrue();
-        }
-        finally
-        {
-            if (File.Exists(dbPath))
-            {
-                File.Delete(dbPath);
-            }
-
-            if (File.Exists(walPath))
-            {
-                File.Delete(walPath);
-            }
-        }
+        try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
     [Test]
-    public async Task PasswordManager_Should_Manage_Database_Password_Lifecycle()
+    public async Task Security_Password_Lifecycle_Should_Work()
     {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"manager_db_{Guid.NewGuid():N}.db");
-        var walPath = GenerateDefaultWalPath(dbPath);
-
-        try
+        using (var engine = new TinyDbEngine(_testDbPath))
         {
-            using (new TinyDbEngine(dbPath))
-            {
-                // 初始化空数据库
-            }
+            // 1. Create secure database
+            DatabaseSecurity.CreateSecureDatabase(engine, "password123");
+            await Assert.That(DatabaseSecurity.IsDatabaseSecure(engine)).IsTrue();
 
-            PasswordManager.SetPassword(dbPath, "InitPass123!");
+            // 2. Authenticate correctly
+            await Assert.That(DatabaseSecurity.AuthenticateDatabase(engine, "password123")).IsTrue();
 
-            await Assert.That(PasswordManager.IsPasswordProtected(dbPath)).IsTrue();
-            await Assert.That(PasswordManager.VerifyPassword(dbPath, "InitPass123!")).IsTrue();
-            await Assert.That(PasswordManager.VerifyPassword(dbPath, "WrongPass456!")).IsFalse();
+            // 3. Authenticate incorrectly
+            await Assert.That(DatabaseSecurity.AuthenticateDatabase(engine, "wrongpassword")).IsFalse();
 
-            var changed = PasswordManager.ChangePassword(dbPath, "InitPass123!", "NewPass456!");
+            // 4. Change password
+            var changed = DatabaseSecurity.ChangePassword(engine, "password123", "newpassword456");
             await Assert.That(changed).IsTrue();
-            await Assert.That(PasswordManager.VerifyPassword(dbPath, "NewPass456!")).IsTrue();
+            await Assert.That(DatabaseSecurity.AuthenticateDatabase(engine, "newpassword456")).IsTrue();
 
-            var removed = PasswordManager.RemovePassword(dbPath, "NewPass456!");
+            // 5. Remove password
+            var removed = DatabaseSecurity.RemovePassword(engine, "newpassword456");
             await Assert.That(removed).IsTrue();
-            await Assert.That(PasswordManager.IsPasswordProtected(dbPath)).IsFalse();
+            await Assert.That(DatabaseSecurity.IsDatabaseSecure(engine)).IsFalse();
         }
-        finally
-        {
-            if (File.Exists(dbPath))
-            {
-                File.Delete(dbPath);
-            }
+    }
 
-            if (File.Exists(walPath))
-            {
-                File.Delete(walPath);
-            }
-        }
+    [Test]
+    public async Task CreateSecureDatabase_When_Already_Protected_Should_Throw()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        DatabaseSecurity.CreateSecureDatabase(engine, "password123");
+
+        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, "newpass"))
+            .Throws<DatabaseAlreadyProtectedException>();
+    }
+
+    [Test]
+    public async Task ChangePassword_With_Wrong_Old_Password_Should_Return_False()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        DatabaseSecurity.CreateSecureDatabase(engine, "password123");
+
+        var result = DatabaseSecurity.ChangePassword(engine, "wrong", "newpass");
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CreateSecureDatabase_With_Invalid_Password_Should_Throw()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, ""))
+            .Throws<ArgumentException>();
+        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, "123"))
+            .Throws<ArgumentException>();
     }
 }

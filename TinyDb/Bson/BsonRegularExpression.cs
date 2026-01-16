@@ -103,7 +103,12 @@ public sealed class BsonRegularExpression : BsonValue
     public override int CompareTo(BsonValue? other)
     {
         if (other is null) return 1;
-        if (other is BsonRegularExpression otherRegex) return Pattern.CompareTo(otherRegex.Pattern);
+        if (other is BsonRegularExpression otherRegex)
+        {
+            var patternComparison = Pattern.CompareTo(otherRegex.Pattern);
+            if (patternComparison != 0) return patternComparison;
+            return Options.CompareTo(otherRegex.Options);
+        }
         return BsonType.CompareTo(other.BsonType);
     }
 

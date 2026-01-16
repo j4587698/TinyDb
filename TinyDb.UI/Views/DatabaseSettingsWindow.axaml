@@ -1,0 +1,114 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TinyDb.UI.ViewModels"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="500" d:DesignHeight="400"
+        x:Class="TinyDb.UI.Views.DatabaseSettingsWindow"
+        x:DataType="vm:DatabaseSettingsViewModel"
+        Title="数据库设置" Width="500" Height="400"
+        WindowStartupLocation="CenterOwner">
+
+    <Design.DataContext>
+        <vm:DatabaseSettingsViewModel/>
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="20">
+        <!-- 标题 -->
+        <TextBlock Grid.Row="0" Text="数据库配置选项" FontSize="18" FontWeight="Bold"
+                   Margin="0,0,0,20" HorizontalAlignment="Center"/>
+
+        <!-- 设置内容 -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="20" Margin="10">
+                <!-- WAL设置区域 -->
+                <Border Background="#F8F9FA" CornerRadius="8" Padding="15">
+                    <StackPanel Spacing="15">
+                        <TextBlock Text="WAL (Write-Ahead Logging) 设置"
+                                   FontWeight="SemiBold" FontSize="14"/>
+
+                        <!-- 启用WAL -->
+                        <Grid ColumnDefinitions="Auto,*">
+                            <CheckBox Grid.Column="0" Content="启用WAL日志"
+                                      IsChecked="{Binding EnableWal}"
+                                      VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="启用预写日志以提高数据安全性"
+                                       Opacity="0.7" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- WAL文件名格式 -->
+                        <StackPanel IsEnabled="{Binding EnableWal}">
+                            <TextBlock Text="WAL文件名格式:" Margin="0,0,0,5"/>
+                            <TextBox Text="{Binding WalFileNameFormat}"
+                                     Watermark="name-wal.ext"/>
+                            <TextBlock Text="可用占位符: {name} - 数据库名称, {ext} - 扩展名"
+                                       FontSize="11" Opacity="0.6" Margin="0,5,0,0"/>
+
+                            <!-- 预设格式 -->
+                            <StackPanel Margin="0,10,0,0" Spacing="5">
+                                <TextBlock Text="预设格式:" FontSize="12" FontWeight="SemiBold"/>
+                                <Grid ColumnDefinitions="*,*">
+                                    <Button Grid.Column="0" Content="默认格式"
+                                            Command="{Binding SetDefaultFormatCommand}"
+                                            Padding="8,4" Margin="0,0,5,0"/>
+                                    <Button Grid.Column="1" Content="兼容模式"
+                                            Command="{Binding SetLegacyFormatCommand}"
+                                            Padding="8,4" Margin="5,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+
+                            <!-- 预览 -->
+                            <Border Background="#E9ECEF" CornerRadius="4" Padding="10" Margin="0,10,0,0">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Text="预览:" FontSize="12" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding WalFileNamePreview}"
+                                               FontFamily="Consolas,monospace" FontSize="11"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 其他设置区域 -->
+                <Border Background="#F8F9FA" CornerRadius="8" Padding="15">
+                    <StackPanel Spacing="15">
+                        <TextBlock Text="其他设置" FontWeight="SemiBold" FontSize="14"/>
+
+                        <!-- 只读模式 -->
+                        <Grid ColumnDefinitions="Auto,*">
+                            <CheckBox Grid.Column="0" Content="只读模式"
+                                      IsChecked="{Binding ReadOnly}"
+                                      VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="以只读方式打开数据库"
+                                       Opacity="0.7" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </Grid>
+
+                        <!-- 页面大小 -->
+                        <StackPanel>
+                            <TextBlock Text="页面大小 (KB):" Margin="0,0,0,5"/>
+                            <NumericUpDown Value="{Binding PageSizeKb}"
+                                          Minimum="1" Maximum="1024" Increment="1"
+                                          FormatString="N0"/>
+                            <TextBlock Text="较大的页面大小可能提高性能，但增加内存使用"
+                                       FontSize="11" Opacity="0.6" Margin="0,5,0,0"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- 按钮区域 -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto,Auto" Margin="0,20,0,0">
+            <TextBlock Grid.Column="0" Text="{Binding StatusMessage}"
+                       VerticalAlignment="Center" Opacity="0.7"/>
+            <Button Grid.Column="1" Content="取消"
+                    Command="{Binding CancelCommand}"
+                    Padding="15,8" Margin="10,0,5,0"/>
+            <Button Grid.Column="2" Content="确定"
+                    Command="{Binding SaveCommand}"
+                    Padding="15,8" Margin="5,0,0,0"
+                    Background="#007ACC" Foreground="White"/>
+        </Grid>
+    </Grid>
+</Window>

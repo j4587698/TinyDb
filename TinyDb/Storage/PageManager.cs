@@ -8,7 +8,7 @@ namespace TinyDb.Storage;
 /// </summary>
 public sealed class PageManager : IDisposable
 {
-    private readonly DiskStream _diskStream;
+    private readonly IDiskStream _diskStream;
     private readonly uint _pageSize;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
     private readonly ConcurrentQueue<uint> _freePages;
@@ -49,7 +49,7 @@ public sealed class PageManager : IDisposable
     /// <param name="diskStream">磁盘流</param>
     /// <param name="pageSize">页面大小</param>
     /// <param name="maxCacheSize">最大缓存大小</param>
-    public PageManager(DiskStream diskStream, uint pageSize = 8192, int maxCacheSize = 1000)
+    public PageManager(IDiskStream diskStream, uint pageSize = 8192, int maxCacheSize = 1000)
     {
         _diskStream = diskStream ?? throw new ArgumentNullException(nameof(diskStream));
         if (pageSize <= PageHeader.Size) throw new ArgumentException($"Page size must be larger than {PageHeader.Size}", nameof(pageSize));
@@ -94,10 +94,9 @@ public sealed class PageManager : IDisposable
             return CreateNewPage(pageID, PageType.Empty);
         }
 
-        var pageData = _diskStream.ReadPage(pageOffset, (int)_pageSize);
-
         try
         {
+            var pageData = _diskStream.ReadPage(pageOffset, (int)_pageSize);
             var page = new Page(pageID, pageData);
 
             // 如果是空页面，初始化为 Empty 类型
@@ -512,8 +511,8 @@ public sealed class PageManager : IDisposable
     /// </summary>
     private void ScanExistingPages()
     {
-        // 限制最大扫描页面数，避免扫描不存在的页面
-        var maxPagesToScan = Math.Min(TotalPages, 1000); // 限制最多扫描1000个页面
+        // 扫描所有页面
+        var maxPagesToScan = TotalPages;
         _nextPageID = 0;
 
         for (uint pageID = 1; pageID <= maxPagesToScan; pageID++)
@@ -550,7 +549,7 @@ public sealed class PageManager : IDisposable
     /// <returns>偏移量</returns>
     private long CalculatePageOffset(uint pageID)
     {
-        return pageID * _pageSize;
+        return (pageID - 1) * _pageSize;
     }
 
     /// <summary>

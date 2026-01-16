@@ -15,6 +15,11 @@ public static class DatabaseSecurity
     private const int KeySize = 32;
     private const int SaltSize = 16;
 
+    /// <summary>
+    /// 创建受密码保护的数据库。
+    /// </summary>
+    /// <param name="engine">数据库引擎实例。</param>
+    /// <param name="password">要设置的密码。</param>
     public static void CreateSecureDatabase(TinyDbEngine engine, string password)
     {
         if (string.IsNullOrWhiteSpace(password))
@@ -30,6 +35,12 @@ public static class DatabaseSecurity
         engine.SetSecurityMetadata(metadata);
     }
 
+    /// <summary>
+    /// 验证数据库密码。
+    /// </summary>
+    /// <param name="engine">数据库引擎实例。</param>
+    /// <param name="password">要验证的密码。</param>
+    /// <returns>如果验证成功则为 true；否则为 false。</returns>
     public static bool AuthenticateDatabase(TinyDbEngine engine, string password)
     {
         if (password == null) throw new ArgumentNullException(nameof(password));
@@ -41,6 +52,13 @@ public static class DatabaseSecurity
         return CryptographicOperations.FixedTimeEquals(derivedKey, metadata.KeyHash);
     }
 
+    /// <summary>
+    /// 更改数据库密码。
+    /// </summary>
+    /// <param name="engine">数据库引擎实例。</param>
+    /// <param name="oldPassword">旧密码。</param>
+    /// <param name="newPassword">新密码。</param>
+    /// <returns>如果更改成功则为 true；否则为 false。</returns>
     public static bool ChangePassword(TinyDbEngine engine, string oldPassword, string newPassword)
     {
         if (!AuthenticateDatabase(engine, oldPassword))
@@ -60,6 +78,12 @@ public static class DatabaseSecurity
         return true;
     }
 
+    /// <summary>
+    /// 移除数据库密码保护。
+    /// </summary>
+    /// <param name="engine">数据库引擎实例。</param>
+    /// <param name="password">当前密码。</param>
+    /// <returns>如果成功移除则为 true；否则为 false。</returns>
     public static bool RemovePassword(TinyDbEngine engine, string password)
     {
         if (!AuthenticateDatabase(engine, password))
@@ -72,11 +96,21 @@ public static class DatabaseSecurity
         return true;
     }
 
+    /// <summary>
+    /// 检查数据库是否受密码保护。
+    /// </summary>
+    /// <param name="engine">数据库引擎实例。</param>
+    /// <returns>如果受保护则为 true。</returns>
     public static bool IsDatabaseSecure(TinyDbEngine engine)
     {
         return engine.TryGetSecurityMetadata(out _);
     }
 
+    /// <summary>
+    /// 检查指定的数据库文件是否包含安全元数据。
+    /// </summary>
+    /// <param name="databasePath">数据库文件路径。</param>
+    /// <returns>如果包含则为 true。</returns>
     internal static bool HasSecurityMetadata(string databasePath)
     {
         return TryReadSecurityMetadata(databasePath, out _);
@@ -118,7 +152,6 @@ public static class DatabaseSecurity
 
     private static byte[] DeriveKey(string password, byte[] salt)
     {
-        using var pbkdf2 = new Rfc2898DeriveBytes(password, salt, Iterations, HashAlgorithmName.SHA256);
-        return pbkdf2.GetBytes(KeySize);
+        return Rfc2898DeriveBytes.Pbkdf2(password, salt, Iterations, HashAlgorithmName.SHA256, KeySize);
     }
 }

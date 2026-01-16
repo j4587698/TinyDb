@@ -13,7 +13,7 @@ namespace TinyDb.Collections;
 /// 文档集合实现
 /// </summary>
 /// <typeparam name="T">文档类型</typeparam>
-public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : ILiteCollection<T>, IDocumentCollection where T : class, new()
+public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : ITinyCollection<T>, IDocumentCollection where T : class, new()
 {
     private readonly TinyDbEngine _engine;
     private readonly string _name;
@@ -115,10 +115,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
-        var documents = new List<BsonDocument>();
-        var entityList = entities.ToList();
+        int totalInserted = 0;
+        const int BatchSize = 1000;
+        var entityBatch = new List<T>(BatchSize);
+        var docBatch = new List<BsonDocument>(BatchSize);
 
-        foreach (var entity in entityList)
+        foreach (var entity in entities)
         {
             if (entity == null) continue;
 
@@ -127,18 +129,37 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
             // 转换为BSON文档（AOT兼容）
             var document = AotBsonMapper.ToDocument(entity);
-            documents.Add(document);
+            
+            entityBatch.Add(entity);
+            docBatch.Add(document);
+
+            if (entityBatch.Count >= BatchSize)
+            {
+                totalInserted += InsertBatch(entityBatch, docBatch);
+                entityBatch.Clear();
+                docBatch.Clear();
+            }
         }
 
+        if (entityBatch.Count > 0)
+        {
+            totalInserted += InsertBatch(entityBatch, docBatch);
+        }
+
+        return totalInserted;
+    }
+
+    private int InsertBatch(List<T> entities, List<BsonDocument> documents)
+    {
         if (documents.Count == 0) return 0;
 
         // 批量插入到数据库
         var insertedCount = _engine.InsertDocuments(_name, documents.ToArray());
 
         // 更新实体的ID
-        for (int i = 0; i < Math.Min(insertedCount, entityList.Count); i++)
+        for (int i = 0; i < Math.Min(insertedCount, entities.Count); i++)
         {
-            var entity = entityList[i];
+            var entity = entities[i];
             if (entity != null && documents.Count > i)
             {
                 var document = documents[i];

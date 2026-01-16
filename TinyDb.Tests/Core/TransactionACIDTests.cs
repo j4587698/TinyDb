@@ -70,7 +70,7 @@ public class TransactionACIDTests
         transaction.Commit();
 
         // Assert - 验证所有操作都已持久化
-        await Assert.That(insertedIds).HasCount(3);
+        await Assert.That(insertedIds).Count().IsEqualTo(3);
         await Assert.That(insertedIds.All(id => id > 0)).IsTrue();
 
         // 验证数据确实被保存
@@ -83,7 +83,7 @@ public class TransactionACIDTests
 
         // 验证集合中的总记录数
         var allUsers = collection.FindAll().ToList();
-        await Assert.That(allUsers).HasCount(3);
+        await Assert.That(allUsers).Count().IsEqualTo(3);
     }
 
     /// <summary>
@@ -158,7 +158,7 @@ public class TransactionACIDTests
 
         // Assert - 验证数据一致性
         var allUsers = collection.FindAll().OrderBy(u => u.Id).ToList();
-        await Assert.That(allUsers).HasCount(2);
+        await Assert.That(allUsers).Count().IsEqualTo(2);
 
         // 验证更新的数据
         var updatedUser = allUsers.FirstOrDefault(u => u.Id == initialUser.Id);
@@ -261,7 +261,7 @@ public class TransactionACIDTests
 
         // Assert - 验证隔离性
         await Assert.That(exceptions).IsEmpty();
-        await Assert.That(results).HasCount(2);
+        await Assert.That(results).Count().IsEqualTo(2);
         await Assert.That(results.Any(r => r.StartsWith("Task1"))).IsTrue();
         await Assert.That(results.Any(r => r.StartsWith("Task2"))).IsTrue();
 
@@ -269,8 +269,8 @@ public class TransactionACIDTests
         var users1 = collection1.FindAll().ToList();
         var users2 = collection2.FindAll().ToList();
 
-        await Assert.That(users1).HasCount(1);
-        await Assert.That(users2).HasCount(1);
+        await Assert.That(users1).Count().IsEqualTo(1);
+        await Assert.That(users2).Count().IsEqualTo(1);
         await Assert.That(users1[0].Name).IsEqualTo("Task1User");
         await Assert.That(users2[0].Name).IsEqualTo("Task2User");
     }
@@ -305,7 +305,7 @@ public class TransactionACIDTests
 
             // 验证所有数据都持久化了
             var allUsers = newCollection.FindAll().ToList();
-            await Assert.That(allUsers).HasCount(1);
+            await Assert.That(allUsers).Count().IsEqualTo(1);
             await Assert.That(allUsers[0].Id == userId).IsTrue();
         }
 
@@ -435,7 +435,7 @@ public class TransactionACIDTests
         }
 
         // Assert - 验证长时间运行事务的结果
-        await Assert.That(insertedIds).HasCount(operationCount);
+        await Assert.That(insertedIds).Count().IsEqualTo(operationCount);
         await Assert.That(insertedIds.All(id => id > 0)).IsTrue();
 
         var finalCount = collection.FindAll().Count();

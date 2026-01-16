@@ -1,0 +1,252 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:TinyDb.UI.ViewModels"
+        xmlns:models="using:TinyDb.UI.Models"
+        xmlns:converters="using:TinyDb.UI.Converters"
+        xmlns:dg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.DataGrid"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="700"
+        x:Class="TinyDb.UI.Views.TableStructureWindow"
+        x:DataType="vm:TableStructureViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="表结构管理"
+        Width="900" Height="700">
+
+    <Window.Resources>
+        <converters:FieldTypeConverter x:Key="FieldTypeConverter"/>
+    </Window.Resources>
+
+    <Design.DataContext>
+        <vm:TableStructureViewModel/>
+    </Design.DataContext>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部工具栏 -->
+        <Border Grid.Row="0" Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" Margin="10">
+                <Button Grid.Column="0" Content="刷新" Command="{Binding LoadTablesCommand}"
+                        IsEnabled="{Binding !IsEditing}" Padding="8,4"/>
+                <Button Grid.Column="1" Content="新建表" Command="{Binding CreateNewTableCommand}"
+                        IsEnabled="{Binding CanCreateTable}" Padding="8,4"/>
+                <Button Grid.Column="2" Content="编辑表" Command="{Binding EditTableCommand}"
+                        IsEnabled="{Binding CanEditTable}" Padding="8,4"/>
+                <Button Grid.Column="3" Content="删除表" Command="{Binding DeleteTableCommand}"
+                        IsEnabled="{Binding CanDeleteTable}" Background="#F44336" Foreground="White" Padding="8,4"/>
+                <Button Grid.Column="4" Content="保存" Command="{Binding SaveTableCommand}"
+                        IsEnabled="{Binding CanSaveTable}" Background="#4CAF50" Foreground="White" Padding="8,4"/>
+                <Button Grid.Column="5" Content="取消" Command="{Binding CancelEditCommand}"
+                        IsEnabled="{Binding CanCancelEdit}" Padding="8,4"/>
+            </Grid>
+        </Border>
+
+        <!-- 新建表名输入 -->
+        <Border Grid.Row="0" Background="#FFF3E0" BorderBrush="#FF9800" BorderThickness="0,0,0,1"
+                IsVisible="{Binding !IsEditing &amp;&amp; !string.IsNullOrWhiteSpace(NewTableName)}">
+            <Grid Margin="10" ColumnDefinitions="Auto,*,Auto,Auto">
+                <TextBlock Grid.Column="0" Text="表名:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBox Grid.Column="1" Text="{Binding NewTableName}"
+                         Watermark="输入表名" MinWidth="200"/>
+                <Button Grid.Column="2" Content="创建" Command="{Binding CreateNewTableCommand}"
+                        IsEnabled="{Binding CanCreateTable}" Padding="8,4"/>
+            </Grid>
+        </Border>
+
+        <!-- 主要内容区域 -->
+        <Grid Grid.Row="1" ColumnDefinitions="250,*,300">
+
+            <!-- 左侧：表列表 -->
+            <Border Grid.Column="0" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*">
+                    <!-- 表列表标题 -->
+                    <Border Grid.Row="0" Background="#F0F0F0" Padding="10">
+                        <TextBlock Text="表列表" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </Border>
+
+                    <!-- 表列表 -->
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Tables}"
+                             SelectedItem="{Binding SelectedTable}"
+                             IsEnabled="{Binding !IsEditing}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="models:TableStructure">
+                                <Border Padding="10" Margin="2">
+                                    <StackPanel Spacing="4">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="Bold"/>
+                                        <TextBlock Text="{Binding TableName}" FontSize="12" Opacity="0.7"/>
+                                        <TextBlock Text="{Binding RecordCount, StringFormat='{} 条记录'}" FontSize="11" Opacity="0.6"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <!-- 中间：表结构设计 -->
+            <Border Grid.Column="1" Background="#FFFFFF" BorderBrush="#E0E0E0" BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*">
+                    <!-- 表设计标题 -->
+                    <Border Grid.Row="0" Background="#F0F0F0" Padding="10">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="{Binding EditingTable.DisplayName, FallbackValue='表结构设计'}"
+                                      FontWeight="Bold" VerticalAlignment="Center"/>
+                            <Button Grid.Column="1" Content="添加字段" Command="{Binding AddFieldCommand}"
+                                    IsEnabled="{Binding IsEditing}" Padding="6,3" FontSize="12"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 表结构编辑区域 -->
+                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <StackPanel Spacing="10">
+                            <!-- 表基本信息编辑 -->
+                            <StackPanel Margin="10" Spacing="10" IsVisible="{Binding IsEditing &amp;&amp; EditingTable != null}">
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <TextBlock Grid.Column="0" Text="表名:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBox Grid.Column="1" Text="{Binding EditingTable.TableName}"
+                                             IsEnabled="{Binding IsEditing}" MinWidth="150"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <TextBlock Grid.Column="0" Text="显示名称:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBox Grid.Column="1" Text="{Binding EditingTable.DisplayName}"
+                                             IsEnabled="{Binding IsEditing}" MinWidth="150"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <TextBlock Grid.Column="0" Text="描述:" VerticalAlignment="Top" Margin="0,0,10,0"/>
+                                    <TextBox Grid.Column="1" Text="{Binding EditingTable.Description}"
+                                             IsEnabled="{Binding IsEditing}" MinWidth="150"
+                                             Height="60" TextWrapping="Wrap" AcceptsReturn="True"/>
+                                </Grid>
+                            </StackPanel>
+
+                            <!-- 字段列表 -->
+                            <Border Background="#F9F9F9" BorderBrush="#E0E0E0" BorderThickness="1" Margin="10"
+                                    IsVisible="{Binding IsEditing &amp;&amp; EditingTable != null}">
+                                <Grid RowDefinitions="Auto,*">
+                                    <Border Grid.Row="0" Background="#EEEEEE" Padding="8">
+                                        <Grid ColumnDefinitions="*,*,Auto">
+                                            <TextBlock Grid.Column="0" Text="字段名" FontWeight="Bold"/>
+                                            <TextBlock Grid.Column="1" Text="类型" FontWeight="Bold"/>
+                                            <TextBlock Grid.Column="2" Text="操作" FontWeight="Bold"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <DataGrid Grid.Row="1" ItemsSource="{Binding EditingTable.Fields}"
+                                              AutoGenerateColumns="False"
+                                              CanUserReorderColumns="True"
+                                              CanUserResizeColumns="True"
+                                              GridLinesVisibility="Horizontal">
+                                        <DataGrid.Columns>
+                                            <dg:DataGridTextColumn Header="字段名" Binding="{Binding FieldName}" Width="150"/>
+                                            <dg:DataGridTextColumn Header="显示名" Binding="{Binding DisplayName}" Width="150"/>
+                                            <dg:DataGridTextColumn Header="类型" Binding="{Binding FieldType}" Width="120"/>
+                                            <dg:DataGridCheckBoxColumn Header="必需" Binding="{Binding IsRequired}" Width="60"/>
+                                            <dg:DataGridTemplateColumn Header="操作" Width="80">
+                                                <dg:DataGridTemplate>
+                                                    <Button Content="删除"
+                                                            Command="{Binding $parent[Window].DataContext.DeleteFieldCommand}"
+                                                            CommandParameter="{Binding}"
+                                                            Background="#F44336"
+                                                            Foreground="White"
+                                                            Padding="4,2"
+                                                            FontSize="11"/>
+                                                </dg:DataGridTemplate>
+                                            </dg:DataGridTemplateColumn>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </Grid>
+                            </Border>
+
+                            <!-- 表结构预览（只读模式） -->
+                            <StackPanel Margin="10" Spacing="10"
+                                        IsVisible="{Binding !IsEditing &amp;&amp; SelectedTable != null}">
+                                <TextBlock Text="{Binding SelectedTable.DisplayName}" FontWeight="Bold" FontSize="14"/>
+                                <TextBlock Text="{Binding SelectedTable.TableName}" FontSize="12" Opacity="0.7"/>
+                                <TextBlock Text="{Binding SelectedTable.Description}" FontSize="12" Opacity="0.8"/>
+
+                                <Separator Margin="0,10"/>
+
+                                <TextBlock Text="字段列表:" FontWeight="SemiBold" FontSize="13"/>
+                                <ItemsControl ItemsSource="{Binding SelectedTable.Fields}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="models:TableField">
+                                            <Border Background="#F5F5F5" Padding="8" Margin="2">
+                                                <Grid ColumnDefinitions="*,Auto,Auto">
+                                                    <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding FieldType}" FontSize="12" Opacity="0.7"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding IsRequired}" FontSize="12" Opacity="0.7"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- 右侧：字段属性编辑器 -->
+            <Border Grid.Column="2" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="1,0,0,0"
+                    IsVisible="{Binding IsEditing &amp;&amp; SelectedField != null}">
+                <Grid RowDefinitions="Auto,*">
+                    <Border Grid.Row="0" Background="#F0F0F0" Padding="10">
+                        <TextBlock Text="字段属性" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </Border>
+
+                    <ScrollViewer Grid.Row="1" Margin="10">
+                        <StackPanel Spacing="15" IsVisible="{Binding SelectedField != null}">
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Text="字段名:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedField.FieldName}" MinWidth="120"/>
+                            </Grid>
+
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Text="显示名:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedField.DisplayName}" MinWidth="120"/>
+                            </Grid>
+
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Text="类型:" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedField.FieldType}" MinWidth="120"/>
+                            </Grid>
+
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Text="描述:" VerticalAlignment="Top" Margin="0,0,10,0"/>
+                                <TextBox Grid.Column="1" Text="{Binding SelectedField.Description}"
+                                         MinWidth="120" Height="60" TextWrapping="Wrap" AcceptsReturn="True"/>
+                            </Grid>
+
+                            <CheckBox Content="必需" IsChecked="{Binding SelectedField.IsRequired}"/>
+                            <CheckBox Content="主键" IsChecked="{Binding SelectedField.IsPrimaryKey}" IsEnabled="False"/>
+                            <CheckBox Content="唯一" IsChecked="{Binding SelectedField.IsUnique}"/>
+                            <CheckBox Content="索引" IsChecked="{Binding SelectedField.IsIndexed}"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 底部状态栏 -->
+        <Border Grid.Row="2" Background="#F0F0F0" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+            <Grid ColumnDefinitions="*,Auto" Margin="10,5">
+                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" VerticalAlignment="Center"/>
+                <ProgressBar Grid.Column="1" Width="100" Height="16" IsIndeterminate="{Binding IsLoading}"
+                            IsVisible="{Binding IsLoading}" Margin="10,0,0,0"/>
+            </Grid>
+        </Border>
+
+        <!-- 加载遮罩 -->
+        <Grid Grid.Row="1" Background="#80000000" IsVisible="{Binding IsLoading}">
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                <ProgressBar Width="200" Height="20" IsIndeterminate="True"/>
+                <TextBlock Text="加载中..." Foreground="White" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

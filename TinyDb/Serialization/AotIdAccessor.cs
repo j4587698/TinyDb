@@ -10,6 +10,11 @@ namespace TinyDb.Serialization;
 /// </summary>
 public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>
 {
+    /// <summary>
+    /// 获取实体的 ID。
+    /// </summary>
+    /// <param name="entity">实体实例。</param>
+    /// <returns>BSON 格式的 ID。</returns>
     public static BsonValue GetId(T entity)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -29,6 +34,11 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         return value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
     }
 
+    /// <summary>
+    /// 设置实体的 ID。
+    /// </summary>
+    /// <param name="entity">实体实例。</param>
+    /// <param name="id">新的 ID 值。</param>
     public static void SetId(T entity, BsonValue id)
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
@@ -49,6 +59,11 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         idProperty.SetValue(entity, converted);
     }
 
+    /// <summary>
+    /// 检查实体是否具有有效的 ID。
+    /// </summary>
+    /// <param name="entity">实体实例。</param>
+    /// <returns>如果 ID 有效则为 true。</returns>
     public static bool HasValidId(T entity)
     {
         if (entity == null) return false;
@@ -96,6 +111,12 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         return AutoIdGenerator.GenerateIdIfNeeded(entity, idProperty);
     }
 
+    /// <summary>
+    /// 将 BSON 值转换为 ID 属性的目标类型。
+    /// </summary>
+    /// <param name="bsonValue">BSON 值。</param>
+    /// <param name="targetType">目标类型。</param>
+    /// <returns>转换后的对象。</returns>
     private static object? ConvertIdValue(BsonValue bsonValue, Type targetType)
     {
         if (targetType == null) throw new ArgumentNullException(nameof(targetType));

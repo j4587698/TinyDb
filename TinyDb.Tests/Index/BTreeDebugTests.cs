@@ -44,7 +44,7 @@ public class BTreeDebugTests
         // 查找刚插入的键
         var found = _index.FindExact(key);
         await Assert.That(found != null).IsTrue();
-        await Assert.That(found).IsEqualTo(docId);
+        await Assert.That(found!.Equals(docId)).IsTrue();
     }
 
     /// <summary>
@@ -71,7 +71,7 @@ public class BTreeDebugTests
             var key = new IndexKey(new BsonInt32(i));
             var found = _index.FindExact(key);
             await Assert.That(found != null).IsTrue();
-            await Assert.That(found).IsEqualTo(new BsonString($"doc_{i}"));
+            await Assert.That(found!.Equals(new BsonString($"doc_{i}"))).IsTrue();
         }
     }
 
@@ -102,7 +102,7 @@ public class BTreeDebugTests
             var found = _index.FindExact(key);
             Console.WriteLine($"查找 {i}: found={found != null}");
             await Assert.That(found != null).IsTrue();
-            await Assert.That(found).IsEqualTo(new BsonString($"doc_{i}"));
+            await Assert.That(found!.Equals(new BsonString($"doc_{i}"))).IsTrue();
         }
     }
 }

@@ -1,24 +1,32 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net9.0;net8.0</TargetFrameworks>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <PublishAot>true</PublishAot>
-      <IsTestProject>true</IsTestProject>
+    <PublishAot>false</PublishAot>
+    <!-- MTP 模式下，必须设置为 false 以避免 SDK 注入 VSTest 目标 -->
+    <IsTestProject>false</IsTestProject>
+    <ImportVSTestTargets>false</ImportVSTestTargets>
+    
+    <!-- 启用新的测试平台 -->
+    <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    
+    <OutputType>Exe</OutputType>
+    <NoWarn>$(NoWarn);TUnit0018;TUnit0023;CS8604;CS8602;CS8600;CS1718;CS8769</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" />
-    <PackageReference Include="TUnit" Version="0.80.0" />
-      <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.0.1" />
+    <PackageReference Include="TUnit" Version="1.6.25" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\TinyDb\TinyDb.csproj" />
-    <ProjectReference Include="..\TinyDb.Demo\TinyDb.Demo.csproj" />
     <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" />
   </ItemGroup>
 

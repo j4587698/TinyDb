@@ -5,16 +5,20 @@ namespace TinyDb.Storage;
 /// <summary>
 /// 磁盘流管理器，负责数据库文件的 I/O 操作
 /// </summary>
-public sealed class DiskStream : IDisposable
+public sealed class DiskStream : IDiskStream
 {
+    // ... existing fields ...
     private readonly string _filePath;
     private readonly FileStream _fileStream;
     private bool _disposed;
+    private readonly object _syncRoot = new();
 
     /// <summary>
     /// 文件路径
     /// </summary>
     public string FilePath => _filePath;
+
+    // ... Size, Position, IsReadable ...
 
     /// <summary>
     /// 文件大小
@@ -24,7 +28,10 @@ public sealed class DiskStream : IDisposable
         get
         {
             ThrowIfDisposed();
-            return _fileStream.Length;
+            lock (_syncRoot)
+            {
+                return _fileStream.Length;
+            }
         }
     }
 
@@ -36,7 +43,10 @@ public sealed class DiskStream : IDisposable
         get
         {
             ThrowIfDisposed();
-            return _fileStream.Position;
+            lock (_syncRoot)
+            {
+                return _fileStream.Position;
+            }
         }
     }
 
@@ -67,60 +77,51 @@ public sealed class DiskStream : IDisposable
         _fileStream = new FileStream(filePath, FileMode.OpenOrCreate, access, share);
     }
 
-    /// <summary>
-    /// 读取数据
-    /// </summary>
-    /// <param name="buffer">缓冲区</param>
-    /// <param name="offset">偏移量</param>
-    /// <param name="count">读取字节数</param>
-    /// <returns>实际读取的字节数</returns>
+    // ... Read, Write, Flush, Seek, SetLength ... (keeping them as is, just need to match surrounding code for context in replace)
+    
     public int Read(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
-        return _fileStream.Read(buffer, offset, count);
+        lock (_syncRoot)
+        {
+            return _fileStream.Read(buffer, offset, count);
+        }
     }
 
-    /// <summary>
-    /// 写入数据
-    /// </summary>
-    /// <param name="buffer">缓冲区</param>
-    /// <param name="offset">偏移量</param>
-    /// <param name="count">写入字节数</param>
     public void Write(byte[] buffer, int offset, int count)
     {
         ThrowIfDisposed();
-        _fileStream.Write(buffer, offset, count);
+        lock (_syncRoot)
+        {
+            _fileStream.Write(buffer, offset, count);
+        }
     }
 
-    /// <summary>
-    /// 刷新缓冲区到磁盘
-    /// </summary>
     public void Flush()
     {
         ThrowIfDisposed();
-        _fileStream.Flush(true);
+        lock (_syncRoot)
+        {
+            _fileStream.Flush(true);
+        }
     }
 
-    /// <summary>
-    /// 设置流位置
-    /// </summary>
-    /// <param name="offset">偏移量</param>
-    /// <param name="origin">起始位置</param>
-    /// <returns>新位置</returns>
     public long Seek(long offset, SeekOrigin origin)
     {
         ThrowIfDisposed();
-        return _fileStream.Seek(offset, origin);
+        lock (_syncRoot)
+        {
+            return _fileStream.Seek(offset, origin);
+        }
     }
 
-    /// <summary>
-    /// 设置文件长度
-    /// </summary>
-    /// <param name="length">文件长度</param>
     public void SetLength(long length)
     {
         ThrowIfDisposed();
-        _fileStream.SetLength(length);
+        lock (_syncRoot)
+        {
+            _fileStream.SetLength(length);
+        }
     }
 
     /// <summary>
@@ -132,7 +133,36 @@ public sealed class DiskStream : IDisposable
     public object LockRegion(long position, long length)
     {
         ThrowIfDisposed();
-        return new object(); // 简化实现
+        
+        // 优先尝试操作系统级文件区域锁定 (Windows/Linux)
+        try 
+        {
+#pragma warning disable CA1416 // Validate platform compatibility
+            _fileStream.Lock(position, length);
+#pragma warning restore CA1416
+            return new Tuple<long, long>(position, length);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            // macOS 或其他不支持区域锁的平台：回退到基于文件的互斥锁
+            // 注意：这提供了全文件级别的互斥，虽然粒度较粗，但保证了跨进程安全。
+            var lockPath = $"{_filePath}.lock";
+            try
+            {
+                // 使用 FileShare.None 确保独占访问
+                // FileOptions.DeleteOnClose 确保锁释放时文件被删除
+                var lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+                return new LockFileHandle(lockStream);
+            }
+            catch (IOException ex)
+            {
+                throw new IOException($"Could not acquire fallback lock file {lockPath}. Another process may be holding the lock.", ex);
+            }
+        }
+        catch (IOException ex)
+        {
+            throw new IOException($"Could not lock file region {position}-{position+length}: {ex.Message}", ex);
+        }
     }
 
     /// <summary>
@@ -142,8 +172,38 @@ public sealed class DiskStream : IDisposable
     public void UnlockRegion(object lockHandle)
     {
         ThrowIfDisposed();
-        // 简化实现
+        
+        if (lockHandle is Tuple<long, long> range)
+        {
+            try
+            {
+#pragma warning disable CA1416 // Validate platform compatibility
+                _fileStream.Unlock(range.Item1, range.Item2);
+#pragma warning restore CA1416
+            }
+            catch (PlatformNotSupportedException)
+            {
+                // Should not happen if LockRegion succeeded with this handle type
+            }
+        }
+        else if (lockHandle is LockFileHandle fileHandle)
+        {
+            // 释放文件锁资源
+            fileHandle.Dispose();
+        }
+        else
+        {
+            throw new ArgumentException("Invalid lock handle", nameof(lockHandle));
+        }
     }
+
+    private sealed class LockFileHandle : IDisposable
+    {
+        private readonly FileStream _stream;
+        public LockFileHandle(FileStream stream) => _stream = stream;
+        public void Dispose() => _stream.Dispose();
+    }
+
 
     /// <summary>
     /// 获取文件统计信息
@@ -152,15 +212,18 @@ public sealed class DiskStream : IDisposable
     public DiskStreamStatistics GetStatistics()
     {
         ThrowIfDisposed();
-        return new DiskStreamStatistics
+        lock (_syncRoot)
         {
-            FilePath = _filePath,
-            Size = _fileStream.Length,
-            Position = _fileStream.Position,
-            IsReadable = _fileStream.CanRead,
-            IsWritable = _fileStream.CanWrite,
-            IsSeekable = _fileStream.CanSeek
-        };
+            return new DiskStreamStatistics
+            {
+                FilePath = _filePath,
+                Size = _fileStream.Length,
+                Position = _fileStream.Position,
+                IsReadable = _fileStream.CanRead,
+                IsWritable = _fileStream.CanWrite,
+                IsSeekable = _fileStream.CanSeek
+            };
+        }
     }
 
     /// <summary>
@@ -179,7 +242,14 @@ public sealed class DiskStream : IDisposable
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        _fileStream.Flush(true);
+        // 注意：异步操作加同步锁可能不是最佳实践，但在不改变接口签名的情况下，这是一个折衷。
+        // 更好的做法是使用 SemaphoreSlim，但这需要将接口改为 async。
+        // 这里我们简单地在同步锁中调用同步 Flush，或者不做保护（假设调用者负责同步）。
+        // 考虑到 DiskStream 的其他方法是同步的，这里为了安全性，我们还是加锁。
+        lock (_syncRoot)
+        {
+            _fileStream.Flush(true);
+        }
         return Task.CompletedTask;
     }
 
@@ -191,10 +261,25 @@ public sealed class DiskStream : IDisposable
     /// <returns>页面数据</returns>
     public byte[] ReadPage(long pageOffset, int pageSize)
     {
-        Seek(pageOffset, SeekOrigin.Begin);
-        var buffer = new byte[pageSize];
-        Read(buffer, 0, pageSize);
-        return buffer;
+        ThrowIfDisposed();
+        lock (_syncRoot)
+        {
+            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
+            var buffer = new byte[pageSize];
+            var bytesRead = 0;
+            while (bytesRead < pageSize)
+            {
+                var read = _fileStream.Read(buffer, bytesRead, pageSize - bytesRead);
+                if (read == 0) break;
+                bytesRead += read;
+            }
+            
+            // 如果读取不足，可能需要处理（例如如果是新分配的页面可能为0）
+            // 但 PageManager 应该处理这种情况，或者 DiskStream 应该保证填充0？
+            // 这里我们只返回实际读取的内容，或者保留 buffer（剩余为0）
+            
+            return buffer;
+        }
     }
 
     /// <summary>
@@ -204,8 +289,12 @@ public sealed class DiskStream : IDisposable
     /// <param name="pageData">页面数据</param>
     public void WritePage(long pageOffset, byte[] pageData)
     {
-        Seek(pageOffset, SeekOrigin.Begin);
-        Write(pageData, 0, pageData.Length);
+        ThrowIfDisposed();
+        lock (_syncRoot)
+        {
+            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
+            _fileStream.Write(pageData, 0, pageData.Length);
+        }
     }
 
     /// <summary>

@@ -54,7 +54,8 @@ public class QuickBatchTest
             {
                 Name = $"User{i}",
                 Email = $"user{i}@test.com",
-                Age = 20 + (i % 50)
+                Age = 20 + (i % 50),
+                Salary = 30000 + (i % 100) * 100
             };
             collection.Insert(user);
         }
@@ -62,6 +63,9 @@ public class QuickBatchTest
         sw1.Stop();
         Console.WriteLine($"   单独插入耗时: {sw1.ElapsedMilliseconds} ms");
         Console.WriteLine($"   平均每条: {(double)sw1.ElapsedMilliseconds / SampleSize:F2} ms");
+        
+        var count1 = collection.FindAll().Count();
+        Console.WriteLine($"   📊 测试1后数据量: {count1} (期望: {SampleSize})");
 
         // 清空数据
         var allUsers = collection.FindAll().ToList();
@@ -81,14 +85,16 @@ public class QuickBatchTest
             {
                 Name = $"User{i}",
                 Email = $"user{i}@test.com",
-                Age = 20 + (i % 50)
+                Age = 20 + (i % 50),
+                Salary = 30000 + (i % 100) * 100
             });
         }
-        collection.Insert(users);
+        var insertedCount = collection.Insert(users);
 
         sw2.Stop();
         Console.WriteLine($"   批量插入耗时: {sw2.ElapsedMilliseconds} ms");
         Console.WriteLine($"   平均每条: {(double)sw2.ElapsedMilliseconds / SampleSize:F2} ms");
+        Console.WriteLine($"   插入返回值: {insertedCount} (期望: {SampleSize})");
 
         // 计算性能提升
         var improvement = (double)(sw1.ElapsedMilliseconds - sw2.ElapsedMilliseconds) / sw1.ElapsedMilliseconds * 100;
@@ -97,6 +103,22 @@ public class QuickBatchTest
         // 验证数据正确性
         var finalCount = collection.FindAll().Count();
         Console.WriteLine($"✅ 数据验证: 插入成功 {finalCount} 条记录");
+
+        // 测试3: 无索引查询性能
+        Console.WriteLine($"\n📊 测试3: 无索引查询 (Salary > 35000)");
+        var sw3 = Stopwatch.StartNew();
+        var queryCount = collection.Find(u => u.Salary > 35000).Count();
+        sw3.Stop();
+        Console.WriteLine($"   查询耗时: {sw3.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   匹配数量: {queryCount}");
+
+        // 测试4: 高选择性无索引查询
+        Console.WriteLine($"\n📊 测试4: 高选择性无索引查询 (Salary > 39800)");
+        var sw4 = Stopwatch.StartNew();
+        var queryCount2 = collection.Find(u => u.Salary > 39800).Count();
+        sw4.Stop();
+        Console.WriteLine($"   查询耗时: {sw4.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   匹配数量: {queryCount2}");
 
         engine.Dispose();
         if (System.IO.File.Exists(DatabaseFile))
@@ -239,6 +261,8 @@ public class TestUser
 
     [Index(Priority = 3)]
     public int Age { get; set; }
+
+    public decimal Salary { get; set; }
 }
 
 [Entity("parallel_users")]

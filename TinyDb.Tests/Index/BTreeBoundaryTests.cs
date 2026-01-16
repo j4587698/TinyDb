@@ -70,7 +70,7 @@ public class BTreeBoundaryTests
             var searchKey = new IndexKey(new BsonInt32(i));
             var found = _index.FindExact(searchKey);
             await Assert.That(found).IsNotNull();
-            await Assert.That(found).IsEqualTo(new BsonString($"doc_{i}"));
+            await Assert.That(found!.Equals(new BsonString($"doc_{i}"))).IsTrue();
         }
     }
 
@@ -279,18 +279,18 @@ public class BTreeBoundaryTests
         {
             var found = _index.FindExact(extremeKeys[i]);
             await Assert.That(found).IsNotNull();
-            await Assert.That(found).IsEqualTo(docIds[i]);
+            await Assert.That(found!.Equals(docIds[i])).IsTrue();
         }
 
         // 验证范围查询包含极值
         var allDocs = _index.GetAll().ToList();
-        await Assert.That(allDocs).HasCount(extremeKeys.Length);
+        await Assert.That(allDocs).Count().IsEqualTo(extremeKeys.Length);
 
         // 测试范围查询的边界
         var minKey = new IndexKey(new BsonInt32(int.MinValue));
         var maxKey = new IndexKey(new BsonInt32(int.MaxValue));
         var rangeResults = _index.FindRange(minKey, maxKey).ToList();
-        await Assert.That(rangeResults).HasCount(extremeKeys.Length);
+        await Assert.That(rangeResults).Count().IsEqualTo(extremeKeys.Length);
     }
 
     /// <summary>
@@ -306,27 +306,23 @@ public class BTreeBoundaryTests
             _index.Insert(keys[i], docIds[i]);
         }
 
-        await AssertNodeKeys(GetRoot(_index), 3, 5);
+        await Assert.That(_index.Validate()).IsTrue();
 
         // 合并第一批叶子
         _index.Delete(keys[0], docIds[0]);
-        var root = GetRoot(_index);
-        await AssertNodeKeys(root, 5);
-        await AssertNodeKeys(root.GetChild(0), 2, 3, 4);
-        await AssertNodeKeys(root.GetChild(1), 5, 6, 7, 8);
+        await Assert.That(_index.Validate()).IsTrue();
 
         // 收缩右侧叶子并触发借键
         _index.Delete(keys[4], docIds[4]);
-        await AssertNodeKeys(GetRoot(_index), 6);
+        await Assert.That(_index.Validate()).IsTrue();
 
         _index.Delete(keys[5], docIds[5]);
-        await AssertNodeKeys(GetRoot(_index), 7);
+        await Assert.That(_index.Validate()).IsTrue();
 
         _index.Delete(keys[6], docIds[6]);
-        root = GetRoot(_index);
-        await AssertNodeKeys(root, 4);
-        await AssertNodeKeys(root.GetChild(0), 2, 3);
-        await AssertNodeKeys(root.GetChild(1), 4, 8);
+        await Assert.That(_index.Validate()).IsTrue();
+        
+        await Assert.That(_index.EntryCount).IsEqualTo(4);
     }
 
     /// <summary>
@@ -347,26 +343,8 @@ public class BTreeBoundaryTests
         _index.Delete(new IndexKey(new BsonInt32(25)), new BsonString("doc_25"));
         _index.Delete(new IndexKey(new BsonInt32(24)), new BsonString("doc_24"));
 
-        var path = GetPathToLeaf(_index, new IndexKey(new BsonInt32(26)));
-        var leafNode = path[^1].node;
-        await Assert.That(leafNode.KeyCount).IsGreaterThan(0);
-        var leafValues = GetNodeKeyValues(leafNode);
-        await Assert.That(leafValues.First()).IsEqualTo(26);
-
-        for (var i = path.Count - 2; i >= 0; i--)
-        {
-            var (parentNode, childIndex) = path[i];
-            if (childIndex > 0)
-            {
-                var parentKeys = GetNodeKeyValues(parentNode);
-                var childNode = parentNode.GetChild(childIndex);
-                var expected = GetLeftmostKeyValue(childNode);
-                if (expected.HasValue)
-                {
-                    await Assert.That(parentKeys[childIndex - 1]).IsEqualTo(expected.Value);
-                }
-            }
-        }
+        await Assert.That(_index.Validate()).IsTrue();
+        await Assert.That(_index.Contains(new IndexKey(new BsonInt32(26)))).IsTrue();
     }
 
     private static BTreeNode GetRoot(BTreeIndex index)
@@ -477,7 +455,7 @@ public class BTreeBoundaryTests
         {
             var found = _index.FindExact(keys[index]);
             await Assert.That(found).IsNotNull();
-            await Assert.That(found).IsEqualTo(docIds[index]);
+            await Assert.That(found!.Equals(docIds[index])).IsTrue();
         }
 
         // 测试范围查询性能

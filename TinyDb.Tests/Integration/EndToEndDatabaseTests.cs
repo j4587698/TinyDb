@@ -94,7 +94,7 @@ public class EndToEndDatabaseTests
             var collection = reopenedEngine.GetCollection<Order>();
             var allOrders = collection.FindAll().ToList();
 
-            await Assert.That(allOrders).HasCount(3);
+            await Assert.That(allOrders).Count().IsEqualTo(3);
             await Assert.That(allOrders.Any(o => o.OrderNumber == "SO-1003")).IsTrue();
         }
     }

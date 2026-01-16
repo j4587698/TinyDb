@@ -28,30 +28,52 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// <summary>
     /// 获取时间戳秒数
     /// </summary>
-    public int TimestampSeconds => _bytes != null ?
-        BitConverter.ToInt32(_bytes, 0) :
-        throw new InvalidOperationException("ObjectId is not initialized");
+    public int TimestampSeconds
+    {
+        get
+        {
+            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
+            return BitConverter.ToInt32(_bytes, 0);
+        }
+    }
 
     /// <summary>
     /// 获取机器标识
     /// </summary>
-    public int Machine => _bytes != null ?
-        BitConverter.ToInt32(_bytes, 4) & 0x00FFFFFF :
-        throw new InvalidOperationException("ObjectId is not initialized");
+    public int Machine
+    {
+        get
+        {
+            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
+            return BitConverter.ToInt32(_bytes, 4) & 0x00FFFFFF;
+        }
+    }
 
     /// <summary>
     /// 获取进程标识
     /// </summary>
-    public short Pid => _bytes != null ?
-        BitConverter.ToInt16(_bytes, 7) :
-        throw new InvalidOperationException("ObjectId is not initialized");
+    public short Pid
+    {
+        get
+        {
+            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
+            return BitConverter.ToInt16(_bytes, 7);
+        }
+    }
 
     /// <summary>
     /// 获取计数器
     /// </summary>
-    public int Counter => _bytes != null ?
-        BitConverter.ToInt32(_bytes, 9) & 0x00FFFFFF :
-        throw new InvalidOperationException("ObjectId is not initialized");
+    public int Counter
+    {
+        get
+        {
+            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
+            // ObjectId uses 3 bytes for counter at index 9.
+            // On Little Endian systems, BitConverter.GetBytes(int) puts lowest bytes first.
+            return _bytes[9] | (_bytes[10] << 8) | (_bytes[11] << 16);
+        }
+    }
 
     /// <summary>
     /// 空的 ObjectId

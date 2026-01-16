@@ -51,6 +51,24 @@ public sealed class QueryOptimizer
         // 解析查询表达式
         var queryExpression = _expressionParser.Parse(expression);
 
+        // 优化：检查是否为主键查询
+        var primaryKeyValue = ExtractPrimaryKeyValue(queryExpression);
+        if (primaryKeyValue != null)
+        {
+            plan.Strategy = QueryExecutionStrategy.PrimaryKeyLookup;
+            // 将主键值存储在 ScanKeys 中以便 Executor 使用
+            plan.IndexScanKeys = new List<IndexScanKey> 
+            { 
+                new IndexScanKey 
+                { 
+                    FieldName = "_id", 
+                    Value = primaryKeyValue, 
+                    ComparisonType = ComparisonType.Equal 
+                } 
+            };
+            return plan;
+        }
+
         // 获取集合的索引管理器
         var indexManager = _engine.GetIndexManager(collectionName);
         if (indexManager == null)
@@ -81,6 +99,43 @@ public sealed class QueryOptimizer
         }
 
         return plan;
+    }
+
+    /// <summary>
+    /// 尝试从查询表达式中提取主键值
+    /// </summary>
+    /// <param name="queryExpression">查询表达式</param>
+    /// <returns>主键值，如果不是主键查询则返回null</returns>
+    private static BsonValue? ExtractPrimaryKeyValue(QueryExpression queryExpression)
+    {
+        if (queryExpression is BinaryExpression binaryExpr)
+        {
+            // 必须是等值比较
+            if (binaryExpr.NodeType != System.Linq.Expressions.ExpressionType.Equal)
+                return null;
+
+            string? fieldName = null;
+            BsonValue? value = null;
+
+            if (binaryExpr.Left is MemberExpression leftMember)
+            {
+                fieldName = leftMember.MemberName;
+                value = ExtractConstantValue(binaryExpr.Right);
+            }
+            else if (binaryExpr.Right is MemberExpression rightMember)
+            {
+                fieldName = rightMember.MemberName;
+                value = ExtractConstantValue(binaryExpr.Left);
+            }
+
+            // 检查字段名是否为 _id 或 Id (不区分大小写)
+            if (fieldName != null && (string.Equals(fieldName, "_id", StringComparison.OrdinalIgnoreCase) || string.Equals(fieldName, "Id", StringComparison.OrdinalIgnoreCase)))
+            {
+                return value;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -237,26 +292,22 @@ public sealed class QueryOptimizer
     {
         if (queryExpression is BinaryExpression binaryExpr)
         {
-            // 检查是否是目标字段的比较
-            bool isTargetField = false;
-            BsonValue? value = null;
+            if (binaryExpr.NodeType == System.Linq.Expressions.ExpressionType.AndAlso)
+            {
+                return ExtractComparisonValue(binaryExpr.Left, fieldName) ?? 
+                       ExtractComparisonValue(binaryExpr.Right, fieldName);
+            }
 
+            // 检查是否是目标字段的比较
             if (binaryExpr.Left is MemberExpression leftMember &&
                 string.Equals(leftMember.MemberName, fieldName, StringComparison.OrdinalIgnoreCase))
             {
-                isTargetField = true;
-                value = ExtractConstantValue(binaryExpr.Right);
+                return ExtractConstantValue(binaryExpr.Right);
             }
             else if (binaryExpr.Right is MemberExpression rightMember &&
                      string.Equals(rightMember.MemberName, fieldName, StringComparison.OrdinalIgnoreCase))
             {
-                isTargetField = true;
-                value = ExtractConstantValue(binaryExpr.Left);
-            }
-
-            if (isTargetField && value != null)
-            {
-                return value;
+                return ExtractConstantValue(binaryExpr.Left);
             }
         }
 
@@ -264,17 +315,43 @@ public sealed class QueryOptimizer
     }
 
     /// <summary>
-    /// 从表达式中提取常量值
+    /// 从表达式中提取常量值 (支持变量和闭包捕获)
     /// </summary>
     /// <param name="expression">表达式</param>
     /// <returns>BSON值</returns>
     private static BsonValue? ExtractConstantValue(QueryExpression expression)
     {
-        return expression switch
+        try 
         {
-            ConstantExpression constExpr => ConvertToBsonValue(constExpr.Value),
-            _ => null
-        };
+            return expression switch
+            {
+                ConstantExpression constExpr => ConvertToBsonValue(constExpr.Value),
+                MemberExpression memberExpr => EvaluateMemberExpression(memberExpr),
+                _ => null
+            };
+        }
+        catch
+        {
+            // 评估失败时忽略，降级为不使用索引
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 评估成员表达式 (用于处理局部变量和闭包)
+    /// </summary>
+    private static BsonValue? EvaluateMemberExpression(MemberExpression memberExpr)
+    {
+        // 既然结构已经变为 QueryExpression 自定义类型，我们无法直接使用 .NET 的 Expression.Compile
+        // 我们需要查看 ExpressionParser 到底生成了什么结构。
+        
+        // 修正：ExpressionParser 生成的是自定义的 MemberExpression, 并不是 System.Linq.Expressions.MemberExpression
+        // 自定义的 MemberExpression 只有 MemberName 和 Expression (QueryExpression)
+        
+        // 由于我们丢失了原始的反射信息 (FieldInfo/PropertyInfo)，我们无法在此处通过反射获取值
+        // 除非 ExpressionParser 保留了这些信息。
+        
+        return null; 
     }
 
     /// <summary>
@@ -309,6 +386,17 @@ public sealed class QueryOptimizer
     {
         if (queryExpression is BinaryExpression binaryExpr)
         {
+            if (binaryExpr.NodeType == System.Linq.Expressions.ExpressionType.AndAlso)
+            {
+                var leftValue = ExtractComparisonValue(binaryExpr.Left, fieldName);
+                if (leftValue != null)
+                {
+                    return ExtractComparisonType(binaryExpr.Left, fieldName);
+                }
+                
+                return ExtractComparisonType(binaryExpr.Right, fieldName);
+            }
+
             bool isTargetField = false;
 
             if (binaryExpr.Left is MemberExpression leftMember &&
@@ -409,7 +497,12 @@ public enum QueryExecutionStrategy
     /// <summary>
     /// 索引查找（使用唯一索引）
     /// </summary>
-    IndexSeek
+    IndexSeek,
+
+    /// <summary>
+    /// 主键查找
+    /// </summary>
+    PrimaryKeyLookup
 }
 
 /// <summary>

@@ -155,6 +155,21 @@ public sealed class TransactionOperation
     public BsonDocument? NewDocument { get; }
 
     /// <summary>
+    /// 索引名称
+    /// </summary>
+    public string? IndexName { get; }
+
+    /// <summary>
+    /// 索引字段
+    /// </summary>
+    public string[]? IndexFields { get; }
+
+    /// <summary>
+    /// 索引是否唯一
+    /// </summary>
+    public bool IndexUnique { get; }
+
+    /// <summary>
     /// 操作时间
     /// </summary>
     public DateTime Timestamp { get; }
@@ -173,13 +188,19 @@ public sealed class TransactionOperation
     /// <param name="originalDocument">原始文档</param>
     /// <param name="newDocument">新文档</param>
     /// <param name="savepointId">保存点ID</param>
+    /// <param name="indexName">索引名称</param>
+    /// <param name="indexFields">索引字段</param>
+    /// <param name="indexUnique">索引是否唯一</param>
     public TransactionOperation(
         TransactionOperationType operationType,
         string collectionName,
         BsonValue? documentId = null,
         BsonDocument? originalDocument = null,
         BsonDocument? newDocument = null,
-        Guid? savepointId = null)
+        Guid? savepointId = null,
+        string? indexName = null,
+        string[]? indexFields = null,
+        bool indexUnique = false)
     {
         OperationId = Guid.NewGuid();
         OperationType = operationType;
@@ -189,6 +210,9 @@ public sealed class TransactionOperation
         NewDocument = newDocument;
         Timestamp = DateTime.UtcNow;
         SavepointId = savepointId;
+        IndexName = indexName;
+        IndexFields = indexFields;
+        IndexUnique = indexUnique;
     }
 
     /// <summary>
@@ -203,7 +227,10 @@ public sealed class TransactionOperation
             DocumentId,
             OriginalDocument?.Clone() as BsonDocument,
             NewDocument?.Clone() as BsonDocument,
-            SavepointId
+            SavepointId,
+            IndexName,
+            IndexFields,
+            IndexUnique
         );
     }
 

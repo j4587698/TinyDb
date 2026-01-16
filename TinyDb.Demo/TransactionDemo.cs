@@ -70,7 +70,7 @@ public static class TransactionDemo
     /// <summary>
     /// 基本事务操作演示
     /// </summary>
-    private static Task BasicTransactionDemo(ILiteCollection<Account> accounts)
+    private static Task BasicTransactionDemo(ITinyCollection<Account> accounts)
     {
         Console.WriteLine("--- 基本事务操作演示 ---");
 
@@ -127,7 +127,7 @@ public static class TransactionDemo
     /// <summary>
     /// 事务回滚演示
     /// </summary>
-    private static Task TransactionRollbackDemo(ILiteCollection<Account> accounts)
+    private static Task TransactionRollbackDemo(ITinyCollection<Account> accounts)
     {
         Console.WriteLine("--- 事务回滚演示 ---");
 
@@ -173,7 +173,7 @@ public static class TransactionDemo
     /// <summary>
     /// 保存点演示
     /// </summary>
-    private static Task SavepointDemo(ILiteCollection<Account> accounts)
+    private static Task SavepointDemo(ITinyCollection<Account> accounts)
     {
         Console.WriteLine("--- 保存点演示 ---");
 

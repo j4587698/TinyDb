@@ -48,7 +48,7 @@ public class Program
 public class QuickIndexBenchmark
 {
     private TinyDbEngine? _engine;
-    private ILiteCollection<QuickUser>? _collection;
+    private ITinyCollection<QuickUser>? _collection;
     private const string DatabaseFile = "quick_benchmark.db";
     private const int SeedCount = 1000;
     private ObjectId _firstSeededUserId;

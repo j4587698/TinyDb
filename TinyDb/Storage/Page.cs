@@ -1,10 +1,11 @@
+using System;
 using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace TinyDb.Storage;
 
 /// <summary>
-/// 数据库页面，表示数据文件中的一个页面
+/// 表示数据库中的一个页面，是数据存储的基本单位。
 /// </summary>
 public sealed class Page : IDisposable
 {
@@ -12,34 +13,54 @@ public sealed class Page : IDisposable
     private readonly object _lock = new();
     private bool _isDirty;
     private bool _disposed;
+    private object? _cachedParsedData;
 
     /// <summary>
-    /// 页面头部
+    /// 获取页面头部信息。
     /// </summary>
     public PageHeader Header { get; private set; }
 
     /// <summary>
-    /// 页面ID
+    /// 获取页面 ID。
     /// </summary>
     public uint PageID => Header.PageID;
 
     /// <summary>
-    /// 页面类型
+    /// 获取页面类型。
     /// </summary>
     public PageType PageType => Header.PageType;
 
     /// <summary>
-    /// 页面大小
+    /// 获取页面大小（字节）。
     /// </summary>
     public int PageSize { get; }
-
+    
     /// <summary>
-    /// 数据区域大小
+    /// 获取或设置已解析数据的缓存对象，用于提高性能。
     /// </summary>
-    public int DataSize => Header.GetDataSize(PageSize);
+    public object? CachedParsedData
+    {
+        get { lock (_lock) return _cachedParsedData; }
+        set { lock (_lock) _cachedParsedData = value; }
+    }
+    
+    /// <summary>
+    /// 数据开始的偏移量（紧跟在页面头部之后）。
+    /// </summary>
+    public const int DataStartOffset = PageHeader.Size; // 41
 
     /// <summary>
-    /// 是否已修改
+    /// 获取页面的数据容量。
+    /// </summary>
+    public int DataCapacity => PageSize - DataStartOffset;
+
+    /// <summary>
+    /// 获取当前的写入位置。
+    /// </summary>
+    public int WritePosition => DataStartOffset + (DataCapacity - Header.FreeBytes);
+
+    /// <summary>
+    /// 获取一个值，指示页面是否已被修改（脏页面）。
     /// </summary>
     public bool IsDirty
     {
@@ -48,31 +69,20 @@ public sealed class Page : IDisposable
     }
 
     /// <summary>
-    /// 获取数据区域的 Span
+    /// 获取有效数据的只读跨度（Span）。
     /// </summary>
-    public Span<byte> DataSpan
+    public ReadOnlySpan<byte> ValidDataSpan
     {
         get
         {
             ThrowIfDisposed();
-            return new Span<byte>(_data, PageHeader.Size, DataSize);
+            int length = DataCapacity - Header.FreeBytes;
+            return new ReadOnlySpan<byte>(_data, DataStartOffset, length);
         }
     }
-
+    
     /// <summary>
-    /// 获取数据区域的 Memory
-    /// </summary>
-    public Memory<byte> DataMemory
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return new Memory<byte>(_data, PageHeader.Size, DataSize);
-        }
-    }
-
-    /// <summary>
-    /// 获取完整的页面数据（包含头部）
+    /// 获取整个页面数据的只读跨度（Span）。
     /// </summary>
     public ReadOnlySpan<byte> FullData
     {
@@ -84,402 +94,219 @@ public sealed class Page : IDisposable
     }
 
     /// <summary>
-    /// 初始化新页面
+    /// 获取整个页面数据的只读内存块（Memory）。
     /// </summary>
-    /// <param name="pageID">页面ID</param>
-    /// <param name="pageSize">页面大小</param>
-    /// <param name="pageType">页面类型</param>
+    public ReadOnlyMemory<byte> Memory
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return new ReadOnlyMemory<byte>(_data);
+        }
+    }
+
+    /// <summary>
+    /// 初始化一个新的空页面。
+    /// </summary>
+    /// <param name="pageID">页面 ID。</param>
+    /// <param name="pageSize">页面大小。</param>
+    /// <param name="pageType">页面类型。</param>
     public Page(uint pageID, int pageSize, PageType pageType = PageType.Empty)
     {
-        if (pageSize <= PageHeader.Size)
-            throw new ArgumentException($"Page size must be larger than {PageHeader.Size}", nameof(pageSize));
-
+        if (pageSize <= DataStartOffset) throw new ArgumentException("Page size too small", nameof(pageSize));
         PageSize = pageSize;
         _data = new byte[pageSize];
         Header = new PageHeader();
         Header.Initialize(pageType, pageID);
-
-        // 将头部写入数据
+        Header.FreeBytes = (ushort)DataCapacity;
         WriteHeader();
-        _isDirty = false; // 新创建的页面应该是干净的
+        _isDirty = false;
     }
 
     /// <summary>
-    /// 从现有数据创建页面
+    /// 使用现有数据初始化页面实例。
     /// </summary>
-    /// <param name="pageID">页面ID</param>
-    /// <param name="data">页面数据</param>
+    /// <param name="pageID">预期的页面 ID。</param>
+    /// <param name="data">页面二进制数据。</param>
     public Page(uint pageID, byte[] data)
     {
         if (data == null) throw new ArgumentNullException(nameof(data));
-        if (data.Length < PageHeader.Size)
-            throw new ArgumentException("Data size is too small for a page", nameof(data));
-
+        if (data.Length <= DataStartOffset) throw new ArgumentException("Data too small", nameof(data));
         PageSize = data.Length;
         _data = new byte[PageSize];
         Array.Copy(data, _data, PageSize);
-
         Header = PageHeader.FromByteArray(_data);
-
-        // 验证页面ID是否匹配
-        if (Header.PageID != pageID)
-        {
-            throw new InvalidOperationException($"Page ID mismatch: expected {pageID}, found {Header.PageID}");
-        }
-
-        // 验证页面完整性
-        if (!Header.IsValid())
-        {
-            throw new InvalidOperationException($"Invalid page header for page {pageID}");
-        }
+        if (Header.PageID != pageID) throw new InvalidOperationException("Page ID mismatch");
     }
 
     /// <summary>
-    /// 克隆页面
+    /// 重置页面字节并保留指定空间。
     /// </summary>
-    public Page Clone()
+    /// <param name="reservedBytes">要保留的字节数。</param>
+    public void ResetBytes(int reservedBytes)
     {
         ThrowIfDisposed();
-        return new Page(PageID, _data);
+        lock (_lock)
+        {
+            if (reservedBytes < 0 || reservedBytes > DataCapacity) throw new ArgumentOutOfRangeException(nameof(reservedBytes));
+            Array.Clear(_data, DataStartOffset, DataCapacity);
+            Header.ItemCount = 0;
+            Header.FreeBytes = (ushort)(DataCapacity - reservedBytes); 
+            Header.UpdateModification();
+            WriteHeader();
+            _cachedParsedData = null;
+            MarkDirty();
+        }
     }
 
     /// <summary>
-    /// 获取页面的快照数据
+    /// 向页面追加内容。
     /// </summary>
-    /// <param name="includeUnusedTail">是否包含未使用的数据区尾部</param>
-    /// <returns>页面字节数组</returns>
+    /// <param name="content">要追加的二进制内容。</param>
+    public void Append(ReadOnlySpan<byte> content)
+    {
+        ThrowIfDisposed();
+        lock (_lock)
+        {
+            int requiredTotal = 4 + content.Length;
+            if (Header.FreeBytes < requiredTotal)
+                throw new ArgumentException($"Page full. Required: {requiredTotal}, Free: {Header.FreeBytes}");
+
+            int pos = WritePosition;
+            int len = content.Length;
+            _data[pos] = (byte)len;
+            _data[pos + 1] = (byte)(len >> 8);
+            _data[pos + 2] = (byte)(len >> 16);
+            _data[pos + 3] = (byte)(len >> 24);
+            
+            content.CopyTo(new Span<byte>(_data, pos + 4, len));
+
+            Header.FreeBytes -= (ushort)requiredTotal;
+            Header.ItemCount++;
+            Header.UpdateModification();
+            WriteHeader();
+            _cachedParsedData = null;
+            MarkDirty();
+        }
+    }
+
     public byte[] Snapshot(bool includeUnusedTail = true)
     {
         ThrowIfDisposed();
         lock (_lock)
         {
-            int length;
-            if (includeUnusedTail)
-            {
-                length = _data.Length;
-            }
-            else
-            {
-                var usedBytes = DataSize - Header.FreeBytes;
-                length = PageHeader.Size + Math.Max(usedBytes, 0);
-            }
-
+            int length = includeUnusedTail ? _data.Length : WritePosition;
             var result = new byte[length];
             Array.Copy(_data, 0, result, 0, length);
             return result;
         }
     }
 
-    /// <summary>
-    /// 更新页面头部
-    /// </summary>
-    /// <param name="header">新的页面头部</param>
-    public void UpdateHeader(PageHeader header)
+    public void SetContent(ReadOnlySpan<byte> content)
     {
         ThrowIfDisposed();
         lock (_lock)
         {
-            Header = header.Clone();
+            int requiredTotal = 4 + content.Length;
+            if (DataCapacity < requiredTotal) throw new ArgumentException($"Content too large. Capacity: {DataCapacity}, Required: {requiredTotal}");
+
+            Array.Clear(_data, DataStartOffset, DataCapacity);
+            Header.ItemCount = 0;
+            Header.FreeBytes = (ushort)DataCapacity;
+
+            int pos = WritePosition;
+            int len = content.Length;
+            _data[pos] = (byte)len;
+            _data[pos + 1] = (byte)(len >> 8);
+            _data[pos + 2] = (byte)(len >> 16);
+            _data[pos + 3] = (byte)(len >> 24);
+            
+            content.CopyTo(new Span<byte>(_data, pos + 4, len));
+
+            Header.FreeBytes -= (ushort)requiredTotal;
+            Header.ItemCount = 1;
+            Header.UpdateModification();
             WriteHeader();
+            _cachedParsedData = null;
             MarkDirty();
         }
     }
 
-    /// <summary>
-    /// 更新页面类型
-    /// </summary>
-    /// <param name="pageType">新的页面类型</param>
-    public void UpdatePageType(PageType pageType)
+    public void SetContent(byte[] content)
     {
-        ThrowIfDisposed();
-        lock (_lock)
-        {
-            // 更新Header对象
-            Header.PageType = pageType;
-
-            // 将Header写入字节数组
-            WriteHeader();
-            MarkDirty();
-        }
+        SetContent(new ReadOnlySpan<byte>(content));
     }
 
-    /// <summary>
-    /// 设置链表链接
-    /// </summary>
-    /// <param name="prevPageID">前一个页面ID</param>
-    /// <param name="nextPageID">下一个页面ID</param>
-    public void SetLinks(uint prevPageID, uint nextPageID)
-    {
-        ThrowIfDisposed();
-        lock (_lock)
-        {
-            // 更新Header对象
-            Header.PrevPageID = prevPageID;
-            Header.NextPageID = nextPageID;
-
-            // 将Header写入字节数组
-            WriteHeader();
-            MarkDirty();
-        }
-    }
-
-    /// <summary>
-    /// 更新页面统计信息
-    /// </summary>
-    /// <param name="freeBytes">剩余字节数</param>
-    /// <param name="itemCount">项目数量</param>
-    public void UpdateStats(ushort freeBytes, ushort itemCount)
-    {
-        ThrowIfDisposed();
-        lock (_lock)
-        {
-            // 直接修改字节数组中的统计信息
-            var freeBytesArray = BitConverter.GetBytes(freeBytes);
-            var itemCountArray = BitConverter.GetBytes(itemCount);
-            Buffer.BlockCopy(freeBytesArray, 0, _data, 16, 2);
-            Buffer.BlockCopy(itemCountArray, 0, _data, 18, 2);
-
-            // 更新修改时间
-            var now = DateTime.UtcNow.Ticks;
-            var timeBytes = BitConverter.GetBytes(now);
-            Buffer.BlockCopy(timeBytes, 0, _data, 24, 8);
-
-            // 直接更新Header属性以保持同步
-            Header.FreeBytes = freeBytes;
-            Header.ItemCount = itemCount;
-            Header.ModifiedAt = now;
-            MarkDirty();
-        }
-    }
-
-    /// <summary>
-    /// 在数据区域写入数据
-    /// </summary>
-    /// <param name="offset">偏移量</param>
-    /// <param name="data">要写入的数据</param>
+    public void UpdateHeader(PageHeader header) { lock(_lock) { Header = header.Clone(); WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
+    public void UpdatePageType(PageType type) { lock(_lock) { Header.PageType = type; WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
+    public void SetLinks(uint prev, uint next) { lock(_lock) { Header.PrevPageID = prev; Header.NextPageID = next; WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
+    
     public void WriteData(int offset, ReadOnlySpan<byte> data)
     {
         ThrowIfDisposed();
-        if (offset < 0 || offset + data.Length > DataSize)
-            throw new ArgumentOutOfRangeException(nameof(offset));
-
-        lock (_lock)
-        {
-            data.CopyTo(new Span<byte>(_data, PageHeader.Size + offset, data.Length));
-            MarkDirty();
-        }
+        int physOffset = DataStartOffset + offset;
+        if (physOffset + data.Length > PageSize) throw new ArgumentOutOfRangeException(nameof(offset));
+        lock(_lock) { data.CopyTo(new Span<byte>(_data, physOffset, data.Length)); _cachedParsedData = null; MarkDirty(); }
     }
 
-    /// <summary>
-    /// 从数据区域读取数据
-    /// </summary>
-    /// <param name="offset">偏移量</param>
-    /// <param name="length">读取长度</param>
-    /// <returns>读取的数据</returns>
-    public byte[] ReadData(int offset, int length)
+    public byte[] ReadBytes(int offset, int length)
     {
         ThrowIfDisposed();
-
-        // 处理无效参数
-        if (offset < 0 || length <= 0 || offset >= DataSize)
-            return Array.Empty<byte>();
-
-        // 如果读取超出数据范围，返回空数组
-        if (offset + length > DataSize)
-            return Array.Empty<byte>();
-
+        int physOffset = DataStartOffset + offset;
+        if (offset < 0 || length <= 0 || physOffset + length > PageSize) return Array.Empty<byte>();
         lock (_lock)
         {
             var result = new byte[length];
-            Array.Copy(_data, PageHeader.Size + offset, result, 0, length);
+            Array.Copy(_data, physOffset, result, 0, length);
             return result;
         }
     }
 
-    /// <summary>
-    /// 获取数据区域的 Span
-    /// </summary>
-    /// <param name="offset">起始偏移量</param>
-    /// <param name="length">长度</param>
-    /// <returns>数据 Span</returns>
+    // Legacy Support
+    public byte[] ReadData(int offset, int length) 
+    {
+        return ReadBytes(offset, length);
+    }
+
     public Span<byte> GetDataSpan(int offset, int length)
     {
         ThrowIfDisposed();
-        if (offset < 0 || offset + length > DataSize)
-            throw new ArgumentOutOfRangeException(nameof(offset));
-
+        int physOffset = DataStartOffset + offset;
+        if (offset < 0 || physOffset + length > PageSize) throw new ArgumentOutOfRangeException(nameof(offset));
         lock (_lock)
         {
-            return new Span<byte>(_data, PageHeader.Size + offset, length);
+            return new Span<byte>(_data, physOffset, length);
         }
     }
 
-    /// <summary>
-    /// 清空数据区域
-    /// </summary>
+    public void UpdateStats(ushort free, ushort count) { lock(_lock) { Header.FreeBytes = free; Header.ItemCount = count; Header.UpdateModification(); WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
+    public void UpdateChecksum() { lock(_lock) { Header.Checksum = 0; WriteHeader(); Header.Checksum = Header.CalculateChecksum(_data); WriteHeader(); } }
+    public bool VerifyIntegrity() { lock(_lock) { return Header.IsValid() && Header.VerifyChecksum(_data); } }
+    public void MarkClean() => _isDirty = false;
+    private void MarkDirty() => _isDirty = true;
+    private void WriteHeader() { Header.WriteTo(new Span<byte>(_data, 0, PageHeader.Size)); }
+    private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(Page)); }
+    public void Dispose() { _disposed = true; }
+    public Page Clone() { return new Page(PageID, _data); }
+    public Span<byte> DataSpan => new Span<byte>(_data, DataStartOffset, DataCapacity);
+    public int DataSize => DataCapacity; 
+    public PageUsageInfo GetUsageInfo() => new PageUsageInfo { PageID = PageID, PageType = PageType, FreeBytes = Header.FreeBytes, ItemCount = Header.ItemCount, IsDirty = IsDirty };
+    
     public void ClearData()
     {
-        ThrowIfDisposed();
-        lock (_lock)
+        ResetBytes(0);
+        lock(_lock)
         {
-            Array.Clear(_data, PageHeader.Size, DataSize);
-
-            // 重置Header对象
             Header.PageType = PageType.Empty;
             Header.PrevPageID = 0;
             Header.NextPageID = 0;
-            Header.ItemCount = 0;
-            Header.Version = 0;
-
-            // 将Header写入字节数组
             WriteHeader();
-
-            var freeBytes = (ushort)Math.Min(DataSize, ushort.MaxValue);
-            UpdateStats(freeBytes, 0);
+            _cachedParsedData = null;
+            MarkDirty();
         }
-    }
-
-    /// <summary>
-    /// 计算并更新校验和
-    /// </summary>
-    public void UpdateChecksum()
-    {
-        ThrowIfDisposed();
-        lock (_lock)
-        {
-            // 计算校验和
-            var checksum = CalculatePageChecksum(_data);
-
-            // 直接修改字节数组中的校验和
-            var checksumBytes = BitConverter.GetBytes(checksum);
-            Buffer.BlockCopy(checksumBytes, 0, _data, 20, 4);
-
-            // 重新写入头部以包含新的校验和
-            WriteHeader();
-        }
-    }
-
-    /// <summary>
-    /// 计算页面校验和
-    /// </summary>
-    /// <param name="data">页面数据</param>
-    /// <returns>校验和</returns>
-    private static uint CalculatePageChecksum(byte[] data)
-    {
-        uint checksum = 0;
-        for (int i = 0; i < data.Length; i++)
-        {
-            checksum = ((checksum << 1) | (checksum >> 31)) ^ data[i];
-        }
-        return checksum;
-    }
-
-    /// <summary>
-    /// 验证页面完整性
-    /// </summary>
-    /// <returns>是否有效</returns>
-    public bool VerifyIntegrity()
-    {
-        ThrowIfDisposed();
-        lock (_lock)
-        {
-            return Header.IsValid() && Header.VerifyChecksum(_data);
-        }
-    }
-
-    /// <summary>
-    /// 标记页面为已修改
-    /// </summary>
-    private void MarkDirty()
-    {
-        _isDirty = true;
-    }
-
-    /// <summary>
-    /// 标记页面为干净（已同步到磁盘）
-    /// </summary>
-    public void MarkClean()
-    {
-        _isDirty = false;
-    }
-
-    /// <summary>
-    /// 将页面头部写入数据数组
-    /// </summary>
-    private void WriteHeader()
-    {
-        var headerData = Header.ToByteArray();
-        Array.Copy(headerData, _data, PageHeader.Size);
-    }
-
-    /// <summary>
-    /// 获取页面使用统计信息
-    /// </summary>
-    /// <returns>使用统计信息</returns>
-    public PageUsageInfo GetUsageInfo()
-    {
-        ThrowIfDisposed();
-        return new PageUsageInfo
-        {
-            PageID = PageID,
-            PageType = PageType,
-            UsedBytes = DataSize - Header.FreeBytes,
-            FreeBytes = Header.FreeBytes,
-            ItemCount = Header.ItemCount,
-            UsageRatio = (double)(DataSize - Header.FreeBytes) / DataSize,
-            IsDirty = IsDirty,
-            Version = Header.Version,
-            ModifiedAt = new DateTime(Header.ModifiedAt, DateTimeKind.Utc)
-        };
-    }
-
-    /// <summary>
-    /// 检查是否已释放
-    /// </summary>
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(Page));
-    }
-
-    /// <summary>
-    /// 释放资源
-    /// </summary>
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
-            // 这里可以添加清理逻辑，如释放大型缓冲区等
-            _disposed = true;
-        }
-    }
-
-    /// <summary>
-    /// 重写 ToString 方法
-    /// </summary>
-    public override string ToString()
-    {
-        return Header.ToString();
     }
 }
 
-/// <summary>
-/// 页面使用统计信息
-/// </summary>
-public sealed class PageUsageInfo
-{
-    public uint PageID { get; init; }
-    public PageType PageType { get; init; }
-    public int UsedBytes { get; init; }
-    public int FreeBytes { get; init; }
-    public int ItemCount { get; init; }
-    public double UsageRatio { get; init; }
-    public bool IsDirty { get; init; }
-    public uint Version { get; init; }
-    public DateTime ModifiedAt { get; init; }
-
-    public override string ToString()
-    {
-        return $"Page[{PageID}] {PageType}: {UsedBytes}/{UsedBytes + FreeBytes} bytes ({UsageRatio:P1}), {ItemCount} items, V{Version}";
-    }
+public sealed class PageUsageInfo { public uint PageID { get; init; } public PageType PageType { get; init; } public int FreeBytes { get; init; } public int ItemCount { get; init; } public bool IsDirty { get; init; } 
+    public override string ToString() => $"Page[{PageID}] Type={PageType} Free={FreeBytes} Items={ItemCount} Dirty={IsDirty}";
 }

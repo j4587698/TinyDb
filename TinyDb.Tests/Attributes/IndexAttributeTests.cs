@@ -85,8 +85,8 @@ public class IndexAttributeTests
         await Assert.That(indexManager.IndexExists("idx_name_age")).IsTrue();
         var index = indexManager.GetIndex("idx_name_age");
         await Assert.That(index).IsNotNull();
-        await Assert.That(index!.Fields).Contains("Name");
-        await Assert.That(index.Fields).Contains("Age");
+        await Assert.That(index!.Fields).Contains("name");
+        await Assert.That(index.Fields).Contains("age");
     }
 
     [Test]

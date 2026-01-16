@@ -311,15 +311,9 @@ public struct DatabaseHeader
         Checksum = 0;
 
         var data = ToByteArray();
-        uint checksum = 0;
-
-        for (int i = 0; i < Size; i++)
-        {
-            if (i >= 52 && i < 56) // 跳过校验和字段本身 (52-55字节)
-                continue;
-
-            checksum += data[i];
-        }
+        
+        // 使用 CRC32 算法计算校验和
+        var checksum = System.IO.Hashing.Crc32.HashToUInt32(data);
 
         // 恢复原始校验和
         Checksum = originalChecksum;

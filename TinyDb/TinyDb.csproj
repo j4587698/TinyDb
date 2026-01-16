@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFrameworks>net9.0;net8.0</TargetFrameworks>
+        <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
@@ -36,19 +36,21 @@
 
         <!-- 兼容性配置 -->
         <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+        <NoWarn>$(NoWarn);CS8602;IL2091</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
-        <PackageReference Include="System.Collections.Immutable" Version="8.0.0" />
-        <PackageReference Include="System.Memory" Version="4.5.5" />
-        <PackageReference Include="System.Threading.Channels" Version="8.0.0" />
+        <InternalsVisibleTo Include="TinyDb.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="3.0.1" />
+        <PackageReference Include="System.IO.Hashing" Version="10.0.1" />
+        <PackageReference Include="System.IO.Pipelines" Version="10.0.1" />
     </ItemGroup>
 
     <ItemGroup Condition="'$(PublishTrimmed)' != 'true'">
-        <ProjectReference Include="../TinyDb.SourceGenerator/TinyDb.SourceGenerator.csproj"
-                          OutputItemType="Analyzer"
-                          ReferenceOutputAssembly="false" />
+        <ProjectReference Include="../TinyDb.SourceGenerator/TinyDb.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     </ItemGroup>
 
     <!-- NuGet 包内容配置 -->
@@ -64,16 +66,12 @@
 
     <!-- 包含SourceGenerator DLL作为分析器 - 静态声明 -->
     <ItemGroup Condition="Exists('../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll')">
-        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll"
-              Pack="true"
-              PackagePath="analyzers/dotnet/cs" />
+        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll" Pack="true" PackagePath="analyzers/dotnet/cs" />
     </ItemGroup>
 
     <!-- 打包前的目标：确保 SourceGenerator 已构建 -->
     <Target Name="BuildSourceGeneratorBeforePack" BeforeTargets="GenerateNuspec">
-        <MSBuild Projects="../TinyDb.SourceGenerator/TinyDb.SourceGenerator.csproj"
-                 Properties="Configuration=Release"
-                 Targets="Build" />
+        <MSBuild Projects="../TinyDb.SourceGenerator/TinyDb.SourceGenerator.csproj" Properties="Configuration=Release" Targets="Build" />
     </Target>
 
 </Project>
