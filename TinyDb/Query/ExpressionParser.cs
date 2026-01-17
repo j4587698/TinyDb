@@ -203,9 +203,9 @@ public sealed class ExpressionParser
 
         return unary.NodeType switch
         {
-            ExpressionType.Not => new BinaryExpression(ExpressionType.NotEqual, operand, new ConstantExpression(true)),
+            ExpressionType.Not => new UnaryExpression(ExpressionType.Not, operand, typeof(bool)),
             ExpressionType.Negate => new BinaryExpression(ExpressionType.Subtract, new ConstantExpression(0), operand),
-            ExpressionType.Convert => ParseExpression(unary.Operand), // 类型转换，直接解析操作数
+            ExpressionType.Convert => new UnaryExpression(ExpressionType.Convert, operand, unary.Type),
             _ => throw new NotSupportedException($"Unary operation {unary.NodeType} is not supported")
         };
     }
@@ -218,6 +218,13 @@ public sealed class ExpressionParser
     private QueryExpression ParseMethodCallExpression(System.Linq.Expressions.MethodCallExpression methodCall)
     {
         var methodName = methodCall.Method.Name;
+
+        // Handle Convert.To...
+        if (methodCall.Method.DeclaringType == typeof(Convert) && methodName.StartsWith("To") && methodCall.Arguments.Count == 1)
+        {
+            var arg = ParseExpression(methodCall.Arguments[0]);
+            return new UnaryExpression(ExpressionType.Convert, arg, methodCall.Type);
+        }
 
         // 处理一些常见的字符串方法
         return methodName switch

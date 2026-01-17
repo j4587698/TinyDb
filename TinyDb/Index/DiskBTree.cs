@@ -115,6 +115,9 @@ public sealed class DiskBTree : IDisposable
         {
             var newChildPage = _pm.NewPage(PageType.Index);
             var newChild = new DiskBTreeNode(newChildPage, _pm);
+            // Ensure garbage from recycled page is cleared
+            newChild.Keys.Clear(); newChild.ChildrenIds.Clear(); newChild.Values.Clear();
+            
             newChild.SetLeaf(root.IsLeaf);
             newChild.Keys.AddRange(root.Keys);
             newChild.ChildrenIds.AddRange(root.ChildrenIds);
@@ -178,6 +181,9 @@ public sealed class DiskBTree : IDisposable
     private void SplitChild(DiskBTreeNode parent, int index, DiskBTreeNode child)
     {
         var newNode = new DiskBTreeNode(_pm.NewPage(PageType.Index), _pm);
+        // Ensure garbage from recycled page is cleared
+        newNode.Keys.Clear(); newNode.ChildrenIds.Clear(); newNode.Values.Clear();
+
         newNode.SetLeaf(child.IsLeaf);
         newNode.SetParent(parent.PageId);
         

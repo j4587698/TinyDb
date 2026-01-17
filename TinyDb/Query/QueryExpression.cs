@@ -91,3 +91,20 @@ public sealed class FunctionExpression : QueryExpression
         Argument = argument;
     }
 }
+
+/// <summary>
+/// 一元表达式（如 Convert, Not）
+/// </summary>
+public sealed class UnaryExpression : QueryExpression
+{
+    public override ExpressionType NodeType { get; }
+    public QueryExpression Operand { get; }
+    public Type Type { get; } // Target type for conversion
+
+    public UnaryExpression(ExpressionType nodeType, QueryExpression operand, Type type)
+    {
+        NodeType = nodeType;
+        Operand = operand;
+        Type = type;
+    }
+}

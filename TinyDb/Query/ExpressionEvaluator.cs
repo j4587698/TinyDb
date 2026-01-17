@@ -24,6 +24,7 @@ public static class ExpressionEvaluator
             ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
             BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
             MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, entity),
+            UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, entity),
             ParameterExpression paramExpr => true,
             FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
@@ -43,6 +44,7 @@ public static class ExpressionEvaluator
             ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
             BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, document),
             MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, document),
+            UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, document),
             ParameterExpression paramExpr => true,
             FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, document),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
@@ -57,6 +59,93 @@ public static class ExpressionEvaluator
         }
 
         throw new InvalidOperationException($"Constant expression must be boolean, got {expression.Value?.GetType().Name}");
+    }
+
+    private static bool EvaluateUnaryBooleanExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(UnaryExpression expression, T entity)
+        where T : class, new()
+    {
+        var val = EvaluateExpressionValue(expression, entity);
+        return val is bool b && b;
+    }
+
+    private static bool EvaluateUnaryBooleanExpression(UnaryExpression expression, BsonDocument document)
+    {
+        var val = EvaluateExpressionValue(expression, document);
+        return val is bool b && b;
+    }
+
+    private static object? EvaluateExpressionValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
+        where T : class, new()
+    {
+        return expression switch
+        {
+            ConstantExpression constExpr => constExpr.Value,
+            MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
+            UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, entity),
+            ParameterExpression => entity,
+            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
+            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
+        };
+    }
+
+    private static object? EvaluateExpressionValue(QueryExpression expression, BsonDocument document)
+    {
+        return expression switch
+        {
+            ConstantExpression constExpr => constExpr.Value,
+            MemberExpression memberExpr => GetMemberValue(memberExpr, document),
+            UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, document),
+            ParameterExpression => document,
+            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, document),
+            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
+        };
+    }
+
+    private static object? EvaluateUnaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(UnaryExpression expression, T entity)
+        where T : class, new()
+    {
+        var value = EvaluateExpressionValue(expression.Operand, entity);
+        return EvaluateUnary(expression.NodeType, value, expression.Type);
+    }
+
+    private static object? EvaluateUnaryExpression(UnaryExpression expression, BsonDocument document)
+    {
+        var value = EvaluateExpressionValue(expression.Operand, document);
+        return EvaluateUnary(expression.NodeType, value, expression.Type);
+    }
+
+    private static object? EvaluateUnary(ExpressionType nodeType, object? value, Type targetType)
+    {
+        if (nodeType == ExpressionType.Convert)
+        {
+            if (value == null) return null;
+            // Handle basic numeric conversions
+            if (IsNumericType(value) && IsNumericType(Activator.CreateInstance(targetType) ?? 0))
+            {
+                return Convert.ChangeType(value, targetType);
+            }
+            // Other conversions?
+            return Convert.ChangeType(value, targetType);
+        }
+        else if (nodeType == ExpressionType.Not)
+        {
+            if (value is bool b) return !b;
+            throw new InvalidOperationException("Not operator requires boolean operand");
+        }
+        throw new NotSupportedException($"Unary operation {nodeType} is not supported");
+    }
+
+    private static bool EvaluateMemberExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
+        where T : class, new()
+    {
+        var value = GetMemberValue(expression, entity);
+        return value is bool boolValue ? boolValue : value != null;
+    }
+
+    private static bool EvaluateMemberExpression(MemberExpression expression, BsonDocument document)
+    {
+        var value = GetMemberValue(expression, document);
+        return value is bool boolValue ? boolValue : value != null;
     }
 
     private static bool EvaluateBinaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BinaryExpression expression, T entity)
@@ -89,44 +178,6 @@ public static class ExpressionEvaluator
             ExpressionType.AndAlso => leftValue is bool leftBool && rightValue is bool rightBool && leftBool && rightBool,
             ExpressionType.OrElse => leftValue is bool leftBool2 && rightValue is bool rightBool2 && (leftBool2 || rightBool2),
             _ => throw new NotSupportedException($"Binary operation {nodeType} is not supported")
-        };
-    }
-
-    private static bool EvaluateMemberExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
-        where T : class, new()
-    {
-        var value = GetMemberValue(expression, entity);
-        return value is bool boolValue ? boolValue : value != null;
-    }
-
-    private static bool EvaluateMemberExpression(MemberExpression expression, BsonDocument document)
-    {
-        var value = GetMemberValue(expression, document);
-        return value is bool boolValue ? boolValue : value != null;
-    }
-
-    private static object? EvaluateExpressionValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
-        where T : class, new()
-    {
-        return expression switch
-        {
-            ConstantExpression constExpr => constExpr.Value,
-            MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
-            ParameterExpression => entity,
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
-        };
-    }
-
-    private static object? EvaluateExpressionValue(QueryExpression expression, BsonDocument document)
-    {
-        return expression switch
-        {
-            ConstantExpression constExpr => constExpr.Value,
-            MemberExpression memberExpr => GetMemberValue(memberExpr, document),
-            ParameterExpression => document,
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, document),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }
 

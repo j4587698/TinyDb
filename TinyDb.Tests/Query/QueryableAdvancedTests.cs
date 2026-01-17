@@ -23,11 +23,11 @@ public class QueryableAdvancedTests : IDisposable
         _products = _engine.GetCollection<Product>();
         
         // Seed data
-        _products.Insert(new Product { Name = "Laptop", Category = "Electronics", Price = 1000, InStock = true });
-        _products.Insert(new Product { Name = "Mouse", Category = "Electronics", Price = 50, InStock = true });
-        _products.Insert(new Product { Name = "Keyboard", Category = "Electronics", Price = 80, InStock = false });
-        _products.Insert(new Product { Name = "Chair", Category = "Furniture", Price = 150, InStock = true });
-        _products.Insert(new Product { Name = "Desk", Category = "Furniture", Price = 200, InStock = true });
+        _products.Insert(new Product { Id = ObjectId.NewObjectId(), Name = "Laptop", Category = "Electronics", Price = 1000, InStock = true });
+        _products.Insert(new Product { Id = ObjectId.NewObjectId(), Name = "Mouse", Category = "Electronics", Price = 50, InStock = true });
+        _products.Insert(new Product { Id = ObjectId.NewObjectId(), Name = "Keyboard", Category = "Electronics", Price = 80, InStock = false });
+        _products.Insert(new Product { Id = ObjectId.NewObjectId(), Name = "Chair", Category = "Furniture", Price = 150, InStock = true });
+        _products.Insert(new Product { Id = ObjectId.NewObjectId(), Name = "Desk", Category = "Furniture", Price = 200, InStock = true });
     }
 
     [Test]

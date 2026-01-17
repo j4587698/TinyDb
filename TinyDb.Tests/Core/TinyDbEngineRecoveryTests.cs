@@ -59,11 +59,11 @@ public class TinyDbEngineRecoveryTests : IDisposable
 
         var dbBackup = File.ReadAllBytes(_testDbPath);
 
-        // Step 2: Add more data
+        // Step 2: Add more data (use new IDs to avoid unique constraint violation)
         using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { EnableJournaling = true }))
         {
             var col = engine.GetCollection<DataItem>();
-            for(int i=0; i<5; i++) col.Insert(new DataItem { Id = i });
+            for(int i=10; i<15; i++) col.Insert(new DataItem { Id = i, Value = $"V{i}" });
             
             // Backup WAL while active (simulate crash state before full flush)
             File.Copy(walPath, walPath + ".bak", true);

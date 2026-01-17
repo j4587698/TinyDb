@@ -41,8 +41,9 @@ public class QueryExecutorComparisonFullTests : IDisposable
         col.Insert(new Item { Id = 3, Value = 30m }); // decimal
         
         // We use Find with filter which uses QueryExecutor internally
-        await Assert.That(col.Find(x => x.Value != null && (decimal)x.Value > 15m).Count()).IsEqualTo(2);
-        await Assert.That(col.Find(x => x.Value != null && (double)x.Value < 25.0).Count()).IsEqualTo(2);
+        // Safe conversion using Convert for mixed types in 'object'
+        await Assert.That(col.Find(x => x.Value != null && Convert.ToDecimal(x.Value) > 15m).Count()).IsEqualTo(2);
+        await Assert.That(col.Find(x => x.Value != null && Convert.ToDouble(x.Value) < 25.0).Count()).IsEqualTo(2);
     }
 
     [Test]

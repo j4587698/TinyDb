@@ -605,6 +605,8 @@ public sealed class TinyDbEngine : IDisposable
 
             foreach (var d in docs)
             {
+                if (d == null) continue;
+
                 try
                 {
                     // Prepare document (Id, Collection)

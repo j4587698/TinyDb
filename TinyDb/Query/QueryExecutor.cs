@@ -45,7 +45,16 @@ public sealed class QueryExecutor
             throw new ArgumentException("Collection name cannot be null, empty, or whitespace", nameof(collectionName));
 
         // 创建查询执行计划
-        var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression);
+        QueryExecutionPlan executionPlan;
+        try
+        {
+            executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression);
+        }
+        catch
+        {
+            // 优化器可能因为不支持的表达式抛出异常，此时回退到全表扫描
+            return ExecuteFullTableScan<T>(collectionName, expression);
+        }
 
         // 根据执行计划选择查询策略
         return executionPlan.Strategy switch
@@ -227,7 +236,21 @@ public sealed class QueryExecutor
         where T : class, new()
     {
         var tx = _engine.GetCurrentTransaction();
-        var queryExpression = expression != null ? _expressionParser.Parse(expression) : null;
+        QueryExpression? queryExpression = null;
+        bool fallbackToMemoryFilter = false;
+
+        if (expression != null)
+        {
+            try
+            {
+                queryExpression = _expressionParser.Parse(expression);
+            }
+            catch
+            {
+                // 解析失败（例如包含不支持的方法），回退到内存过滤
+                fallbackToMemoryFilter = true;
+            }
+        }
 
         // 1. 准备事务覆盖层
         ConcurrentDictionary<string, BsonDocument?>? txOverlay = null;
@@ -284,11 +307,20 @@ public sealed class QueryExecutor
         }
 
         // 3. 评估与映射 (继续并行化)
-        return docs
-            //.AsParallel() // docs is already ParallelQuery<BsonDocument> due to Concat fixes
+        var result = docs
+            //.AsParallel() 
             .Where(doc => queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, doc!))
             .Select(doc => AotBsonMapper.FromDocument<T>(doc!))
             .Where(entity => entity != null)!;
+
+        // 4. 如果 BSON 解析失败，应用内存过滤
+        if (fallbackToMemoryFilter && expression != null)
+        {
+            var compiled = expression.Compile();
+            result = result.Where(compiled);
+        }
+
+        return result;
     }
 
     /// <summary>
