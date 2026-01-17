@@ -45,16 +45,7 @@ public sealed class QueryExecutor
             throw new ArgumentException("Collection name cannot be null, empty, or whitespace", nameof(collectionName));
 
         // 创建查询执行计划
-        QueryExecutionPlan executionPlan;
-        try
-        {
-            executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression);
-        }
-        catch
-        {
-            // 优化器可能因为不支持的表达式抛出异常，此时回退到全表扫描
-            return ExecuteFullTableScan<T>(collectionName, expression);
-        }
+        var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression);
 
         // 根据执行计划选择查询策略
         return executionPlan.Strategy switch

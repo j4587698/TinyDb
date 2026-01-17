@@ -223,6 +223,13 @@ public sealed class TinyDbEngine : IDisposable
                     if (!_header.IsValid()) throw new InvalidOperationException();
                     // 初始化 PageManager (现有数据库)
                     _pageManager.Initialize(_header.TotalPages, _header.FirstFreePage);
+                    
+                    // 关键修复：如果在崩溃前分配了页面但 Header 未更新，
+                    // WAL 重放后 PageManager 知道最新状态，需反向同步回 Header
+                    if (_pageManager.TotalPages > _header.TotalPages || _pageManager.FirstFreePageID != _header.FirstFreePage)
+                    {
+                        WriteHeader();
+                    }
                 }
                 _header.EnableJournaling = _options.EnableJournaling;
                 InitializeSystemPages();
@@ -647,6 +654,10 @@ public sealed class TinyDbEngine : IDisposable
                     
                     docsToUpdateIndex?.Add((doc, id));
                     insertedCount++;
+
+                    // 关键修复：确保 Header 实时反映最新的 TotalPages 和 FirstFreePage 状态
+                    // 无论是否是新页面(isN)，只要分配了页面，FirstFreePage 就可能改变，必须同步。
+                    lock (_lock) { WriteHeader(); }
                 }
                 catch (Exception ex)
                 {
@@ -690,6 +701,7 @@ public sealed class TinyDbEngine : IDisposable
         var st = GetCollectionState(col);
         var ds = new List<BsonDocument>();
         
+        // 获取所有属于该集合的页面ID并排序，以确保存储顺序读取
         var pages = st.OwnedPages.Keys.ToList();
         pages.Sort();
         
@@ -698,10 +710,12 @@ public sealed class TinyDbEngine : IDisposable
             try
             {
                 var p = _pageManager.GetPage(pageId);
+                // 验证页面类型和归属（双重检查）
                 if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
 
                 foreach (var doc in _dataPageAccess.ScanDocumentsFromPage(p))
                 {
+                    // 再次检查集合标签，防止页面跨集合共享时的泄露
                     if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
                     ds.Add(ResolveLargeDocument(doc));
                 }
@@ -710,6 +724,7 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         var tx = GetCurrentTransaction();
+        // 关键修复：即使 ds 为空，也应该进行事务合并，以包含事务中新增但尚未落盘的文档
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
     }
 
@@ -798,10 +813,11 @@ public sealed class TinyDbEngine : IDisposable
             var span = new ReadOnlySpan<byte>(stream.GetBuffer(), 0, (int)stream.Length);
             _dataPageAccess.AppendDocumentToPage(p, span);
             st.Index.Set(id.ToString() ?? "", new DocumentLocation(p.PageID, i));
-            if (isN)
-            {
-                lock (_lock) { _header.UsedPages++; WriteHeader(); }
-            }
+            if (isN) lock (_lock) { _header.UsedPages++; }
+            
+            // 无论是否是新页面，同步 PageManager 状态到 Header
+            lock(_lock) { WriteHeader(); }
+
             _dataPageAccess.PersistPage(p);
         }
         if (u && idx != null) idx.InsertDocument(doc, id);

@@ -636,6 +636,7 @@ public sealed class DiskBTree : IDisposable
             node.Keys.Insert(0, key);
             node.Values.Insert(0, val);
             
+            // 更新父节点的分隔符为当前节点新的第一个键
             parent.Keys[leftSiblingIndex] = node.Keys[0];
         }
         else
@@ -645,6 +646,7 @@ public sealed class DiskBTree : IDisposable
             leftSibling.Keys.RemoveAt(leftSibling.KeyCount - 1);
             leftSibling.ChildrenIds.RemoveAt(leftSibling.ChildrenIds.Count - 1);
             
+            // 旋转操作：父节点分隔符移入子节点，左兄弟最后一个键移入父节点
             var separator = parent.Keys[leftSiblingIndex];
             node.Keys.Insert(0, separator);
             node.ChildrenIds.Insert(0, childId);
@@ -673,6 +675,7 @@ public sealed class DiskBTree : IDisposable
             node.Keys.Add(key);
             node.Values.Add(val);
             
+            // 更新父节点的分隔符为右兄弟新的第一个键
             parent.Keys[nodeIndex] = rightSibling.Keys[0];
         }
         else
@@ -682,6 +685,7 @@ public sealed class DiskBTree : IDisposable
             rightSibling.Keys.RemoveAt(0);
             rightSibling.ChildrenIds.RemoveAt(0);
             
+            // 旋转操作：父节点分隔符移入子节点，右兄弟第一个键移入父节点
             var separator = parent.Keys[nodeIndex];
             node.Keys.Add(separator);
             node.ChildrenIds.Add(childId);

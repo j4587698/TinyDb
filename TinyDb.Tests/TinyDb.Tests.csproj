@@ -7,23 +7,21 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <PublishAot>false</PublishAot>
-    <!-- MTP 模式下，必须设置为 false 以避免 SDK 注入 VSTest 目标 -->
-    <IsTestProject>false</IsTestProject>
-    <!-- 显式禁用 VSTest 导入 -->
-    <ImportVSTestTargets>false</ImportVSTestTargets>
-    <GenerateProgramFile>false</GenerateProgramFile>
     
-    <!-- 启用新的测试平台 -->
+    <!-- 按照官方 MTP 规范配置 -->
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+    
+    <!-- 显式声明使用 MTP 运行器而非 VSTest -->
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
     <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
     
-    <OutputType>Exe</OutputType>
     <NoWarn>$(NoWarn);TUnit0018;TUnit0023;CS8604;CS8602;CS8600;CS1718;CS8769</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- 暂时移除 CodeCoverage 以排除 VSTest 依赖冲突 -->
-    <!-- <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" /> -->
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.1.0" />
     <PackageReference Include="TUnit" Version="1.6.25" />
   </ItemGroup>
 
