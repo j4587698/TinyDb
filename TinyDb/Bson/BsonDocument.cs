@@ -404,7 +404,18 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     public override sbyte ToSByte(IFormatProvider? provider) => Convert.ToSByte(Count, provider);
     public override float ToSingle(IFormatProvider? provider) => Convert.ToSingle(Count, provider);
     public override string ToString(IFormatProvider? provider) => ToString();
-    public override object ToType(Type conversionType, IFormatProvider? provider) => Convert.ChangeType(this, conversionType, provider);
+    public override object ToType(Type conversionType, IFormatProvider? provider)
+    {
+        if (conversionType == typeof(BsonDocument)) return this;
+        if (conversionType == typeof(Dictionary<string, object?>)) return ToDictionary();
+        
+        if (Type.GetTypeCode(conversionType) != TypeCode.Object)
+        {
+            return Convert.ChangeType(this, conversionType, provider);
+        }
+        
+        throw new InvalidCastException($"Cannot convert BsonDocument to {conversionType.Name}");
+    }
     public override ushort ToUInt16(IFormatProvider? provider) => Convert.ToUInt16(Count, provider);
     public override uint ToUInt32(IFormatProvider? provider) => Convert.ToUInt32(Count, provider);
     public override ulong ToUInt64(IFormatProvider? provider) => Convert.ToUInt64(Count, provider);
