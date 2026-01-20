@@ -153,6 +153,22 @@ public static class ExpressionEvaluator
     private static object? EvaluateBinaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BinaryExpression expression, T entity)
         where T : class, new()
     {
+        // Short-circuit logic
+        if (expression.NodeType == ExpressionType.AndAlso)
+        {
+            var left = EvaluateExpressionValue(expression.Left, entity);
+            if (left is bool b && !b) return false;
+            var right = EvaluateExpressionValue(expression.Right, entity);
+            return right is bool rb && rb;
+        }
+        if (expression.NodeType == ExpressionType.OrElse)
+        {
+            var left = EvaluateExpressionValue(expression.Left, entity);
+            if (left is bool b && b) return true;
+            var right = EvaluateExpressionValue(expression.Right, entity);
+            return right is bool rb && rb;
+        }
+
         var leftValue = EvaluateExpressionValue(expression.Left, entity);
         var rightValue = EvaluateExpressionValue(expression.Right, entity);
 
@@ -161,6 +177,22 @@ public static class ExpressionEvaluator
 
     private static object? EvaluateBinaryExpression(BinaryExpression expression, BsonDocument document)
     {
+        // Short-circuit logic
+        if (expression.NodeType == ExpressionType.AndAlso)
+        {
+            var left = EvaluateExpressionValue(expression.Left, document);
+            if (left is bool b && !b) return false;
+            var right = EvaluateExpressionValue(expression.Right, document);
+            return right is bool rb && rb;
+        }
+        if (expression.NodeType == ExpressionType.OrElse)
+        {
+            var left = EvaluateExpressionValue(expression.Left, document);
+            if (left is bool b && b) return true;
+            var right = EvaluateExpressionValue(expression.Right, document);
+            return right is bool rb && rb;
+        }
+
         var leftValue = EvaluateExpressionValue(expression.Left, document);
         var rightValue = EvaluateExpressionValue(expression.Right, document);
 
