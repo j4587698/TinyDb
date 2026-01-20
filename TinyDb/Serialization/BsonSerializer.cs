@@ -301,6 +301,15 @@ public sealed class BsonWriter : IDisposable
             case BsonRegularExpression regex:
                 WriteRegularExpression(regex.Pattern, regex.Options);
                 break;
+            case BsonJavaScript js:
+                WriteJavaScript(js.Code);
+                break;
+            case BsonJavaScriptWithScope jsScope:
+                WriteJavaScriptWithScope(jsScope.Code, jsScope.Scope);
+                break;
+            case BsonSymbol symbol:
+                WriteSymbol(symbol.Name);
+                break;
             case BsonTimestamp timestamp:
                 WriteTimestamp(timestamp.Value);
                 break;
@@ -537,26 +546,70 @@ public sealed class BsonWriter : IDisposable
         WriteCString(options);
     }
 
-    // TODO: 实现其他BSON类型的写入方法
-    // public void WriteJavaScript(string code) { ... }
-    // public void WriteJavaScriptWithScope(string code, BsonDocument scope) { ... }
-    // public void WriteSymbol(string name) { ... }
-    // public void WriteDecimal128(decimal value) { ... }
+    /// <summary>
+    /// 写入 JavaScript 代码
+    /// </summary>
+    /// <param name="code">JavaScript 代码</param>
+    public void WriteJavaScript(string code)
+    {
+        ThrowIfDisposed();
+        WriteString(code);
+    }
+
+    /// <summary>
+    /// 写入带有作用域的 JavaScript 代码
+    /// </summary>
+    /// <param name="code">JavaScript 代码</param>
+    /// <param name="scope">作用域文档</param>
+    public void WriteJavaScriptWithScope(string code, BsonDocument scope)
+    {
+        ThrowIfDisposed();
+        if (code == null) throw new ArgumentNullException(nameof(code));
+        if (scope == null) throw new ArgumentNullException(nameof(scope));
+
+        _writer.Flush();
+        var sizePosition = _stream.Position;
+        _writer.Write(0); // 占位符
+
+        WriteString(code);
+        WriteDocument(scope);
+
+        _writer.Flush();
+        var endPosition = _stream.Position;
+        var totalSize = (int)(endPosition - sizePosition);
+        _stream.Seek(sizePosition, SeekOrigin.Begin);
+        _writer.Write(totalSize);
+        _writer.Flush();
+        _stream.Seek(endPosition, SeekOrigin.Begin);
+    }
+
+    /// <summary>
+    /// 写入符号
+    /// </summary>
+    /// <param name="name">符号名称</param>
+    public void WriteSymbol(string name)
+    {
+        ThrowIfDisposed();
+        WriteString(name);
+    }
 
     /// <summary>
     /// 写入 Decimal128 值
     /// </summary>
     /// <param name="value">Decimal128 值</param>
-    public void WriteDecimal128(decimal value)
+    public void WriteDecimal128(Decimal128 value)
     {
         ThrowIfDisposed();
-        // BSON Decimal128 使用 128 位十进制浮点数
-        // 这里我们将其存储为字符串以保持精度
-        var stringValue = value.ToString(CultureInfo.InvariantCulture);
-        var bytes = Encoding.UTF8.GetBytes(stringValue);
-        _writer.Write(bytes.Length + 1); // Length includes null terminator
-        _writer.Write(bytes);
-        _writer.Write((byte)0); // Null terminator
+        _writer.Write(value.LowBits);
+        _writer.Write(value.HighBits);
+    }
+
+    /// <summary>
+    /// 写入 Decimal128 值 (兼容重载)
+    /// </summary>
+    public void WriteDecimal128(decimal value)
+    {
+        WriteDecimal128(new Decimal128(value));
     }
 
     /// <summary>
@@ -659,6 +712,9 @@ public sealed class BsonReader : IDisposable
             BsonType.Array => ReadArray(),
             BsonType.Binary => ReadBinary(),
             BsonType.RegularExpression => ReadRegularExpression(),
+            BsonType.JavaScript => ReadJavaScript(),
+            BsonType.JavaScriptWithScope => ReadJavaScriptWithScope(),
+            BsonType.Symbol => ReadSymbol(),
             BsonType.Timestamp => ReadTimestamp(),
             BsonType.MinKey => BsonMinKey.Value,
             BsonType.MaxKey => BsonMaxKey.Value,
@@ -793,12 +849,15 @@ public sealed class BsonReader : IDisposable
             case BsonType.String:
             case BsonType.JavaScript:
             case BsonType.Symbol:
-            case BsonType.Decimal128:
                 var strLen = _reader.ReadInt32();
                 SkipBytes(strLen); // strLen includes null terminator
                 break;
+            case BsonType.Decimal128:
+                SkipBytes(16);
+                break;
             case BsonType.Document:
             case BsonType.Array:
+            case BsonType.JavaScriptWithScope:
                 var docLen = _reader.ReadInt32();
                 SkipBytes(docLen - 4); // docLen includes the int32 size itself
                 break;
@@ -1009,23 +1068,13 @@ public sealed class BsonReader : IDisposable
     /// <summary>
     /// 读取 Decimal128 值
     /// </summary>
-    /// <returns>Decimal128 值</returns>
+    /// <returns>BsonDecimal128</returns>
     public BsonDecimal128 ReadDecimal128()
     {
         ThrowIfDisposed();
-        var length = _reader.ReadInt32();
-        var bytes = _reader.ReadBytes(length - 1); // 不包含 null 终止符
-        var nullTerminator = _reader.ReadByte();
-        if (nullTerminator != 0)
-        {
-            throw new InvalidOperationException("Decimal128 null terminator expected");
-        }
-        var stringValue = Encoding.UTF8.GetString(bytes);
-        if (decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out var decimalValue))
-        {
-            return new BsonDecimal128(decimalValue);
-        }
-        throw new InvalidOperationException($"Invalid Decimal128 value: {stringValue}");
+        var lo = _reader.ReadUInt64();
+        var hi = _reader.ReadUInt64();
+        return new BsonDecimal128(new Decimal128(lo, hi));
     }
 
     /// <summary>
@@ -1064,11 +1113,38 @@ public sealed class BsonReader : IDisposable
         return new BsonTimestamp(value);
     }
 
-    // TODO: 实现其他BSON类型的读取方法
-    // public BsonJavaScript ReadJavaScript() { ... }
-    // public BsonSymbol ReadSymbol() { ... }
-    // public BsonJavaScript ReadJavaScriptWithScope() { ... }
-    // public BsonDecimal128 ReadDecimal128() { ... }
+    /// <summary>
+    /// 读取 JavaScript 代码
+    /// </summary>
+    /// <returns>BsonJavaScript</returns>
+    public BsonJavaScript ReadJavaScript()
+    {
+        ThrowIfDisposed();
+        return new BsonJavaScript(ReadString().Value);
+    }
+
+    /// <summary>
+    /// 读取带有作用域的 JavaScript 代码
+    /// </summary>
+    /// <returns>BsonJavaScriptWithScope</returns>
+    public BsonJavaScriptWithScope ReadJavaScriptWithScope()
+    {
+        ThrowIfDisposed();
+        var totalSize = _reader.ReadInt32();
+        var code = ReadString().Value;
+        var scope = ReadDocument();
+        return new BsonJavaScriptWithScope(code, scope);
+    }
+
+    /// <summary>
+    /// 读取符号
+    /// </summary>
+    /// <returns>BsonSymbol</returns>
+    public BsonSymbol ReadSymbol()
+    {
+        ThrowIfDisposed();
+        return new BsonSymbol(ReadString().Value);
+    }
 
     /// <summary>
     /// 检查是否已释放
