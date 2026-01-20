@@ -227,12 +227,13 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
             var countComparison = Count.CompareTo(otherDoc.Count);
             if (countComparison != 0) return countComparison;
 
-            foreach (var kvp in _elements)
+            var sortedKeys = _elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            foreach (var key in sortedKeys)
             {
-                if (!otherDoc.TryGetValue(kvp.Key, out var otherValue))
+                if (!otherDoc.TryGetValue(key, out var otherValue))
                     return 1;
 
-                var valueComparison = kvp.Value.CompareTo(otherValue);
+                var valueComparison = _elements[key].CompareTo(otherValue);
                 if (valueComparison != 0) return valueComparison;
             }
 
@@ -264,7 +265,15 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// <summary>
     /// 获取哈希码
     /// </summary>
-    public override int GetHashCode() => _elements.GetHashCode();
+    public override int GetHashCode()
+    {
+        int hash = 0;
+        foreach (var kvp in _elements)
+        {
+            hash ^= HashCode.Combine(kvp.Key, kvp.Value);
+        }
+        return hash;
+    }
 
     /// <summary>
     /// 转换为 JSON 字符串
