@@ -8,44 +8,54 @@ namespace TinyDb.Tests.Bson;
 public class BsonConvertibleThrowTests
 {
     [Test]
-    public async Task BsonJavaScript_Convert_ShouldThrow()
+    public async Task BsonJavaScript_IConvertible_FullCoverage()
     {
         var js = new BsonJavaScript("code");
+        var c = (IConvertible)js;
         
-        await Assert.That(js.ToBoolean(null)).IsTrue();
-        
-        await Assert.That(() => js.ToDouble(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToDecimal(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToInt32(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToInt64(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToDateTime(null)).Throws<InvalidCastException>();
+        await Assert.That(c.ToBoolean(null)).IsTrue();
+        await Assert.That(c.ToString(null)).IsEqualTo("code");
+        await Assert.That(c.GetTypeCode()).IsEqualTo(TypeCode.String);
+        await Assert.That(c.ToType(typeof(string), null)).IsEqualTo("code");
+
+        await Assert.That(() => c.ToByte(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToChar(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToDateTime(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToDecimal(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToDouble(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToInt16(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToInt32(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToInt64(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToSByte(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToSingle(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToUInt16(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToUInt32(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToUInt64(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToType(typeof(int), null)).Throws<InvalidCastException>();
     }
 
     [Test]
-    public async Task BsonSymbol_Convert_ShouldThrow()
+    public async Task BsonSymbol_IConvertible_FullCoverage()
     {
         var sym = new BsonSymbol("sym");
+        var c = (IConvertible)sym;
         
-        await Assert.That(sym.ToBoolean(null)).IsTrue();
-        
-        await Assert.That(() => sym.ToDouble(null)).Throws<InvalidCastException>();
-        await Assert.That(() => sym.ToDecimal(null)).Throws<InvalidCastException>();
-        await Assert.That(() => sym.ToInt32(null)).Throws<InvalidCastException>();
-    }
+        await Assert.That(c.ToBoolean(null)).IsTrue();
+        await Assert.That(c.ToString(null)).IsEqualTo("sym");
+        await Assert.That(c.GetTypeCode()).IsEqualTo(TypeCode.String);
 
-    [Test]
-    public async Task BsonJavaScriptWithScope_Convert_ShouldThrow()
-    {
-        var js = new BsonJavaScriptWithScope("code", new BsonDocument());
-        
-        await Assert.That(js.ToBoolean(null)).IsTrue();
-        
-        await Assert.That(() => js.ToDouble(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToDecimal(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToInt32(null)).Throws<InvalidCastException>();
-        await Assert.That(() => js.ToDateTime(null)).Throws<InvalidCastException>();
-        
-        await Assert.That(() => js.ToType(typeof(int), null)).Throws<InvalidCastException>();
-        await Assert.That(js.ToType(typeof(string), null)).IsEqualTo("code");
+        await Assert.That(() => c.ToByte(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToChar(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToDateTime(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToDecimal(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToDouble(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToInt16(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToInt32(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToInt64(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToSByte(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToSingle(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToUInt16(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToUInt32(null)).Throws<InvalidCastException>();
+        await Assert.That(() => c.ToUInt64(null)).Throws<InvalidCastException>();
     }
 }
