@@ -22,11 +22,11 @@ public static class ExpressionEvaluator
         return expression switch
         {
             ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
+            BinaryExpression binaryExpr => (bool)EvaluateBinaryExpression(binaryExpr, entity),
             MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, entity),
             UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, entity),
             ParameterExpression paramExpr => true,
-            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
+            FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, entity) ?? false,
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
         };
     }
@@ -42,11 +42,11 @@ public static class ExpressionEvaluator
         return expression switch
         {
             ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, document),
+            BinaryExpression binaryExpr => (bool)EvaluateBinaryExpression(binaryExpr, document),
             MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, document),
             UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, document),
             ParameterExpression paramExpr => true,
-            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, document),
+            FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, document) ?? false,
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
         };
     }
@@ -84,6 +84,7 @@ public static class ExpressionEvaluator
             UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, entity),
             ParameterExpression => entity,
             BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
+            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }
@@ -97,6 +98,7 @@ public static class ExpressionEvaluator
             UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, document),
             ParameterExpression => document,
             BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, document),
+            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, document),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }
@@ -148,7 +150,7 @@ public static class ExpressionEvaluator
         return value is bool boolValue ? boolValue : value != null;
     }
 
-    private static bool EvaluateBinaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BinaryExpression expression, T entity)
+    private static object? EvaluateBinaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BinaryExpression expression, T entity)
         where T : class, new()
     {
         var leftValue = EvaluateExpressionValue(expression.Left, entity);
@@ -157,7 +159,7 @@ public static class ExpressionEvaluator
         return EvaluateBinary(expression.NodeType, leftValue, rightValue);
     }
 
-    private static bool EvaluateBinaryExpression(BinaryExpression expression, BsonDocument document)
+    private static object? EvaluateBinaryExpression(BinaryExpression expression, BsonDocument document)
     {
         var leftValue = EvaluateExpressionValue(expression.Left, document);
         var rightValue = EvaluateExpressionValue(expression.Right, document);
@@ -165,37 +167,190 @@ public static class ExpressionEvaluator
         return EvaluateBinary(expression.NodeType, leftValue, rightValue);
     }
 
-    private static bool EvaluateBinary(ExpressionType nodeType, object? leftValue, object? rightValue)
+    private static object? EvaluateBinary(ExpressionType nodeType, object? leftValue, object? rightValue)
     {
-        return nodeType switch
+        switch (nodeType)
         {
-            ExpressionType.Equal => Equals(leftValue, rightValue),
-            ExpressionType.NotEqual => !Equals(leftValue, rightValue),
-            ExpressionType.GreaterThan => Compare(leftValue, rightValue) > 0,
-            ExpressionType.GreaterThanOrEqual => Compare(leftValue, rightValue) >= 0,
-            ExpressionType.LessThan => Compare(leftValue, rightValue) < 0,
-            ExpressionType.LessThanOrEqual => Compare(leftValue, rightValue) <= 0,
-            ExpressionType.AndAlso => leftValue is bool leftBool && rightValue is bool rightBool && leftBool && rightBool,
-            ExpressionType.OrElse => leftValue is bool leftBool2 && rightValue is bool rightBool2 && (leftBool2 || rightBool2),
-            _ => throw new NotSupportedException($"Binary operation {nodeType} is not supported")
-        };
+            case ExpressionType.Equal: return Compare(leftValue, rightValue) == 0;
+            case ExpressionType.NotEqual: return Compare(leftValue, rightValue) != 0;
+            case ExpressionType.GreaterThan: return Compare(leftValue, rightValue) > 0;
+            case ExpressionType.GreaterThanOrEqual: return Compare(leftValue, rightValue) >= 0;
+            case ExpressionType.LessThan: return Compare(leftValue, rightValue) < 0;
+            case ExpressionType.LessThanOrEqual: return Compare(leftValue, rightValue) <= 0;
+            case ExpressionType.AndAlso: return leftValue is bool leftBool && rightValue is bool rightBool && leftBool && rightBool;
+            case ExpressionType.OrElse: return leftValue is bool leftBool2 && rightValue is bool rightBool2 && (leftBool2 || rightBool2);
+            
+            // Arithmetic Operations
+            case ExpressionType.Add: return EvaluateMathOp(leftValue, rightValue, (a, b) => a + b, (a, b) => a + b);
+            case ExpressionType.Subtract: return EvaluateMathOp(leftValue, rightValue, (a, b) => a - b, (a, b) => a - b);
+            case ExpressionType.Multiply: return EvaluateMathOp(leftValue, rightValue, (a, b) => a * b, (a, b) => a * b);
+            case ExpressionType.Divide: return EvaluateMathOp(leftValue, rightValue, (a, b) => a / b, (a, b) => a / b);
+            
+            default: throw new NotSupportedException($"Binary operation {nodeType} is not supported");
+        }
+    }
+
+    private static object? EvaluateMathOp(object? left, object? right, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc)
+    {
+        if (left == null || right == null) return null; // Or throw?
+        
+        if (left is decimal || right is decimal || left is Decimal128 || right is Decimal128)
+        {
+            return decimalFunc(ToDecimal(left), ToDecimal(right));
+        }
+        
+        var dResult = doubleFunc(ToDouble(left), ToDouble(right));
+        
+        // Try to keep int/long if possible? 
+        // For simplicity, we return double or decimal, unless we want to be strict.
+        // Let's try to return int/long if inputs are int/long?
+        // But doubleFunc returns double.
+        // If inputs are int, maybe we want int result?
+        if ((left is int || left is long) && (right is int || right is long) && dResult == Math.Floor(dResult))
+        {
+             if (dResult >= int.MinValue && dResult <= int.MaxValue) return (int)dResult;
+             return (long)dResult;
+        }
+
+        return dResult;
+    }
+
+    private static decimal ToDecimal(object val)
+    {
+        if (val is Decimal128 d128) return d128.ToDecimal();
+        return Convert.ToDecimal(val);
+    }
+    
+    private static double ToDouble(object val)
+    {
+        return Convert.ToDouble(val);
     }
 
     private static object? GetMemberValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
         where T : class, new()
     {
-        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        object? target = entity;
+        if (expression.Expression != null && expression.Expression.NodeType != ExpressionType.Parameter)
         {
-            return adapter.GetPropertyValue(entity, expression.MemberName);
+            target = EvaluateExpressionValue(expression.Expression, entity);
         }
 
-        return EntityMetadata<T>.TryGetProperty(expression.MemberName, out var property)
-            ? property.GetValue(entity)
-            : null;
+        if (target == null) return null;
+
+        // Handle properties on common types (Unified with BsonDocument logic)
+        if (target is string str)
+        {
+            if (expression.MemberName == "Length") return str.Length;
+        }
+        else if (target is System.Collections.ICollection col)
+        {
+            if (expression.MemberName == "Count") return col.Count;
+        }
+        else if (target is System.Collections.IEnumerable en)
+        {
+            if (expression.MemberName == "Count")
+            {
+                int count = 0;
+                var enumerator = en.GetEnumerator();
+                while (enumerator.MoveNext()) count++;
+                return count;
+            }
+        }
+        else if (target is DateTime dt)
+        {
+            return expression.MemberName switch
+            {
+                "Year" => dt.Year,
+                "Month" => dt.Month,
+                "Day" => dt.Day,
+                "Hour" => dt.Hour,
+                "Minute" => dt.Minute,
+                "Second" => dt.Second,
+                "Date" => dt.Date,
+                "DayOfWeek" => (int)dt.DayOfWeek,
+                _ => null
+            };
+        }
+        else if (target is BsonArray arr)
+        {
+            if (expression.MemberName == "Count") return arr.Count;
+        }
+        else if (target is BsonValue bv && bv.IsArray)
+        {
+            if (expression.MemberName == "Count") return ((BsonArray)bv.RawValue!).Count;
+        }
+
+        // Reflection or AOT Access
+        var type = target.GetType();
+        if (type == typeof(T))
+        {
+            if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+            {
+                return adapter.GetPropertyValue((T)target, expression.MemberName);
+            }
+            return EntityMetadata<T>.TryGetProperty(expression.MemberName, out var property)
+                ? property.GetValue(target)
+                : null;
+        }
+
+        // For nested objects that are not T
+        // We could support AOT if we had a way to lookup adapter by Type, but currently generic.
+        // Fallback to Reflection
+        var prop = type.GetProperty(expression.MemberName);
+        return prop?.GetValue(target);
     }
 
     private static object? GetMemberValue(MemberExpression expression, BsonDocument document)
     {
+        var target = expression.Expression != null ? EvaluateExpressionValue(expression.Expression, document) : null;
+        
+        if (target != null)
+        {
+            // Handle properties on common types
+            if (target is string str)
+            {
+                if (expression.MemberName == "Length") return str.Length;
+            }
+            else if (target is System.Collections.ICollection col)
+            {
+                if (expression.MemberName == "Count") return col.Count;
+            }
+            else if (target is System.Collections.IEnumerable en)
+            {
+                if (expression.MemberName == "Count")
+                {
+                    int count = 0;
+                    var enumerator = en.GetEnumerator();
+                    while (enumerator.MoveNext()) count++;
+                    return count;
+                }
+            }
+            else if (target is DateTime dt)
+            {
+                return expression.MemberName switch
+                {
+                    "Year" => dt.Year,
+                    "Month" => dt.Month,
+                    "Day" => dt.Day,
+                    "Hour" => dt.Hour,
+                    "Minute" => dt.Minute,
+                    "Second" => dt.Second,
+                    "Date" => dt.Date,
+                    "DayOfWeek" => (int)dt.DayOfWeek,
+                    _ => null
+                };
+            }
+            else if (target is BsonArray arr)
+            {
+                if (expression.MemberName == "Count") return arr.Count;
+            }
+            else if (target is BsonValue bv && bv.IsArray)
+            {
+                if (expression.MemberName == "Count") return ((BsonArray)bv.RawValue!).Count;
+            }
+        }
+
+        // Default behavior: look up in document
         // Try camelCase first (convention), then exact match
         var name = expression.MemberName;
         var camelName = ToCamelCase(name);
@@ -209,53 +364,140 @@ public static class ExpressionEvaluator
         return null;
     }
 
-    private static bool EvaluateFunctionExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
+    private static object? EvaluateFunctionExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
         where T : class, new()
     {
-        var targetValue = EvaluateExpressionValue(expression.Target, entity);
-        var argumentValue = EvaluateExpressionValue(expression.Argument, entity);
-        return EvaluateFunction(expression.FunctionName, targetValue, argumentValue);
+        var targetValue = expression.Target != null ? EvaluateExpressionValue(expression.Target, entity) : null;
+        var argValues = expression.Arguments.Select(a => EvaluateExpressionValue(a, entity)).ToArray();
+        
+        return EvaluateFunction(expression.FunctionName, targetValue, argValues);
     }
 
-    private static bool EvaluateFunctionExpression(FunctionExpression expression, BsonDocument document)
+    private static object? EvaluateFunctionExpression(FunctionExpression expression, BsonDocument document)
     {
-        var targetValue = EvaluateExpressionValue(expression.Target, document);
-        var argumentValue = EvaluateExpressionValue(expression.Argument, document);
-        return EvaluateFunction(expression.FunctionName, targetValue, argumentValue);
+        var targetValue = expression.Target != null ? EvaluateExpressionValue(expression.Target, document) : null;
+        var argValues = expression.Arguments.Select(a => EvaluateExpressionValue(a, document)).ToArray();
+        
+        return EvaluateFunction(expression.FunctionName, targetValue, argValues);
     }
 
-    private static bool EvaluateFunction(string functionName, object? targetValue, object? argumentValue)
+    private static object? EvaluateFunction(string functionName, object? targetValue, object?[] args)
     {
-        return functionName switch
+        // 1. String Methods
+        if (targetValue is string str)
         {
-            "Contains" => EvaluateContainsFunction(targetValue, argumentValue),
-            "StartsWith" => EvaluateStartsWithFunction(targetValue, argumentValue),
-            "EndsWith" => EvaluateEndsWithFunction(targetValue, argumentValue),
-            _ => throw new NotSupportedException($"Function '{functionName}' is not supported")
-        };
-    }
-
-    private static bool EvaluateContainsFunction(object? targetValue, object? argumentValue)
-    {
-        if (targetValue is string targetStr && argumentValue is string argStr)
-        {
-            return targetStr.Contains(argStr);
-        }
-
-        if (targetValue is System.Collections.IEnumerable targetEnum)
-        {
-            foreach (var item in targetEnum)
+            return functionName switch
             {
-                var actualItem = item is BsonValue bv ? bv.RawValue : item;
-                if (Equals(actualItem, argumentValue))
+                "Contains" => args.Length == 1 && args[0] is string s ? str.Contains(s) : false,
+                "StartsWith" => args.Length == 1 && args[0] is string s ? str.StartsWith(s) : false,
+                "EndsWith" => args.Length == 1 && args[0] is string s ? str.EndsWith(s) : false,
+                "ToLower" => str.ToLower(),
+                "ToUpper" => str.ToUpper(),
+                "Trim" => str.Trim(),
+                "Substring" => args.Length switch 
                 {
-                    return true;
-                }
-            }
-            return false;
+                    1 => str.Substring(Convert.ToInt32(args[0])),
+                    2 => str.Substring(Convert.ToInt32(args[0]), Convert.ToInt32(args[1])),
+                    _ => throw new ArgumentException("Invalid arguments for Substring")
+                },
+                "Replace" => args.Length == 2 && args[0] is string o && args[1] is string n ? str.Replace(o, n) : str,
+                _ => throw new NotSupportedException($"String function '{functionName}' is not supported")
+            };
         }
 
-        throw new NotSupportedException($"Contains operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
+        // 2. Collection Methods
+        if (targetValue is System.Collections.IEnumerable enumerable)
+        {
+            if (functionName == "Contains" && args.Length == 1)
+            {
+                foreach (var item in enumerable)
+                {
+                    var actualItem = item is BsonValue bv ? bv.RawValue : item;
+                    if (Equals(actualItem, args[0])) return true;
+                }
+                return false;
+            }
+            if (functionName == "Count")
+            {
+                // Try cheap Count property first
+                if (targetValue is System.Collections.ICollection col) return col.Count;
+                if (targetValue is BsonArray ba) return ba.Count;
+                int count = 0;
+                var e = enumerable.GetEnumerator();
+                while (e.MoveNext()) count++;
+                return count;
+            }
+        }
+
+        // 3. Math Methods (Static)
+        if (targetValue == null) // Static calls usually have null target
+        {
+            switch (functionName)
+            {
+                case "Abs": return EvaluateMathOneArg(args, Math.Abs, Math.Abs, Math.Abs);
+                case "Ceiling": return EvaluateMathOneArg(args, Math.Ceiling, Math.Ceiling, d => (decimal)Math.Ceiling((double)d));
+                case "Floor": return EvaluateMathOneArg(args, Math.Floor, Math.Floor, d => (decimal)Math.Floor((double)d));
+                case "Round": 
+                    if (args.Length == 1) return EvaluateMathOneArg(args, Math.Round, Math.Round, Math.Round);
+                    if (args.Length == 2) return EvaluateMathTwoArgs(args, (v, p) => Math.Round(v, (int)p), (v, p) => Math.Round(v, (int)p), (v, p) => Math.Round(v, (int)p));
+                    break;
+                case "Min": return EvaluateMathTwoArgs(args, Math.Min, Math.Min, Math.Min);
+                case "Max": return EvaluateMathTwoArgs(args, Math.Max, Math.Max, Math.Max);
+                case "Pow": return args.Length == 2 ? Math.Pow(Convert.ToDouble(args[0]), Convert.ToDouble(args[1])) : 0.0;
+                case "Sqrt": return args.Length == 1 ? Math.Sqrt(Convert.ToDouble(args[0])) : 0.0;
+            }
+        }
+
+        // 4. DateTime Methods
+        if (targetValue is DateTime dt)
+        {
+            return functionName switch
+            {
+                "AddDays" => dt.AddDays(Convert.ToDouble(args[0])),
+                "AddHours" => dt.AddHours(Convert.ToDouble(args[0])),
+                "AddMinutes" => dt.AddMinutes(Convert.ToDouble(args[0])),
+                "AddSeconds" => dt.AddSeconds(Convert.ToDouble(args[0])),
+                "AddYears" => dt.AddYears(Convert.ToInt32(args[0])),
+                "AddMonths" => dt.AddMonths(Convert.ToInt32(args[0])),
+                "ToString" => dt.ToString(),
+                _ => throw new NotSupportedException($"DateTime function '{functionName}' is not supported")
+            };
+        }
+
+        if (functionName == "ToString" && args.Length == 0 && targetValue != null)
+        {
+            return targetValue.ToString();
+        }
+
+        throw new NotSupportedException($"Function '{functionName}' is not supported for type {targetValue?.GetType().Name ?? "null"}");
+    }
+
+    private static object EvaluateMathOneArg(object?[] args, Func<double, double> doubleFunc, Func<decimal, decimal> decimalFunc, Func<decimal, decimal>? decimalFuncFallback = null)
+    {
+        if (args.Length != 1) throw new ArgumentException("Function requires 1 argument");
+        var val = args[0];
+        if (val is int i) return (int)doubleFunc(i);
+        if (val is long l) return (long)doubleFunc(l);
+        if (val is double d) return doubleFunc(d);
+        if (val is decimal dec) return decimalFunc(dec);
+        if (val is Decimal128 d128) return new Decimal128(decimalFunc(d128.ToDecimal())); // Simplified mapping
+        
+        return doubleFunc(Convert.ToDouble(val));
+    }
+
+    private static object EvaluateMathTwoArgs(object?[] args, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc, Func<decimal, decimal, decimal>? decimalFuncFallback = null)
+    {
+        if (args.Length != 2) throw new ArgumentException("Function requires 2 arguments");
+        var v1 = args[0];
+        var v2 = args[1];
+        
+        if (v1 == null || v2 == null) return 0.0;
+
+        // Unified type unification including Decimal128
+        if (v1 is decimal || v2 is decimal || v1 is Decimal128 || v2 is Decimal128) 
+            return decimalFunc(ToDecimal(v1), ToDecimal(v2));
+        
+        return doubleFunc(ToDouble(v1), ToDouble(v2));
     }
 
     private static bool EvaluateStartsWithFunction(object? targetValue, object? argumentValue)
@@ -284,18 +526,39 @@ public static class ExpressionEvaluator
         if (left == null) return -1;
         if (right == null) return 1;
 
+        // Unwrap BsonValue if present
+        if (left is BsonValue bl) left = bl.RawValue;
+        if (right is BsonValue br) right = br.RawValue;
+
+        if (left == null && right == null) return 0;
+        if (left == null) return -1;
+        if (right == null) return 1;
+
         // Try to unify types if one is numeric
         if (IsNumericType(left) && IsNumericType(right))
         {
+            if (left is Decimal128 ld) left = ld.ToDecimal();
+            if (right is Decimal128 rd) right = rd.ToDecimal();
+
             if (left is decimal || right is decimal)
             {
-                return Convert.ToDecimal(left).CompareTo(Convert.ToDecimal(right));
+                return ToDecimal(left).CompareTo(ToDecimal(right));
             }
-            return Convert.ToDouble(left).CompareTo(Convert.ToDouble(right));
+            return ToDouble(left).CompareTo(ToDouble(right));
         }
 
-        // Fix logic for different types but compatible (e.g. int vs long)
-        // IsNumericType covers this above via ToDouble/ToDecimal
+        // Handle Byte Arrays
+        if (left is byte[] b1 && right is byte[] b2)
+        {
+            var lenDiff = b1.Length.CompareTo(b2.Length);
+            if (lenDiff != 0) return lenDiff;
+            for (int i = 0; i < b1.Length; i++)
+            {
+                var bDiff = b1[i].CompareTo(b2[i]);
+                if (bDiff != 0) return bDiff;
+            }
+            return 0;
+        }
 
         if (left is IComparable leftComparable)
         {
@@ -322,7 +585,7 @@ public static class ExpressionEvaluator
     {
         return value is sbyte || value is byte || value is short || value is ushort ||
                value is int || value is uint || value is long || value is ulong ||
-               value is float || value is double || value is decimal;
+               value is float || value is double || value is decimal || value is Decimal128;
     }
 
     private static string ToCamelCase(string name)
