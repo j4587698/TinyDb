@@ -80,7 +80,7 @@ public class QueryExecutorTransactionTests : IDisposable
         
         var res = col.Find(x => x.Name == "B").ToList();
         
-        // await Assert.That(res.Count).IsEqualTo(1);
+        await Assert.That(res.Count).IsEqualTo(1);
         
         var old = col.Find(x => x.Name == "A").ToList();
         await Assert.That(old.Count).IsEqualTo(0);
