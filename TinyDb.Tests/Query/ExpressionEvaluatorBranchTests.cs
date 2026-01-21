@@ -29,6 +29,7 @@ public class ExpressionEvaluatorBranchTests
         var method = typeof(ExpressionEvaluator).GetMethod("Compare", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         
         await Assert.That((int)method!.Invoke(null, new object[] { null, null })!).IsEqualTo(0);
+        await Assert.That((int)method.Invoke(null, new object[] { BsonNull.Value, null })!).IsEqualTo(0);
         await Assert.That((int)method.Invoke(null, new object[] { null, 1 })!).IsEqualTo(-1);
         await Assert.That((int)method.Invoke(null, new object[] { 1, null })!).IsEqualTo(1);
     }

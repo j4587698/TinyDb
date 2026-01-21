@@ -554,11 +554,7 @@ public static class ExpressionEvaluator
 
     private static int Compare(object? left, object? right)
     {
-        if (left == null && right == null) return 0;
-        if (left == null) return -1;
-        if (right == null) return 1;
-
-        // Unwrap BsonValue if present
+        // Unwrap BsonValue if present (before null checks, so BsonNull becomes null)
         if (left is BsonValue bl) left = bl.RawValue;
         if (right is BsonValue br) right = br.RawValue;
 
