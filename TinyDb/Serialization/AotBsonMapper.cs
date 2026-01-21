@@ -834,6 +834,7 @@ public static class AotBsonMapper
                 BsonInt32 i32 => i32.Value,
                 BsonInt64 i64 => checked((int)i64.Value),
                 BsonDouble dbl => Convert.ToInt32(dbl.Value),
+                BsonDecimal128 dec => checked((int)dec.Value.ToDecimal()),
                 BsonString s => int.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToInt32(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -842,22 +843,16 @@ public static class AotBsonMapper
                 BsonInt64 i64 => i64.Value,
                 BsonInt32 i32 => i32.Value,
                 BsonDouble dbl => Convert.ToInt64(dbl.Value),
+                BsonDecimal128 dec => checked((long)dec.Value.ToDecimal()),
                 BsonString s => long.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
-            },
-            var t when t == typeof(short) => bsonValue switch
-            {
-                BsonInt32 i32 => checked((short)i32.Value),
-                BsonInt64 i64 => checked((short)i64.Value),
-                BsonDouble dbl => Convert.ToInt16(dbl.Value),
-                BsonString s => short.Parse(s.Value, CultureInfo.InvariantCulture),
-                _ => Convert.ToInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
             var t when t == typeof(byte) => bsonValue switch
             {
                 BsonInt32 i32 => checked((byte)i32.Value),
                 BsonInt64 i64 => checked((byte)i64.Value),
-                BsonDouble dbl => Convert.ToByte(dbl.Value),
+                BsonDouble dbl => checked((byte)dbl.Value),
+                BsonDecimal128 dec => checked((byte)dec.Value.ToDecimal()),
                 BsonString s => byte.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -865,7 +860,8 @@ public static class AotBsonMapper
             {
                 BsonInt32 i32 => checked((sbyte)i32.Value),
                 BsonInt64 i64 => checked((sbyte)i64.Value),
-                BsonDouble dbl => Convert.ToSByte(dbl.Value),
+                BsonDouble dbl => checked((sbyte)dbl.Value),
+                BsonDecimal128 dec => checked((sbyte)dec.Value.ToDecimal()),
                 BsonString s => sbyte.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToSByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -873,7 +869,8 @@ public static class AotBsonMapper
             {
                 BsonInt32 i32 => checked((uint)i32.Value),
                 BsonInt64 i64 => checked((uint)i64.Value),
-                BsonDouble dbl => Convert.ToUInt32(dbl.Value),
+                BsonDouble dbl => checked((uint)dbl.Value),
+                BsonDecimal128 dec => checked((uint)dec.Value.ToDecimal()),
                 BsonString s => uint.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToUInt32(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -881,7 +878,8 @@ public static class AotBsonMapper
             {
                 BsonInt64 i64 => checked((ulong)i64.Value),
                 BsonInt32 i32 => checked((ulong)i32.Value),
-                BsonDouble dbl => Convert.ToUInt64(dbl.Value),
+                BsonDouble dbl => checked((ulong)dbl.Value),
+                BsonDecimal128 dec => checked((ulong)dec.Value.ToDecimal()),
                 BsonString s => ulong.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToUInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -889,7 +887,8 @@ public static class AotBsonMapper
             {
                 BsonInt32 i32 => checked((ushort)i32.Value),
                 BsonInt64 i64 => checked((ushort)i64.Value),
-                BsonDouble dbl => Convert.ToUInt16(dbl.Value),
+                BsonDouble dbl => checked((ushort)dbl.Value),
+                BsonDecimal128 dec => checked((ushort)dec.Value.ToDecimal()),
                 BsonString s => ushort.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToUInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -898,6 +897,7 @@ public static class AotBsonMapper
                 BsonDouble dbl => dbl.Value,
                 BsonInt64 i64 => i64.Value,
                 BsonInt32 i32 => i32.Value,
+                BsonDecimal128 dec => (double)dec.Value.ToDecimal(),
                 BsonString s => double.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToDouble(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
@@ -905,10 +905,21 @@ public static class AotBsonMapper
                 Convert.ToSingle(ConvertPrimitiveValue(bsonValue, typeof(double)), CultureInfo.InvariantCulture),
             var t when t == typeof(decimal) => bsonValue switch
             {
-                BsonDecimal128 dec => dec.Value,
+                BsonDecimal128 dec => dec.Value.ToDecimal(),
                 BsonDouble dbl => Convert.ToDecimal(dbl.Value, CultureInfo.InvariantCulture),
+                BsonInt32 i32 => (decimal)i32.Value,
+                BsonInt64 i64 => (decimal)i64.Value,
                 BsonString s => decimal.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToDecimal(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
+            var t when t == typeof(short) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((short)i32.Value),
+                BsonInt64 i64 => checked((short)i64.Value),
+                BsonDouble dbl => checked((short)dbl.Value),
+                BsonDecimal128 dec => checked((short)dec.Value.ToDecimal()),
+                BsonString s => short.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => Convert.ToInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
             var t when t == typeof(DateTime) => bsonValue switch
             {

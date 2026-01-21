@@ -74,15 +74,27 @@ public sealed class QueryExecutor
 
         if (document != null)
         {
-            // 再次验证查询条件（防止非唯一匹配或其他逻辑差异，虽然对于PK通常不需要）
-            // 这里为了安全起见，或者如果原表达式有其他条件（目前优化器只支持纯PK查询，所以这里是冗余的，但在复合条件下有用）
-            // 但目前的优化器逻辑：ExtractPrimaryKeyValue 只接受单一的 Equal 表达式。
-            // 所以 document 一定匹配。
-            
-            var entity = AotBsonMapper.FromDocument<T>(document);
-            if (entity != null)
+            // 必须验证原始表达式，因为可能存在除主键外的其他条件（例如 Id == 1 && Name == "Bob"）
+            // 如果表达式为空（不应该发生），默认匹配
+            var isMatch = true;
+            if (executionPlan.QueryExpression != null)
             {
-                yield return entity;
+                isMatch = ExpressionEvaluator.Evaluate(executionPlan.QueryExpression, document);
+            }
+            else if (executionPlan.OriginalExpression != null)
+            {
+                // Fallback to original expression if QueryExpression is not available (though it should be)
+                // Note: Evaluate(Expression<...>) for documents is not directly available, need QueryExpression
+                // But CreateExecutionPlan always sets QueryExpression.
+            }
+
+            if (isMatch)
+            {
+                var entity = AotBsonMapper.FromDocument<T>(document);
+                if (entity != null)
+                {
+                    yield return entity;
+                }
             }
         }
     }
@@ -265,7 +277,6 @@ public sealed class QueryExecutor
 
         // 2. 构建处理管道
         var rawPipeline = _engine.FindAllRaw(collectionName)
-            .AsParallel()
             // 2.1 并行解析
             .Select(slice => BsonSerializer.DeserializeDocument(slice))
             // 2.2 过滤集合 (处理共享页面)
@@ -290,7 +301,7 @@ public sealed class QueryExecutor
                 })
                 .Where(doc => doc != null)
                 .Select(doc => doc!)
-                .Concat(txOverlay.Values.AsParallel().Where(v => v != null).Select(v => v!)); // 补充仅在事务中存在的新增文档
+                .Concat(txOverlay.Values.Where(v => v != null).Select(v => v!)); // 补充仅在事务中存在的新增文档
         }
         else
         {
