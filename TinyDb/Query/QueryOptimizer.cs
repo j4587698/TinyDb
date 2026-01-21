@@ -49,7 +49,18 @@ public sealed class QueryOptimizer
         }
 
         // 解析查询表达式
-        var queryExpression = _expressionParser.Parse(expression);
+        QueryExpression? queryExpression = null;
+        try
+        {
+            queryExpression = _expressionParser.Parse(expression);
+            plan.QueryExpression = queryExpression;
+        }
+        catch
+        {
+            // 解析失败（例如包含不支持的节点），回退到全表扫描
+            plan.Strategy = QueryExecutionStrategy.FullTableScan;
+            return plan;
+        }
 
         // 优化：检查是否为主键查询
         var primaryKeyValue = ExtractPrimaryKeyValue(queryExpression);
@@ -92,6 +103,14 @@ public sealed class QueryOptimizer
             plan.Strategy = QueryExecutionStrategy.IndexScan;
             plan.UseIndex = bestIndex;
             plan.IndexScanKeys = ExtractIndexScanKeys(queryExpression, bestIndex);
+
+            // 优化：如果是唯一索引且查询覆盖了所有字段且均为等值匹配，升级为 IndexSeek
+            if (bestIndex.IsUnique && 
+                plan.IndexScanKeys.Count == bestIndex.Fields.Length && 
+                plan.IndexScanKeys.All(k => k.ComparisonType == ComparisonType.Equal))
+            {
+                plan.Strategy = QueryExecutionStrategy.IndexSeek;
+            }
         }
         else
         {
@@ -110,6 +129,15 @@ public sealed class QueryOptimizer
     {
         if (queryExpression is BinaryExpression binaryExpr)
         {
+            // 如果是 AND 表达式，递归检查左右子树
+            if (binaryExpr.NodeType == System.Linq.Expressions.ExpressionType.AndAlso)
+            {
+                var leftResult = ExtractPrimaryKeyValue(binaryExpr.Left);
+                if (leftResult != null) return leftResult;
+                
+                return ExtractPrimaryKeyValue(binaryExpr.Right);
+            }
+
             // 必须是等值比较
             if (binaryExpr.NodeType != System.Linq.Expressions.ExpressionType.Equal)
                 return null;
@@ -452,6 +480,11 @@ public sealed class QueryExecutionPlan
     /// 原始查询表达式
     /// </summary>
     public LambdaExpression? OriginalExpression { get; set; }
+
+    /// <summary>
+    /// 解析后的查询表达式
+    /// </summary>
+    public QueryExpression? QueryExpression { get; set; }
 
     /// <summary>
     /// 执行策略
