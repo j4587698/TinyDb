@@ -6,9 +6,18 @@ using TinyDb.Bson;
 namespace TinyDb.Serialization;
 
 /// <summary>
+/// 非泛型的实体适配器接口，用于AOT兼容的类型查找
+/// </summary>
+public interface IAotEntityAdapter
+{
+    BsonDocument ToDocumentUntyped(object entity);
+    object FromDocumentUntyped(BsonDocument document);
+}
+
+/// <summary>
 /// 表示针对特定实体类型由源生成器生成的AOT辅助适配器
 /// </summary>
-public sealed class AotEntityAdapter<T>
+public sealed class AotEntityAdapter<T> : IAotEntityAdapter
 {
     public Func<T, BsonDocument> ToDocument { get; }
     public Func<BsonDocument, T> FromDocument { get; }
@@ -32,6 +41,10 @@ public sealed class AotEntityAdapter<T>
         HasValidId = hasValidId ?? throw new ArgumentNullException(nameof(hasValidId));
         GetPropertyValue = getPropertyValue ?? throw new ArgumentNullException(nameof(getPropertyValue));
     }
+
+    // 实现非泛型接口
+    public BsonDocument ToDocumentUntyped(object entity) => ToDocument((T)entity);
+    public object FromDocumentUntyped(BsonDocument document) => FromDocument(document)!;
 }
 
 /// <summary>
@@ -46,6 +59,24 @@ public static partial class AotHelperRegistry
         if (_adapters.TryGetValue(typeof(T), out var raw))
         {
             adapter = (AotEntityAdapter<T>)raw;
+            return true;
+        }
+
+        adapter = null;
+        return false;
+    }
+
+    /// <summary>
+    /// 尝试根据类型获取非泛型适配器
+    /// </summary>
+    /// <param name="entityType">实体类型</param>
+    /// <param name="adapter">适配器</param>
+    /// <returns>是否找到适配器</returns>
+    internal static bool TryGetUntypedAdapter(Type entityType, [NotNullWhen(true)] out IAotEntityAdapter? adapter)
+    {
+        if (_adapters.TryGetValue(entityType, out var raw) && raw is IAotEntityAdapter typedAdapter)
+        {
+            adapter = typedAdapter;
             return true;
         }
 

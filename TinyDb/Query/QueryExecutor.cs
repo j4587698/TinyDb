@@ -197,15 +197,38 @@ public sealed class QueryExecutor
             yield break;
         }
 
-        // 使用索引查找文档ID（使用Find以支持非唯一索引返回多个结果）
-        var documentIds = index.Find(exactKey);
-
         // 预解析查询表达式（如果有）
         QueryExpression? queryExpression = null;
         if (executionPlan.OriginalExpression != null)
         {
             queryExpression = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
         }
+
+        // 优化：对于唯一索引，使用 FindExact 直接获取单一结果，避免返回 List 的开销
+        if (index.IsUnique)
+        {
+            var documentId = index.FindExact(exactKey);
+            if (documentId != null)
+            {
+                var document = _engine.FindById(executionPlan.CollectionName, documentId);
+                if (document != null)
+                {
+                    // 如果有额外条件，先在 BsonDocument 上评估
+                    if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, document))
+                    {
+                        var entity = AotBsonMapper.FromDocument<T>(document);
+                        if (entity != null)
+                        {
+                            yield return entity;
+                        }
+                    }
+                }
+            }
+            yield break;
+        }
+
+        // 非唯一索引：使用 Find 以支持返回多个结果
+        var documentIds = index.Find(exactKey);
 
         // 根据文档ID获取完整文档
         foreach (var documentId in documentIds)
@@ -292,16 +315,17 @@ public sealed class QueryExecutor
             docs = rawPipeline
                 .Select(doc => {
                     var id = doc["_id"].ToString() ?? "";
-                    // 如果ID在事务中有修改，使用事务版本（移除以标记为已处理）
                     if (txOverlay.TryRemove(id, out var txDoc))
                     {
-                        return txDoc; // 可能为null（删除）
+                        Console.WriteLine($"[DEBUG] Replaced {id} with tx version");
+                        return txDoc; 
                     }
-                    return doc; // 使用磁盘版本
+                    Console.WriteLine($"[DEBUG] Using disk version {id}: {doc}");
+                    return doc; 
                 })
                 .Where(doc => doc != null)
                 .Select(doc => doc!)
-                .Concat(txOverlay.Values.Where(v => v != null).Select(v => v!)); // 补充仅在事务中存在的新增文档
+                .Concat(Enumerable.Range(0, 1).SelectMany(_ => txOverlay.Values).Where(v => v != null).Select(v => v!)); // 补充仅在事务中存在的新增文档
         }
         else
         {

@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text;
 using System.Globalization;
+using System.Collections.Frozen;
 using TinyDb.Bson;
 using Microsoft.IO;
 
@@ -27,6 +28,35 @@ public static class BsonSerializer
             MaximumSmallPoolFreeBytes = 1024 * 1024 * 100 // 100MB Cache
         }
     );
+
+    /// <summary>
+    /// 常用键名的 UTF8 编码缓存，避免每次序列化都调用 Encoding.UTF8.GetBytes()
+    /// </summary>
+    internal static readonly FrozenDictionary<string, byte[]> CommonKeyCache = new Dictionary<string, byte[]>
+    {
+        ["_id"] = DefaultEncoding.GetBytes("_id"),
+        ["_collection"] = DefaultEncoding.GetBytes("_collection"),
+        ["_isLargeDocument"] = DefaultEncoding.GetBytes("_isLargeDocument"),
+        ["_largeDocumentIndex"] = DefaultEncoding.GetBytes("_largeDocumentIndex"),
+        ["_largeDocumentSize"] = DefaultEncoding.GetBytes("_largeDocumentSize"),
+        ["Id"] = DefaultEncoding.GetBytes("Id"),
+        ["id"] = DefaultEncoding.GetBytes("id"),
+        ["Name"] = DefaultEncoding.GetBytes("Name"),
+        ["name"] = DefaultEncoding.GetBytes("name"),
+        ["Type"] = DefaultEncoding.GetBytes("Type"),
+        ["type"] = DefaultEncoding.GetBytes("type"),
+        ["Value"] = DefaultEncoding.GetBytes("Value"),
+        ["value"] = DefaultEncoding.GetBytes("value"),
+        ["Data"] = DefaultEncoding.GetBytes("Data"),
+        ["data"] = DefaultEncoding.GetBytes("data"),
+        ["Count"] = DefaultEncoding.GetBytes("Count"),
+        ["count"] = DefaultEncoding.GetBytes("count"),
+        ["Items"] = DefaultEncoding.GetBytes("Items"),
+        ["items"] = DefaultEncoding.GetBytes("items"),
+        ["Created"] = DefaultEncoding.GetBytes("Created"),
+        ["Updated"] = DefaultEncoding.GetBytes("Updated"),
+        ["Deleted"] = DefaultEncoding.GetBytes("Deleted"),
+    }.ToFrozenDictionary();
 
     /// <summary>
     /// 序列化 BsonValue
@@ -414,8 +444,16 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (value == null) throw new ArgumentNullException(nameof(value));
 
-        var bytes = Encoding.UTF8.GetBytes(value);
-        _writer.Write(bytes);
+        // 优化：使用缓存的常用键名编码
+        if (BsonSerializer.CommonKeyCache.TryGetValue(value, out var cachedBytes))
+        {
+            _writer.Write(cachedBytes);
+        }
+        else
+        {
+            var bytes = Encoding.UTF8.GetBytes(value);
+            _writer.Write(bytes);
+        }
         _writer.Write((byte)0); // null 终止符
     }
 

@@ -38,11 +38,12 @@ public static class BsonConversion
             decimal dec => new BsonDecimal128(dec),
             bool b => new BsonBoolean(b),
             DateTime dt => new BsonDateTime(dt),
-            Guid guid => new BsonBinary(guid, BsonBinary.BinarySubType.Uuid),
+            Guid guid => new BsonString(guid.ToString()),
             ObjectId oid => new BsonObjectId(oid),
             Enum enumValue => ConvertEnumToBsonValue(enumValue),
-            IDictionary<string, object> dict when dict != null => ConvertDictionaryToBsonDocument(dict),
-            _ => new BsonString(value.ToString() ?? string.Empty)
+            System.Collections.IDictionary dict => ConvertDictionaryToBsonDocument(dict),
+            System.Collections.IEnumerable enumerable => ConvertEnumerableToBsonArray(enumerable),
+            _ => ConvertComplexObjectToBsonValue(value)
         };
     }
 
@@ -58,18 +59,59 @@ public static class BsonConversion
     }
 
     /// <summary>
+    /// 将复杂对象转换为BsonValue（通过AotBsonMapper）
+    /// </summary>
+    private static BsonValue ConvertComplexObjectToBsonValue(object value)
+    {
+        var type = value.GetType();
+
+        // 检查是否为复杂对象类型
+        if (IsComplexObjectType(type))
+        {
+            // 首先尝试使用注册的AOT适配器（AOT兼容）
+            if (AotHelperRegistry.TryGetUntypedAdapter(type, out var adapter))
+            {
+                return adapter.ToDocumentUntyped(value);
+            }
+
+            // 尝试使用AotBsonMapper序列化
+            var doc = AotBsonMapper.ToDocument(value);
+            if (doc != null)
+            {
+                return doc;
+            }
+        }
+
+        // 回退到字符串表示
+        return new BsonString(value.ToString() ?? string.Empty);
+    }
+
+    /// <summary>
     /// 将Dictionary转换为BsonDocument
     /// </summary>
-    private static BsonDocument ConvertDictionaryToBsonDocument(IDictionary<string, object> dictionary)
+    private static BsonDocument ConvertDictionaryToBsonDocument(System.Collections.IDictionary dictionary)
     {
         var document = new BsonDocument();
-        foreach (var kvp in dictionary)
+        foreach (System.Collections.DictionaryEntry entry in dictionary)
         {
-            var key = kvp.Key;
-            var value = ToBsonValue(kvp.Value);
+            var key = entry.Key.ToString() ?? string.Empty;
+            var value = ToBsonValue(entry.Value!);
             document = document.Set(key, value);
         }
         return document;
+    }
+
+    /// <summary>
+    /// 将Enumerable转换为BsonArray
+    /// </summary>
+    private static BsonArray ConvertEnumerableToBsonArray(System.Collections.IEnumerable enumerable)
+    {
+        var list = new List<BsonValue>();
+        foreach (var item in enumerable)
+        {
+            list.Add(ToBsonValue(item!));
+        }
+        return new BsonArray(list);
     }
 
     /// <summary>
@@ -153,6 +195,33 @@ public static class BsonConversion
             return ConvertFromBsonValueToEnum(bsonValue, targetType);
         }
 
+        // 处理嵌套的复杂类型（BsonDocument/BsonDocumentValue -> 自定义类/结构体）
+        // 注意：BsonDocument 嵌套时会被包装为 BsonDocumentValue
+        if (IsComplexObjectType(targetType))
+        {
+            BsonDocument? nestedDoc = null;
+            if (bsonValue is BsonDocument doc)
+            {
+                nestedDoc = doc;
+            }
+            else if (bsonValue.IsDocument && bsonValue.RawValue is BsonDocument rawDoc)
+            {
+                nestedDoc = rawDoc;
+            }
+
+            if (nestedDoc != null)
+            {
+                // 首先尝试使用注册的AOT适配器（AOT兼容）
+                if (AotHelperRegistry.TryGetUntypedAdapter(targetType, out var adapter))
+                {
+                    return adapter.FromDocumentUntyped(nestedDoc);
+                }
+
+                // 回退到AotBsonMapper.ConvertValue (使用反射)
+                return AotBsonMapper.ConvertValue(nestedDoc, targetType);
+            }
+        }
+
         return targetType switch
         {
             var t when t == typeof(string) =>
@@ -180,10 +249,10 @@ public static class BsonConversion
             var t when t == typeof(decimal) =>
                 bsonValue switch
                 {
-                    BsonDecimal128 dec128 => dec128.Value,
+                    BsonDecimal128 dec128 => dec128.Value.ToDecimal(),
                     BsonDouble dbl => Convert.ToDecimal(dbl.Value),
-                    BsonInt32 i32 => i32.Value,
-                    BsonInt64 i64 => i64.Value,
+                    BsonInt32 i32 => Convert.ToDecimal(i32.Value),
+                    BsonInt64 i64 => Convert.ToDecimal(i64.Value),
                     _ => Convert.ToDecimal(bsonValue.ToString())
                 },
             var t when t == typeof(bool) =>
@@ -191,9 +260,11 @@ public static class BsonConversion
             var t when t == typeof(DateTime) =>
                 bsonValue is BsonDateTime dt ? dt.Value : Convert.ToDateTime(bsonValue.ToString()),
             var t when t == typeof(Guid) =>
-                bsonValue is BsonBinary bin && bin.Bytes.Length == 16
-                    ? new Guid(bin.Bytes)
-                    : Guid.Parse(bsonValue.ToString()),
+                bsonValue is BsonString bsonString
+                    ? Guid.Parse(bsonString.Value)
+                    : bsonValue is BsonBinary bin && (bin.Bytes.Length == 16 || bin.SubType == BsonBinary.BinarySubType.Uuid || bin.SubType == BsonBinary.BinarySubType.UuidLegacy)
+                        ? new Guid(bin.Bytes)
+                        : Guid.Parse(bsonValue.ToString()),
             var t when t == typeof(char) =>
                 bsonValue switch
                 {
@@ -351,5 +422,39 @@ public static class BsonConversion
             // 如果数字转换失败，尝试字符串转换
             return Enum.Parse(enumType, bsonValue.ToString(), ignoreCase: true);
         }
+    }
+
+    /// <summary>
+    /// 判断是否为复杂对象类型（类或结构体，排除基本类型、集合等）
+    /// </summary>
+    private static bool IsComplexObjectType(Type type)
+    {
+        // 排除基本类型、字符串、枚举和集合类型
+        if (type.IsPrimitive ||
+            type == typeof(string) ||
+            type == typeof(byte[]) ||
+            type == typeof(DateTime) ||
+            type == typeof(Guid) ||
+            type == typeof(ObjectId) ||
+            type == typeof(decimal) ||
+            type.IsEnum)
+        {
+            return false;
+        }
+
+        // 排除集合类型
+        if (typeof(System.Collections.IEnumerable).IsAssignableFrom(type) && type != typeof(string))
+        {
+            return false;
+        }
+
+        // 排除 BsonValue 及其派生类型
+        if (typeof(BsonValue).IsAssignableFrom(type))
+        {
+            return false;
+        }
+
+        // 处理复杂对象类型（class 和 struct）
+        return type.IsClass || (type.IsValueType && !type.IsEnum && !type.IsPrimitive);
     }
 }

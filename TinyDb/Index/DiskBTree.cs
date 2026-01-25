@@ -138,6 +138,16 @@ public sealed class DiskBTree : IDisposable
             newChild.SetParent(root.PageId);
             newChild.Save(_pm);
             
+            if (!newChild.IsLeaf)
+            {
+                foreach (var childId in newChild.ChildrenIds)
+                {
+                    var c = LoadNode(childId);
+                    c.SetParent(newChild.PageId);
+                    c.Save(_pm);
+                }
+            }
+            
             SplitChild(root, 0, newChild);
             InsertNonFull(root, key, value);
         }
@@ -361,13 +371,29 @@ public sealed class DiskBTree : IDisposable
 
     /// <summary>
     /// 查找键的单个值（第一个匹配项）。
+    /// 优化版本：直接在叶子节点中查找，无需创建 List。
     /// </summary>
     /// <param name="key">键。</param>
     /// <returns>值，如果未找到则为 null。</returns>
     public BsonValue? FindExact(IndexKey key)
     {
-        var list = Find(key);
-        return list.Count > 0 ? list[0] : null;
+        var node = FindLeafNode(key);
+        if (node == null) return null;
+
+        // 查找精确匹配的第一个值
+        for (int i = 0; i < node.KeyCount; i++)
+        {
+            int cmp = node.Keys[i].CompareTo(key);
+            if (cmp == 0)
+            {
+                return node.Values[i];
+            }
+            if (cmp > 0)
+            {
+                break; // 已经超过目标键，不可能找到了
+            }
+        }
+        return null;
     }
     
     /// <summary>

@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
@@ -75,6 +76,7 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     /// <param name="f">数据库文件路径。</param>
     /// <param name="o">可选的配置选项。</param>
+    [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(TinyDbEngine))]
     public TinyDbEngine(string f, TinyDbOptions? o = null) : this(f, o, null) { }
 
     internal TinyDbEngine(string f, TinyDbOptions? o, IDiskStream? ds)
@@ -654,10 +656,6 @@ public sealed class TinyDbEngine : IDisposable
                     
                     docsToUpdateIndex?.Add((doc, id));
                     insertedCount++;
-
-                    // 关键修复：确保 Header 实时反映最新的 TotalPages 和 FirstFreePage 状态
-                    // 无论是否是新页面(isN)，只要分配了页面，FirstFreePage 就可能改变，必须同步。
-                    lock (_lock) { WriteHeader(); }
                 }
                 catch (Exception ex)
                 {
@@ -669,6 +667,10 @@ public sealed class TinyDbEngine : IDisposable
             {
                 _dataPageAccess.PersistPage(currentPage);
             }
+
+            // 批量插入完成后同步一次 Header，确保 TotalPages 和 FirstFreePage 状态正确
+            // 优化：从循环内移到循环外，减少内存分配和 IO 操作
+            lock (_lock) { WriteHeader(); }
         }
 
         if (docsToUpdateIndex != null)
@@ -829,15 +831,23 @@ public sealed class TinyDbEngine : IDisposable
         bool hasId = doc.TryGetValue("_id", out var exId) && exId != null && !exId.IsNull;
         bool hasCol = doc.TryGetValue("_collection", out _);
 
+        // 快速路径：如果已有 _id 和 _collection，直接返回原文档
         if (hasId && hasCol)
         {
             id = exId!;
             return doc;
         }
 
-        // 优化：使用 Builder 避免多次创建不可变副本
-        var builder = doc.ToBuilder();
-        
+        // 优化：直接创建新的 Builder，一次性添加所有字段，避免 ToBuilder() 的额外转换
+        var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+
+        // 复制原文档的所有字段
+        foreach (var kvp in doc)
+        {
+            builder[kvp.Key] = kvp.Value;
+        }
+
+        // 添加 _id（如果缺失）
         if (!hasId)
         {
             id = ObjectId.NewObjectId();
@@ -848,12 +858,13 @@ public sealed class TinyDbEngine : IDisposable
             id = exId!;
         }
 
+        // 添加 _collection（如果缺失）
         if (!hasCol)
         {
             builder["_collection"] = col;
         }
 
-        return new BsonDocument(builder);
+        return new BsonDocument(builder.ToImmutable());
     }
 
     private static BsonDocument CreateLargeDocumentIndexDocument(BsonValue id, string col, uint pId, int s)
@@ -961,10 +972,14 @@ public sealed class TinyDbEngine : IDisposable
                 _collectionStates.Clear();
                 _transactionManager?.Dispose();
                 DisposeIndexManagers();
-                DisposeComponents();
             }
             catch { }
-            finally { _disposed = true; _isInitialized = false; }
+            finally
+            {
+                DisposeComponents();
+                _disposed = true;
+                _isInitialized = false;
+            }
         }
     }
 }
