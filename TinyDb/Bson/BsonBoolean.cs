@@ -7,6 +7,16 @@ namespace TinyDb.Bson;
 /// </summary>
 public sealed class BsonBoolean : BsonValue
 {
+    /// <summary>
+    /// 单例：True 值，避免重复创建对象
+    /// </summary>
+    public static readonly BsonBoolean True = new(true);
+
+    /// <summary>
+    /// 单例：False 值，避免重复创建对象
+    /// </summary>
+    public static readonly BsonBoolean False = new(false);
+
     public override BsonType BsonType => BsonType.Boolean;
     public override object? RawValue { get; }
 
@@ -18,7 +28,12 @@ public sealed class BsonBoolean : BsonValue
         RawValue = value;
     }
 
-    public static implicit operator BsonBoolean(bool value) => new(value);
+    /// <summary>
+    /// 获取布尔值的单例实例（推荐使用，避免对象分配）
+    /// </summary>
+    public static BsonBoolean FromValue(bool value) => value ? True : False;
+
+    public static implicit operator BsonBoolean(bool value) => FromValue(value);
     public static implicit operator bool(BsonBoolean bsonBoolean) => bsonBoolean.Value;
 
     public override int CompareTo(BsonValue? other)

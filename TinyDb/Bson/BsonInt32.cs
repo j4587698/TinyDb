@@ -7,6 +7,31 @@ namespace TinyDb.Bson;
 /// </summary>
 public sealed class BsonInt32 : BsonValue
 {
+    /// <summary>
+    /// 小整数缓存：0-255 的常用整数，避免重复创建对象
+    /// </summary>
+    private static readonly BsonInt32[] SmallIntCache = CreateSmallIntCache();
+
+    /// <summary>
+    /// 缓存的最小值
+    /// </summary>
+    private const int CacheMin = 0;
+
+    /// <summary>
+    /// 缓存的最大值
+    /// </summary>
+    private const int CacheMax = 255;
+
+    private static BsonInt32[] CreateSmallIntCache()
+    {
+        var cache = new BsonInt32[CacheMax - CacheMin + 1];
+        for (int i = 0; i < cache.Length; i++)
+        {
+            cache[i] = new BsonInt32(CacheMin + i);
+        }
+        return cache;
+    }
+
     public override BsonType BsonType => BsonType.Int32;
     public override object? RawValue { get; }
 
@@ -18,7 +43,19 @@ public sealed class BsonInt32 : BsonValue
         RawValue = value;
     }
 
-    public static implicit operator BsonInt32(int value) => new(value);
+    /// <summary>
+    /// 获取整数值（推荐使用，小整数会使用缓存避免对象分配）
+    /// </summary>
+    public static BsonInt32 FromValue(int value)
+    {
+        if (value >= CacheMin && value <= CacheMax)
+        {
+            return SmallIntCache[value - CacheMin];
+        }
+        return new BsonInt32(value);
+    }
+
+    public static implicit operator BsonInt32(int value) => FromValue(value);
     public static implicit operator int(BsonInt32 bsonInt) => bsonInt.Value;
 
     public override int CompareTo(BsonValue? other)
