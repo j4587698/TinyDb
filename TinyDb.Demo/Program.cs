@@ -28,13 +28,15 @@ public class Program
         {
             ("基础CRUD操作", "1", SimpleCrudDemo.RunAsync),
             ("元数据系统", "2", MetadataDemo.RunAsync),
-            ("数据库安全系统", "3", SimpleSecurityDemo.RunAsync)
-            // 暂时注释掉有编译错误的演示
-            // ("事务处理功能", "4", TransactionDemo.RunAsync),
-            // ("LINQ查询功能", "5", LinqQueryDemo.RunAsync),
-            // ("索引系统", "6", IndexDemo.RunAsync),
-            // ("ID生成策略", "7", IdGenerationDemo.RunAsync),
-            // ("性能测试", "8", PerformanceDemo.RunAsync)
+            ("数据库安全系统", "3", SimpleSecurityDemo.RunAsync),
+            ("LINQ查询功能", "4", LinqQueryDemo.RunAsync),
+            ("异步操作", "5", AsyncOperationsDemo.RunAsync),
+            ("批量操作与性能", "6", BulkOperationsDemo.RunAsync),
+            ("嵌套对象与复杂类型", "7", NestedObjectsDemo.RunAsync),
+            ("实体关系", "8", RelationshipsDemo.RunAsync),
+            ("事务处理功能", "9", TransactionDemo.RunAsync),
+            ("索引系统", "10", IndexDemo.RunAsync),
+            ("自动ID生成", "11", AutoIdSimpleDemo.RunAsync)
         };
 
         Console.WriteLine("🎯 可用演示列表:");
@@ -125,7 +127,9 @@ public class Program
             "demo.db", "simple_crud_demo.db", "linq_demo.db",
             "transaction_demo.db", "performance_demo.db", "metadata_demo.db",
             "secure_demo.db", "normal_demo.db", "index_demo.db",
-            "idgeneration_demo.db", "option_secure_demo.db", "advanced_demo.db"
+            "idgeneration_demo.db", "option_secure_demo.db", "advanced_demo.db",
+            "linq_query_demo.db", "async_demo.db", "bulk_demo.db",
+            "nested_objects_demo.db", "relationships_demo.db", "auto_id_demo.db"
         };
 
         // 清理WAL文件
