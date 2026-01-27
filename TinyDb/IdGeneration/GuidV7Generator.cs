@@ -29,9 +29,9 @@ public class GuidV7Generator : IIdGenerator
         // 获取当前 Unix 时间戳毫秒
         var unixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // 创建随机字节
+        // 创建随机字节 (使用加密安全的 RNG 以避免碰撞)
         var randomBytes = new byte[10];
-        Random.Shared.NextBytes(randomBytes);
+        System.Security.Cryptography.RandomNumberGenerator.Fill(randomBytes);
 
         // 构造 GUID v7 的16字节
         var guidBytes = new byte[16];

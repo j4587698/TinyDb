@@ -1,5 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
+using System.Threading;
+using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Serialization;
@@ -370,6 +372,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         ThrowIfDisposed();
 
+        // 关键修复：如果在事务中，必须使用 FindAll().Count() 以包含挂起的操作
+        if (_engine.GetCurrentTransaction() != null)
+        {
+            return FindAll().LongCount();
+        }
+
         return _engine.GetCachedDocumentCount(_name);
     }
 
@@ -577,6 +585,316 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         return _engine.GetIndexManager(_name);
     }
+
+    #region 异步方法实现
+
+    /// <summary>
+    /// 异步插入单个文档
+    /// </summary>
+    /// <param name="entity">要插入的实体</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入文档的ID</returns>
+    public async Task<BsonValue> InsertAsync(T entity, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        // 确保实体有ID
+        EnsureEntityHasId(entity);
+
+        // 转换为BSON文档（AOT兼容）
+        var document = AotBsonMapper.ToDocument(entity);
+
+        // 检查是否在事务中
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            // 在事务中，记录操作而不是直接写入（事务不支持异步）
+            var documentId = ((Transaction)currentTransaction).RecordInsert(_name, document);
+            UpdateEntityId(entity, documentId);
+            return documentId;
+        }
+        else
+        {
+            // 不在事务中，异步插入到数据库
+            var id = await _engine.InsertDocumentAsync(_name, document, cancellationToken).ConfigureAwait(false);
+            UpdateEntityId(entity, id);
+            return id;
+        }
+    }
+
+    /// <summary>
+    /// 异步插入多个文档
+    /// </summary>
+    /// <param name="entities">要插入的实体集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入的文档数量</returns>
+    public async Task<int> InsertAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        int totalInserted = 0;
+        const int BatchSize = 1000;
+        var entityBatch = new List<T>(BatchSize);
+        var docBatch = new List<BsonDocument>(BatchSize);
+
+        foreach (var entity in entities)
+        {
+            if (entity == null) continue;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            EnsureEntityHasId(entity);
+            var document = AotBsonMapper.ToDocument(entity);
+            
+            entityBatch.Add(entity);
+            docBatch.Add(document);
+
+            if (entityBatch.Count >= BatchSize)
+            {
+                totalInserted += await InsertBatchAsync(entityBatch, docBatch, cancellationToken).ConfigureAwait(false);
+                entityBatch.Clear();
+                docBatch.Clear();
+            }
+        }
+
+        if (entityBatch.Count > 0)
+        {
+            totalInserted += await InsertBatchAsync(entityBatch, docBatch, cancellationToken).ConfigureAwait(false);
+        }
+
+        return totalInserted;
+    }
+
+    private async Task<int> InsertBatchAsync(List<T> entities, List<BsonDocument> documents, CancellationToken cancellationToken)
+    {
+        if (documents.Count == 0) return 0;
+
+        var insertedCount = await _engine.InsertDocumentsAsync(_name, documents.ToArray(), cancellationToken).ConfigureAwait(false);
+
+        for (int i = 0; i < Math.Min(insertedCount, entities.Count); i++)
+        {
+            var entity = entities[i];
+            if (entity != null && documents.Count > i)
+            {
+                var document = documents[i];
+                if (document.TryGetValue("_id", out var id))
+                {
+                    UpdateEntityId(entity, id);
+                }
+            }
+        }
+
+        return insertedCount;
+    }
+
+    /// <summary>
+    /// 异步更新文档
+    /// </summary>
+    /// <param name="entity">要更新的实体</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>更新的文档数量</returns>
+    public async Task<int> UpdateAsync(T entity, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        var hasValidId = AotIdAccessor<T>.HasValidId(entity);
+        if (!hasValidId)
+        {
+            throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
+        }
+
+        var id = AotIdAccessor<T>.GetId(entity);
+        var document = AotBsonMapper.ToDocument(entity);
+
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            var originalDocument = _engine.FindById(_name, id);
+            if (originalDocument == null)
+            {
+                ((Transaction)currentTransaction).RecordInsert(_name, document);
+                return 1;
+            }
+            else
+            {
+                ((Transaction)currentTransaction).RecordUpdate(_name, originalDocument, document);
+                return 1;
+            }
+        }
+        else
+        {
+            return await _engine.UpdateDocumentAsync(_name, document, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// 异步更新多个文档
+    /// </summary>
+    /// <param name="entities">要更新的实体集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>更新的文档数量</returns>
+    public async Task<int> UpdateAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var updatedCount = 0;
+        foreach (var entity in entities)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entity != null)
+            {
+                updatedCount += await UpdateAsync(entity, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return updatedCount;
+    }
+
+    /// <summary>
+    /// 异步删除文档
+    /// </summary>
+    /// <param name="id">要删除的文档ID</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    public async Task<int> DeleteAsync(BsonValue id, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (id == null || id.IsNull) return 0;
+
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            var documentToDelete = _engine.FindById(_name, id);
+            if (documentToDelete == null)
+            {
+                return 0;
+            }
+            else
+            {
+                ((Transaction)currentTransaction).RecordDelete(_name, documentToDelete);
+                return 1;
+            }
+        }
+        else
+        {
+            return await _engine.DeleteDocumentAsync(_name, id, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// 异步删除多个文档
+    /// </summary>
+    /// <param name="ids">要删除的文档ID集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    public async Task<int> DeleteAsync(IEnumerable<BsonValue> ids, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+
+        var deletedCount = 0;
+        foreach (var id in ids)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (id != null && !id.IsNull)
+            {
+                deletedCount += await DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return deletedCount;
+    }
+
+    /// <summary>
+    /// 异步删除所有文档
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    public async Task<int> DeleteAllAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var deletedCount = 0;
+        var allDocuments = FindAll().ToList();
+
+        foreach (var entity in allDocuments)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var id = GetEntityId(entity);
+            if (id != null && !id.IsNull)
+            {
+                deletedCount += await DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return deletedCount;
+    }
+
+    /// <summary>
+    /// 异步根据条件删除文档
+    /// </summary>
+    /// <param name="predicate">查询条件</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    public async Task<int> DeleteManyAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var deletedCount = 0;
+        var documentsToDelete = Find(predicate).ToList();
+
+        foreach (var entity in documentsToDelete)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var id = GetEntityId(entity);
+            if (id != null && !id.IsNull)
+            {
+                deletedCount += await DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return deletedCount;
+    }
+
+    /// <summary>
+    /// 异步插入或更新文档（如果存在ID则更新，否则插入）
+    /// </summary>
+    /// <param name="entity">要插入或更新的实体</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>操作类型和影响的文档数量</returns>
+    public async Task<(UpdateType UpdateType, int Count)> UpsertAsync(T entity, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        var id = GetEntityId(entity);
+
+        if (id == null || id.IsNull)
+        {
+            await InsertAsync(entity, cancellationToken).ConfigureAwait(false);
+            return (UpdateType.Insert, 1);
+        }
+        else
+        {
+            var existingDocument = FindById(id);
+            if (existingDocument == null)
+            {
+                await InsertAsync(entity, cancellationToken).ConfigureAwait(false);
+                return (UpdateType.Insert, 1);
+            }
+            else
+            {
+                var updateCount = await UpdateAsync(entity, cancellationToken).ConfigureAwait(false);
+                return (UpdateType.Update, updateCount);
+            }
+        }
+    }
+
+    #endregion
 
     /// <summary>
     /// 检查是否已释放

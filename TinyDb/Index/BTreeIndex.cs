@@ -87,7 +87,10 @@ public sealed class BTreeIndex : IDisposable
         
         lock (_lock)
         {
-            if (_unique && _tree.Contains(key)) return false;
+            if (_unique && _tree.Contains(key))
+            {
+                return false;
+            }
             _tree.Insert(key, documentId);
             UpdateRootField();
             return true;

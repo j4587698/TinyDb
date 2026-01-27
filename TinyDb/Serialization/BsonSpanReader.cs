@@ -100,6 +100,9 @@ public ref struct BsonSpanReader
             BsonType.Timestamp => new BsonTimestamp(ReadInt64()),
             BsonType.Int64 => new BsonInt64(ReadInt64()),
             BsonType.Decimal128 => ReadDecimal128(),
+            BsonType.JavaScript => new BsonJavaScript(ReadString()),
+            BsonType.Symbol => new BsonSymbol(ReadString()),
+            BsonType.JavaScriptWithScope => ReadJavaScriptWithScope(),
             BsonType.MinKey => BsonMinKey.Value,
             BsonType.MaxKey => BsonMaxKey.Value,
             _ => throw new NotSupportedException($"Unsupported BSON type: {type}")
@@ -116,6 +119,10 @@ public ref struct BsonSpanReader
             case BsonType.Symbol:
                 int len = ReadInt32();
                 _position += len; 
+                break;
+            case BsonType.JavaScriptWithScope:
+                int totalSize = ReadInt32();
+                _position += (totalSize - 4);
                 break;
             case BsonType.Document:
             case BsonType.Array:
@@ -140,11 +147,7 @@ public ref struct BsonSpanReader
                 break;
             case BsonType.Int32: _position += 4; break;
             case BsonType.Decimal128: 
-                // Decimal128 stored as string in this implementation? Or raw bytes?
-                // Standard BSON is 128-bit. But current BsonReader implementation reads it as String (int32 length + bytes).
-                // "ReadDecimal128 reads int32 length then bytes."
-                int decLen = ReadInt32();
-                _position += decLen;
+                _position += 16;
                 break;
             default: throw new NotSupportedException($"Cannot skip type {type}");
         }
@@ -258,17 +261,20 @@ public ref struct BsonSpanReader
 
     public BsonDecimal128 ReadDecimal128()
     {
-        // 兼容现有实现：作为字符串存储
-        int len = ReadInt32();
-        if (_position + len > _data.Length) throw new EndOfStreamException();
+        if (_position + 16 > _data.Length) throw new EndOfStreamException();
         
-        string s = Encoding.UTF8.GetString(_data.Slice(_position, len - 1));
-        _position += len;
+        ulong lo = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_position));
+        ulong hi = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_position + 8));
+        _position += 16;
         
-        if (decimal.TryParse(s, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d))
-        {
-            return new BsonDecimal128(d);
-        }
-        throw new InvalidOperationException($"Invalid decimal: {s}");
+        return new BsonDecimal128(new Decimal128(lo, hi));
+    }
+
+    public BsonJavaScriptWithScope ReadJavaScriptWithScope()
+    {
+        int totalSize = ReadInt32();
+        string code = ReadString();
+        var scope = ReadDocument();
+        return new BsonJavaScriptWithScope(code, scope);
     }
 }

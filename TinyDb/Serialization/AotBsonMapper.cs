@@ -161,6 +161,12 @@ public static class AotBsonMapper
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
+        // Special case: if T is BsonDocument, return the document directly
+        if (typeof(T) == typeof(BsonDocument))
+        {
+            return (T)(object)document;
+        }
+
         if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
             return adapter.FromDocument(document);
@@ -179,6 +185,12 @@ public static class AotBsonMapper
         where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        // Special case: if entity is BsonDocument, get _id directly
+        if (entity is BsonDocument doc)
+        {
+            return doc.ContainsKey("_id") ? doc["_id"] : BsonNull.Value;
+        }
 
         if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
@@ -205,6 +217,17 @@ public static class AotBsonMapper
         where T : class, new()
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
+
+        // Special case: if entity is BsonDocument, set _id directly
+        // Note: BsonDocument.Set returns a new instance, so this only works for mutable operations
+        // For BsonDocument, the caller should use doc.Set("_id", id) instead
+        if (entity is BsonDocument)
+        {
+            // BsonDocument is immutable in terms of Set returning new instance
+            // The typical pattern is: doc = doc.Set("_id", id)
+            // We cannot modify the reference here, so we skip this case
+            return;
+        }
 
         AotIdAccessor<T>.SetId(entity, id);
     }
@@ -612,6 +635,8 @@ public static class AotBsonMapper
     }
 
     [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "回退路径需要创建泛型字典以保持兼容性，推荐使用 Source Generator 提供的静态适配器。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2077", Justification = "Type requirements are preserved by ResolveDictionaryTypes but lost in ValueTuple return.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2080", Justification = "Type requirements are preserved by ResolveDictionaryTypes but lost in ValueTuple return.")]
     private static object? ConvertDictionary([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type dictionaryType, BsonDocument document)
     {
         if (document == null) return null;
@@ -644,6 +669,7 @@ public static class AotBsonMapper
 
     [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "回退路径需要创建泛型集合以保持兼容性，推荐使用 Source Generator 提供的静态适配器。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2075", Justification = "回退路径通过反射访问集合的 Add 方法，仅在缺失 Source Generator 适配器时启用。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2077", Justification = "Type requirements are preserved by ResolveCollectionTypes but lost in ValueTuple return.")]
     private static object? ConvertCollection([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type collectionType, BsonArray array)
     {
         if (array == null) return null;

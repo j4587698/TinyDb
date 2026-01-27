@@ -25,7 +25,7 @@ public sealed class ExpressionParser
     /// </summary>
     /// <param name="expression">表达式</param>
     /// <returns>查询表达式</returns>
-    private QueryExpression ParseExpression(Expression expression)
+    public QueryExpression ParseExpression(Expression expression)
     {
         // 尝试提前求值：如果表达式不依赖于参数，则将其视为常量进行求值
         // 这解决了闭包、局部变量、复杂数学运算和不受支持的方法调用（只要它们是常量）的问题
@@ -39,11 +39,11 @@ public sealed class ExpressionParser
                     return new ConstantExpression(constExpr.Value);
                 }
 
-                // 对于其他不包含参数的表达式，编译并执行
-                var lambda = System.Linq.Expressions.Expression.Lambda(expression);
-                var fn = lambda.Compile();
-                var value = fn.DynamicInvoke();
-                return new ConstantExpression(value);
+                // 对于其他不包含参数的表达式，尝试编译并执行 (仅在支持动态代码的环境下)
+                if (System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+                {
+                    return EvaluateConstantWithCompile(expression);
+                }
             }
             catch
             {
@@ -59,8 +59,44 @@ public sealed class ExpressionParser
             System.Linq.Expressions.ParameterExpression parameter => ParseParameterExpression(parameter),
             System.Linq.Expressions.UnaryExpression unary => ParseUnaryExpression(unary),
             System.Linq.Expressions.MethodCallExpression methodCall => ParseMethodCallExpression(methodCall),
+            System.Linq.Expressions.NewExpression newExpr => ParseNewExpression(newExpr),
+            System.Linq.Expressions.MemberInitExpression memberInit => ParseMemberInitExpression(memberInit),
             _ => throw new NotSupportedException($"Expression type {expression.NodeType} is not supported")
         };
+    }
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "The type comes from the expression tree and is expected to be valid.")]
+    private QueryExpression ParseNewExpression(System.Linq.Expressions.NewExpression newExpr)
+    {
+        var args = newExpr.Arguments.Select(ParseExpression).ToList();
+        return new ConstructorExpression(newExpr.Type, args);
+    }
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "The type comes from the expression tree and is expected to be valid.")]
+    private QueryExpression ParseMemberInitExpression(System.Linq.Expressions.MemberInitExpression memberInit)
+    {
+        var bindings = new List<(string MemberName, QueryExpression Value)>();
+        
+        foreach (var binding in memberInit.Bindings)
+        {
+            if (binding is System.Linq.Expressions.MemberAssignment assignment)
+            {
+                var memberName = assignment.Member.Name;
+                var value = ParseExpression(assignment.Expression);
+                bindings.Add((memberName, value));
+            }
+        }
+        
+        return new MemberInitQueryExpression(memberInit.Type, bindings);
+    }
+
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("Aot", "IL3050", Justification = "Guarded by IsDynamicCodeSupported")]
+    private static ConstantExpression EvaluateConstantWithCompile(Expression expression)
+    {
+        var lambda = System.Linq.Expressions.Expression.Lambda(expression);
+        var fn = lambda.Compile();
+        var value = fn.DynamicInvoke();
+        return new ConstantExpression(value);
     }
 
     /// <summary>
@@ -197,6 +233,7 @@ public sealed class ExpressionParser
     /// </summary>
     /// <param name="unary">一元表达式</param>
     /// <returns>查询表达式</returns>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "The type comes from the expression tree and is expected to be a valid entity type handled by the engine.")]
     private QueryExpression ParseUnaryExpression(System.Linq.Expressions.UnaryExpression unary)
     {
         var operand = ParseExpression(unary.Operand);
@@ -215,6 +252,7 @@ public sealed class ExpressionParser
     /// </summary>
     /// <param name="methodCall">方法调用表达式</param>
     /// <returns>查询表达式</returns>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "The type comes from the expression tree and is expected to be a valid entity type handled by the engine.")]
     private QueryExpression ParseMethodCallExpression(System.Linq.Expressions.MethodCallExpression methodCall)
     {
         var methodName = methodCall.Method.Name;
@@ -226,103 +264,30 @@ public sealed class ExpressionParser
             return new UnaryExpression(ExpressionType.Convert, arg, methodCall.Type);
         }
 
-        // 处理一些常见的字符串方法
-        return methodName switch
+        // Special handling for Equals (convert to BinaryExpression)
+        if (methodName == "Equals" && methodCall.Arguments.Count == 1 && methodCall.Object != null)
         {
-            "Contains" => ParseContainsMethod(methodCall),
-            "StartsWith" => ParseStartsWithMethod(methodCall),
-            "EndsWith" => ParseEndsWithMethod(methodCall),
-            "Equals" => ParseEqualsMethod(methodCall),
-            "ToString" => ParseToStringMethod(methodCall),
-            _ => throw new NotSupportedException($"Method '{methodName}' is not supported in queries")
-        };
-    }
-
-    /// <summary>
-    /// 解析 ToString 方法
-    /// </summary>
-    /// <param name="methodCall">方法调用表达式</param>
-    /// <returns>查询表达式</returns>
-    private QueryExpression ParseToStringMethod(System.Linq.Expressions.MethodCallExpression methodCall)
-    {
-        var objectExpression = ParseExpression(methodCall.Object!);
-
-        // 如果是常量表达式，立即求值
-        if (objectExpression is ConstantExpression constantExpr && constantExpr.Value != null)
+            var left = ParseExpression(methodCall.Object);
+            var right = ParseExpression(methodCall.Arguments[0]);
+            return new BinaryExpression(ExpressionType.Equal, left, right);
+        }
+        
+        // Special handling for ToString (constant optimization)
+        if (methodName == "ToString" && methodCall.Arguments.Count == 0 && methodCall.Object != null)
         {
-            return new ConstantExpression(constantExpr.Value.ToString());
+             var objectExpression = ParseExpression(methodCall.Object);
+             // 如果是常量表达式，立即求值
+             if (objectExpression is ConstantExpression constantExpr && constantExpr.Value != null)
+             {
+                 return new ConstantExpression(constantExpr.Value.ToString());
+             }
+             // 否则作为普通函数调用处理
         }
 
-        // 如果不是常量，目前只能返回原表达式（这可能导致类型不匹配，但在有限的查询支持下可能足够）
-        // 理想情况下应该引入一个 ToStringExpression 类型
-        return objectExpression;
-    }
+        // Generic method parsing
+        var target = methodCall.Object != null ? ParseExpression(methodCall.Object) : null;
+        var args = methodCall.Arguments.Select(ParseExpression).ToList();
 
-    /// <summary>
-    /// 解析 Contains 方法
-    /// </summary>
-    /// <param name="methodCall">方法调用表达式</param>
-    /// <returns>查询表达式</returns>
-    private QueryExpression ParseContainsMethod(System.Linq.Expressions.MethodCallExpression methodCall)
-    {
-        if (methodCall.Object == null || methodCall.Arguments.Count != 1)
-            throw new InvalidOperationException("Contains method must have one argument");
-
-        var left = ParseExpression(methodCall.Object);
-        var right = ParseExpression(methodCall.Arguments[0]);
-
-        // 将 Contains 转换为字符串包含比较
-        // 使用自定义的字符串包含操作，通过FunctionExpression处理
-        return new FunctionExpression("Contains", left, right);
-    }
-
-    /// <summary>
-    /// 解析 StartsWith 方法
-    /// </summary>
-    /// <param name="methodCall">方法调用表达式</param>
-    /// <returns>查询表达式</returns>
-    private QueryExpression ParseStartsWithMethod(System.Linq.Expressions.MethodCallExpression methodCall)
-    {
-        if (methodCall.Object == null || methodCall.Arguments.Count != 1)
-            throw new InvalidOperationException("StartsWith method must have one argument");
-
-        var targetExpression = ParseExpression(methodCall.Object);
-        var argumentExpression = ParseExpression(methodCall.Arguments[0]);
-
-        // 创建一个表示StartsWith操作的函数表达式
-        return new FunctionExpression("StartsWith", targetExpression, argumentExpression);
-    }
-
-    /// <summary>
-    /// 解析 EndsWith 方法
-    /// </summary>
-    /// <param name="methodCall">方法调用表达式</param>
-    /// <returns>查询表达式</returns>
-    private QueryExpression ParseEndsWithMethod(System.Linq.Expressions.MethodCallExpression methodCall)
-    {
-        if (methodCall.Object == null || methodCall.Arguments.Count != 1)
-            throw new InvalidOperationException("EndsWith method must have one argument");
-
-        var targetExpression = ParseExpression(methodCall.Object);
-        var argumentExpression = ParseExpression(methodCall.Arguments[0]);
-
-        // 创建一个表示EndsWith操作的函数表达式
-        return new FunctionExpression("EndsWith", targetExpression, argumentExpression);
-    }
-
-    /// <summary>
-    /// 解析 Equals 方法
-    /// </summary>
-    /// <param name="methodCall">方法调用表达式</param>
-    /// <returns>查询表达式</returns>
-    private QueryExpression ParseEqualsMethod(System.Linq.Expressions.MethodCallExpression methodCall)
-    {
-        if (methodCall.Object == null || methodCall.Arguments.Count != 1)
-            throw new InvalidOperationException("Equals method must have one argument");
-
-        var left = ParseExpression(methodCall.Object);
-        var right = ParseExpression(methodCall.Arguments[0]);
-
-        return new BinaryExpression(ExpressionType.Equal, left, right);
+        return new FunctionExpression(methodName, target, args);
     }
 }

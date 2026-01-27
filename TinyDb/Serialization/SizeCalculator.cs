@@ -32,7 +32,10 @@ internal sealed class SizeCalculator
             BsonBinary b => 4 + 1 + b.Bytes.Length,
             BsonRegularExpression r => CalculateCStringSize(r.Pattern) + CalculateCStringSize(r.Options),
             BsonTimestamp => 8,
-            BsonDecimal128 d => CalculateStringSize(d.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            BsonDecimal128 => 16, // Decimal128 is fixed 128-bit (16 bytes)
+            BsonJavaScript js => CalculateStringSize(js.Code),
+            BsonSymbol sym => CalculateStringSize(sym.Name),
+            BsonJavaScriptWithScope jsScope => 4 + CalculateStringSize(jsScope.Code) + CalculateDocumentSize(jsScope.Scope),
             _ => throw new NotSupportedException($"BSON type {value.BsonType} is not supported")
         };
     }

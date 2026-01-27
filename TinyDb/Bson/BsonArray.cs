@@ -154,6 +154,13 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     /// <summary>
     /// 初始化空数组
     /// </summary>
+    private static object? _aotRef;
+    static BsonArray()
+    {
+        // Preserve BsonArrayValue constructor for AOT
+        _aotRef = new BsonArrayValue();
+    }
+
     public BsonArray() : this(ImmutableList<BsonValue>.Empty)
     {
     }
@@ -390,6 +397,11 @@ internal sealed class BsonArrayValue : BsonValue
     public BsonArrayValue(BsonArray value)
     {
         Value = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    public BsonArrayValue()
+    {
+        Value = new BsonArray();
     }
 
     public override int CompareTo(BsonValue? other)

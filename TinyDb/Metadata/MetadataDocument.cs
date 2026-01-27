@@ -23,6 +23,11 @@ public class MetadataDocument
     public string TypeName { get; set; } = string.Empty;
 
     /// <summary>
+    /// 实体集合名称
+    /// </summary>
+    public string CollectionName { get; set; } = string.Empty;
+
+    /// <summary>
     /// 实体显示名称
     /// </summary>
     public string DisplayName { get; set; } = string.Empty;
@@ -58,6 +63,7 @@ public class MetadataDocument
         {
             Id = ObjectId.NewObjectId(),
             TypeName = metadata.TypeName,
+            CollectionName = metadata.CollectionName,
             DisplayName = metadata.DisplayName,
             Description = metadata.Description ?? "",
             CreatedAt = DateTime.Now,
@@ -78,6 +84,7 @@ public class MetadataDocument
         var metadata = new EntityMetadata
         {
             TypeName = TypeName,
+            CollectionName = CollectionName,
             DisplayName = DisplayName,
             Description = string.IsNullOrEmpty(Description) ? null : Description
         };

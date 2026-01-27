@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
@@ -141,6 +143,81 @@ public interface ITinyCollection<T> where T : class
     /// </summary>
     /// <returns>索引管理器实例</returns>
     IndexManager GetIndexManager();
+
+    #region 异步方法
+
+    /// <summary>
+    /// 异步插入单个文档
+    /// </summary>
+    /// <param name="entity">要插入的实体</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入文档的ID</returns>
+    Task<BsonValue> InsertAsync(T entity, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步插入多个文档
+    /// </summary>
+    /// <param name="entities">要插入的实体集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入的文档数量</returns>
+    Task<int> InsertAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步更新文档
+    /// </summary>
+    /// <param name="entity">要更新的实体</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>更新的文档数量</returns>
+    Task<int> UpdateAsync(T entity, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步更新多个文档
+    /// </summary>
+    /// <param name="entities">要更新的实体集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>更新的文档数量</returns>
+    Task<int> UpdateAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步删除文档
+    /// </summary>
+    /// <param name="id">要删除的文档ID</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    Task<int> DeleteAsync(BsonValue id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步删除多个文档
+    /// </summary>
+    /// <param name="ids">要删除的文档ID集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    Task<int> DeleteAsync(IEnumerable<BsonValue> ids, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步删除所有文档
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    Task<int> DeleteAllAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步根据条件删除文档
+    /// </summary>
+    /// <param name="predicate">查询条件</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    Task<int> DeleteManyAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步插入或更新文档（如果存在ID则更新，否则插入）
+    /// </summary>
+    /// <param name="entity">要插入或更新的实体</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>操作类型和影响的文档数量</returns>
+    Task<(UpdateType UpdateType, int Count)> UpsertAsync(T entity, CancellationToken cancellationToken = default);
+
+    #endregion
 }
 
 /// <summary>

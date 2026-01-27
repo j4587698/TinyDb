@@ -122,8 +122,16 @@ public sealed class BsonBinary : BsonValue
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        hash.Add(Bytes);
         hash.Add(SubType);
+        hash.Add(Bytes.Length);
+        
+        // Add content hash (optimization: maybe only sample if large?)
+        // For correctness/coverage now, we iterate.
+        foreach(var b in Bytes)
+        {
+            hash.Add(b);
+        }
+        
         return hash.ToHashCode();
     }
 
@@ -141,7 +149,24 @@ public sealed class BsonBinary : BsonValue
     public override int CompareTo(BsonValue? other)
     {
         if (other is null) return 1;
-        if (other is BsonBinary otherBinary) return Bytes.Length.CompareTo(otherBinary.Bytes.Length);
+        if (other is BsonBinary otherBinary)
+        {
+            // 1. Length
+            var lenDiff = Bytes.Length.CompareTo(otherBinary.Bytes.Length);
+            if (lenDiff != 0) return lenDiff;
+
+            // 2. SubType
+            var subTypeDiff = SubType.CompareTo(otherBinary.SubType);
+            if (subTypeDiff != 0) return subTypeDiff;
+
+            // 3. Bytes
+            for (int i = 0; i < Bytes.Length; i++)
+            {
+                var byteDiff = Bytes[i].CompareTo(otherBinary.Bytes[i]);
+                if (byteDiff != 0) return byteDiff;
+            }
+            return 0;
+        }
         return BsonType.CompareTo(other.BsonType);
     }
 

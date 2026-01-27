@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Linq.Expressions;
 
 namespace TinyDb.Query;
@@ -75,20 +78,25 @@ public sealed class ParameterExpression : QueryExpression
 }
 
 /// <summary>
-/// 函数表达式（用于处理Contains等字符串方法）
+/// 函数表达式（用于处理方法调用）
 /// </summary>
 public sealed class FunctionExpression : QueryExpression
 {
-    public override ExpressionType NodeType => ExpressionType.Call; // 使用Call类型表示方法调用
+    public override ExpressionType NodeType => ExpressionType.Call;
     public string FunctionName { get; }
-    public QueryExpression Target { get; }
-    public QueryExpression Argument { get; }
+    public QueryExpression? Target { get; }
+    public IReadOnlyList<QueryExpression> Arguments { get; }
 
-    public FunctionExpression(string functionName, QueryExpression target, QueryExpression argument)
+    public FunctionExpression(string functionName, QueryExpression? target, IEnumerable<QueryExpression> arguments)
     {
         FunctionName = functionName;
         Target = target;
-        Argument = argument;
+        Arguments = arguments?.ToList() ?? new List<QueryExpression>();
+    }
+    
+    public FunctionExpression(string functionName, QueryExpression target, QueryExpression argument) 
+        : this(functionName, target, new[] { argument })
+    {
     }
 }
 
@@ -99,12 +107,54 @@ public sealed class UnaryExpression : QueryExpression
 {
     public override ExpressionType NodeType { get; }
     public QueryExpression Operand { get; }
+    
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
     public Type Type { get; } // Target type for conversion
 
-    public UnaryExpression(ExpressionType nodeType, QueryExpression operand, Type type)
+    public UnaryExpression(ExpressionType nodeType, QueryExpression operand, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)] Type type)
     {
         NodeType = nodeType;
         Operand = operand;
         Type = type;
+    }
+}
+
+/// <summary>
+/// 构造函数表达式 (new T(...))
+/// </summary>
+public sealed class ConstructorExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.New;
+    
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)]
+    public Type Type { get; }
+    
+    public IReadOnlyList<QueryExpression> Arguments { get; }
+
+    public ConstructorExpression([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type type, IEnumerable<QueryExpression> arguments)
+    {
+        Type = type;
+        Arguments = arguments?.ToList() ?? new List<QueryExpression>();
+    }
+}
+
+/// <summary>
+/// 成员初始化表达式 (new T { Prop = value, ... })
+/// </summary>
+public sealed class MemberInitQueryExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.MemberInit;
+    
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
+    public Type Type { get; }
+    
+    public IReadOnlyList<(string MemberName, QueryExpression Value)> Bindings { get; }
+
+    public MemberInitQueryExpression(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)] Type type, 
+        IEnumerable<(string MemberName, QueryExpression Value)> bindings)
+    {
+        Type = type;
+        Bindings = bindings?.ToList() ?? new List<(string, QueryExpression)>();
     }
 }

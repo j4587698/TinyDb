@@ -54,7 +54,7 @@ public static partial class AotHelperRegistry
 {
     private static readonly ConcurrentDictionary<Type, object> _adapters = new();
 
-    internal static bool TryGetAdapter<T>([NotNullWhen(true)] out AotEntityAdapter<T>? adapter)
+    public static bool TryGetAdapter<T>([NotNullWhen(true)] out AotEntityAdapter<T>? adapter)
     {
         if (_adapters.TryGetValue(typeof(T), out var raw))
         {

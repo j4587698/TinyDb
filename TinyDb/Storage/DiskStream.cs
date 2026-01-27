@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 
@@ -8,18 +9,20 @@ namespace TinyDb.Storage;
 /// </summary>
 public sealed class DiskStream : IDiskStream
 {
-    // ... existing fields ...
     private readonly string _filePath;
     private readonly FileStream _fileStream;
     private bool _disposed;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     /// <summary>
+    /// 跨平台文件区域锁管理器（进程内）
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, RegionLockManager> _regionLocks = new();
+
+    /// <summary>
     /// 文件路径
     /// </summary>
     public string FilePath => _filePath;
-
-    // ... Size, Position, IsReadable ...
 
     /// <summary>
     /// 文件大小
@@ -161,7 +164,7 @@ public sealed class DiskStream : IDiskStream
     }
 
     /// <summary>
-    /// 锁定文件区域
+    /// 锁定文件区域（跨平台实现）
     /// </summary>
     /// <param name="position">起始位置</param>
     /// <param name="length">锁定长度</param>
@@ -169,44 +172,14 @@ public sealed class DiskStream : IDiskStream
     public object LockRegion(long position, long length)
     {
         ThrowIfDisposed();
-        
-        // 优先尝试操作系统级文件区域锁定 (Windows/Linux)
-        try 
-        {
-#pragma warning disable CA1416 // Validate platform compatibility
-            _semaphore.Wait();
-            try
-            {
-                _fileStream.Lock(position, length);
-            }
-            finally
-            {
-                _semaphore.Release();
-            }
-#pragma warning restore CA1416
-            return new Tuple<long, long>(position, length);
-        }
-        catch (PlatformNotSupportedException)
-        {
-            // macOS 或其他不支持区域锁的平台：回退到基于文件的互斥锁
-            // 注意：这提供了全文件级别的互斥，虽然粒度较粗，但保证了跨进程安全。
-            var lockPath = $"{_filePath}.lock";
-            try
-            {
-                // 使用 FileShare.None 确保独占访问
-                // FileOptions.DeleteOnClose 确保锁释放时文件被删除
-                var lockStream = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
-                return new LockFileHandle(lockStream);
-            }
-            catch (IOException ex)
-            {
-                throw new IOException($"Could not acquire fallback lock file {lockPath}. Another process may be holding the lock.", ex);
-            }
-        }
-        catch (IOException ex)
-        {
-            throw new IOException($"Could not lock file region {position}-{position+length}: {ex.Message}", ex);
-        }
+
+        // 获取或创建该文件的区域锁管理器
+        var fullPath = Path.GetFullPath(_filePath);
+        var lockManager = _regionLocks.GetOrAdd(fullPath, _ => new RegionLockManager());
+
+        // 获取区域锁
+        var regionLock = lockManager.AcquireLock(position, length);
+        return regionLock;
     }
 
     /// <summary>
@@ -216,32 +189,10 @@ public sealed class DiskStream : IDiskStream
     public void UnlockRegion(object lockHandle)
     {
         ThrowIfDisposed();
-        
-        if (lockHandle is Tuple<long, long> range)
+
+        if (lockHandle is RegionLock regionLock)
         {
-            try
-            {
-#pragma warning disable CA1416 // Validate platform compatibility
-                _semaphore.Wait();
-                try
-                {
-                    _fileStream.Unlock(range.Item1, range.Item2);
-                }
-                finally
-                {
-                    _semaphore.Release();
-                }
-#pragma warning restore CA1416
-            }
-            catch (PlatformNotSupportedException)
-            {
-                // Should not happen if LockRegion succeeded with this handle type
-            }
-        }
-        else if (lockHandle is LockFileHandle fileHandle)
-        {
-            // 释放文件锁资源
-            fileHandle.Dispose();
+            regionLock.Release();
         }
         else
         {
@@ -249,11 +200,110 @@ public sealed class DiskStream : IDiskStream
         }
     }
 
-    private sealed class LockFileHandle : IDisposable
+    /// <summary>
+    /// 跨平台区域锁管理器（进程内）
+    /// </summary>
+    private sealed class RegionLockManager
     {
-        private readonly FileStream _stream;
-        public LockFileHandle(FileStream stream) => _stream = stream;
-        public void Dispose() => _stream.Dispose();
+        private readonly object _syncRoot = new();
+        private readonly List<ActiveRegionLock> _lockedRegions = new();
+
+        public RegionLock AcquireLock(long position, long length)
+        {
+            var end = position + length;
+
+            while (true)
+            {
+                ActiveRegionLock? conflictingLock = null;
+
+                lock (_syncRoot)
+                {
+                    // 检查是否有重叠的区域
+                    foreach (var region in _lockedRegions)
+                    {
+                        if (position < region.End && end > region.Start)
+                        {
+                            // 有重叠
+                            conflictingLock = region;
+                            break;
+                        }
+                    }
+
+                    if (conflictingLock == null)
+                    {
+                        // 没有重叠，创建新的锁并立即添加到列表
+                        var newLock = new ActiveRegionLock(position, end);
+                        _lockedRegions.Add(newLock);
+                        return new RegionLock(this, newLock);
+                    }
+                }
+
+                // 有冲突，在锁外等待
+                conflictingLock.WaitForRelease();
+                // 等待后重新检查，因为可能有新的冲突
+            }
+        }
+
+        public void ReleaseLock(ActiveRegionLock activeLock)
+        {
+            lock (_syncRoot)
+            {
+                _lockedRegions.Remove(activeLock);
+            }
+            activeLock.SignalRelease();
+        }
+
+        /// <summary>
+        /// 活动区域锁
+        /// </summary>
+        internal sealed class ActiveRegionLock
+        {
+            private readonly ManualResetEventSlim _releaseEvent = new(false);
+
+            public long Start { get; }
+            public long End { get; }
+
+            public ActiveRegionLock(long start, long end)
+            {
+                Start = start;
+                End = end;
+            }
+
+            public void WaitForRelease()
+            {
+                _releaseEvent.Wait();
+            }
+
+            public void SignalRelease()
+            {
+                _releaseEvent.Set();
+            }
+        }
+    }
+
+    /// <summary>
+    /// 区域锁句柄
+    /// </summary>
+    private sealed class RegionLock
+    {
+        private readonly RegionLockManager _manager;
+        private readonly RegionLockManager.ActiveRegionLock _activeLock;
+        private bool _released;
+
+        public RegionLock(RegionLockManager manager, RegionLockManager.ActiveRegionLock activeLock)
+        {
+            _manager = manager;
+            _activeLock = activeLock;
+        }
+
+        public void Release()
+        {
+            if (!_released)
+            {
+                _released = true;
+                _manager.ReleaseLock(_activeLock);
+            }
+        }
     }
 
 

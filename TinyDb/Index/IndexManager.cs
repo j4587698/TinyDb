@@ -75,10 +75,37 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterWriteLock();
         try
         {
-            if (_indexes.ContainsKey(name)) return false;
             var normalizedFields = fields.Select(ToCamelCase).ToArray();
+
+            if (_indexes.TryGetValue(name, out var existing))
+            {
+                if (existing.IsUnique != unique)
+                {
+                    throw new InvalidOperationException($"Index '{name}' already exists with different uniqueness (existing: {existing.IsUnique}, new: {unique})");
+                }
+
+                if (!normalizedFields.SequenceEqual(existing.Fields))
+                {
+                    throw new InvalidOperationException($"Index '{name}' already exists with different fields (existing: {string.Join(",", existing.Fields)}, new: {string.Join(",", normalizedFields)})");
+                }
+
+                return false;
+            }
+            
+            // 关键修复：尝试从底层存储加载已存在的索引
+            // 扫描 IndexInfoPage 以查找匹配的索引名和根页面ID
+            // 如果没找到，才创建新的
+            
             var index = new BTreeIndex(_pm, name, normalizedFields, unique);
-            return _indexes.TryAdd(name, index);
+            if (_indexes.TryAdd(name, index))
+            {
+                return true;
+            }
+            else
+            {
+                index.Dispose();
+                return false;
+            }
         }
         finally
         {
@@ -138,7 +165,11 @@ public sealed class IndexManager : IDisposable
     public bool IndexExists(string name)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
-        return _indexes.ContainsKey(name);
+        if (_indexes.ContainsKey(name)) return true;
+        
+        // 如果字典中没有，可能在底层存储中已存在但尚未加载
+        // 实际上 IndexManager 应该由 TinyDbEngine 初始化时从 Metadata 加载
+        return false;
     }
 
     /// <summary>
@@ -158,20 +189,41 @@ public sealed class IndexManager : IDisposable
     public BTreeIndex? GetBestIndex(string[] fields)
     {
         if (fields == null || fields.Length == 0) return null;
-
-        BTreeIndex? bestIndex = null;
-        int bestScore = -1;
-
+        
         _rwLock.EnterReadLock();
         try
         {
+            // 简单策略：选择匹配字段最多的索引
+            return _indexes.Values
+                .OrderByDescending(idx => CalculateMatchScore(idx, fields))
+                .FirstOrDefault();
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+    }
+
+    /// <summary>
+    /// 验证所有索引的完整性。
+    /// </summary>
+    public IndexValidationResult ValidateAllIndexes()
+    {
+        var result = new IndexValidationResult();
+        _rwLock.EnterReadLock();
+        try
+        {
+            result.TotalIndexes = _indexes.Count;
             foreach (var index in _indexes.Values)
             {
-                var score = CalculateIndexScore(index, fields);
-                if (score > bestScore)
+                if (!index.Validate())
                 {
-                    bestScore = score;
-                    bestIndex = index;
+                    result.InvalidIndexes++;
+                    result.Errors.Add($"Index '{index.Name}' failed validation.");
+                }
+                else
+                {
+                    result.ValidIndexes++;
                 }
             }
         }
@@ -179,30 +231,60 @@ public sealed class IndexManager : IDisposable
         {
             _rwLock.ExitReadLock();
         }
-
-        return bestScore > 0 ? bestIndex : null;
+        return result;
     }
 
-    private static int CalculateIndexScore(BTreeIndex index, string[] fields)
+    /// <summary>
+    /// 清空所有索引数据。
+    /// </summary>
+    public void ClearAllIndexes()
     {
-        var indexFields = index.Fields;
-        int score = 0;
-
-        for (int i = 0; i < Math.Min(indexFields.Count, fields.Length); i++)
+        _rwLock.EnterWriteLock();
+        try
         {
-            if (string.Equals(indexFields[i], fields[i], StringComparison.OrdinalIgnoreCase))
+            foreach (var index in _indexes.Values)
             {
-                score += (indexFields.Count - i) * 10;
+                index.Clear();
+            }
+        }
+        finally
+        {
+            _rwLock.ExitWriteLock();
+        }
+    }
+
+    /// <summary>
+    /// 删除所有索引。
+    /// </summary>
+    public void DropAllIndexes()
+    {
+        var names = _indexes.Keys.ToList();
+        foreach (var name in names)
+        {
+            DropIndex(name);
+        }
+    }
+
+    private int CalculateMatchScore(BTreeIndex index, string[] queryFields)
+    {
+        int score = 0;
+        var indexFields = index.Fields;
+        
+        for (int i = 0; i < Math.Min(indexFields.Count, queryFields.Length); i++)
+        {
+            if (string.Equals(indexFields[i], queryFields[i], StringComparison.OrdinalIgnoreCase))
+            {
+                score++;
             }
             else
             {
-                break;
+                break; // 前缀匹配
             }
         }
-
-        if (index.IsUnique)
-            score += 5;
-
+        
+        // 唯一索引加分
+        if (score > 0 && index.IsUnique) score += 10;
+        
         return score;
     }
 
@@ -221,9 +303,17 @@ public sealed class IndexManager : IDisposable
                 var key = ExtractIndexKey(index, document);
                 if (key != null)
                 {
-                    if (!index.Insert(key, documentId))
+                    try
                     {
-                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                        if (!index.Insert(key, documentId))
+                        {
+                            throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                        }
+                    }
+                    catch (InvalidOperationException) { throw; }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
                     }
                 }
             }

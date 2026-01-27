@@ -23,12 +23,12 @@
     <InvariantGlobalization>true</InvariantGlobalization>
 
     <!-- SourceGenerator 优化 -->
-    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <EmitCompilerGeneratedFiles>false</EmitCompilerGeneratedFiles>
     <CompilerGeneratedFilesOutputPath>Generated</CompilerGeneratedFilesOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="TinyDb" Version="0.1.0" />
+    <ProjectReference Include="TinyDb.csproj" />
   </ItemGroup>
 
   <!-- 修剪警告抑制（如果需要） -->

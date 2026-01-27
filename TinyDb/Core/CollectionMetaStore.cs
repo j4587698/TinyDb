@@ -146,11 +146,16 @@ internal sealed class CollectionMetaStore
         }
         var collectionData = BsonSerializer.SerializeDocument(collectionInfo);
         
-        // Check size? If too large, we need multiple pages. For now assume it fits.
-        // TODO: Handle overflow
         
         var collectionPage = _pageManager.GetPage(pageId);
-            const int dataOffset = 247;
+        const int dataOffset = 247;
+        
+        // 检查溢出
+        if (collectionData.Length > collectionPage.PageSize - dataOffset)
+        {
+            throw new InvalidOperationException($"Collection metadata size ({collectionData.Length} bytes) exceeds page capacity. Multi-page metadata storage is not yet implemented.");
+        }
+
         collectionPage.WriteData(dataOffset, collectionData);
         collectionPage.UpdateStats((ushort)(collectionPage.DataSize - dataOffset - collectionData.Length), 1);
         _pageManager.SavePage(collectionPage, forceFlush: forceFlush);

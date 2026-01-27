@@ -11,6 +11,11 @@ public class EntityMetadata
     public string TypeName { get; set; } = string.Empty;
 
     /// <summary>
+    /// 实体集合名称
+    /// </summary>
+    public string CollectionName { get; set; } = string.Empty;
+
+    /// <summary>
     /// 实体显示名称
     /// </summary>
     public string DisplayName { get; set; } = string.Empty;
@@ -65,6 +70,11 @@ public class PropertyMetadata
     /// 密码相关配置（当属性是密码类型时使用）
     /// </summary>
     public PasswordMetadata? Password { get; set; }
+
+    /// <summary>
+    /// 外键关联的集合名称
+    /// </summary>
+    public string? ForeignKeyCollection { get; set; }
 }
 
 /// <summary>

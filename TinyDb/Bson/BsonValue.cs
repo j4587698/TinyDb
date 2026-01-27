@@ -162,7 +162,14 @@ public abstract class BsonValue : IComparable<BsonValue>, IEquatable<BsonValue>,
     public virtual T As<T>()
     {
         if (RawValue is T value) return value;
-        throw new InvalidCastException($"Cannot convert {BsonType} to {typeof(T).Name}");
+        
+        if (typeof(T) == typeof(decimal) && RawValue is Decimal128 d128)
+            return (T)(object)d128.ToDecimal();
+            
+        if (typeof(T) == typeof(Decimal128) && RawValue is decimal d)
+            return (T)(object)new Decimal128(d);
+
+        throw new InvalidCastException($"Cannot convert {BsonType} ({RawValue?.GetType().Name}) to {typeof(T).Name}");
     }
 
     /// <summary>

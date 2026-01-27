@@ -486,6 +486,21 @@ public sealed class TinyDbEngine : IDisposable
         return res;
     }
 
+    /// <summary>
+    /// 异步插入文档
+    /// </summary>
+    /// <param name="col">集合名称</param>
+    /// <param name="doc">要插入的文档</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入文档的ID</returns>
+    internal async Task<BsonValue> InsertDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
+    {
+        var pr = PrepareDocumentForInsert(col, doc, out var id);
+        var res = InsertPreparedDocument(col, pr, id, GetCollectionState(col), GetIndexManager(col), true);
+        await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
+        return res;
+    }
+
     internal int UpdateDocument(string col, BsonDocument doc)
     {
         if (!doc.TryGetValue("_id", out var id)) return 0;
@@ -548,6 +563,69 @@ public sealed class TinyDbEngine : IDisposable
         return 1;
     }
 
+    /// <summary>
+    /// 异步更新文档
+    /// </summary>
+    /// <param name="col">集合名称</param>
+    /// <param name="doc">要更新的文档</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>更新的文档数量</returns>
+    internal async Task<int> UpdateDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
+    {
+        if (!doc.TryGetValue("_id", out var id)) return 0;
+        var st = GetCollectionState(col);
+        var k = id.ToString() ?? "";
+        PageDocumentEntry old = default;
+
+        lock (st.PageState.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(col, st, id, k, out var p, out var e, out var i)) return 0;
+            if (i >= e.Count) return 0;
+            old = e[i];
+
+            var bs = BsonSerializer.SerializeDocument(doc);
+            if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+            {
+                var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
+                doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
+                bs = BsonSerializer.SerializeDocument(doc);
+            }
+
+            e[i] = new PageDocumentEntry(doc, bs);
+
+            if (!_dataPageAccess.CanFitInPage(p, e))
+            {
+                e[i] = old;
+                e.RemoveAt(i);
+                st.Index.Remove(k);
+                if (e.Count == 0)
+                {
+                    st.OwnedPages.TryRemove(p.PageID, out _);
+                    if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
+                    _pageManager.FreePage(p.PageID);
+                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+                if (old.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(old.LargeDocumentIndexPageId); } catch { }
+
+                var pr = PrepareDocumentForInsert(col, doc, out _);
+                InsertPreparedDocument(col, pr, id, st, GetIndexManager(col), false);
+            }
+            else
+            {
+                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                if (old.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(old.LargeDocumentIndexPageId); } catch { }
+            }
+        }
+        GetIndexManager(col)?.UpdateDocument(old.Document, doc, id);
+
+        await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
+        return 1;
+    }
+
     internal int DeleteDocument(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
@@ -576,6 +654,42 @@ public sealed class TinyDbEngine : IDisposable
             GetIndexManager(col)?.DeleteDocument(entry.Document, id);
         }
         EnsureWriteDurability();
+        return 1;
+    }
+
+    /// <summary>
+    /// 异步删除文档
+    /// </summary>
+    /// <param name="col">集合名称</param>
+    /// <param name="id">要删除的文档ID</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>删除的文档数量</returns>
+    internal async Task<int> DeleteDocumentAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
+    {
+        var st = GetCollectionState(col);
+        var k = id.ToString() ?? "";
+        lock (st.PageState.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(col, st, id, k, out var p, out var e, out var i)) return 0;
+            if (i >= e.Count) return 0;
+            var entry = e[i];
+            e.RemoveAt(i);
+            st.Index.Remove(k);
+            if (e.Count == 0)
+            {
+                st.OwnedPages.TryRemove(p.PageID, out _);
+                if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
+                _pageManager.FreePage(p.PageID);
+                lock (_lock) { _header.UsedPages--; WriteHeader(); }
+            }
+            else
+            {
+                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+            }
+            if (entry.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(entry.LargeDocumentIndexPageId); } catch { }
+            GetIndexManager(col)?.DeleteDocument(entry.Document, id);
+        }
+        await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
     }
 
@@ -689,6 +803,126 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         EnsureWriteDurability();
+
+        if (exceptions.Count > 0)
+        {
+            throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+        }
+
+        return insertedCount;
+    }
+
+    /// <summary>
+    /// 异步批量插入文档
+    /// </summary>
+    /// <param name="col">集合名称</param>
+    /// <param name="docs">要插入的文档数组</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入的文档数量</returns>
+    internal async Task<int> InsertDocumentsAsync(string col, BsonDocument[] docs, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (docs == null) throw new ArgumentNullException(nameof(docs));
+        if (docs.Length == 0) return 0;
+
+        var st = GetCollectionState(col);
+        var idx = GetIndexManager(col);
+        var docsToUpdateIndex = idx != null ? new List<(BsonDocument Doc, BsonValue Id)>(docs.Length) : null;
+        int insertedCount = 0;
+
+        using var stream = BsonSerializer.GetRecyclableStream();
+
+        var exceptions = new List<Exception>();
+
+        lock (st.PageState.SyncRoot)
+        {
+            Page? currentPage = null;
+            if (st.PageState.PageId != 0)
+            {
+                try { currentPage = _pageManager.GetPage(st.PageState.PageId); } catch { }
+            }
+
+            if (currentPage == null || currentPage.Header.PageType != PageType.Data)
+            {
+                var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024); 
+                currentPage = p;
+                if (isN || st.OwnedPages.IsEmpty) st.OwnedPages.TryAdd(p.PageID, 0);
+                if (isN) lock (_lock) { _header.UsedPages++; WriteHeader(); }
+            }
+
+            foreach (var d in docs)
+            {
+                if (d == null) continue;
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var doc = PrepareDocumentForInsert(col, d, out var id);
+
+                    stream.SetLength(0);
+                    BsonSerializer.SerializeDocument(doc, stream);
+
+                    if (LargeDocumentStorage.RequiresLargeDocumentStorage((int)stream.Length, _dataPageAccess.GetMaxDocumentSize()))
+                    {
+                        var bytes = stream.ToArray();
+                        var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
+                        doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
+                        
+                        stream.SetLength(0);
+                        BsonSerializer.SerializeDocument(doc, stream);
+                    }
+
+                    int len = (int)stream.Length;
+                    int reqSize = DataPageAccess.GetEntrySize(len);
+
+                    if (currentPage!.Header.FreeBytes < reqSize)
+                    {
+                        _dataPageAccess.PersistPage(currentPage);
+                        var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
+                        currentPage = p;
+                        if (isN || st.OwnedPages.IsEmpty) st.OwnedPages.TryAdd(p.PageID, 0);
+                        if (isN) lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                    }
+
+                    ushort i = currentPage.Header.ItemCount;
+                    var span = new ReadOnlySpan<byte>(stream.GetBuffer(), 0, len);
+                    _dataPageAccess.AppendDocumentToPage(currentPage, span);
+                    st.Index.Set(id.ToString() ?? "", new DocumentLocation(currentPage.PageID, i));
+                    
+                    docsToUpdateIndex?.Add((doc, id));
+                    insertedCount++;
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            }
+
+            if (currentPage != null)
+            {
+                _dataPageAccess.PersistPage(currentPage);
+            }
+
+            lock (_lock) { WriteHeader(); }
+        }
+
+        if (docsToUpdateIndex != null)
+        {
+            foreach (var (doc, id) in docsToUpdateIndex)
+            {
+                try
+                {
+                    idx!.InsertDocument(doc, id);
+                }
+                catch (Exception ex)
+                {
+                    exceptions.Add(ex);
+                }
+            }
+        }
+
+        await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
 
         if (exceptions.Count > 0)
         {
@@ -934,6 +1168,11 @@ public sealed class TinyDbEngine : IDisposable
     }
 
     private void EnsureWriteDurability() { _flushScheduler.EnsureDurabilityAsync(_options.WriteConcern).GetAwaiter().GetResult(); }
+
+    private Task EnsureWriteDurabilityAsync(CancellationToken cancellationToken = default) 
+    { 
+        return _flushScheduler.EnsureDurabilityAsync(_options.WriteConcern, cancellationToken); 
+    }
 
     private IEnumerable<BsonDocument> MergeTransactionOperations(string col, IEnumerable<BsonDocument> ds, Transaction tx)
     {

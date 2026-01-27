@@ -77,6 +77,81 @@ public sealed class PageManager : IDisposable
             var calculatedTotal = (uint)(_fileSize / _pageSize);
             _nextPageID = Math.Max(totalPages, calculatedTotal);
             _firstFreePageID = firstFreePageID;
+
+            // 关键修复：如果 _firstFreePageID 为 0 但文件中有页面，
+            // 可能是由于非正常关闭导致的空闲链表丢失，执行一次快速扫描恢复
+            if (_firstFreePageID == 0 && _nextPageID > 1)
+            {
+                ScanFreePages();
+            }
+        }
+    }
+
+    private void ScanFreePages()
+    {
+        uint lastFreeId = 0;
+        for (uint i = 2; i <= _nextPageID; i++)
+        {
+            try
+            {
+                var p = GetPage(i, false);
+                if (p.Header.PageType == PageType.Empty)
+                {
+                    if (_firstFreePageID == 0) _firstFreePageID = i;
+                    if (lastFreeId != 0)
+                    {
+                        var lastPage = GetPage(lastFreeId, false);
+                        lastPage.Header.NextPageID = i;
+                        SavePage(lastPage);
+                    }
+                    lastFreeId = i;
+                }
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// 获取页面使用统计
+    /// </summary>
+    /// <returns>页面统计信息</returns>
+    public PageManagerStatistics GetStatistics()
+    {
+        ThrowIfDisposed();
+
+        lock (_allocationLock)
+        {
+            var dirtyPages = _pageCache.Values.Count(p => p.IsDirty);
+            var totalPages = TotalPages;
+            
+            // 简单估算：扫描空闲链表长度
+            uint freeCount = 0;
+            uint current = _firstFreePageID;
+            var visited = new HashSet<uint>();
+            while (current != 0 && visited.Add(current))
+            {
+                freeCount++;
+                try { 
+                    var pOffset = CalculatePageOffset(current);
+                    var pData = _diskStream.ReadPage(pOffset, (int)_pageSize);
+                    var header = PageHeader.FromByteArray(pData);
+                    current = header.NextPageID;
+                } catch { break; }
+            }
+
+            return new PageManagerStatistics
+            {
+                PageSize = _pageSize,
+                TotalPages = totalPages,
+                UsedPages = totalPages > 0 ? (totalPages - 1 - freeCount) : 0, // 减去头部
+                FreePages = freeCount,
+                CachedPages = _pageCache.Count,
+                DirtyPages = dirtyPages,
+                MaxCacheSize = MaxCacheSize,
+                CacheHitRatio = _lruCache.HitRatio,
+                FileSize = _fileSize,
+                NextPageID = _nextPageID
+            };
         }
     }
 
@@ -476,37 +551,6 @@ public sealed class PageManager : IDisposable
             }
         }
     }
-
-    /// <summary>
-    /// 获取页面使用统计
-    /// </summary>
-    /// <returns>页面统计信息</returns>
-    public PageManagerStatistics GetStatistics()
-    {
-        ThrowIfDisposed();
-
-        lock (_allocationLock)
-        {
-            var dirtyPages = _pageCache.Values.Count(p => p.IsDirty);
-            var totalPages = TotalPages;
-            
-            return new PageManagerStatistics
-            {
-                PageSize = _pageSize,
-                TotalPages = totalPages,
-                UsedPages = 0, // Unknown without scan
-                FreePages = 0, // Unknown without scan
-                CachedPages = _pageCache.Count,
-                DirtyPages = dirtyPages,
-                MaxCacheSize = MaxCacheSize,
-                CacheHitRatio = _lruCache.HitRatio,
-                FileSize = _fileSize,
-                NextPageID = _nextPageID
-            };
-        }
-    }
-
-
 
     /// <summary>
     /// 计算页面偏移量

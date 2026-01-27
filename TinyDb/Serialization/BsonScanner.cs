@@ -69,12 +69,12 @@ public static class BsonScanner
             case BsonType.String:
             case BsonType.JavaScript:
             case BsonType.Symbol:
-            case BsonType.Decimal128: // TinyDb custom storage as string
                 int len = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
                 offset += 4 + len; 
                 break;
             case BsonType.Document:
             case BsonType.Array:
+            case BsonType.JavaScriptWithScope:
                 int size = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
                 offset += size;
                 break;
@@ -87,6 +87,7 @@ public static class BsonScanner
             case BsonType.DateTime:
             case BsonType.Timestamp:
             case BsonType.Int64: offset += 8; break;
+            case BsonType.Decimal128: offset += 16; break;
             case BsonType.Null:
             case BsonType.Undefined:
             case BsonType.MinKey:
@@ -95,10 +96,6 @@ public static class BsonScanner
             case BsonType.RegularExpression:
                 while (data[offset++] != 0) ;
                 while (data[offset++] != 0) ;
-                break;
-            case BsonType.JavaScriptWithScope:
-                int codeSize = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
-                offset += codeSize;
                 break;
             case BsonType.Int32: offset += 4; break;
             default: throw new NotSupportedException($"Unknown BSON type {type} at offset {offset}");
@@ -143,10 +140,10 @@ public static class BsonScanner
                 var dt = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(ms);
                 return new BsonDateTime(dt);
             case BsonType.Decimal128:
-                 int decLen = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
-                 var decStr = Encoding.UTF8.GetString(data.Slice(offset + 4, decLen - 1));
-                 offset += 4 + decLen;
-                 return new BsonDecimal128(decimal.Parse(decStr, System.Globalization.CultureInfo.InvariantCulture));
+                 var lo = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset));
+                 var hi = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset + 8));
+                 offset += 16;
+                 return new BsonDecimal128(new Decimal128(lo, hi));
             case BsonType.Null:
                 return BsonNull.Value;
             case BsonType.ObjectId:
@@ -154,20 +151,14 @@ public static class BsonScanner
                 offset += 12;
                 return new BsonObjectId(new ObjectId(oidBytes));
             default:
-                 // For complex types (Doc/Array), we might just deserialize them fully or skip?
-                 // If we need the value to evaluate (e.g. sub-property), we need full BsonDocument.
-                 // For now, if we hit a complex type, we might need to fallback to full deserialization of that value.
-                 // But since we are scanning, we can just grab the bytes and deserialize.
-                 // But SkipValue updated offset.
-                 // We need to capture bytes.
+                 // Fallback for complex types or others
                  int start = offset;
                  SkipValue(type, data, ref offset);
-                 var valueSpan = data.Slice(start, offset - start);
-                 // This requires BsonSerializer to deserialize specific value types from bytes?
-                 // BsonSerializer.DeserializeDocument works for Document.
-                 // For Array?
-                 // For simplicity, let's return BsonNull for unhandled types in Scanner context, causing mismatch.
-                 return BsonNull.Value;
+                 var valueData = data.Slice(start, offset - start).ToArray();
+                 return type switch {
+                     BsonType.Binary => new BsonBinary(valueData.Skip(5).ToArray(), (BsonBinary.BinarySubType)valueData[4]),
+                     _ => BsonNull.Value 
+                 };
         }
     }
 }

@@ -1,6 +1,8 @@
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TinyDb.Storage;
+using TinyDb.Metadata;
+using System.Collections.Concurrent;
 
 namespace TinyDb.Core;
 
@@ -11,8 +13,11 @@ public sealed class TransactionManager : IDisposable
 {
     internal readonly TinyDbEngine _engine;
     private readonly Dictionary<Guid, Transaction> _activeTransactions;
+    private readonly ConcurrentDictionary<string, List<ForeignKeyDefinition>> _foreignKeyCache = new(StringComparer.Ordinal);
     private readonly object _lock = new();
     private bool _disposed;
+
+    private record ForeignKeyDefinition(string FieldName, string ReferencedCollection);
 
     /// <summary>
     /// 活动事务数量
@@ -273,7 +278,7 @@ public sealed class TransactionManager : IDisposable
     /// 验证操作
     /// </summary>
     /// <param name="transaction">事务</param>
-    private static void ValidateOperations(Transaction transaction)
+    private void ValidateOperations(Transaction transaction)
     {
         // 检查重复的文档ID插入（只检查非null ID的重复）
         var insertOperations = transaction.Operations
@@ -288,8 +293,104 @@ public sealed class TransactionManager : IDisposable
             throw new InvalidOperationException("Duplicate document IDs detected in transaction");
         }
 
-        // 检查外键约束（简化实现）
-        // 实际实现中应该检查引用完整性
+        // 检查外键约束
+        ValidateForeignKeys(transaction);
+    }
+
+    private void ValidateForeignKeys(Transaction transaction)
+    {
+        var operations = transaction.Operations
+            .Where(op => op.OperationType == TransactionOperationType.Insert || op.OperationType == TransactionOperationType.Update)
+            .ToList();
+
+        foreach (var op in operations)
+        {
+            if (op.NewDocument == null) continue;
+
+            var foreignKeys = GetForeignKeyDefinitions(op.CollectionName);
+            if (foreignKeys.Count == 0) continue;
+
+            foreach (var fk in foreignKeys)
+            {
+                BsonValue? fkValue;
+                bool found = op.NewDocument.TryGetValue(fk.FieldName, out fkValue) && !fkValue.IsNull;
+                
+                if (!found)
+                {
+                    // Try camelCase
+                    var camelName = ToCamelCase(fk.FieldName);
+                    if (camelName != fk.FieldName)
+                    {
+                        found = op.NewDocument.TryGetValue(camelName, out fkValue) && !fkValue.IsNull;
+                    }
+                }
+
+                if (found)
+                {
+                    var referencedDoc = _engine.FindById(fk.ReferencedCollection, fkValue!);
+
+                    if (referencedDoc == null)
+                    {
+                         throw new InvalidOperationException($"Foreign key constraint violation: Field '{fk.FieldName}' in collection '{op.CollectionName}' references non-existent document ID '{fkValue}' in collection '{fk.ReferencedCollection}'.");
+                    }
+                }
+                else
+                {
+                    // FK field missing, skip validation (nullable FK)
+                }
+            }
+        }
+    }
+
+    private static string ToCamelCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+    }
+
+    private List<ForeignKeyDefinition> GetForeignKeyDefinitions(string collectionName)
+    {
+        return _foreignKeyCache.GetOrAdd(collectionName, name =>
+        {
+            var definitions = new List<ForeignKeyDefinition>();
+            
+            // 扫描所有元数据集合以找到匹配的集合名称
+            var metadataCollectionNames = _engine.GetCollectionNames()
+                .Where(n => n.StartsWith("__metadata_"))
+                .ToList();
+
+            foreach (var metaColName in metadataCollectionNames)
+            {
+                try
+                {
+                    var metaCol = _engine.GetCollectionWithName<MetadataDocument>(metaColName);
+                    var metaDoc = metaCol.FindAll().OrderByDescending(d => d.UpdatedAt).FirstOrDefault();
+                    
+                    if (metaDoc != null)
+                    {
+                        if (metaDoc.CollectionName == name)
+                        {
+                            var entityMeta = metaDoc.ToEntityMetadata();
+                            foreach (var prop in entityMeta.Properties)
+                            {
+                                if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
+                                {
+                                    definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // 忽略元数据读取错误
+                }
+            }
+            
+            return definitions;
+        });
     }
 
     /// <summary>

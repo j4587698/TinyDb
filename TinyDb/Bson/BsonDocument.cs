@@ -165,6 +165,13 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// <summary>
     /// 初始化空的文档
     /// </summary>
+    private static object? _aotRef;
+    static BsonDocument()
+    {
+        // Preserve BsonDocumentValue constructor for AOT
+        _aotRef = new BsonDocumentValue();
+    }
+
     public BsonDocument() : this(ImmutableDictionary<string, BsonValue>.Empty)
     {
     }
@@ -441,6 +448,11 @@ internal sealed class BsonDocumentValue : BsonValue
         Value = value ?? throw new ArgumentNullException(nameof(value));
     }
 
+    public BsonDocumentValue()
+    {
+        Value = new BsonDocument();
+    }
+
     public override int CompareTo(BsonValue? other)
     {
         if (other is null) return 1;
@@ -451,7 +463,10 @@ internal sealed class BsonDocumentValue : BsonValue
 
     public override bool Equals(BsonValue? other)
     {
-        return other is BsonDocumentValue otherDoc && Value.Equals(otherDoc.Value);
+        if (other is null) return false;
+        if (other is BsonDocumentValue otherDoc) return Value.Equals(otherDoc.Value);
+        if (other is BsonDocument doc) return Value.Equals(doc);
+        return false;
     }
 
     public override int GetHashCode() => Value.GetHashCode();

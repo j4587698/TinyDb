@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using TinyDb.Attributes;
 
 namespace TinyDb.Metadata;
 
@@ -18,9 +19,13 @@ public static class MetadataExtractor
         if (entityType == null)
             throw new ArgumentNullException(nameof(entityType));
 
+        var entityAttr = entityType.GetCustomAttribute<EntityAttribute>();
+        var collectionName = entityAttr?.CollectionName ?? entityType.Name;
+
         var metadata = new EntityMetadata
         {
             TypeName = entityType.FullName ?? entityType.Name,
+            CollectionName = collectionName,
             DisplayName = GetEntityDisplayName(entityType),
             Description = GetEntityDescription(entityType)
         };
@@ -47,6 +52,7 @@ public static class MetadataExtractor
             throw new ArgumentNullException(nameof(propertyInfo));
 
         var metadataAttr = propertyInfo.GetCustomAttribute<PropertyMetadataAttribute>();
+        var foreignKeyAttr = propertyInfo.GetCustomAttribute<ForeignKeyAttribute>();
 
         return new PropertyMetadata
         {
@@ -55,7 +61,8 @@ public static class MetadataExtractor
             DisplayName = metadataAttr?.DisplayName ?? propertyInfo.Name,
             Description = metadataAttr?.Description,
             Order = metadataAttr?.Order ?? 0,
-            Required = metadataAttr?.Required ?? false
+            Required = metadataAttr?.Required ?? false,
+            ForeignKeyCollection = foreignKeyAttr?.CollectionName
         };
     }
 

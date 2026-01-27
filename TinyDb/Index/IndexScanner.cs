@@ -28,7 +28,7 @@ public static class IndexScanner
         var indexManager = engine.GetIndexManager(collectionName);
 
         // 自动创建主键索引（_id字段）
-        CreatePrimaryKeyIndex(indexManager);
+        CreatePrimaryKeyIndex(indexManager, collectionName);
 
         // 扫描单个属性索引
         ScanPropertyIndexes(indexManager, entityType);
@@ -174,24 +174,30 @@ public static class IndexScanner
     /// 创建主键索引
     /// </summary>
     /// <param name="indexManager">索引管理器</param>
-    private static void CreatePrimaryKeyIndex(IndexManager indexManager)
+    /// <param name="collectionName">集合名称</param>
+    private static void CreatePrimaryKeyIndex(IndexManager indexManager, string collectionName)
     {
-        const string primaryKeyIndexName = "pk__id";
+        string primaryKeyIndexName = $"pk_{collectionName}_id";
 
-        // 检查主键索引是否已存在
+        // 检查主键索引是否已存在（字典或底层页面）
         if (indexManager.IndexExists(primaryKeyIndexName))
         {
-            return; // 主键索引已存在，无需重复创建
+            return; 
         }
 
         try
         {
             // 创建主键索引，_id字段是唯一的
+            // 注意：如果底层存储已存在同名索引（但管理器尚未加载），CreateIndex 会抛出异常
             indexManager.CreateIndex(primaryKeyIndexName, new[] { "_id" }, true);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Duplicate key"))
+        {
+            // 忽略重复键错误，这说明索引已经存在并已初始化
         }
         catch
         {
-            // 主键索引创建失败不应阻止系统启动
+            // 其他异常也不应阻止系统启动
         }
     }
 
