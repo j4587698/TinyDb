@@ -128,6 +128,8 @@ public class QuickBatchTest
 
         RunParallelInsertTest(options);
 
+        RunAsyncInsertTest(options);
+
         Console.WriteLine("\n=== 快速批量插入测试完成 ===");
     }
 
@@ -246,6 +248,191 @@ public class QuickBatchTest
     }
 
     private static string GetParallelCollectionName(int worker) => $"parallel_users_{worker}";
+
+    private static void RunAsyncInsertTest(TinyDbOptions baseOptions)
+    {
+        const string AsyncDatabaseFile = "quick_batch_async.db";
+        const int SampleSize = 1000;
+
+        // 清理旧数据库文件
+        if (System.IO.File.Exists(AsyncDatabaseFile))
+        {
+            System.IO.File.Delete(AsyncDatabaseFile);
+        }
+
+        var options = baseOptions.Clone();
+
+        Console.WriteLine("\n=== 异步插入性能测试 ===\n");
+        Console.WriteLine($"⚙️ 写入关注级别: {options.WriteConcern}");
+
+        using var engine = new TinyDbEngine(AsyncDatabaseFile, options);
+        var collection = engine.GetCollection<TestUser>();
+
+        // 测试1：同步单条插入
+        Console.WriteLine($"\n📊 测试1: 同步单条插入 {SampleSize} 条记录");
+        var sw1 = Stopwatch.StartNew();
+
+        for (int i = 0; i < SampleSize; i++)
+        {
+            var user = new TestUser
+            {
+                Name = $"SyncUser{i}",
+                Email = $"sync{i}@test.com",
+                Age = 20 + (i % 50),
+                Salary = 30000 + (i % 100) * 100
+            };
+            collection.Insert(user);
+        }
+
+        sw1.Stop();
+        Console.WriteLine($"   同步插入耗时: {sw1.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   平均每条: {(double)sw1.ElapsedMilliseconds / SampleSize:F2} ms");
+
+        // 清空数据
+        var allUsers = collection.FindAll().ToList();
+        foreach (var user in allUsers)
+        {
+            collection.Delete(user.Id);
+        }
+
+        // 测试2：异步单条插入
+        Console.WriteLine($"\n📊 测试2: 异步单条插入 {SampleSize} 条记录");
+        var sw2 = Stopwatch.StartNew();
+
+        var asyncTask = RunAsyncInserts(collection, SampleSize);
+        asyncTask.GetAwaiter().GetResult();
+
+        sw2.Stop();
+        Console.WriteLine($"   异步插入耗时: {sw2.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   平均每条: {(double)sw2.ElapsedMilliseconds / SampleSize:F2} ms");
+
+        // 计算性能差异
+        var asyncImpact = ((double)sw2.ElapsedMilliseconds / sw1.ElapsedMilliseconds - 1.0) * 100;
+        if (asyncImpact > 0)
+            Console.WriteLine($"\n📉 异步开销: +{asyncImpact:F1}% (预期：async/await 有少量开销)");
+        else
+            Console.WriteLine($"\n📈 异步提升: {-asyncImpact:F1}%");
+
+        // 清空数据
+        allUsers = collection.FindAll().ToList();
+        foreach (var user in allUsers)
+        {
+            collection.Delete(user.Id);
+        }
+
+        // 测试3：同步批量插入
+        Console.WriteLine($"\n📊 测试3: 同步批量插入 {SampleSize} 条记录");
+        var users = new List<TestUser>();
+        for (int i = 0; i < SampleSize; i++)
+        {
+            users.Add(new TestUser
+            {
+                Name = $"BatchUser{i}",
+                Email = $"batch{i}@test.com",
+                Age = 20 + (i % 50),
+                Salary = 30000 + (i % 100) * 100
+            });
+        }
+
+        var sw3 = Stopwatch.StartNew();
+        collection.Insert(users);
+        sw3.Stop();
+        Console.WriteLine($"   同步批量插入耗时: {sw3.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   平均每条: {(double)sw3.ElapsedMilliseconds / SampleSize:F2} ms");
+
+        // 清空数据
+        allUsers = collection.FindAll().ToList();
+        foreach (var user in allUsers)
+        {
+            collection.Delete(user.Id);
+        }
+
+        // 测试4：异步批量插入
+        Console.WriteLine($"\n📊 测试4: 异步批量插入 {SampleSize} 条记录");
+        var users2 = new List<TestUser>();
+        for (int i = 0; i < SampleSize; i++)
+        {
+            users2.Add(new TestUser
+            {
+                Name = $"AsyncBatchUser{i}",
+                Email = $"asyncbatch{i}@test.com",
+                Age = 20 + (i % 50),
+                Salary = 30000 + (i % 100) * 100
+            });
+        }
+
+        var sw4 = Stopwatch.StartNew();
+        var asyncBatchTask = collection.InsertAsync(users2);
+        asyncBatchTask.GetAwaiter().GetResult();
+        sw4.Stop();
+        Console.WriteLine($"   异步批量插入耗时: {sw4.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   平均每条: {(double)sw4.ElapsedMilliseconds / SampleSize:F2} ms");
+
+        // 测试5: 并发异步插入
+        Console.WriteLine($"\n📊 测试5: 并发异步插入 (10个并发任务)");
+        // 清空数据
+        allUsers = collection.FindAll().ToList();
+        foreach (var user in allUsers)
+        {
+            collection.Delete(user.Id);
+        }
+
+        var sw5 = Stopwatch.StartNew();
+        var concurrentTasks = new List<Task>();
+        for (int t = 0; t < 10; t++)
+        {
+            var taskId = t;
+            concurrentTasks.Add(Task.Run(async () =>
+            {
+                for (int i = 0; i < SampleSize / 10; i++)
+                {
+                    var user = new TestUser
+                    {
+                        Name = $"ConcurrentUser{taskId}_{i}",
+                        Email = $"concurrent{taskId}_{i}@test.com",
+                        Age = 20 + (i % 50),
+                        Salary = 30000 + (i % 100) * 100
+                    };
+                    await collection.InsertAsync(user);
+                }
+            }));
+        }
+        Task.WhenAll(concurrentTasks).GetAwaiter().GetResult();
+        sw5.Stop();
+        Console.WriteLine($"   并发异步插入耗时: {sw5.ElapsedMilliseconds} ms");
+        Console.WriteLine($"   平均每条: {(double)sw5.ElapsedMilliseconds / SampleSize:F2} ms");
+
+        // 最终统计
+        Console.WriteLine("\n📊 性能对比总结:");
+        Console.WriteLine($"   单条同步: {sw1.ElapsedMilliseconds} ms ({(double)sw1.ElapsedMilliseconds / SampleSize:F2} ms/条)");
+        Console.WriteLine($"   单条异步: {sw2.ElapsedMilliseconds} ms ({(double)sw2.ElapsedMilliseconds / SampleSize:F2} ms/条)");
+        Console.WriteLine($"   批量同步: {sw3.ElapsedMilliseconds} ms ({(double)sw3.ElapsedMilliseconds / SampleSize:F2} ms/条)");
+        Console.WriteLine($"   批量异步: {sw4.ElapsedMilliseconds} ms ({(double)sw4.ElapsedMilliseconds / SampleSize:F2} ms/条)");
+        Console.WriteLine($"   并发异步: {sw5.ElapsedMilliseconds} ms ({(double)sw5.ElapsedMilliseconds / SampleSize:F2} ms/条)");
+
+        engine.Dispose();
+        if (System.IO.File.Exists(AsyncDatabaseFile))
+        {
+            System.IO.File.Delete(AsyncDatabaseFile);
+        }
+
+        Console.WriteLine("\n=== 异步插入性能测试完成 ===");
+    }
+
+    private static async Task RunAsyncInserts(ITinyCollection<TestUser> collection, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            var user = new TestUser
+            {
+                Name = $"AsyncUser{i}",
+                Email = $"async{i}@test.com",
+                Age = 20 + (i % 50),
+                Salary = 30000 + (i % 100) * 100
+            };
+            await collection.InsertAsync(user);
+        }
+    }
 }
 
 [Entity("test_users")]
