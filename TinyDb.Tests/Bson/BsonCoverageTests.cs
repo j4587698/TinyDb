@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using TinyDb.Bson;
+using TinyDb.Tests.Utils;
 using TUnit.Core;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -159,10 +160,9 @@ public class BsonCoverageTests
     }
 
     [Test]
+    [SkipInAot("Uses reflection to instantiate internal type BsonDocumentValue")]
     public async Task BsonDocumentValue_Coverage()
     {
-        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
-
         var doc = new BsonDocument().Set("a", 1);
         // Using reflection to instantiate internal type BsonDocumentValue
         var type = typeof(BsonDocument).Assembly.GetType("TinyDb.Bson.BsonDocumentValue");
@@ -184,10 +184,9 @@ public class BsonCoverageTests
     }
     
     [Test]
+    [SkipInAot("Uses reflection to instantiate internal type BsonArrayValue")]
     public async Task BsonArrayValue_Coverage()
     {
-        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
-
         var arr = new BsonArray().AddValue(1);
         var type = typeof(BsonArray).Assembly.GetType("TinyDb.Bson.BsonArrayValue");
         if (type != null)
@@ -207,10 +206,9 @@ public class BsonCoverageTests
     }
 
     [Test]
+    [SkipInAot("Uses reflection to instantiate internal type BsonDocumentValue")]
     public async Task BsonDocumentValue_IConvertible_Coverage()
     {
-        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
-
         var doc = new BsonDocument().Set("a", 1);
         var type = typeof(BsonDocument).Assembly.GetType("TinyDb.Bson.BsonDocumentValue");
         if (type != null)

@@ -25,22 +25,22 @@ public class QueryExecutorErrorTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
-    [Entity("Data")]
-    public class Item
-    {
-        public int Id { get; set; }
-    }
-
     [Test]
     public async Task Execute_With_Null_CollectionName_Should_Throw()
     {
-        await Assert.That(() => _executor.Execute<Item>(null!)).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<QueryErrorItem>(null!)).Throws<ArgumentException>();
     }
 
     [Test]
     public async Task Execute_With_Empty_CollectionName_Should_Throw()
     {
-        await Assert.That(() => _executor.Execute<Item>("")).Throws<ArgumentException>();
-        await Assert.That(() => _executor.Execute<Item>("   ")).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<QueryErrorItem>("")).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<QueryErrorItem>("   ")).Throws<ArgumentException>();
     }
+}
+
+[Entity("Data")]
+public class QueryErrorItem
+{
+    public int Id { get; set; }
 }

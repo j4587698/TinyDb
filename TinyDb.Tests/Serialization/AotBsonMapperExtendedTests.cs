@@ -1,11 +1,49 @@
 using System;
 using System.Globalization;
+using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
 namespace TinyDb.Tests.Serialization;
+
+/// <summary>
+/// A class with Id property for GetId/SetId tests
+/// </summary>
+public class MapperSimpleEntity
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
+/// <summary>
+/// A class with [Entity] attribute specifying IdProperty
+/// </summary>
+[Entity(IdProperty = "UserId")]
+public class EntityWithSpecifiedIdProperty
+{
+    public int UserId { get; set; }
+    public string Name { get; set; } = "";
+}
+
+/// <summary>
+/// A class with [Id] attribute on a property
+/// </summary>
+public class EntityWithIdAttribute
+{
+    [Id]
+    public string MyCustomId { get; set; } = "";
+    public string Name { get; set; } = "";
+}
+
+/// <summary>
+/// A class without any Id property
+/// </summary>
+public class MapperNoIdEntity
+{
+    public string Name { get; set; } = "";
+}
 
 public class AotBsonMapperExtendedTests
 {
@@ -89,5 +127,172 @@ public class AotBsonMapperExtendedTests
     {
         BsonValue big = long.MaxValue;
         await Assert.That(() => AotBsonMapper.ConvertValue(big, typeof(int))).Throws<OverflowException>();
+    }
+    
+    /// <summary>
+    /// Test GetId with a regular entity
+    /// </summary>
+    [Test]
+    public async Task GetId_SimpleEntity_ShouldReturnId()
+    {
+        var entity = new MapperSimpleEntity { Id = 42, Name = "Test" };
+        var id = AotBsonMapper.GetId(entity);
+        await Assert.That(id.ToInt32(null)).IsEqualTo(42);
+    }
+    
+    /// <summary>
+    /// Test GetId with BsonDocument
+    /// </summary>
+    [Test]
+    public async Task GetId_BsonDocument_ShouldReturnId()
+    {
+        var doc = new BsonDocument().Set("_id", 123).Set("name", "Test");
+        var id = AotBsonMapper.GetId(doc);
+        await Assert.That(id.ToInt32(null)).IsEqualTo(123);
+    }
+    
+    /// <summary>
+    /// Test GetId with BsonDocument without _id
+    /// </summary>
+    [Test]
+    public async Task GetId_BsonDocument_NoId_ShouldReturnNull()
+    {
+        var doc = new BsonDocument().Set("name", "Test");
+        var id = AotBsonMapper.GetId(doc);
+        await Assert.That(id.IsNull).IsTrue();
+    }
+    
+    /// <summary>
+    /// Test GetId throws on null entity
+    /// </summary>
+    [Test]
+    public async Task GetId_NullEntity_ShouldThrow()
+    {
+        await Assert.That(() => AotBsonMapper.GetId<MapperSimpleEntity>(null!)).Throws<ArgumentNullException>();
+    }
+    
+    /// <summary>
+    /// Test SetId with a regular entity
+    /// </summary>
+    [Test]
+    public async Task SetId_SimpleEntity_ShouldSetId()
+    {
+        var entity = new MapperSimpleEntity { Id = 0, Name = "Test" };
+        AotBsonMapper.SetId(entity, new BsonInt32(99));
+        await Assert.That(entity.Id).IsEqualTo(99);
+    }
+    
+    /// <summary>
+    /// Test SetId with BsonDocument (should do nothing, BsonDocument is immutable)
+    /// </summary>
+    [Test]
+    public async Task SetId_BsonDocument_ShouldDoNothing()
+    {
+        var doc = new BsonDocument().Set("_id", 123);
+        AotBsonMapper.SetId(doc, new BsonInt32(999));
+        // BsonDocument is immutable, SetId does nothing
+        await Assert.That(doc["_id"].ToInt32(null)).IsEqualTo(123);
+    }
+    
+    /// <summary>
+    /// Test SetId throws on null entity
+    /// </summary>
+    [Test]
+    public async Task SetId_NullEntity_ShouldThrow()
+    {
+        await Assert.That(() => AotBsonMapper.SetId<MapperSimpleEntity>(null!, new BsonInt32(1))).Throws<ArgumentNullException>();
+    }
+    
+    /// <summary>
+    /// Test GetPropertyValue with adapter
+    /// </summary>
+    [Test]
+    public async Task GetPropertyValue_WithAdapter_ShouldWork()
+    {
+        var entity = new MapperSimpleEntity { Id = 1, Name = "TestValue" };
+        var value = AotBsonMapper.GetPropertyValue(entity, "Name");
+        await Assert.That(value).IsEqualTo("TestValue");
+    }
+    
+    /// <summary>
+    /// Test GetPropertyValue with non-existent property
+    /// </summary>
+    [Test]
+    public async Task GetPropertyValue_NonExistent_ShouldReturnNull()
+    {
+        var entity = new MapperSimpleEntity { Id = 1, Name = "Test" };
+        var value = AotBsonMapper.GetPropertyValue(entity, "NonExistent");
+        await Assert.That(value).IsNull();
+    }
+    
+    /// <summary>
+    /// Test GetPropertyValue throws on null entity
+    /// </summary>
+    [Test]
+    public async Task GetPropertyValue_NullEntity_ShouldThrow()
+    {
+        await Assert.That(() => AotBsonMapper.GetPropertyValue<MapperSimpleEntity>(null!, "Name")).Throws<ArgumentNullException>();
+    }
+    
+    /// <summary>
+    /// Test GetPropertyValue throws on null propertyName
+    /// </summary>
+    [Test]
+    public async Task GetPropertyValue_NullPropertyName_ShouldThrow()
+    {
+        var entity = new MapperSimpleEntity { Id = 1, Name = "Test" };
+        await Assert.That(() => AotBsonMapper.GetPropertyValue(entity, null!)).Throws<ArgumentNullException>();
+    }
+    
+    /// <summary>
+    /// Test ResolveIdProperty with EntityAttribute.IdProperty specified
+    /// </summary>
+    [Test]
+    public async Task ToDocument_EntityWithSpecifiedIdProperty_ShouldUseSpecifiedProperty()
+    {
+        var entity = new EntityWithSpecifiedIdProperty { UserId = 42, Name = "Test" };
+        var doc = AotBsonMapper.ToDocument(entity);
+        
+        // The Id should be mapped to _id
+        await Assert.That(doc.ContainsKey("_id")).IsTrue();
+        await Assert.That(doc["_id"].ToInt32(null)).IsEqualTo(42);
+    }
+    
+    /// <summary>
+    /// Test ResolveIdProperty with [Id] attribute
+    /// </summary>
+    [Test]
+    public async Task ToDocument_EntityWithIdAttribute_ShouldUseAttributedProperty()
+    {
+        var entity = new EntityWithIdAttribute { MyCustomId = "custom-id-123", Name = "Test" };
+        var doc = AotBsonMapper.ToDocument(entity);
+        
+        // The MyCustomId should be mapped to _id
+        await Assert.That(doc.ContainsKey("_id")).IsTrue();
+        await Assert.That(doc["_id"].ToString()).IsEqualTo("custom-id-123");
+    }
+    
+    /// <summary>
+    /// Test FromDocument with EntityAttribute.IdProperty specified
+    /// </summary>
+    [Test]
+    public async Task FromDocument_EntityWithSpecifiedIdProperty_ShouldRestoreCorrectly()
+    {
+        var doc = new BsonDocument().Set("_id", 42).Set("name", "Test");
+        var entity = AotBsonMapper.FromDocument<EntityWithSpecifiedIdProperty>(doc);
+        
+        await Assert.That(entity.UserId).IsEqualTo(42);
+        await Assert.That(entity.Name).IsEqualTo("Test");
+    }
+    
+    /// <summary>
+    /// Test GetId with entity that has no Id property
+    /// </summary>
+    [Test]
+    public async Task GetId_NoIdProperty_ShouldReturnNull()
+    {
+        var entity = new MapperNoIdEntity { Name = "Test" };
+        var id = AotBsonMapper.GetId(entity);
+        await Assert.That(id.IsNull).IsTrue();
     }
 }

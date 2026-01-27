@@ -1,6 +1,7 @@
 using System;
 using System.Linq.Expressions;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TinyDb.Bson;
@@ -127,24 +128,12 @@ public class ExpressionParserCoverageTests
     [Test]
     public async Task Parse_MethodCall_ToString_Member()
     {
-        // x.Id.ToString()
+        // x.Id.ToString() - ParseMethodCallExpression handles it generically as FunctionExpression
         Expression<Func<TestDoc, bool>> expr = x => x.Id.ToString() == "5";
         var result = _parser.Parse(expr);
         await Assert.That(result).IsNotNull();
         
-        // This likely returns the member expression or function expression depending on implementation
-        // The implementation says: if not constant, return objectExpression (which matches x.Id)
-        // Wait, the implementation of ParseToStringMethod says: 
-        // return objectExpression; // which returns x.Id (int)
-        // This is a known limitation mentioned in comments.
         var binary = (BinaryExpression)result;
-        // Left side should be x.Id (MemberExpression) effectively
-        // Actually checking ParseToStringMethod:
-        // if (objectExpression is ConstantExpression ...) -> Constant
-        // else -> return objectExpression;
-        
-        // Actually, ParseMethodCallExpression handles it generically if it's not a constant optimization.
-        // It returns FunctionExpression.
         await Assert.That(binary.Left).IsTypeOf<TinyDb.Query.FunctionExpression>(); 
     }
 
@@ -282,5 +271,297 @@ public class ExpressionParserCoverageTests
             // Expected
             return;
         }
+    }
+
+    /// <summary>
+    /// Test static field access (not just properties like DateTime.Now)
+    /// </summary>
+    [Test]
+    public async Task Parse_Static_Field_Access()
+    {
+        // Use a class with a static field (string.Empty is a static readonly field)
+        Expression<Func<TestDoc, bool>> expr = x => x.Name == string.Empty;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo("");
+    }
+
+    /// <summary>
+    /// Test static field access with int.MaxValue
+    /// </summary>
+    [Test]
+    public async Task Parse_Static_Field_Access_IntMaxValue()
+    {
+        Expression<Func<TestDoc, bool>> expr = x => x.Id < int.MaxValue;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo(int.MaxValue);
+    }
+
+    /// <summary>
+    /// Test closure access with an actual field (not property) through anonymous object
+    /// </summary>
+    [Test]
+    public async Task Parse_Closure_With_Field_Access()
+    {
+        // Anonymous types actually use properties, but we can use a tuple which has fields
+        var tuple = (Limit: 42, Name: "test");
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > tuple.Limit;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo(42);
+    }
+
+    /// <summary>
+    /// Test closure access with captured class field 
+    /// </summary>
+    public class ClosureContainer
+    {
+        public int Threshold = 75; // Note: field, not property
+        public string Prefix = "test_";
+    }
+
+    [Test]
+    public async Task Parse_Closure_Class_Field_Access()
+    {
+        var container = new ClosureContainer();
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > container.Threshold;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo(75);
+    }
+
+    [Test]
+    public async Task Parse_Closure_Class_Field_String_Access()
+    {
+        var container = new ClosureContainer();
+        Expression<Func<TestDoc, bool>> expr = x => x.Name.StartsWith(container.Prefix);
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<FunctionExpression>();
+        var func = (FunctionExpression)result;
+        await Assert.That(func.FunctionName).IsEqualTo("StartsWith");
+    }
+
+    /// <summary>
+    /// Test direct ParameterChecker.Check path for expressions with parameter
+    /// </summary>
+    [Test]
+    public async Task Parse_ParameterChecker_HasParameter_FastExit()
+    {
+        // Expression with parameter in nested binary expression should trigger fast exit
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > 10 && x.Id < 100 && x.IsActive;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<BinaryExpression>();
+    }
+
+    /// <summary>
+    /// Test parsing with complex nested closures
+    /// </summary>
+    [Test]
+    public async Task Parse_Nested_Closure_Access()
+    {
+        var outer = new { Inner = new { Value = 123 } };
+        Expression<Func<TestDoc, bool>> expr = x => x.Id == outer.Inner.Value;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo(123);
+    }
+
+    /// <summary>
+    /// Test MemberInit expression parsing
+    /// </summary>
+    public class ResultDto
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    [Test]
+    public async Task Parse_MemberInit_Expression()
+    {
+        // MemberInit is typically in Select expressions
+        // We need to directly call ParseExpression with the body
+        Expression<Func<TestDoc, ResultDto>> selector = x => new ResultDto { Id = x.Id, Name = x.Name };
+        var result = _parser.ParseExpression(selector.Body);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<MemberInitQueryExpression>();
+    }
+
+    /// <summary>
+    /// Test New expression parsing
+    /// </summary>
+    [Test]
+    public async Task Parse_New_Expression()
+    {
+        Expression<Func<TestDoc, object>> selector = x => new { x.Id, x.Name };
+        var result = _parser.ParseExpression(selector.Body);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstructorExpression>();
+    }
+
+    /// <summary>
+    /// Test unsupported binary operator
+    /// </summary>
+    [Test]
+    public async Task Parse_Unsupported_Binary_Operator_Throws()
+    {
+        // ExclusiveOr (^) is not supported
+        var param = Expression.Parameter(typeof(int), "x");
+        var xorExpr = Expression.ExclusiveOr(param, Expression.Constant(5));
+        var lambda = Expression.Lambda<Func<int, int>>(xorExpr, param);
+        
+        await Assert.That(() => _parser.ParseExpression(lambda.Body))
+            .Throws<NotSupportedException>();
+    }
+
+    /// <summary>
+    /// Test unsupported unary operator
+    /// </summary>
+    [Test]
+    public async Task Parse_Unsupported_Unary_Operator_Throws()
+    {
+        // OnesComplement (~) is not supported
+        var param = Expression.Parameter(typeof(int), "x");
+        var complementExpr = Expression.OnesComplement(param);
+        var lambda = Expression.Lambda<Func<int, int>>(complementExpr, param);
+        
+        await Assert.That(() => _parser.ParseExpression(lambda.Body))
+            .Throws<NotSupportedException>();
+    }
+
+    /// <summary>
+    /// Test Convert (cast) expression
+    /// </summary>
+    [Test]
+    public async Task Parse_Convert_Cast_Expression()
+    {
+        Expression<Func<TestDoc, bool>> expr = x => (double)x.Id > 5.5;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Left).IsTypeOf<UnaryExpression>();
+        var convert = (UnaryExpression)binary.Left;
+        await Assert.That(convert.NodeType).IsEqualTo(ExpressionType.Convert);
+    }
+
+    /// <summary>
+    /// Test OrElse operator
+    /// </summary>
+    [Test]
+    public async Task Parse_OrElse_Operator()
+    {
+        Expression<Func<TestDoc, bool>> expr = x => x.Id == 1 || x.Id == 2;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result.NodeType).IsEqualTo(ExpressionType.OrElse);
+    }
+
+    /// <summary>
+    /// Test NotEqual operator
+    /// </summary>
+    [Test]
+    public async Task Parse_NotEqual_Operator()
+    {
+        Expression<Func<TestDoc, bool>> expr = x => x.Id != 0;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result.NodeType).IsEqualTo(ExpressionType.NotEqual);
+    }
+
+    /// <summary>
+    /// Test pure constant expression without any parameter
+    /// This should go through the optimization path (ParameterChecker returns false)
+    /// </summary>
+    [Test]
+    public async Task Parse_Pure_Constant_Expression()
+    {
+        // 5 == 5 has no parameter, should be optimized
+        Expression<Func<TestDoc, bool>> expr = x => 5 == 5;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        // The result could be ConstantExpression(true) after optimization
+        // or BinaryExpression if optimization is disabled
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(true);
+    }
+
+    /// <summary>
+    /// Test complex math expression without parameter
+    /// </summary>
+    [Test]
+    [SkipInAot("Complex math expressions require Lambda.Compile() which is not available in AOT")]
+    public async Task Parse_Complex_Math_Without_Parameter()
+    {
+        var a = 10;
+        var b = 20;
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > (a + b) * 2;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        // (a + b) * 2 = 60 should be optimized to constant
+        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo(60);
+    }
+
+    /// <summary>
+    /// Test direct call to ParseExpression with unsupported node type
+    /// </summary>
+    [Test]
+    public async Task ParseExpression_Unsupported_NodeType_Throws()
+    {
+        // Create a TypeBinary expression (x is string) which might not be supported
+        var param = Expression.Parameter(typeof(object), "x");
+        var typeIs = Expression.TypeIs(param, typeof(string));
+        
+        await Assert.That(() => _parser.ParseExpression(typeIs))
+            .Throws<NotSupportedException>();
+    }
+
+    /// <summary>
+    /// Test parameter expression direct parsing
+    /// </summary>
+    [Test]
+    public async Task Parse_Parameter_Expression_Direct()
+    {
+        var param = Expression.Parameter(typeof(int), "value");
+        var result = _parser.ParseExpression(param);
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ParameterExpression>();
+        await Assert.That(((ParameterExpression)result).Name).IsEqualTo("value");
+    }
+
+    /// <summary>
+    /// Test member access on nested object
+    /// </summary>
+    public class NestedTestDoc
+    {
+        public int Id { get; set; }
+        public TestDoc Child { get; set; } = new();
+    }
+
+    [Test]
+    public async Task Parse_Nested_Member_Access()
+    {
+        Expression<Func<NestedTestDoc, bool>> expr = x => x.Child.Id > 5;
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Left).IsTypeOf<MemberExpression>();
+        var member = (MemberExpression)binary.Left;
+        await Assert.That(member.MemberName).IsEqualTo("Id");
+        // The inner expression should also be a MemberExpression for "Child"
+        await Assert.That(member.Expression).IsTypeOf<MemberExpression>();
     }
 }

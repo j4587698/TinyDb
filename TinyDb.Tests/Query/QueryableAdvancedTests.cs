@@ -31,6 +31,7 @@ public class QueryableAdvancedTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Should_Group_By_Category()
     {
         var groups = _products.Query()
@@ -101,6 +102,27 @@ public class QueryableAdvancedTests : IDisposable
         
         bool allInStock = _products.Query().All(p => p.InStock);
         await Assert.That(allInStock).IsFalse();
+    }
+
+    [Test]
+    public async Task OrderBy_ThenBy_Should_Sort_Correctly()
+    {
+        // 验证 ThenBy 是否能被正确重写为 Enumerable.ThenBy
+        var sorted = _products.Query()
+            .OrderBy(p => p.Category)
+            .ThenByDescending(p => p.Price)
+            .ToList();
+
+        await Assert.That(sorted.Count).IsEqualTo(5);
+        
+        // Electronics (3 items): Laptop(1000), Keyboard(80), Mouse(50)
+        await Assert.That(sorted[0].Name).IsEqualTo("Laptop");
+        await Assert.That(sorted[1].Name).IsEqualTo("Keyboard");
+        await Assert.That(sorted[2].Name).IsEqualTo("Mouse");
+        
+        // Furniture (2 items): Desk(200), Chair(150)
+        await Assert.That(sorted[3].Name).IsEqualTo("Desk");
+        await Assert.That(sorted[4].Name).IsEqualTo("Chair");
     }
 
     public void Dispose()

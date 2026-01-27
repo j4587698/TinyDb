@@ -57,18 +57,18 @@ public class ExceptionHandlingTests : IDisposable
     public async Task FindById_With_Null_Or_NullBson_Should_Return_Null()
     {
         using var engine = new TinyDbEngine(_testDbPath);
-        var collection = engine.GetCollection<TestEntity>();
-        
+        var collection = engine.GetCollection<ExceptionTestEntity>();
+
         var result1 = collection.FindById(null!);
         var result2 = collection.FindById(BsonNull.Value);
 
         await Assert.That(result1).IsNull();
         await Assert.That(result2).IsNull();
     }
+}
 
-    [Entity("Test")]
-    public class TestEntity
-    {
-        public int Id { get; set; }
-    }
+[Entity("Test")]
+public class ExceptionTestEntity
+{
+    public int Id { get; set; }
 }

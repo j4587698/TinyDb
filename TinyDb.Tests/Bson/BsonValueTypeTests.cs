@@ -38,7 +38,7 @@ public class BsonValueTypeTests
     {
         decimal dec = 123.45m;
         BsonDecimal128 val = dec;
-        decimal result = val.Value;
+        decimal result = (decimal)val.Value;
         await Assert.That(result).IsEqualTo(dec);
         
         await Assert.That(val.ToString()).IsEqualTo("123.45");

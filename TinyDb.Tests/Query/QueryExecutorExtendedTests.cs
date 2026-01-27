@@ -31,27 +31,15 @@ public class QueryExecutorExtendedTests : IDisposable
         try { if (Directory.Exists(_testDirectory)) Directory.Delete(_testDirectory, true); } catch { }
     }
 
-    [Entity("Products")]
-    public class Product
-    {
-        public ObjectId? Id { get; set; }
-        public string? Name { get; set; }
-        public string? Category { get; set; }
-        public decimal Price { get; set; }
-        public int Stock { get; set; }
-        public bool IsActive { get; set; }
-        public List<string>? Tags { get; set; }
-    }
-
     [Test]
     public async Task Execute_With_Or_Condition_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "A", Category = "Cat1" });
-        col.Insert(new Product { Name = "B", Category = "Cat2" });
-        col.Insert(new Product { Name = "C", Category = "Cat3" });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Category = "Cat1" });
+        col.Insert(new QueryExtendedProduct { Name = "B", Category = "Cat2" });
+        col.Insert(new QueryExtendedProduct { Name = "C", Category = "Cat3" });
 
-        var results = _executor.Execute<Product>("Products", p => p.Category == "Cat1" || p.Category == "Cat2").ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Category == "Cat1" || p.Category == "Cat2").ToList();
 
         await Assert.That(results.Count).IsEqualTo(2);
         await Assert.That(results.Any(p => p.Name == "A")).IsTrue();
@@ -61,11 +49,11 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_NotEqual_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "A", Stock = 10 });
-        col.Insert(new Product { Name = "B", Stock = 0 });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Stock = 10 });
+        col.Insert(new QueryExtendedProduct { Name = "B", Stock = 0 });
 
-        var results = _executor.Execute<Product>("Products", p => p.Stock != 0).ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Stock != 0).ToList();
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Name).IsEqualTo("A");
@@ -74,11 +62,11 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_LessThan_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "A", Price = 10 });
-        col.Insert(new Product { Name = "B", Price = 20 });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Price = 10 });
+        col.Insert(new QueryExtendedProduct { Name = "B", Price = 20 });
 
-        var results = _executor.Execute<Product>("Products", p => p.Price < 15).ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Price < 15).ToList();
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Name).IsEqualTo("A");
@@ -87,11 +75,11 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_LessThanOrEqual_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "A", Price = 10 });
-        col.Insert(new Product { Name = "B", Price = 20 });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Price = 10 });
+        col.Insert(new QueryExtendedProduct { Name = "B", Price = 20 });
 
-        var results = _executor.Execute<Product>("Products", p => p.Price <= 10).ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Price <= 10).ToList();
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Name).IsEqualTo("A");
@@ -100,11 +88,11 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_String_StartsWith_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "Apple" });
-        col.Insert(new Product { Name = "Banana" });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "Apple" });
+        col.Insert(new QueryExtendedProduct { Name = "Banana" });
 
-        var results = _executor.Execute<Product>("Products", p => p.Name!.StartsWith("App")).ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Name!.StartsWith("App")).ToList();
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Name).IsEqualTo("Apple");
@@ -113,13 +101,13 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_String_EndsWith_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "Apple" });
-        col.Insert(new Product { Name = "Banana" });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "Apple" });
+        col.Insert(new QueryExtendedProduct { Name = "Banana" });
 
-        var results = _executor.Execute<Product>("Products", p => p.Name!.EndsWith("nan a")).ToList(); // Typo in string? No "nan a" -> "nana"
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Name!.EndsWith("nan a")).ToList(); // Typo in string? No "nan a" -> "nana"
 
-        var results2 = _executor.Execute<Product>("Products", p => p.Name!.EndsWith("nana")).ToList();
+        var results2 = _executor.Execute<QueryExtendedProduct>("Products", p => p.Name!.EndsWith("nana")).ToList();
         await Assert.That(results2.Count).IsEqualTo(1);
         await Assert.That(results2[0].Name).IsEqualTo("Banana");
     }
@@ -127,11 +115,11 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_String_Contains_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "Pineapple" });
-        col.Insert(new Product { Name = "Banana" });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "Pineapple" });
+        col.Insert(new QueryExtendedProduct { Name = "Banana" });
 
-        var results = _executor.Execute<Product>("Products", p => p.Name!.Contains("eapp")).ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Name!.Contains("eapp")).ToList();
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Name).IsEqualTo("Pineapple");
@@ -140,14 +128,26 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_List_Contains_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<Product>("Products");
-        col.Insert(new Product { Name = "A", Tags = new List<string> { "Red", "Fruit" } });
-        col.Insert(new Product { Name = "B", Tags = new List<string> { "Yellow", "Fruit" } });
+        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Tags = new List<string> { "Red", "Fruit" } });
+        col.Insert(new QueryExtendedProduct { Name = "B", Tags = new List<string> { "Yellow", "Fruit" } });
 
         // Note: Linq Expression for List.Contains might be compiled to instance method call
-        var results = _executor.Execute<Product>("Products", p => p.Tags!.Contains("Red")).ToList();
+        var results = _executor.Execute<QueryExtendedProduct>("Products", p => p.Tags!.Contains("Red")).ToList();
 
         await Assert.That(results.Count).IsEqualTo(1);
         await Assert.That(results[0].Name).IsEqualTo("A");
     }
+}
+
+[Entity("Products")]
+public class QueryExtendedProduct
+{
+    public ObjectId? Id { get; set; }
+    public string? Name { get; set; }
+    public string? Category { get; set; }
+    public decimal Price { get; set; }
+    public int Stock { get; set; }
+    public bool IsActive { get; set; }
+    public List<string>? Tags { get; set; }
 }

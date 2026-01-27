@@ -53,7 +53,8 @@ public class QueryExpressionFullTests
         
         await Assert.That(expr.FunctionName).IsEqualTo("Contains");
         await Assert.That(expr.Target).IsSameReferenceAs(target);
-        await Assert.That(expr.Argument).IsSameReferenceAs(arg);
+        await Assert.That(expr.Arguments.Count).IsEqualTo(1);
+        await Assert.That(expr.Arguments[0]).IsSameReferenceAs(arg);
         await Assert.That(expr.NodeType).IsEqualTo(ExpressionType.Call);
     }
 }

@@ -1,0 +1,648 @@
+using System.Reflection;
+using TinyDb.Bson;
+using TinyDb.Core;
+using TinyDb.Storage;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+
+namespace TinyDb.Tests.Core;
+
+/// <summary>
+/// Tests for CollectionMetaStore internal class.
+/// Since CollectionMetaStore is internal, we test it through TinyDbEngine 
+/// and use reflection for direct testing where needed.
+/// </summary>
+public class CollectionMetaStoreTests : IDisposable
+{
+    private readonly string _testDbPath;
+    private readonly TinyDbEngine _engine;
+
+    public CollectionMetaStoreTests()
+    {
+        _testDbPath = Path.Combine(Path.GetTempPath(), $"meta_store_{Guid.NewGuid():N}.db");
+        _engine = new TinyDbEngine(_testDbPath);
+    }
+
+    public void Dispose()
+    {
+        _engine.Dispose();
+        try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
+    }
+
+    private object GetCollectionMetaStore()
+    {
+        var field = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        return field?.GetValue(_engine) 
+            ?? throw new InvalidOperationException("Could not get _collectionMetaStore field");
+    }
+
+    private BsonDocument InvokeGetMetadata(object metaStore, string name)
+    {
+        var method = metaStore.GetType().GetMethod("GetMetadata", 
+            BindingFlags.Public | BindingFlags.Instance);
+        return (BsonDocument)(method?.Invoke(metaStore, [name]) 
+            ?? throw new InvalidOperationException("Could not invoke GetMetadata"));
+    }
+
+    private void InvokeUpdateMetadata(object metaStore, string name, BsonDocument metadata, bool forceFlush)
+    {
+        var method = metaStore.GetType().GetMethod("UpdateMetadata", 
+            BindingFlags.Public | BindingFlags.Instance);
+        method?.Invoke(metaStore, [name, metadata, forceFlush]);
+    }
+
+    private bool InvokeIsKnown(object metaStore, string name)
+    {
+        var method = metaStore.GetType().GetMethod("IsKnown", 
+            BindingFlags.Public | BindingFlags.Instance);
+        return (bool)(method?.Invoke(metaStore, [name]) 
+            ?? throw new InvalidOperationException("Could not invoke IsKnown"));
+    }
+
+    private List<string> InvokeGetCollectionNames(object metaStore)
+    {
+        var method = metaStore.GetType().GetMethod("GetCollectionNames", 
+            BindingFlags.Public | BindingFlags.Instance);
+        return (List<string>)(method?.Invoke(metaStore, []) 
+            ?? throw new InvalidOperationException("Could not invoke GetCollectionNames"));
+    }
+
+    [Test]
+    public async Task GetMetadata_UnknownCollection_ReturnsEmptyDocument()
+    {
+        var metaStore = GetCollectionMetaStore();
+        var metadata = InvokeGetMetadata(metaStore, "unknown_collection");
+        
+        await Assert.That(metadata).IsNotNull();
+        await Assert.That(metadata.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetMetadata_RegisteredCollection_ReturnsEmptyDocument()
+    {
+        // Register collection via engine
+        _engine.GetCollectionWithName<TestItem>("test_collection");
+        
+        var metaStore = GetCollectionMetaStore();
+        var metadata = InvokeGetMetadata(metaStore, "test_collection");
+        
+        await Assert.That(metadata).IsNotNull();
+        await Assert.That(metadata.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task UpdateMetadata_NewCollection_ShouldRegisterAndSave()
+    {
+        var metaStore = GetCollectionMetaStore();
+        
+        var metadata = new BsonDocument()
+            .Set("rootIndexPage", new BsonInt32(123))
+            .Set("customProperty", new BsonString("test value"));
+        
+        InvokeUpdateMetadata(metaStore, "new_collection_with_meta", metadata, true);
+        
+        // Verify it's registered
+        await Assert.That(InvokeIsKnown(metaStore, "new_collection_with_meta")).IsTrue();
+        
+        // Verify metadata was stored
+        var retrieved = InvokeGetMetadata(metaStore, "new_collection_with_meta");
+        await Assert.That(((BsonInt32)retrieved["rootIndexPage"]).Value).IsEqualTo(123);
+        await Assert.That(((BsonString)retrieved["customProperty"]).Value).IsEqualTo("test value");
+    }
+
+    [Test]
+    public async Task UpdateMetadata_ExistingCollection_ShouldUpdateMetadata()
+    {
+        var metaStore = GetCollectionMetaStore();
+        
+        // First update - creates collection
+        var metadata1 = new BsonDocument().Set("version", new BsonInt32(1));
+        InvokeUpdateMetadata(metaStore, "existing_collection", metadata1, false);
+        
+        // Second update - updates metadata
+        var metadata2 = new BsonDocument()
+            .Set("version", new BsonInt32(2))
+            .Set("newField", new BsonString("new value"));
+        InvokeUpdateMetadata(metaStore, "existing_collection", metadata2, true);
+        
+        // Verify updated metadata
+        var retrieved = InvokeGetMetadata(metaStore, "existing_collection");
+        await Assert.That(((BsonInt32)retrieved["version"]).Value).IsEqualTo(2);
+        await Assert.That(((BsonString)retrieved["newField"]).Value).IsEqualTo("new value");
+    }
+
+    [Test]
+    public async Task UpdateMetadata_Persistence_ShouldSurviveReopen()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"meta_persist_{Guid.NewGuid():N}.db");
+        
+        try
+        {
+            // Create and update metadata
+            using (var engine = new TinyDbEngine(path))
+            {
+                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
+                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                
+                var metadata = new BsonDocument()
+                    .Set("persistedValue", new BsonInt32(42))
+                    .Set("persistedString", new BsonString("hello world"));
+                
+                metaStore!.GetType().GetMethod("UpdateMetadata")!
+                    .Invoke(metaStore, [  "persistent_meta_col", metadata, true ]);
+                
+                engine.Flush();
+            }
+            
+            // Reopen and verify
+            using (var engine = new TinyDbEngine(path))
+            {
+                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
+                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                
+                var retrieved = (BsonDocument)metaStore!.GetType().GetMethod("GetMetadata")!
+                    .Invoke(metaStore, [ "persistent_meta_col" ])!;
+                
+                await Assert.That(((BsonInt32)retrieved["persistedValue"]).Value).IsEqualTo(42);
+                await Assert.That(((BsonString)retrieved["persistedString"]).Value).IsEqualTo("hello world");
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task GetCollectionNames_ReturnsAllRegisteredCollections()
+    {
+        var metaStore = GetCollectionMetaStore();
+        
+        // Register multiple collections through the engine
+        _engine.GetCollectionWithName<TestItem>("col_a");
+        _engine.GetCollectionWithName<TestItem>("col_b");
+        _engine.GetCollectionWithName<TestItem>("col_c");
+        
+        var names = InvokeGetCollectionNames(metaStore);
+        
+        await Assert.That(names).Contains("col_a");
+        await Assert.That(names).Contains("col_b");
+        await Assert.That(names).Contains("col_c");
+    }
+
+    [Test]
+    public async Task IsKnown_UnknownCollection_ReturnsFalse()
+    {
+        var metaStore = GetCollectionMetaStore();
+        await Assert.That(InvokeIsKnown(metaStore, "does_not_exist")).IsFalse();
+    }
+
+    [Test]
+    public async Task IsKnown_RegisteredCollection_ReturnsTrue()
+    {
+        _engine.GetCollectionWithName<TestItem>("is_known_test");
+        var metaStore = GetCollectionMetaStore();
+        await Assert.That(InvokeIsKnown(metaStore, "is_known_test")).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterCollection_DuplicateRegistration_ShouldNotDuplicate()
+    {
+        // Register same collection multiple times
+        _engine.GetCollectionWithName<TestItem>("duplicate_test");
+        _engine.GetCollectionWithName<TestItem>("duplicate_test");
+        _engine.GetCollectionWithName<TestItem>("duplicate_test");
+        
+        var names = _engine.GetCollectionNames().ToList();
+        var count = names.Count(n => n == "duplicate_test");
+        
+        await Assert.That(count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task RemoveCollection_ExistingCollection_ShouldRemove()
+    {
+        _engine.GetCollectionWithName<TestItem>("to_remove");
+        var metaStore = GetCollectionMetaStore();
+        
+        await Assert.That(InvokeIsKnown(metaStore, "to_remove")).IsTrue();
+        
+        _engine.DropCollection("to_remove");
+        
+        await Assert.That(InvokeIsKnown(metaStore, "to_remove")).IsFalse();
+    }
+
+    [Test]
+    public async Task RemoveCollection_NonExistentCollection_ShouldNotThrow()
+    {
+        var result = _engine.DropCollection("never_existed");
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task MultipleMetadataUpdates_ShouldMaintainCorrectState()
+    {
+        var metaStore = GetCollectionMetaStore();
+        
+        // Create multiple collections with metadata
+        for (int i = 0; i < 5; i++)
+        {
+            var metadata = new BsonDocument()
+                .Set("index", new BsonInt32(i))
+                .Set("name", new BsonString($"collection_{i}"));
+            InvokeUpdateMetadata(metaStore, $"multi_col_{i}", metadata, false);
+        }
+        
+        // Force flush
+        _engine.Flush();
+        
+        // Verify all collections exist with correct metadata
+        for (int i = 0; i < 5; i++)
+        {
+            var retrieved = InvokeGetMetadata(metaStore, $"multi_col_{i}");
+            await Assert.That(((BsonInt32)retrieved["index"]).Value).IsEqualTo(i);
+            await Assert.That(((BsonString)retrieved["name"]).Value).IsEqualTo($"collection_{i}");
+        }
+    }
+
+    [Test]
+    public async Task UpdateMetadata_WithComplexDocument_ShouldPersist()
+    {
+        var metaStore = GetCollectionMetaStore();
+        
+        var nestedDoc = new BsonDocument()
+            .Set("nestedInt", new BsonInt32(100))
+            .Set("nestedString", new BsonString("nested value"));
+        
+        var arrayValues = new BsonArray()
+            .AddValue(new BsonInt32(1))
+            .AddValue(new BsonInt32(2))
+            .AddValue(new BsonInt32(3));
+        
+        var metadata = new BsonDocument()
+            .Set("nested", nestedDoc)
+            .Set("array", arrayValues)
+            .Set("boolean", BsonBoolean.True)
+            .Set("double", new BsonDouble(3.14));
+        
+        InvokeUpdateMetadata(metaStore, "complex_meta_col", metadata, true);
+        
+        var retrieved = InvokeGetMetadata(metaStore, "complex_meta_col");
+        
+        var nestedResult = (BsonDocument)retrieved["nested"];
+        await Assert.That(((BsonInt32)nestedResult["nestedInt"]).Value).IsEqualTo(100);
+        await Assert.That(((BsonString)nestedResult["nestedString"]).Value).IsEqualTo("nested value");
+        await Assert.That(((BsonArray)retrieved["array"]).Count).IsEqualTo(3);
+        await Assert.That(((BsonBoolean)retrieved["boolean"]).Value).IsTrue();
+        await Assert.That(((BsonDouble)retrieved["double"]).Value).IsEqualTo(3.14);
+    }
+
+    public class TestItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+}
+
+/// <summary>
+/// Tests for CollectionMetaStore edge cases and error conditions.
+/// </summary>
+public class CollectionMetaStoreEdgeCasesTests : IDisposable
+{
+    private readonly string _testDbPath;
+    private readonly TinyDbEngine _engine;
+
+    public CollectionMetaStoreEdgeCasesTests()
+    {
+        _testDbPath = Path.Combine(Path.GetTempPath(), $"meta_edge_{Guid.NewGuid():N}.db");
+        _engine = new TinyDbEngine(_testDbPath);
+    }
+
+    public void Dispose()
+    {
+        _engine.Dispose();
+        try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
+    }
+
+    private object GetCollectionMetaStore()
+    {
+        var field = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        return field?.GetValue(_engine) 
+            ?? throw new InvalidOperationException("Could not get _collectionMetaStore field");
+    }
+
+    [Test]
+    public async Task Collection_WithEmptyName_ShouldWork()
+    {
+        // Empty string as collection name (edge case)
+        var metaStore = GetCollectionMetaStore();
+        var registerMethod = metaStore.GetType().GetMethod("RegisterCollection");
+        
+        registerMethod?.Invoke(metaStore, [ "", true ]);
+        
+        var isKnownMethod = metaStore.GetType().GetMethod("IsKnown");
+        var result = (bool)(isKnownMethod?.Invoke(metaStore, [ "" ]) ?? false);
+        
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task Collection_WithSpecialCharacters_ShouldWork()
+    {
+        _engine.GetCollectionWithName<TestItem>("col-with-dashes");
+        _engine.GetCollectionWithName<TestItem>("col_with_underscores");
+        _engine.GetCollectionWithName<TestItem>("col.with.dots");
+        
+        var names = _engine.GetCollectionNames().ToList();
+        
+        await Assert.That(names).Contains("col-with-dashes");
+        await Assert.That(names).Contains("col_with_underscores");
+        await Assert.That(names).Contains("col.with.dots");
+    }
+
+    [Test]
+    public async Task Collection_WithUnicodeCharacters_ShouldWork()
+    {
+        _engine.GetCollectionWithName<TestItem>("集合名称");
+        _engine.GetCollectionWithName<TestItem>("コレクション");
+        _engine.GetCollectionWithName<TestItem>("коллекция");
+        
+        var names = _engine.GetCollectionNames().ToList();
+        
+        await Assert.That(names).Contains("集合名称");
+        await Assert.That(names).Contains("コレクション");
+        await Assert.That(names).Contains("коллекция");
+    }
+
+    [Test]
+    public async Task Collection_CaseSensitivity_ShouldBeDistinct()
+    {
+        _engine.GetCollectionWithName<TestItem>("CaseSensitive");
+        _engine.GetCollectionWithName<TestItem>("casesensitive");
+        _engine.GetCollectionWithName<TestItem>("CASESENSITIVE");
+        
+        var names = _engine.GetCollectionNames().ToList();
+        
+        await Assert.That(names).Contains("CaseSensitive");
+        await Assert.That(names).Contains("casesensitive");
+        await Assert.That(names).Contains("CASESENSITIVE");
+        await Assert.That(names.Count).IsGreaterThanOrEqualTo(3);
+    }
+
+    [Test]
+    public async Task LoadCollections_WithNoExistingData_ShouldNotThrow()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"empty_load_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var engine = new TinyDbEngine(path);
+            var names = engine.GetCollectionNames().ToList();
+            await Assert.That(names).IsEmpty();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task SaveCollections_WithEmptyMetadata_ShouldSaveSuccessfully()
+    {
+        _engine.GetCollectionWithName<TestItem>("empty_meta_test");
+        _engine.Flush();
+        
+        await Assert.That(_engine.CollectionExists("empty_meta_test")).IsTrue();
+    }
+
+    [Test]
+    public async Task GetMetadata_AfterRemoveCollection_ShouldReturnEmptyDocument()
+    {
+        var metaStore = GetCollectionMetaStore();
+        var updateMethod = metaStore.GetType().GetMethod("UpdateMetadata");
+        var getMethod = metaStore.GetType().GetMethod("GetMetadata");
+        
+        // Add collection with metadata
+        var metadata = new BsonDocument().Set("test", new BsonInt32(123));
+        updateMethod?.Invoke(metaStore, [ "temp_collection", metadata, false ]);
+        
+        // Remove collection
+        _engine.DropCollection("temp_collection");
+        
+        // Get metadata - should return empty document
+        var result = (BsonDocument)(getMethod?.Invoke(metaStore, [ "temp_collection" ]) 
+            ?? throw new Exception());
+        
+        await Assert.That(result.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task UpdateMetadata_MultipleTimes_ShouldOverwritePrevious()
+    {
+        var metaStore = GetCollectionMetaStore();
+        var updateMethod = metaStore.GetType().GetMethod("UpdateMetadata");
+        var getMethod = metaStore.GetType().GetMethod("GetMetadata");
+        
+        // First update
+        var meta1 = new BsonDocument().Set("version", new BsonInt32(1));
+        updateMethod?.Invoke(metaStore, [ "overwrite_test", meta1, false ]);
+        
+        // Second update - completely different structure
+        var meta2 = new BsonDocument().Set("newKey", new BsonString("new value"));
+        updateMethod?.Invoke(metaStore, [ "overwrite_test", meta2, true ]);
+        
+        var result = (BsonDocument)(getMethod?.Invoke(metaStore, [ "overwrite_test" ]) 
+            ?? throw new Exception());
+        
+        // Should have new key, not old key
+        await Assert.That(result.ContainsKey("newKey")).IsTrue();
+        await Assert.That(result.ContainsKey("version")).IsFalse();
+    }
+
+    public class TestItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+}
+
+/// <summary>
+/// Tests for CollectionMetaStore persistence across database sessions.
+/// </summary>
+public class CollectionMetaStorePersistenceTests
+{
+    [Test]
+    public async Task Persistence_WithMultipleCollections_ShouldSurviveReopen()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"meta_persist_multi_{Guid.NewGuid():N}.db");
+        
+        try
+        {
+            // Create multiple collections with data
+            using (var engine = new TinyDbEngine(path))
+            {
+                engine.GetCollectionWithName<TestItem>("persist_a").Insert(new TestItem { Id = 1 });
+                engine.GetCollectionWithName<TestItem>("persist_b").Insert(new TestItem { Id = 2 });
+                engine.GetCollectionWithName<TestItem>("persist_c").Insert(new TestItem { Id = 3 });
+                engine.Flush();
+            }
+            
+            // Reopen and verify
+            using (var engine = new TinyDbEngine(path))
+            {
+                var names = engine.GetCollectionNames().ToList();
+                await Assert.That(names).Contains("persist_a");
+                await Assert.That(names).Contains("persist_b");
+                await Assert.That(names).Contains("persist_c");
+                await Assert.That(names.Count).IsEqualTo(3);
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Persistence_DropCollectionThenReopen_ShouldNotHaveDroppedCollection()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"meta_drop_persist_{Guid.NewGuid():N}.db");
+        
+        try
+        {
+            // Create and then drop a collection
+            using (var engine = new TinyDbEngine(path))
+            {
+                engine.GetCollectionWithName<TestItem>("to_keep");
+                engine.GetCollectionWithName<TestItem>("to_drop");
+                engine.Flush();
+                
+                engine.DropCollection("to_drop");
+                engine.Flush();
+            }
+            
+            // Reopen and verify
+            using (var engine = new TinyDbEngine(path))
+            {
+                var names = engine.GetCollectionNames().ToList();
+                await Assert.That(names).Contains("to_keep");
+                await Assert.That(names).DoesNotContain("to_drop");
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Persistence_MetadataUpdate_ShouldSurviveReopen()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"meta_update_persist_{Guid.NewGuid():N}.db");
+        
+        try
+        {
+            // Create collection with custom metadata
+            using (var engine = new TinyDbEngine(path))
+            {
+                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
+                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                
+                var metadata = new BsonDocument()
+                    .Set("customInt", new BsonInt32(999))
+                    .Set("customString", new BsonString("persisted data"));
+                
+                metaStore!.GetType().GetMethod("UpdateMetadata")!
+                    .Invoke(metaStore, [ "meta_persist_test", metadata, true ]);
+                
+                engine.Flush();
+            }
+            
+            // Reopen and verify metadata persisted
+            using (var engine = new TinyDbEngine(path))
+            {
+                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
+                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                
+                var retrieved = (BsonDocument)metaStore!.GetType().GetMethod("GetMetadata")!
+                    .Invoke(metaStore, [ "meta_persist_test" ])!;
+                
+                await Assert.That(((BsonInt32)retrieved["customInt"]).Value).IsEqualTo(999);
+                await Assert.That(((BsonString)retrieved["customString"]).Value).IsEqualTo("persisted data");
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Persistence_EmptyDatabase_ShouldLoadWithoutErrors()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"empty_db_{Guid.NewGuid():N}.db");
+        
+        try
+        {
+            // Create empty database
+            using (var engine = new TinyDbEngine(path))
+            {
+                engine.Flush();
+            }
+            
+            // Reopen empty database
+            using (var engine = new TinyDbEngine(path))
+            {
+                var names = engine.GetCollectionNames().ToList();
+                await Assert.That(names).IsEmpty();
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Persistence_ManyCollections_ShouldPersistAll()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"many_cols_{Guid.NewGuid():N}.db");
+        const int collectionCount = 20;
+        
+        try
+        {
+            // Create many collections
+            using (var engine = new TinyDbEngine(path))
+            {
+                for (int i = 0; i < collectionCount; i++)
+                {
+                    engine.GetCollectionWithName<TestItem>($"collection_{i:D3}");
+                }
+                engine.Flush();
+            }
+            
+            // Reopen and verify all collections exist
+            using (var engine = new TinyDbEngine(path))
+            {
+                var names = engine.GetCollectionNames().ToList();
+                await Assert.That(names.Count).IsEqualTo(collectionCount);
+                
+                for (int i = 0; i < collectionCount; i++)
+                {
+                    await Assert.That(names).Contains($"collection_{i:D3}");
+                }
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    public class TestItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+}

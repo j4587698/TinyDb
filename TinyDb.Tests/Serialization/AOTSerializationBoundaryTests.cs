@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TinyDb.Tests.TestEntities;
@@ -29,8 +30,6 @@ public class AOTSerializationBoundaryTests
     [Test]
     public async Task ComplexNestedObject_ShouldSerializeCorrectly()
     {
-        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
-
         // Arrange - 创建复杂的嵌套对象
         var complexEntity = new ComplexAOTEntity
         {
@@ -224,8 +223,6 @@ public class AOTSerializationBoundaryTests
     [Test]
     public async Task CustomType_ShouldSerializeCorrectly()
     {
-        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
-
         // Arrange - 创建包含自定义类型的对象
         var entity = new CustomTypeEntity
         {
@@ -413,6 +410,7 @@ public class AOTSerializationBoundaryTests
 }
 
 // Address类定义
+[Entity]
 public class Address
 {
     public string Street { get; set; } = string.Empty;
@@ -422,6 +420,7 @@ public class Address
 }
 
 // 测试用的实体类定义
+[Entity]
 public class ComplexAOTEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -435,6 +434,7 @@ public class ComplexAOTEntity
     public Dictionary<string, object> Metadata { get; set; } = new();
 }
 
+[Entity]
 public class CircularEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -443,6 +443,7 @@ public class CircularEntity
     public CircularEntity? Parent { get; set; }
 }
 
+[Entity]
 public class NullTestEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -459,6 +460,7 @@ public class NullTestEntity
     public List<string> ListValue { get; set; } = new();
 }
 
+[Entity]
 public class LargeAOTEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -468,6 +470,7 @@ public class LargeAOTEntity
     public string LargeText { get; set; } = string.Empty;
 }
 
+[Entity]
 public class CustomTypeEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -489,12 +492,14 @@ public struct CustomStruct
     public string Name { get; set; }
 }
 
+[Entity]
 public class CustomClass
 {
     public string Description { get; set; } = string.Empty;
     public decimal Value { get; set; }
 }
 
+[Entity]
 public class VersionTestEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -505,6 +510,7 @@ public class VersionTestEntity
     public List<string>? Tags { get; set; } // 新增字段
 }
 
+[Entity]
 public class ReflectionTestEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -514,6 +520,7 @@ public class ReflectionTestEntity
     private string PrivateProperty { get; set; } = string.Empty;
 }
 
+[Entity]
 public class GenericCollectionEntity
 {
     public string Id { get; set; } = string.Empty;
@@ -523,6 +530,7 @@ public class GenericCollectionEntity
     public List<List<int>> NestedList { get; set; } = new();
 }
 
+[Entity]
 public class ProblematicEntity
 {
     public string Id { get; set; } = string.Empty;

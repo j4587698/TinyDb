@@ -25,38 +25,40 @@ public class QueryArithmeticTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
-    [Entity("Math")]
-    public class MathItem
-    {
-        public int Id { get; set; }
-        public int A { get; set; }
-    }
-
     [Test]
-    public async Task Arithmetic_Operations_Should_Throw_NotSupported()
+    public async Task Arithmetic_Operations_Should_Work()
     {
-        // QueryExecutor does not support arithmetic evaluation yet
-        var col = _engine.GetCollection<MathItem>();
-        col.Insert(new MathItem { Id = 1, A = 10 });
+        // QueryExecutor now supports arithmetic evaluation
+        var col = _engine.GetCollection<QueryArithmeticMathItem>();
+        col.Insert(new QueryArithmeticMathItem { Id = 1, A = 10 });
 
-        // Add
-        await Assert.That(() => _executor.Execute<MathItem>("Math", x => x.A + 5 == 15).ToList())
-            .Throws<NotSupportedException>();
+        // Add: 10 + 5 == 15
+        var resAdd = _executor.Execute<QueryArithmeticMathItem>("Math", x => x.A + 5 == 15).ToList();
+        await Assert.That(resAdd.Count).IsEqualTo(1);
+        await Assert.That(resAdd[0].Id).IsEqualTo(1);
 
-        // Subtract
-        await Assert.That(() => _executor.Execute<MathItem>("Math", x => x.A - 5 == 5).ToList())
-            .Throws<NotSupportedException>();
+        // Subtract: 10 - 5 == 5
+        var resSub = _executor.Execute<QueryArithmeticMathItem>("Math", x => x.A - 5 == 5).ToList();
+        await Assert.That(resSub.Count).IsEqualTo(1);
+        await Assert.That(resSub[0].Id).IsEqualTo(1);
     }
 
     [Test]
     public async Task Logical_NotEqual_Should_Work()
     {
-        var col = _engine.GetCollection<MathItem>();
-        col.Insert(new MathItem { Id = 1, A = 10 });
-        col.Insert(new MathItem { Id = 2, A = 20 });
+        var col = _engine.GetCollection<QueryArithmeticMathItem>();
+        col.Insert(new QueryArithmeticMathItem { Id = 1, A = 10 });
+        col.Insert(new QueryArithmeticMathItem { Id = 2, A = 20 });
 
-        var res = _executor.Execute<MathItem>("Math", x => x.A != 10).ToList();
+        var res = _executor.Execute<QueryArithmeticMathItem>("Math", x => x.A != 10).ToList();
         await Assert.That(res.Count).IsEqualTo(1);
         await Assert.That(res[0].Id).IsEqualTo(2);
     }
+}
+
+[Entity("Math")]
+public class QueryArithmeticMathItem
+{
+    public int Id { get; set; }
+    public int A { get; set; }
 }

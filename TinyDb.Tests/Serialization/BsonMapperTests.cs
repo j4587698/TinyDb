@@ -299,7 +299,7 @@ public class BsonMapperTests
         // Assert
         await Assert.That(document.ContainsKey("price")).IsTrue();
         await Assert.That(document["price"].GetType()).IsEqualTo(typeof(BsonDecimal128));
-        await Assert.That(((BsonDecimal128)document["price"]).Value).IsEqualTo(product.Price);
+        await Assert.That((decimal)((BsonDecimal128)document["price"]).Value).IsEqualTo(product.Price);
 
         await Assert.That(restored).IsNotNull();
         await Assert.That(restored!.Price).IsEqualTo(product.Price);

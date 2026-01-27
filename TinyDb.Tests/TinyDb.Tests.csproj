@@ -6,18 +6,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <PublishAot>false</PublishAot>
-    
-    <!-- 按照官方 MTP 规范配置 -->
-    <IsTestProject>true</IsTestProject>
-    <OutputType>Exe</OutputType>
-    
-    <!-- 显式声明使用 MTP 运行器而非 VSTest -->
-    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
-    <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
-    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
-    
-    <NoWarn>$(NoWarn);TUnit0018;TUnit0023;CS8604;CS8602;CS8600;CS1718;CS8769</NoWarn>
+    <!-- AOT analysis for all frameworks -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <IlcGenerateCompleteTypeMetadata>true</IlcGenerateCompleteTypeMetadata>
+    <IlcGenerateStackTraceData>true</IlcGenerateStackTraceData>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+  </PropertyGroup>
+
+  <!-- Only enable AOT publish on .NET 10+ due to ILCompiler bug in .NET 9 -->
+  <PropertyGroup Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net10.0'))">
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,7 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TinyDb\TinyDb.csproj" />
-    <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" />
+    <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

@@ -33,9 +33,9 @@ public class ExpressionParserFullTests
     }
 
     [Test]
-    public async Task Parse_Unsupported_Method_Should_Throw()
+    public async Task Parse_Conditional_Should_Throw()
     {
-        Expression<Func<TestObj, bool>> expr = x => x.Text.Trim() == "A";
+        Expression<Func<TestObj, bool>> expr = x => x.Flag ? true : false;
         await Assert.That(() => _parser.Parse(expr)).Throws<NotSupportedException>();
     }
 

@@ -17,10 +17,10 @@ public class TinyDbEngineRecoveryTests : IDisposable
 
     public void Dispose()
     {
-        try 
-        { 
+        try
+        {
             if (File.Exists(_testDbPath)) File.Delete(_testDbPath);
-            
+
             var directory = Path.GetDirectoryName(_testDbPath)!;
             var fileNameNoExt = Path.GetFileNameWithoutExtension(_testDbPath);
             foreach (var file in Directory.GetFiles(directory, $"{fileNameNoExt}*"))
@@ -30,24 +30,17 @@ public class TinyDbEngineRecoveryTests : IDisposable
         } catch { }
     }
 
-    [Entity("data")]
-    public class DataItem
-    {
-        public int Id { get; set; }
-        public string Value { get; set; } = "";
-    }
-
     [Test]
     public async Task Engine_Should_Recover_From_WAL_On_Startup()
     {
         // 1. Create DB and enable WAL
         using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { EnableJournaling = true }))
         {
-            var collection = engine.GetCollection<DataItem>();
+            var collection = engine.GetCollection<RecoveryDataItem>();
             // Insert data
-            for (int i = 0; i < 10; i++)
+            for (int i = 1; i <= 10; i++)
             {
-                collection.Insert(new DataItem { Id = i, Value = $"V{i}" });
+                collection.Insert(new RecoveryDataItem { Id = i, Value = $"V{i}" });
             }
         }
 
@@ -62,26 +55,33 @@ public class TinyDbEngineRecoveryTests : IDisposable
         // Step 2: Add more data (use new IDs to avoid unique constraint violation)
         using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { EnableJournaling = true }))
         {
-            var col = engine.GetCollection<DataItem>();
-            for(int i=10; i<15; i++) col.Insert(new DataItem { Id = i, Value = $"V{i}" });
-            
+            var col = engine.GetCollection<RecoveryDataItem>();
+            for(int i=11; i<=15; i++) col.Insert(new RecoveryDataItem { Id = i, Value = $"V{i}" });
+
             // Backup WAL while active (simulate crash state before full flush)
             File.Copy(walPath, walPath + ".bak", true);
         }
-        
+
         // Step 3: Rollback DB file and restore WAL
         File.WriteAllBytes(_testDbPath, dbBackup);
         File.Copy(walPath + ".bak", walPath, true);
-        
+
         // Step 4: Open Engine
         using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { EnableJournaling = true }))
         {
-            var col = engine.GetCollection<DataItem>();
+            var col = engine.GetCollection<RecoveryDataItem>();
             var all = col.FindAll().ToList();
-            
+
             // Should include recovered items
             await Assert.That(all.Count).IsGreaterThan(1);
             await Assert.That(all.Any(x => x.Id == 4)).IsTrue();
         }
     }
+}
+
+[Entity("data")]
+public class RecoveryDataItem
+{
+    public int Id { get; set; }
+    public string Value { get; set; } = "";
 }

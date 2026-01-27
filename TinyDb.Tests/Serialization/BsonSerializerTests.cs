@@ -158,7 +158,7 @@ public class BsonSerializerTests
 
         // Assert
         await Assert.That(deserialized).IsNotNull();
-        await Assert.That(deserialized!.Value).IsEqualTo(original);
+        await Assert.That((decimal)deserialized!.Value).IsEqualTo(original);
     }
 
     [Test]
@@ -176,7 +176,7 @@ public class BsonSerializerTests
         await Assert.That(deserialized).IsNotNull();
         var priceValue = deserialized!["price"];
         await Assert.That(priceValue.GetType()).IsEqualTo(typeof(BsonDecimal128));
-        await Assert.That(((BsonDecimal128)priceValue).Value).IsEqualTo(price);
+        await Assert.That((decimal)((BsonDecimal128)priceValue).Value).IsEqualTo(price);
     }
 
     [Test]

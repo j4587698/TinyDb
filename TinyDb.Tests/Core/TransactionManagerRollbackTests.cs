@@ -23,31 +23,24 @@ public class TransactionManagerRollbackTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
-    [Entity("col")]
-    public class Item
-    {
-        public int Id { get; set; }
-        public string Val { get; set; } = "";
-    }
-
     [Test]
     public async Task Rollback_Should_Handle_Insert_Update_Delete()
     {
-        var col = _engine.GetCollection<Item>();
-        col.Insert(new Item { Id = 1, Val = "A" });
+        var col = _engine.GetCollection<TransactionRollbackItem>();
+        col.Insert(new TransactionRollbackItem { Id = 1, Val = "A" });
 
         using (var trans = _engine.BeginTransaction())
         {
             // Update 1
-            col.Update(new Item { Id = 1, Val = "B" });
-            
+            col.Update(new TransactionRollbackItem { Id = 1, Val = "B" });
+
             // Insert 2
-            col.Insert(new Item { Id = 2, Val = "C" });
-            
+            col.Insert(new TransactionRollbackItem { Id = 2, Val = "C" });
+
             // Insert 3 then Delete 3
-            col.Insert(new Item { Id = 3, Val = "D" });
+            col.Insert(new TransactionRollbackItem { Id = 3, Val = "D" });
             col.Delete(new BsonInt32(3));
-            
+
             trans.Rollback();
         }
 
@@ -55,4 +48,11 @@ public class TransactionManagerRollbackTests : IDisposable
         await Assert.That(all.Count).IsEqualTo(1);
         await Assert.That(all[0].Val).IsEqualTo("A");
     }
+}
+
+[Entity("col")]
+public class TransactionRollbackItem
+{
+    public int Id { get; set; }
+    public string Val { get; set; } = "";
 }

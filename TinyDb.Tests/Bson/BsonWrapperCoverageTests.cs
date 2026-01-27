@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using TinyDb.Bson;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -9,13 +8,11 @@ namespace TinyDb.Tests.Bson;
 public class BsonWrapperCoverageTests
 {
     [Test]
-    public async Task BsonDocumentValue_IConvertible_Coverage()
+    public async Task BsonDocument_IConvertible_Coverage()
     {
+        // BsonDocument directly implements IConvertible - no need for internal BsonDocumentValue
         var doc = new BsonDocument().Set("a", 1);
-        var type = typeof(BsonDocument).Assembly.GetType("TinyDb.Bson.BsonDocumentValue");
-        if (type == null) return;
-
-        var instance = (IConvertible)Activator.CreateInstance(type, doc)!;
+        var instance = (IConvertible)doc;
         
         await Assert.That(instance.ToBoolean(null)).IsTrue();
         await Assert.That(instance.ToInt32(null)).IsEqualTo(1);
@@ -34,13 +31,11 @@ public class BsonWrapperCoverageTests
     }
 
     [Test]
-    public async Task BsonArrayValue_IConvertible_Coverage()
+    public async Task BsonArray_IConvertible_Coverage()
     {
+        // BsonArray directly implements IConvertible - no need for internal BsonArrayValue
         var arr = new BsonArray().AddValue(1).AddValue(2);
-        var type = typeof(BsonDocument).Assembly.GetType("TinyDb.Bson.BsonArrayValue");
-        if (type == null) return;
-
-        var instance = (IConvertible)Activator.CreateInstance(type, arr)!;
+        var instance = (IConvertible)arr;
         
         await Assert.That(instance.ToBoolean(null)).IsTrue();
         await Assert.That(instance.ToInt32(null)).IsEqualTo(2); // Count
@@ -50,11 +45,5 @@ public class BsonWrapperCoverageTests
         await Assert.That(instance.ToString(null)).IsEqualTo(arr.ToString());
         
         await Assert.That(() => instance.ToDateTime(null)).Throws<InvalidCastException>();
-        
-        // Cast via ToType
-        // BsonArray.ToType delegates to ChangeType(this). 
-        // BsonArray implements IEnumerable.
-        // It might not convert back to BsonArray via Convert.ChangeType easily unless explicit cast.
-        // But let's check basic ones.
     }
 }

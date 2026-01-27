@@ -1,7 +1,9 @@
 using TinyDb.Bson;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 
 namespace TinyDb.Tests.Bson;
 
@@ -233,10 +235,9 @@ public class BsonExhaustiveIConvertibleTests
     }
 
     [Test]
+    [SkipInAot("Uses reflection to instantiate internal type BsonArrayValue")]
     public async Task BsonArrayValue_Internal_Coverage()
     {
-        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled) return;
-
         var type = typeof(BsonArray).Assembly.GetType("TinyDb.Bson.BsonArrayValue");
         var array = new BsonArray().AddValue(1);
         var wrapper = (BsonValue)Activator.CreateInstance(type!, array)!;

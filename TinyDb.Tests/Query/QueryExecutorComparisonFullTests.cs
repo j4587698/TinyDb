@@ -25,21 +25,14 @@ public class QueryExecutorComparisonFullTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
-    [Entity("Items")]
-    public class Item
-    {
-        public int Id { get; set; }
-        public object? Value { get; set; }
-    }
-
     [Test]
     public async Task Compare_Numeric_Combinations()
     {
-        var col = _engine.GetCollection<Item>();
-        col.Insert(new Item { Id = 1, Value = 10 }); // int
-        col.Insert(new Item { Id = 2, Value = 20.5 }); // double
-        col.Insert(new Item { Id = 3, Value = 30m }); // decimal
-        
+        var col = _engine.GetCollection<QueryComparisonFullItem>();
+        col.Insert(new QueryComparisonFullItem { Id = 1, Value = 10 }); // int
+        col.Insert(new QueryComparisonFullItem { Id = 2, Value = 20.5 }); // double
+        col.Insert(new QueryComparisonFullItem { Id = 3, Value = 30m }); // decimal
+
         // We use Find with filter which uses QueryExecutor internally
         // Safe conversion using Convert for mixed types in 'object'
         await Assert.That(col.Find(x => x.Value != null && Convert.ToDecimal(x.Value) > 15m).Count()).IsEqualTo(2);
@@ -49,12 +42,19 @@ public class QueryExecutorComparisonFullTests : IDisposable
     [Test]
     public async Task Compare_Nulls()
     {
-        var col = _engine.GetCollection<Item>();
-        col.Insert(new Item { Id = 1, Value = null });
-        col.Insert(new Item { Id = 2, Value = "A" });
-        
+        var col = _engine.GetCollection<QueryComparisonFullItem>();
+        col.Insert(new QueryComparisonFullItem { Id = 1, Value = null });
+        col.Insert(new QueryComparisonFullItem { Id = 2, Value = "A" });
+
         // Note: x.Value == null in Expression might be parsed as Constant(null)
         await Assert.That(col.Find(x => x.Value == null).Count()).IsEqualTo(1);
         await Assert.That(col.Find(x => x.Value != null).Count()).IsEqualTo(1);
     }
+}
+
+[Entity("Items")]
+public class QueryComparisonFullItem
+{
+    public int Id { get; set; }
+    public object? Value { get; set; }
 }

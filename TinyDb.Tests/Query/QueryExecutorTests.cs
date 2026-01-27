@@ -42,18 +42,6 @@ public class QueryExecutorTests : IDisposable
         }
     }
 
-    // 测试实体类
-    [Entity("Users")]
-    public class TestUser
-    {
-        public ObjectId? Id { get; set; }
-        public string? Name { get; set; }
-        public int Age { get; set; }
-        public string? Email { get; set; }
-        public bool IsActive { get; set; }
-        public DateTime CreatedAt { get; set; }
-    }
-
     [Test]
     public async Task Constructor_Should_Initialize_Correctly()
     {
@@ -72,14 +60,14 @@ public class QueryExecutorTests : IDisposable
     public async Task Execute_With_Null_CollectionName_Should_Throw()
     {
         // Act & Assert
-        await Assert.That(() => _executor.Execute<TestUser>(null!).ToList()).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<QueryTestUser>(null!).ToList()).Throws<ArgumentException>();
     }
 
     [Test]
     public async Task Execute_With_Empty_CollectionName_Should_Throw()
     {
         // Act & Assert
-        await Assert.That(() => _executor.Execute<TestUser>("").ToList()).Throws<ArgumentException>();
+        await Assert.That(() => _executor.Execute<QueryTestUser>("").ToList()).Throws<ArgumentException>();
     }
 
     [Test]
@@ -89,7 +77,7 @@ public class QueryExecutorTests : IDisposable
         const string collectionName = "NonExistentCollection";
 
         // Act
-        var results = _executor.Execute<TestUser>(collectionName).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName).ToList();
 
         // Assert
         await Assert.That(results).IsEmpty();
@@ -100,21 +88,21 @@ public class QueryExecutorTests : IDisposable
     {
         // Arrange
         const string collectionName = "Users";
-        var users = new List<TestUser>
+        var users = new List<QueryTestUser>
         {
             new() { Name = "Alice", Age = 25, Email = "alice@test.com", IsActive = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Bob", Age = 30, Email = "bob@test.com", IsActive = false, CreatedAt = DateTime.UtcNow },
             new() { Name = "Charlie", Age = 35, Email = "charlie@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>();
+        var collection = _engine.GetCollection<QueryTestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
         }
 
         // Act
-        var results = _executor.Execute<TestUser>(collectionName).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName).ToList();
 
         // Assert
         await Assert.That(results.Count).IsEqualTo(3);
@@ -128,21 +116,21 @@ public class QueryExecutorTests : IDisposable
     {
         // Arrange
         const string collectionName = "Users";
-        var users = new List<TestUser>
+        var users = new List<QueryTestUser>
         {
             new() { Name = "Alice", Age = 25, Email = "alice@test.com", IsActive = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Bob", Age = 30, Email = "bob@test.com", IsActive = false, CreatedAt = DateTime.UtcNow },
             new() { Name = "Charlie", Age = 35, Email = "charlie@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>();
+        var collection = _engine.GetCollection<QueryTestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
         }
 
         // Act - Filter for active users
-        var results = _executor.Execute<TestUser>(collectionName, u => u.IsActive).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName, u => u.IsActive).ToList();
 
         // Assert
         await Assert.That(results.Count).IsEqualTo(2);
@@ -156,21 +144,21 @@ public class QueryExecutorTests : IDisposable
     {
         // Arrange
         const string collectionName = "Users";
-        var users = new List<TestUser>
+        var users = new List<QueryTestUser>
         {
             new() { Name = "Alice", Age = 25, Email = "alice@test.com", IsActive = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Bob", Age = 30, Email = "bob@test.com", IsActive = false, CreatedAt = DateTime.UtcNow },
             new() { Name = "Charlie", Age = 35, Email = "charlie@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>();
+        var collection = _engine.GetCollection<QueryTestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
         }
 
         // Act - Filter for users older than 28
-        var results = _executor.Execute<TestUser>(collectionName, u => u.Age > 28).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName, u => u.Age > 28).ToList();
 
         // Assert
         await Assert.That(results.Count).IsEqualTo(2);
@@ -184,21 +172,21 @@ public class QueryExecutorTests : IDisposable
     {
         // Arrange
         const string collectionName = "Users";
-        var users = new List<TestUser>
+        var users = new List<QueryTestUser>
         {
             new() { Name = "Alice", Age = 25, Email = "alice@test.com", IsActive = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Bob", Age = 30, Email = "bob@test.com", IsActive = false, CreatedAt = DateTime.UtcNow },
             new() { Name = "Alice Smith", Age = 35, Email = "alice.smith@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>();
+        var collection = _engine.GetCollection<QueryTestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
         }
 
         // Act - Filter for users named Alice
-        var results = _executor.Execute<TestUser>(collectionName, u => u.Name == "Alice").ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName, u => u.Name == "Alice").ToList();
 
         // Assert
         await Assert.That(results.Count).IsEqualTo(1);
@@ -210,7 +198,7 @@ public class QueryExecutorTests : IDisposable
     {
         // Arrange
         const string collectionName = "Users";
-        var users = new List<TestUser>
+        var users = new List<QueryTestUser>
         {
             new() { Name = "Alice", Age = 25, Email = "alice@test.com", IsActive = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Bob", Age = 30, Email = "bob@test.com", IsActive = false, CreatedAt = DateTime.UtcNow },
@@ -218,14 +206,14 @@ public class QueryExecutorTests : IDisposable
             new() { Name = "Diana", Age = 28, Email = "diana@test.com", IsActive = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollection<TestUser>();
+        var collection = _engine.GetCollection<QueryTestUser>();
         foreach (var user in users)
         {
             collection.Insert(user);
         }
 
         // Act - Filter for active users older than 27
-        var results = _executor.Execute<TestUser>(collectionName, u => u.IsActive && u.Age > 27).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName, u => u.IsActive && u.Age > 27).ToList();
 
         // Assert
         await Assert.That(results.Count).IsEqualTo(2);
@@ -241,12 +229,12 @@ public class QueryExecutorTests : IDisposable
         const string collectionName = "Users";
 
         // Insert a test document with minimal data
-        var collection = _engine.GetCollection<TestUser>();
-        var testUser = new TestUser { Name = "Test" };
+        var collection = _engine.GetCollection<QueryTestUser>();
+        var testUser = new QueryTestUser { Name = "Test" };
         collection.Insert(testUser);
 
         // Act
-        var results = _executor.Execute<TestUser>(collectionName).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName).ToList();
 
         // Assert - Should not crash and handle null gracefully
         await Assert.That(results.Count).IsGreaterThanOrEqualTo(0);
@@ -259,10 +247,10 @@ public class QueryExecutorTests : IDisposable
         const string collectionName = "LargeDataset";
         const int userCount = 1000;
 
-        var collection = _engine.GetCollectionWithName<TestUser>(collectionName);
+        var collection = _engine.GetCollectionWithName<QueryTestUser>(collectionName);
         for (int i = 0; i < userCount; i++)
         {
-            var user = new TestUser
+            var user = new QueryTestUser
             {
                 Name = $"User{i}",
                 Age = 20 + (i % 50),
@@ -275,10 +263,22 @@ public class QueryExecutorTests : IDisposable
         }
 
         // Act
-        var results = _executor.Execute<TestUser>(collectionName, u => u.IsActive && u.Age > 30).ToList();
+        var results = _executor.Execute<QueryTestUser>(collectionName, u => u.IsActive && u.Age > 30).ToList();
 
         // Assert
         await Assert.That(results.Count).IsGreaterThan(0);
         await Assert.That(results.All(u => u.IsActive && u.Age > 30)).IsTrue();
     }
+}
+
+// 测试实体类
+[Entity("Users")]
+public class QueryTestUser
+{
+    public ObjectId? Id { get; set; }
+    public string? Name { get; set; }
+    public int Age { get; set; }
+    public string? Email { get; set; }
+    public bool IsActive { get; set; }
+    public DateTime CreatedAt { get; set; }
 }

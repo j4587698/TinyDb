@@ -131,7 +131,7 @@ public class BsonValueCoverageTests
     public async Task BsonDecimal128_Coverage()
     {
         var val = new BsonDecimal128(123.45m);
-        await Assert.That(val.Value).IsEqualTo(123.45m);
+        await Assert.That((decimal)val.Value).IsEqualTo(123.45m);
         await Assert.That(val.ToString()).IsEqualTo("123.45");
         
         await Assert.That(val.ToBoolean(null)).IsTrue();

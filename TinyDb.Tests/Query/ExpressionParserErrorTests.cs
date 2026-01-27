@@ -49,10 +49,9 @@ public class ExpressionParserErrorTests
         Expression<Func<TestDoc, bool>> typeAs = x => (x as object) != null;
         await Assert.That(() => _parser.Parse(typeAs)).Throws<NotSupportedException>();
         
-        // 7. MemberInit
+        // 7. MemberInit - NOW SUPPORTED for AOT projections
         // x => new TestDoc { Id = x.Id } != null
-        Expression<Func<TestDoc, bool>> memberInit = x => new TestDoc { Id = x.Id } != null;
-        await Assert.That(() => _parser.Parse(memberInit)).Throws<NotSupportedException>();
+        // MemberInitExpression is now parsed and can be evaluated
         
         // 8. Invocation (invoking a delegate)
         Func<int, bool> d = i => i > 0;

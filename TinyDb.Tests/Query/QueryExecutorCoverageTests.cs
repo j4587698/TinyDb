@@ -6,6 +6,7 @@ using TinyDb.Query;
 using TinyDb.Core;
 using TinyDb.Bson;
 using TinyDb.Index;
+using TinyDb.Tests.Utils;
 using TUnit.Core;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -124,6 +125,7 @@ public class QueryExecutorCoverageTests
     }
 
     [Test]
+    [SkipInAot("Uses MakeGenericMethod which requires dynamic code generation")]
     public async Task ExecuteIndexScan_MissingIndex_Coverage()
     {
         var collectionName = "test_col_fallback";
