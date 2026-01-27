@@ -35,7 +35,7 @@ public class DatabaseRecoveryTests
         // 创建数据库并插入大量数据
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<User>(collectionName);
+            var collection = engine.GetCollection<User>(collectionName);
 
             // 插入足够多的数据以确保持久化
             for (int i = 0; i < 1000; i++)
@@ -48,7 +48,8 @@ public class DatabaseRecoveryTests
                 });
             }
 
-            // 不调用Flush()，模拟异常关闭
+            // 确保数据写入磁盘（Dispose 会调用 Flush，但显式调用更可靠）
+            engine.Flush();
         }
 
         // 重新打开数据库，应该能正常恢复
@@ -57,11 +58,14 @@ public class DatabaseRecoveryTests
             var collections = recoveredEngine.GetCollectionNames().ToList();
             await Assert.That(collections.Contains(collectionName)).IsTrue();
 
-            var collection = recoveredEngine.GetCollectionWithName<User>(collectionName);
-            var count = collection.Count();
+            var collection = recoveredEngine.GetCollection<User>(collectionName);
+            
+            // 使用 FindAll 获取实际数据以便调试
+            var allDocs = collection.FindAll().ToList();
+            var count = allDocs.Count;
 
-            // 至少应该有一些数据被恢复
-            await Assert.That(count).IsGreaterThan(0);
+            // 应该有 1000 条数据被恢复
+            await Assert.That(count).IsEqualTo(1000);
         }
     }
 
@@ -73,7 +77,7 @@ public class DatabaseRecoveryTests
         // 创建数据库并插入数据
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<User>(collectionName);
+            var collection = engine.GetCollection<User>(collectionName);
             collection.Insert(new User { Name = "Original User", Age = 30, Email = "original@example.com" });
             engine.Flush();
         }
@@ -113,7 +117,7 @@ public class DatabaseRecoveryTests
             await Assert.That(collections).IsNotNull();
 
             // 应该能够正常创建集合
-            var collection = engine.GetCollectionWithName<User>("new_collection");
+            var collection = engine.GetCollection<User>("new_collection");
             await Assert.That(collection).IsNotNull();
 
             collection.Insert(new User { Name = "New User", Age = 25, Email = "new@example.com" });
@@ -129,7 +133,7 @@ public class DatabaseRecoveryTests
         // 创建完整数据库
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<User>(collectionName);
+            var collection = engine.GetCollection<User>(collectionName);
             for (int i = 0; i < 100; i++)
             {
                 collection.Insert(new User
@@ -166,12 +170,12 @@ public class DatabaseRecoveryTests
         // 创建数据库
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<User>(collectionName);
+            var collection = engine.GetCollection<User>(collectionName);
             collection.Insert(new User { Name = "Multi Recovery User", Age = 35, Email = "multi@example.com" });
             engine.Flush();
         }
 
-        // 多次异常关闭和重新打开
+        // 多次重新打开数据库
         for (int attempt = 0; attempt < 3; attempt++)
         {
             using (var engine = new TinyDbEngine(_testDbPath))
@@ -179,8 +183,9 @@ public class DatabaseRecoveryTests
                 var collections = engine.GetCollectionNames().ToList();
                 await Assert.That(collections.Contains(collectionName)).IsTrue();
 
-                var collection = engine.GetCollectionWithName<User>(collectionName);
-                await Assert.That(collection.Count()).IsGreaterThan(0);
+                var collection = engine.GetCollection<User>(collectionName);
+                var currentCount = collection.FindAll().Count();
+                await Assert.That(currentCount).IsGreaterThan(0);
 
                 // 每次都添加一些数据
                 collection.Insert(new User
@@ -189,15 +194,19 @@ public class DatabaseRecoveryTests
                     Age = 30 + attempt,
                     Email = $"recovery{attempt}@example.com"
                 });
+                
+                // 确保数据写入磁盘
+                engine.Flush();
             }
         }
 
         // 最终验证
         using (var finalEngine = new TinyDbEngine(_testDbPath))
         {
-            var collection = finalEngine.GetCollectionWithName<User>(collectionName);
-            var finalCount = collection.Count();
-            await Assert.That(finalCount).IsGreaterThan(3); // 至少有原始数据 + 3次恢复添加的数据
+            var collection = finalEngine.GetCollection<User>(collectionName);
+            var allDocs = collection.FindAll().ToList();
+            var finalCount = allDocs.Count;
+            await Assert.That(finalCount).IsEqualTo(4); // 1 初始 + 3 次添加
         }
     }
 
@@ -210,7 +219,7 @@ public class DatabaseRecoveryTests
         // 初始化数据库
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<User>(collectionName);
+            var collection = engine.GetCollection<User>(collectionName);
             collection.Insert(new User { Name = "Concurrent Test", Age = 25, Email = "concurrent@example.com" });
             engine.Flush();
         }
@@ -224,9 +233,9 @@ public class DatabaseRecoveryTests
             {
                 using (var engine = new TinyDbEngine(_testDbPath))
                 {
-                    var collection = engine.GetCollectionWithName<User>(collectionName);
-                    var count = collection.Count();
-                    await Assert.That(count).IsGreaterThan(0);
+                    var collection = engine.GetCollection<User>(collectionName);
+                    var docs = collection.FindAll().ToList();
+                    await Assert.That(docs.Count).IsGreaterThan(0);
 
                     // 添加新数据
                     collection.Insert(new User
@@ -246,13 +255,13 @@ public class DatabaseRecoveryTests
 
         await Task.WhenAll(tasks);
 
-        // 验证最终状态 - 允许一定范围的数据，因为并发可能有竞争
+        // 验证最终状态
         using (var finalEngine = new TinyDbEngine(_testDbPath))
         {
-            var collection = finalEngine.GetCollectionWithName<User>(collectionName);
-            var finalCount = collection.Count();
-            await Assert.That(finalCount).IsGreaterThanOrEqualTo(1); // 至少有原始数据
-            await Assert.That(finalCount).IsLessThanOrEqualTo(6); // 最多所有数据
+            var collection = finalEngine.GetCollection<User>(collectionName);
+            var allDocs = collection.FindAll().ToList();
+            var finalCount = allDocs.Count;
+            await Assert.That(finalCount).IsEqualTo(6); // 1 初始 + 5 并发添加
         }
     }
 }

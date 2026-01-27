@@ -35,7 +35,7 @@ public class QueryExecutorFallbackTests : IDisposable
     [Test]
     public async Task Execute_UnsupportedExpression_ShouldFallbackToMemory()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("test");
+        var col = _engine.GetCollection<TestEntity>("test");
         col.Insert(new TestEntity { Id = 1, Name = "A" });
         col.Insert(new TestEntity { Id = 2, Name = "B" });
         

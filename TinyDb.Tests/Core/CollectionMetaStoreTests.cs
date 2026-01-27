@@ -82,7 +82,7 @@ public class CollectionMetaStoreTests : IDisposable
     public async Task GetMetadata_RegisteredCollection_ReturnsEmptyDocument()
     {
         // Register collection via engine
-        _engine.GetCollectionWithName<TestItem>("test_collection");
+        _engine.GetCollection<TestItem>("test_collection");
         
         var metaStore = GetCollectionMetaStore();
         var metadata = InvokeGetMetadata(metaStore, "test_collection");
@@ -180,9 +180,9 @@ public class CollectionMetaStoreTests : IDisposable
         var metaStore = GetCollectionMetaStore();
         
         // Register multiple collections through the engine
-        _engine.GetCollectionWithName<TestItem>("col_a");
-        _engine.GetCollectionWithName<TestItem>("col_b");
-        _engine.GetCollectionWithName<TestItem>("col_c");
+        _engine.GetCollection<TestItem>("col_a");
+        _engine.GetCollection<TestItem>("col_b");
+        _engine.GetCollection<TestItem>("col_c");
         
         var names = InvokeGetCollectionNames(metaStore);
         
@@ -201,7 +201,7 @@ public class CollectionMetaStoreTests : IDisposable
     [Test]
     public async Task IsKnown_RegisteredCollection_ReturnsTrue()
     {
-        _engine.GetCollectionWithName<TestItem>("is_known_test");
+        _engine.GetCollection<TestItem>("is_known_test");
         var metaStore = GetCollectionMetaStore();
         await Assert.That(InvokeIsKnown(metaStore, "is_known_test")).IsTrue();
     }
@@ -210,9 +210,9 @@ public class CollectionMetaStoreTests : IDisposable
     public async Task RegisterCollection_DuplicateRegistration_ShouldNotDuplicate()
     {
         // Register same collection multiple times
-        _engine.GetCollectionWithName<TestItem>("duplicate_test");
-        _engine.GetCollectionWithName<TestItem>("duplicate_test");
-        _engine.GetCollectionWithName<TestItem>("duplicate_test");
+        _engine.GetCollection<TestItem>("duplicate_test");
+        _engine.GetCollection<TestItem>("duplicate_test");
+        _engine.GetCollection<TestItem>("duplicate_test");
         
         var names = _engine.GetCollectionNames().ToList();
         var count = names.Count(n => n == "duplicate_test");
@@ -223,7 +223,7 @@ public class CollectionMetaStoreTests : IDisposable
     [Test]
     public async Task RemoveCollection_ExistingCollection_ShouldRemove()
     {
-        _engine.GetCollectionWithName<TestItem>("to_remove");
+        _engine.GetCollection<TestItem>("to_remove");
         var metaStore = GetCollectionMetaStore();
         
         await Assert.That(InvokeIsKnown(metaStore, "to_remove")).IsTrue();
@@ -351,9 +351,9 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     [Test]
     public async Task Collection_WithSpecialCharacters_ShouldWork()
     {
-        _engine.GetCollectionWithName<TestItem>("col-with-dashes");
-        _engine.GetCollectionWithName<TestItem>("col_with_underscores");
-        _engine.GetCollectionWithName<TestItem>("col.with.dots");
+        _engine.GetCollection<TestItem>("col-with-dashes");
+        _engine.GetCollection<TestItem>("col_with_underscores");
+        _engine.GetCollection<TestItem>("col.with.dots");
         
         var names = _engine.GetCollectionNames().ToList();
         
@@ -365,9 +365,9 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     [Test]
     public async Task Collection_WithUnicodeCharacters_ShouldWork()
     {
-        _engine.GetCollectionWithName<TestItem>("集合名称");
-        _engine.GetCollectionWithName<TestItem>("コレクション");
-        _engine.GetCollectionWithName<TestItem>("коллекция");
+        _engine.GetCollection<TestItem>("集合名称");
+        _engine.GetCollection<TestItem>("コレクション");
+        _engine.GetCollection<TestItem>("коллекция");
         
         var names = _engine.GetCollectionNames().ToList();
         
@@ -379,9 +379,9 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     [Test]
     public async Task Collection_CaseSensitivity_ShouldBeDistinct()
     {
-        _engine.GetCollectionWithName<TestItem>("CaseSensitive");
-        _engine.GetCollectionWithName<TestItem>("casesensitive");
-        _engine.GetCollectionWithName<TestItem>("CASESENSITIVE");
+        _engine.GetCollection<TestItem>("CaseSensitive");
+        _engine.GetCollection<TestItem>("casesensitive");
+        _engine.GetCollection<TestItem>("CASESENSITIVE");
         
         var names = _engine.GetCollectionNames().ToList();
         
@@ -410,7 +410,7 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     [Test]
     public async Task SaveCollections_WithEmptyMetadata_ShouldSaveSuccessfully()
     {
-        _engine.GetCollectionWithName<TestItem>("empty_meta_test");
+        _engine.GetCollection<TestItem>("empty_meta_test");
         _engine.Flush();
         
         await Assert.That(_engine.CollectionExists("empty_meta_test")).IsTrue();
@@ -482,9 +482,9 @@ public class CollectionMetaStorePersistenceTests
             // Create multiple collections with data
             using (var engine = new TinyDbEngine(path))
             {
-                engine.GetCollectionWithName<TestItem>("persist_a").Insert(new TestItem { Id = 1 });
-                engine.GetCollectionWithName<TestItem>("persist_b").Insert(new TestItem { Id = 2 });
-                engine.GetCollectionWithName<TestItem>("persist_c").Insert(new TestItem { Id = 3 });
+                engine.GetCollection<TestItem>("persist_a").Insert(new TestItem { Id = 1 });
+                engine.GetCollection<TestItem>("persist_b").Insert(new TestItem { Id = 2 });
+                engine.GetCollection<TestItem>("persist_c").Insert(new TestItem { Id = 3 });
                 engine.Flush();
             }
             
@@ -514,8 +514,8 @@ public class CollectionMetaStorePersistenceTests
             // Create and then drop a collection
             using (var engine = new TinyDbEngine(path))
             {
-                engine.GetCollectionWithName<TestItem>("to_keep");
-                engine.GetCollectionWithName<TestItem>("to_drop");
+                engine.GetCollection<TestItem>("to_keep");
+                engine.GetCollection<TestItem>("to_drop");
                 engine.Flush();
                 
                 engine.DropCollection("to_drop");
@@ -617,7 +617,7 @@ public class CollectionMetaStorePersistenceTests
             {
                 for (int i = 0; i < collectionCount; i++)
                 {
-                    engine.GetCollectionWithName<TestItem>($"collection_{i:D3}");
+                    engine.GetCollection<TestItem>($"collection_{i:D3}");
                 }
                 engine.Flush();
             }

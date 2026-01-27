@@ -24,7 +24,7 @@ public class ForeignKeyTests : IDisposable
         metadataManager.SaveEntityMetadata(typeof(ForeignKeyUser));
         metadataManager.SaveEntityMetadata(typeof(ForeignKeyOrder));
 
-        var orders = engine.GetCollectionWithName<ForeignKeyOrder>("Orders");
+        var orders = engine.GetCollection<ForeignKeyOrder>("Orders");
 
         // Act
         using var transaction = engine.BeginTransaction();
@@ -59,8 +59,8 @@ public class ForeignKeyTests : IDisposable
         metadataManager.SaveEntityMetadata(typeof(ForeignKeyUser));
         metadataManager.SaveEntityMetadata(typeof(ForeignKeyOrder));
 
-        var users = engine.GetCollectionWithName<ForeignKeyUser>("Users");
-        var orders = engine.GetCollectionWithName<ForeignKeyOrder>("Orders");
+        var users = engine.GetCollection<ForeignKeyUser>("Users");
+        var orders = engine.GetCollection<ForeignKeyOrder>("Orders");
 
         // Act
         var user = new ForeignKeyUser { Name = "John" };

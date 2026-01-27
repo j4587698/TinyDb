@@ -61,7 +61,7 @@ public class MetadataManagerTests
     {
         var manager = new MetadataManager(_engine);
         var collectionName = $"__metadata_{typeof(SpecialMetadataEntity).FullName}";
-        var collection = _engine.GetCollectionWithName<MetadataDocument>(collectionName);
+        var collection = _engine.GetCollection<MetadataDocument>(collectionName);
 
         manager.SaveEntityMetadata(typeof(SpecialMetadataEntity));
         var initialDoc = collection.FindAll().Single();

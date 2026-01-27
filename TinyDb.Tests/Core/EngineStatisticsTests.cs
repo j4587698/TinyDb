@@ -29,7 +29,7 @@ public class EngineStatisticsTests : IDisposable
         await Assert.That(stats.CollectionCount).IsEqualTo(0);
         
         // Add collection
-        engine.GetCollectionWithName<object>("Test");
+        engine.GetCollection<object>("Test");
         var stats2 = engine.GetStatistics();
         await Assert.That(stats2.CollectionCount).IsEqualTo(1);
         

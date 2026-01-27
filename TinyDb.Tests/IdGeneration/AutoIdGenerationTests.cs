@@ -20,7 +20,7 @@ public class AutoIdGenerationTests
     [Before(Test)]
     public void Setup()
     {
-        _testFile = Path.GetTempFileName();
+        _testFile = Path.Combine(Path.GetTempPath(), $"tinydb_autoid_test_{Guid.NewGuid():N}.db");
         _engine = new TinyDbEngine(_testFile);
 
         // 重置所有序列以确保测试独立性

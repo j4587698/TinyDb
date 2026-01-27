@@ -35,7 +35,7 @@ public class QueryExecutorIndexTests : IDisposable
     [Test]
     public async Task IndexSeek_Unique_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<Product>("products");
+        var col = _engine.GetCollection<Product>("products");
         _engine.EnsureIndex("products", "Code", "idx_code", unique: true);
         
         col.Insert(new Product { Id = 1, Code = "A", Group = 1, Score = 10 });
@@ -49,7 +49,7 @@ public class QueryExecutorIndexTests : IDisposable
     [Test]
     public async Task IndexScan_Composite_Prefix_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<Product>("products");
+        var col = _engine.GetCollection<Product>("products");
         _engine.GetIndexManager("products").CreateIndex("idx_group_score", new[] { "Group", "Score" }, unique: false);
         
         col.Insert(new Product { Id = 1, Group = 1, Score = 10 });
@@ -64,7 +64,7 @@ public class QueryExecutorIndexTests : IDisposable
     [Test]
     public async Task IndexScan_Composite_Range_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<Product>("products");
+        var col = _engine.GetCollection<Product>("products");
         _engine.GetIndexManager("products").CreateIndex("idx_group_score", new[] { "Group", "Score" }, unique: false);
         
         col.Insert(new Product { Id = 1, Group = 1, Score = 10 });
@@ -79,7 +79,7 @@ public class QueryExecutorIndexTests : IDisposable
     [Test]
     public async Task IndexScan_Range_MinMax_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<Product>("products");
+        var col = _engine.GetCollection<Product>("products");
         _engine.EnsureIndex("products", "Score", "idx_score");
         
         col.Insert(new Product { Id = 1, Score = 10 });

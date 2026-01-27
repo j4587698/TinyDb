@@ -249,7 +249,7 @@ public class DatabaseService : IDisposable
             // 尝试创建一个测试集合来检查数据完整性
             try
             {
-                var testCollection = _engine.GetCollectionWithName<TempDocument>("__recovery_test__");
+                var testCollection = _engine.GetCollection<TempDocument>("__recovery_test__");
                 var testDoc = new TempDocument { Name = "test", Created = DateTime.UtcNow, IsTemporary = true };
                 var testId = testCollection.Insert(testDoc);
                 testCollection.Delete(testId);
@@ -276,7 +276,7 @@ public class DatabaseService : IDisposable
                 try
                 {
                     // 首先尝试使用TempDocument类型
-                    var tempCollection = _engine.GetCollectionWithName<TempDocument>(name);
+                    var tempCollection = _engine.GetCollection<TempDocument>(name);
                     count = tempCollection.Count();
                     cachedCount = _engine.GetCachedDocumentCount(name);
                 }
@@ -285,7 +285,7 @@ public class DatabaseService : IDisposable
                     try
                     {
                         // 如果失败，尝试使用一个通用的文档类型
-                        var genericCollection = _engine.GetCollectionWithName<SimpleDocument>(name);
+                        var genericCollection = _engine.GetCollection<SimpleDocument>(name);
                         count = genericCollection.Count();
                         cachedCount = _engine.GetCachedDocumentCount(name);
                     }
@@ -359,7 +359,7 @@ public class DatabaseService : IDisposable
 
                         var getCollectionMethod = _engine.GetType()
                             .GetMethods()
-                            .FirstOrDefault(m => m.Name == "GetCollectionWithName" && m.IsGenericMethod);
+                            .FirstOrDefault(m => m.Name == "GetCollection" && m.IsGenericMethod);
 
                         if (getCollectionMethod != null)
                         {
@@ -385,7 +385,7 @@ public class DatabaseService : IDisposable
                         // 回退到BsonDocument类型（兼容性）
                         try
                         {
-                            var collection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+                            var collection = _engine.GetCollection<BsonDocument>(collectionName);
                             Console.WriteLine($"[DEBUG] Got BsonDocument collection, document count: {collection.Count()}");
 
                             foreach (var doc in collection.FindAll())
@@ -405,7 +405,7 @@ public class DatabaseService : IDisposable
                             // 最后尝试TempDocument类型（兼容旧数据）
                             try
                             {
-                                var tempCollection = _engine.GetCollectionWithName<TempDocument>(collectionName);
+                                var tempCollection = _engine.GetCollection<TempDocument>(collectionName);
                                 Console.WriteLine($"[DEBUG] Got TempDocument collection, document count: {tempCollection.Count()}");
 
                                 foreach (var doc in tempCollection.FindAll())
@@ -425,7 +425,7 @@ public class DatabaseService : IDisposable
                                 // 最后尝试使用SimpleDocument类型
                                 try
                                 {
-                                    var simpleCollection = _engine.GetCollectionWithName<SimpleDocument>(collectionName);
+                                    var simpleCollection = _engine.GetCollection<SimpleDocument>(collectionName);
                                     Console.WriteLine($"[DEBUG] Got SimpleDocument collection, document count: {simpleCollection.Count()}");
 
                                     foreach (var doc in simpleCollection.FindAll())
@@ -474,7 +474,7 @@ public class DatabaseService : IDisposable
 
         try
         {
-            var collection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+            var collection = _engine.GetCollection<BsonDocument>(collectionName);
             var bsonId = (BsonValue)id;
             var doc = collection.FindById(bsonId);
 
@@ -506,11 +506,11 @@ public class DatabaseService : IDisposable
             // 使用反射获取类型化集合
             var getCollectionMethod = _engine.GetType()
                 .GetMethods()
-                .FirstOrDefault(m => m.Name == "GetCollectionWithName" && m.IsGenericMethod);
+                .FirstOrDefault(m => m.Name == "GetCollection" && m.IsGenericMethod);
 
             if (getCollectionMethod == null)
             {
-                throw new InvalidOperationException("无法找到GetCollectionWithName方法");
+                throw new InvalidOperationException("无法找到GetCollection方法");
             }
 
             var genericMethod = getCollectionMethod.MakeGenericMethod(entityType);
@@ -577,7 +577,7 @@ public class DatabaseService : IDisposable
 
         try
         {
-            var collection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+            var collection = _engine.GetCollection<BsonDocument>(collectionName);
 
             // 解析JSON为BsonDocument
             using var jsonDoc = JsonDocument.Parse(jsonContent);
@@ -605,7 +605,7 @@ public class DatabaseService : IDisposable
 
         try
         {
-            var collection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+            var collection = _engine.GetCollection<BsonDocument>(collectionName);
             var bsonId = (BsonValue)id;
             var result = await Task.Run(() => collection.Delete(bsonId));
             return result > 0;
@@ -636,11 +636,11 @@ public class DatabaseService : IDisposable
             // 使用反射获取集合，类型安全
             var getCollectionMethod = _engine.GetType()
                 .GetMethods()
-                .FirstOrDefault(m => m.Name == "GetCollectionWithName" && m.IsGenericMethod);
+                .FirstOrDefault(m => m.Name == "GetCollection" && m.IsGenericMethod);
 
             if (getCollectionMethod == null)
             {
-                throw new InvalidOperationException("无法找到GetCollectionWithName方法");
+                throw new InvalidOperationException("无法找到GetCollection方法");
             }
 
             var genericMethod = getCollectionMethod.MakeGenericMethod(entityType);
@@ -719,7 +719,7 @@ public class DatabaseService : IDisposable
             if (!IsConnected || _engine == null)
                 throw new InvalidOperationException("数据库未连接");
 
-            var collection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+            var collection = _engine.GetCollection<BsonDocument>(collectionName);
 
             // 简单实现：获取所有文档然后进行过滤
             // 实际项目中可以实现更复杂的查询解析

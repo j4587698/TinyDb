@@ -62,7 +62,7 @@ public class EngineEdgeCasesTests : IDisposable
     public async Task DropCollection_Should_Remove_Data_And_Metadata()
     {
         using var engine = new TinyDbEngine(_testDbPath);
-        var col = engine.GetCollectionWithName<TestDoc>("DropMe");
+        var col = engine.GetCollection<TestDoc>("DropMe");
         col.Insert(new TestDoc { Id = 1, Data = "test" });
         
         await Assert.That(engine.CollectionExists("DropMe")).IsTrue();
@@ -101,7 +101,7 @@ public class EngineEdgeCasesTests : IDisposable
     public async Task FindAll_Should_Merge_Transaction_Inserts()
     {
         using var engine = new TinyDbEngine(_testDbPath);
-        var col = engine.GetCollectionWithName<TestDoc>("TransMerge");
+        var col = engine.GetCollection<TestDoc>("TransMerge");
         col.Insert(new TestDoc { Id = 1, Data = "Base" });
 
         using (var trans = engine.BeginTransaction())
@@ -120,7 +120,7 @@ public class EngineEdgeCasesTests : IDisposable
     public async Task FindAll_Should_Merge_Transaction_Updates_And_Deletes()
     {
         using var engine = new TinyDbEngine(_testDbPath);
-        var col = engine.GetCollectionWithName<TestDoc>("TransMerge2");
+        var col = engine.GetCollection<TestDoc>("TransMerge2");
         col.Insert(new TestDoc { Id = 1, Data = "A" });
         col.Insert(new TestDoc { Id = 2, Data = "B" });
 

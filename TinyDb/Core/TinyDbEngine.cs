@@ -150,7 +150,7 @@ public sealed class TinyDbEngine : IDisposable
                     var docs = FindAll(colName).ToList();
                     
                     // 写入目标
-                    var tempCol = tempEngine.GetCollectionWithName<BsonDocument>(colName);
+                    var tempCol = tempEngine.GetCollection<BsonDocument>(colName);
                     if (docs.Count > 0)
                     {
                         tempCol.Insert(docs);
@@ -304,6 +304,7 @@ public sealed class TinyDbEngine : IDisposable
 
     /// <summary>
     /// 检索或为指定类型创建集合。
+    /// 集合名称按以下优先级确定：Entity特性的Name属性 > 类名
     /// </summary>
     /// <typeparam name="T">集合中文档的类型。</typeparam>
     /// <returns>集合实例。</returns>
@@ -315,14 +316,18 @@ public sealed class TinyDbEngine : IDisposable
 
     /// <summary>
     /// 检索或使用特定名称创建集合。
+    /// 集合名称按以下优先级确定：name参数 > Entity特性的Name属性 > 类名
     /// </summary>
     /// <typeparam name="T">集合中文档的类型。</typeparam>
-    /// <param name="n">集合的名称。</param>
+    /// <param name="name">集合的名称（可选）。如果为null或空，则使用Entity特性的Name属性或类名。</param>
     /// <returns>集合实例。</returns>
-    public ITinyCollection<T> GetCollectionWithName<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string n) where T : class, new()
+    public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name) where T : class, new()
     {
+        var n = !string.IsNullOrEmpty(name) ? name : (GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name);
         return (ITinyCollection<T>)_collections.GetOrAdd(n, _ => { RegisterCollection(_); return new DocumentCollection<T>(this, _); });
     }
+
+
 
     /// <summary>
     /// 获取数据库中所有集合的名称。
@@ -1063,10 +1068,11 @@ public sealed class TinyDbEngine : IDisposable
     private BsonDocument PrepareDocumentForInsert(string col, BsonDocument doc, out BsonValue id)
     {
         bool hasId = doc.TryGetValue("_id", out var exId) && exId != null && !exId.IsNull;
-        bool hasCol = doc.TryGetValue("_collection", out _);
+        // 检查 _collection 是否已经存在且值正确（避免不必要的重建）
+        bool hasCorrectCol = doc.TryGetValue("_collection", out var existingCol) && existingCol?.ToString() == col;
 
-        // 快速路径：如果已有 _id 和 _collection，直接返回原文档
-        if (hasId && hasCol)
+        // 快速路径：如果已有 _id 且 _collection 值正确，直接返回原文档
+        if (hasId && hasCorrectCol)
         {
             id = exId!;
             return doc;
@@ -1092,11 +1098,8 @@ public sealed class TinyDbEngine : IDisposable
             id = exId!;
         }
 
-        // 添加 _collection（如果缺失）
-        if (!hasCol)
-        {
-            builder["_collection"] = col;
-        }
+        // 强制设置 _collection 为实际使用的集合名称（覆盖 AOT 生成器设置的值）
+        builder["_collection"] = col;
 
         return new BsonDocument(builder.ToImmutable());
     }
@@ -1196,7 +1199,7 @@ public sealed class TinyDbEngine : IDisposable
 
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(TinyDbEngine)); }
 
-    private static string? GetCollectionNameFromEntityAttribute<T>() where T : class => typeof(T).GetCustomAttribute<EntityAttribute>()?.CollectionName;
+    private static string? GetCollectionNameFromEntityAttribute<T>() where T : class => typeof(T).GetCustomAttribute<EntityAttribute>()?.Name;
 
     public void Dispose()
     {

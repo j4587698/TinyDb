@@ -203,7 +203,7 @@ public class QueryPipelineGroupByTests : IDisposable
     public async Task GroupBy_EmptyCollection_ShouldReturnEmpty()
     {
         // Create empty collection
-        var emptyCollection = _engine.GetCollectionWithName<Product>("empty_products");
+        var emptyCollection = _engine.GetCollection<Product>("empty_products");
         
         var query = emptyCollection.Query()
             .GroupBy(p => p.Category)
@@ -218,7 +218,7 @@ public class QueryPipelineGroupByTests : IDisposable
     [SkipInAot("GroupBy result enumeration requires dynamic code")]
     public async Task GroupBy_SingleCategory_ShouldReturnOneGroup()
     {
-        var singleCollection = _engine.GetCollectionWithName<Product>("single_category");
+        var singleCollection = _engine.GetCollection<Product>("single_category");
         singleCollection.Insert(new Product { Id = 1, Name = "A", Category = "Same", Price = 1m });
         singleCollection.Insert(new Product { Id = 2, Name = "B", Category = "Same", Price = 2m });
         singleCollection.Insert(new Product { Id = 3, Name = "C", Category = "Same", Price = 3m });

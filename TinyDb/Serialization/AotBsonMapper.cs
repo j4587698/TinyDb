@@ -143,12 +143,45 @@ public static class AotBsonMapper
             return doc;
         }
 
-        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        // 循环引用检测
+        _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+        
+        if (!typeof(T).IsValueType && _serializingObjects.Contains(entity))
         {
-            return adapter.ToDocument(entity);
+            // 检测到循环引用，返回空文档（或只包含ID的文档）
+            if (AotHelperRegistry.TryGetAdapter<T>(out var circularAdapter))
+            {
+                var id = circularAdapter.GetId(entity);
+                if (id != null && !id.IsNull)
+                {
+                    return new BsonDocument().Set("_id", id);
+                }
+            }
+            return new BsonDocument();
         }
 
-        return FallbackToDocument(typeof(T), entity!);
+        if (!typeof(T).IsValueType)
+        {
+            _serializingObjects.Add(entity);
+        }
+
+        try
+        {
+            if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+            {
+                return adapter.ToDocument(entity);
+            }
+
+            // 直接调用 FallbackToDocumentInternal，因为 ToDocument<T> 已经处理了循环引用检测
+            return FallbackToDocumentInternal(typeof(T), entity!);
+        }
+        finally
+        {
+            if (!typeof(T).IsValueType)
+            {
+                _serializingObjects.Remove(entity);
+            }
+        }
     }
 
     /// <summary>

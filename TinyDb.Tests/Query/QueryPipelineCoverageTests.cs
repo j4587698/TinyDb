@@ -32,7 +32,7 @@ public class QueryPipelineCoverageTests : IDisposable
     [Test]
     public async Task Execute_NoSource_ShouldReturnQueryResult()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("test");
+        var col = _engine.GetCollection<TestEntity>("test");
         col.Insert(new TestEntity { Id = 1 });
         
         var executor = new QueryExecutor(_engine);
@@ -46,7 +46,7 @@ public class QueryPipelineCoverageTests : IDisposable
     [Test]
     public async Task Execute_WithWhere_ShouldFilter()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("test");
+        var col = _engine.GetCollection<TestEntity>("test");
         col.Insert(new TestEntity { Id = 1 });
         col.Insert(new TestEntity { Id = 2 });
         
@@ -68,7 +68,7 @@ public class QueryPipelineCoverageTests : IDisposable
     [Test]
     public async Task Execute_WithSelect_ShouldProject()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("test");
+        var col = _engine.GetCollection<TestEntity>("test");
         col.Insert(new TestEntity { Id = 10 });
         
         var executor = new QueryExecutor(_engine);
@@ -89,7 +89,7 @@ public class QueryPipelineCoverageTests : IDisposable
     [Test]
     public async Task Execute_WithTerminalCount_ShouldReturnInt()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("test");
+        var col = _engine.GetCollection<TestEntity>("test");
         col.Insert(new TestEntity { Id = 1 });
         col.Insert(new TestEntity { Id = 2 });
         

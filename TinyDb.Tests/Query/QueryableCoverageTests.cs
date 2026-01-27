@@ -15,14 +15,16 @@ namespace TinyDb.Tests.Query;
 /// Tests for improving Queryable.cs coverage
 /// </summary>
 [NotInParallel]
-public class QueryableCoverageTests : IDisposable
+public class QueryableCoverageTests
 {
-    private readonly string _testDirectory;
-    private readonly string _testDbPath;
-    private readonly TinyDbEngine _engine;
-    private readonly QueryExecutor _executor;
+    private string _testDirectory = null!;
+    private string _testDbPath = null!;
+    private TinyDbEngine _engine = null!;
+    private QueryExecutor _executor = null!;
+    private int _testCounter;
 
-    public QueryableCoverageTests()
+    [Before(Test)]
+    public void Setup()
     {
         _testDirectory = Path.Combine(Path.GetTempPath(), "TinyDbQueryableCoverageTests", Guid.NewGuid().ToString());
         Directory.CreateDirectory(_testDirectory);
@@ -30,15 +32,22 @@ public class QueryableCoverageTests : IDisposable
 
         _engine = new TinyDbEngine(_testDbPath);
         _executor = new QueryExecutor(_engine);
+        _testCounter = 0;
     }
 
-    public void Dispose()
+    [After(Test)]
+    public void Cleanup()
     {
         _engine?.Dispose();
         if (Directory.Exists(_testDirectory))
         {
             try { Directory.Delete(_testDirectory, true); } catch { }
         }
+    }
+    
+    private string GetUniqueCollectionName(string baseName = "products")
+    {
+        return $"{baseName}_{++_testCounter}_{Guid.NewGuid():N}";
     }
 
     #region Queryable<TSource, TData> Tests
@@ -78,14 +87,14 @@ public class QueryableCoverageTests : IDisposable
     public async Task Queryable_GetEnumerator_NonGeneric_Should_Work()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Mouse", Price = 29.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -107,14 +116,14 @@ public class QueryableCoverageTests : IDisposable
     public async Task Select_Should_Project_To_Anonymous_Type()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Mouse", Price = 29.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -131,14 +140,14 @@ public class QueryableCoverageTests : IDisposable
     public async Task Select_Should_Project_To_Single_Property()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 999.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
             new() { Name = "Mouse", Price = 29.99m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -160,12 +169,12 @@ public class QueryableCoverageTests : IDisposable
     public async Task Skip_Should_Skip_Items()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = Enumerable.Range(1, 10)
             .Select(i => new TestProduct { Name = $"Product{i}", Price = i * 10, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow })
             .ToList();
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -181,12 +190,12 @@ public class QueryableCoverageTests : IDisposable
     public async Task Take_Should_Take_Items()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = Enumerable.Range(1, 10)
             .Select(i => new TestProduct { Name = $"Product{i}", Price = i * 10, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow })
             .ToList();
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -202,12 +211,12 @@ public class QueryableCoverageTests : IDisposable
     public async Task Skip_And_Take_Should_Work_Together()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = Enumerable.Range(1, 10)
             .Select(i => new TestProduct { Name = $"Product{i}", Price = i * 10, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow })
             .ToList();
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -227,7 +236,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task OrderBy_Should_Sort_Ascending()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Banana", Price = 30m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -235,7 +244,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Cherry", Price = 40m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -254,7 +263,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task OrderByDescending_Should_Sort_Descending()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Banana", Price = 30m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -262,7 +271,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Cherry", Price = 40m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -281,7 +290,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task ThenBy_Should_Sort_Secondary()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Banana", Price = 30m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -290,7 +299,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Mouse", Price = 50m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -311,7 +320,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task ThenByDescending_Should_Sort_Secondary_Descending()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Banana", Price = 30m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -320,7 +329,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Mouse", Price = 50m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -342,12 +351,12 @@ public class QueryableCoverageTests : IDisposable
     public async Task LongCount_Should_Return_Correct_Count()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = Enumerable.Range(1, 5)
             .Select(i => new TestProduct { Name = $"Product{i}", Price = i * 10, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow })
             .ToList();
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -363,13 +372,13 @@ public class QueryableCoverageTests : IDisposable
     public async Task Single_Should_Return_Single_Item()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "UniqueProduct", Price = 100m, Category = "Unique", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -386,7 +395,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task SingleOrDefault_Should_Return_Default_When_Empty()
     {
         // Arrange
-        const string collectionName = "empty_products";
+        var collectionName = GetUniqueCollectionName("empty_products");
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
 
         // Act
@@ -400,7 +409,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Last_Should_Return_Last_Item()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "First", Price = 10m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -408,7 +417,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Third", Price = 30m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -424,7 +433,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task LastOrDefault_Should_Return_Default_When_Empty()
     {
         // Arrange
-        const string collectionName = "empty_products2";
+        var collectionName = GetUniqueCollectionName("empty_products");
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
 
         // Act
@@ -438,7 +447,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task ElementAt_Should_Return_Item_At_Index()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "First", Price = 10m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -446,7 +455,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Third", Price = 30m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -462,13 +471,13 @@ public class QueryableCoverageTests : IDisposable
     public async Task ElementAtOrDefault_Should_Return_Default_When_OutOfRange()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Only", Price = 10m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -484,7 +493,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task All_Should_Return_True_When_All_Match()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -492,7 +501,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -508,7 +517,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task All_Should_Return_False_When_Not_All_Match()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -516,7 +525,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -536,7 +545,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Distinct_Should_Remove_Duplicates()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -544,7 +553,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Food", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -566,7 +575,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Sum_Should_Calculate_Sum()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -574,7 +583,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -590,7 +599,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Average_Should_Calculate_Average()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -598,7 +607,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -614,7 +623,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Min_Should_Find_Minimum()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -622,7 +631,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -638,7 +647,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Max_Should_Find_Maximum()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 100m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -646,7 +655,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "P3", Price = 300m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -666,7 +675,7 @@ public class QueryableCoverageTests : IDisposable
     public async Task Complex_Query_With_Where_Select_OrderBy()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "Laptop", Price = 1000m, Category = "Electronics", InStock = true, CreatedAt = DateTime.UtcNow },
@@ -675,7 +684,7 @@ public class QueryableCoverageTests : IDisposable
             new() { Name = "Chair", Price = 200m, Category = "Furniture", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
@@ -697,13 +706,13 @@ public class QueryableCoverageTests : IDisposable
     public async Task Empty_Result_Should_Return_Empty_List()
     {
         // Arrange
-        const string collectionName = "products";
+        var collectionName = GetUniqueCollectionName();
         var products = new List<TestProduct>
         {
             new() { Name = "P1", Price = 10m, Category = "Cat", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products) collection.Insert(product);
 
         var queryable = new Queryable<TestProduct>(_executor, collectionName);

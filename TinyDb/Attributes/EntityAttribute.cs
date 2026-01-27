@@ -9,9 +9,9 @@ namespace TinyDb.Attributes;
 public sealed class EntityAttribute : Attribute
 {
     /// <summary>
-    /// 实体的集合名称（可选）
+    /// 实体的集合名称（可选），如果不指定则使用类名
     /// </summary>
-    public string? CollectionName { get; set; }
+    public string? Name { get; set; }
 
     /// <summary>
     /// 手动指定ID属性名称（可选，如果不指定则自动查找Id或_id）
@@ -22,14 +22,14 @@ public sealed class EntityAttribute : Attribute
     {
     }
 
-    public EntityAttribute(string collectionName)
+    public EntityAttribute(string name)
     {
-        CollectionName = collectionName;
+        Name = name;
     }
 
-    public EntityAttribute(string collectionName, string idProperty)
+    public EntityAttribute(string name, string idProperty)
     {
-        CollectionName = collectionName;
+        Name = name;
         IdProperty = idProperty;
     }
 }

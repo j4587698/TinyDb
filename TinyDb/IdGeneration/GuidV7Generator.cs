@@ -26,6 +26,11 @@ public class GuidV7Generator : IIdGenerator
     /// </summary>
     private static Guid CreateGuidV7()
     {
+#if NET9_0_OR_GREATER
+        // .NET 9+ 使用内置的 GUID v7 生成方法
+        return Guid.CreateVersion7();
+#else
+        // .NET 8 使用自定义实现
         // 获取当前 Unix 时间戳毫秒
         var unixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -57,5 +62,6 @@ public class GuidV7Generator : IIdGenerator
         guidBytes[8] = (byte)((guidBytes[8] & 0x3F) | 0x80);
 
         return new Guid(guidBytes);
+#endif
     }
 }

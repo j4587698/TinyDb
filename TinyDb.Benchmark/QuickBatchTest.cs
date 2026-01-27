@@ -155,7 +155,7 @@ public class QuickBatchTest
         var sw = Stopwatch.StartNew();
         Parallel.For(0, threadCount, worker =>
         {
-            var collection = engine.GetCollectionWithName<ParallelUser>(GetParallelCollectionName(worker));
+            var collection = engine.GetCollection<ParallelUser>(GetParallelCollectionName(worker));
             var start = worker * perThread;
             var random = new Random(unchecked(start * 486187739) ^ Environment.TickCount);
 

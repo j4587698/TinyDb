@@ -33,7 +33,7 @@ public class QueryExecutorTransactionTests : IDisposable
     [Test]
     public async Task FullTableScan_Transaction_Inserts_ShouldBeVisible()
     {
-        var col = _engine.GetCollectionWithName<Item>("items");
+        var col = _engine.GetCollection<Item>("items");
         col.Insert(new Item { Id = 1, Name = "A", Flag = true });
         
         using var tx = _engine.BeginTransaction();
@@ -52,7 +52,7 @@ public class QueryExecutorTransactionTests : IDisposable
     [Test]
     public async Task FullTableScan_Transaction_Deletes_ShouldBeHidden()
     {
-        var col = _engine.GetCollectionWithName<Item>("items");
+        var col = _engine.GetCollection<Item>("items");
         col.Insert(new Item { Id = 1, Name = "A", Flag = true });
         
         using var tx = _engine.BeginTransaction();
@@ -69,7 +69,7 @@ public class QueryExecutorTransactionTests : IDisposable
     [Test]
     public async Task FullTableScan_Transaction_Updates_ShouldBeVisible()
     {
-        var col = _engine.GetCollectionWithName<Item>("items");
+        var col = _engine.GetCollection<Item>("items");
         col.Insert(new Item { Id = 1, Name = "A", Flag = true });
         
         using var tx = _engine.BeginTransaction();

@@ -201,7 +201,7 @@ public class DynamicEntityGenerator
         try
         {
             var collectionName = $"__metadata_{GetValidTypeName(tableName)}";
-            var collection = _engine.GetCollectionWithName<MetadataDocument>(collectionName);
+            var collection = _engine.GetCollection<MetadataDocument>(collectionName);
 
             // 转换为MetadataDocument并保存
             var metadataDoc = MetadataDocument.FromEntityMetadata(metadata);

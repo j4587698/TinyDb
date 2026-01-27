@@ -104,6 +104,11 @@ public static class AutoIdGenerator
     /// </summary>
     private static Guid CreateGuidV7()
     {
+#if NET9_0_OR_GREATER
+        // .NET 9+ 使用内置的 GUID v7 生成方法
+        return Guid.CreateVersion7();
+#else
+        // .NET 8 使用自定义实现
         // 获取当前 Unix 时间戳毫秒
         var unixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -112,6 +117,11 @@ public static class AutoIdGenerator
         System.Security.Cryptography.RandomNumberGenerator.Fill(randomBytes);
 
         // 构造 GUID v7 的16字节
+        // GUID v7 格式 (RFC draft):
+        // - bytes 0-5: 48-bit timestamp (big-endian)
+        // - bytes 6-7: ver + rand_a (4-bit version + 12-bit random)
+        // - bytes 8-9: var + rand_b (2-bit variant + 62-bit random)
+        // - bytes 10-15: rand_b continuation
         var guidBytes = new byte[16];
 
         // 前6字节：Unix 时间戳毫秒的大端序
@@ -135,6 +145,7 @@ public static class AutoIdGenerator
         guidBytes[8] = (byte)((guidBytes[8] & 0x3F) | 0x80);
 
         return new Guid(guidBytes);
+#endif
     }
 
     /// <summary>

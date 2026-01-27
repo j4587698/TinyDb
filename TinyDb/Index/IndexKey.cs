@@ -125,6 +125,8 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
             BsonType.Boolean => ((BsonBoolean)left).Value.CompareTo(((BsonBoolean)right).Value),
             BsonType.DateTime => ((BsonDateTime)left).Value.CompareTo(((BsonDateTime)right).Value),
             BsonType.ObjectId => ((BsonObjectId)left).Value.CompareTo(((BsonObjectId)right).Value),
+            BsonType.Binary => ((BsonBinary)left).CompareTo((BsonBinary)right),
+            BsonType.Decimal128 => ((BsonDecimal128)left).Value.CompareTo(((BsonDecimal128)right).Value),
             _ => string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal)
         };
     }

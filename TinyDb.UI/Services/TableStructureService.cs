@@ -135,7 +135,7 @@ public class TableStructureService
                 return null;
             }
 
-            var metadataCollection = _engine.GetCollectionWithName<MetadataDocument>(matchingMetadataCollection);
+            var metadataCollection = _engine.GetCollection<MetadataDocument>(matchingMetadataCollection);
             var metadataDoc = metadataCollection.FindAll().FirstOrDefault();
 
             if (metadataDoc == null)
@@ -207,7 +207,7 @@ public class TableStructureService
 
             try
             {
-                var collection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+                var collection = _engine.GetCollection<BsonDocument>(collectionName);
                 return collection.Count();
             }
             catch (Exception ex)
@@ -216,7 +216,7 @@ public class TableStructureService
 
                 try
                 {
-                    var dynamicCollection = _engine.GetCollectionWithName<DynamicEntity>(collectionName);
+                    var dynamicCollection = _engine.GetCollection<DynamicEntity>(collectionName);
                     return dynamicCollection.Count();
                 }
                 catch (Exception ex2)
@@ -225,7 +225,7 @@ public class TableStructureService
 
                     try
                     {
-                        var tempDocCollection = _engine.GetCollectionWithName<TinyDb.UI.Services.TempDocument>(collectionName);
+                        var tempDocCollection = _engine.GetCollection<TinyDb.UI.Services.TempDocument>(collectionName);
                         return tempDocCollection.Count();
                     }
                     catch (Exception ex3)
@@ -299,7 +299,7 @@ public class TableStructureService
                 // 尝试作为BsonDocument读取
                 try
                 {
-                    bsonCollection = _engine.GetCollectionWithName<BsonDocument>(collectionName);
+                    bsonCollection = _engine.GetCollection<BsonDocument>(collectionName);
                     recordCount = bsonCollection.Count();
                     Console.WriteLine($"[DEBUG] 作为BsonDocument成功读取集合 {collectionName}，记录数: {recordCount}");
                 }
@@ -310,7 +310,7 @@ public class TableStructureService
                     // 如果BsonDocument失败，尝试DynamicEntity
                     try
                     {
-                        dynamicCollection = _engine.GetCollectionWithName<DynamicEntity>(collectionName);
+                        dynamicCollection = _engine.GetCollection<DynamicEntity>(collectionName);
                         recordCount = dynamicCollection.Count();
                         Console.WriteLine($"[DEBUG] 作为DynamicEntity成功读取集合 {collectionName}，记录数: {recordCount}");
                     }
@@ -321,7 +321,7 @@ public class TableStructureService
                         // 如果DynamicEntity也失败，尝试TempDocument
                         try
                         {
-                            tempDocCollection = _engine.GetCollectionWithName<TinyDb.UI.Services.TempDocument>(collectionName);
+                            tempDocCollection = _engine.GetCollection<TinyDb.UI.Services.TempDocument>(collectionName);
                             recordCount = tempDocCollection.Count();
                             Console.WriteLine($"[DEBUG] 作为TempDocument成功读取集合 {collectionName}，记录数: {recordCount}");
                         }
@@ -456,7 +456,7 @@ public class TableStructureService
                 try
                 {
                     Console.WriteLine($"[DEBUG] 尝试作为TempDocument读取集合: {collectionName}");
-                    tempDocCollection = _engine.GetCollectionWithName<TinyDb.UI.Services.TempDocument>(collectionName);
+                    tempDocCollection = _engine.GetCollection<TinyDb.UI.Services.TempDocument>(collectionName);
                     var tempDocuments = tempDocCollection.FindAll().Take(100).ToList();
                     Console.WriteLine($"[DEBUG] 分析 {tempDocuments.Count} 个TempDocument以推断结构");
 
@@ -540,7 +540,7 @@ public class TableStructureService
     {
         try
         {
-            var metadataCollection = _engine.GetCollectionWithName<BsonDocument>("__ui_table_metadata");
+            var metadataCollection = _engine.GetCollection<BsonDocument>("__ui_table_metadata");
             var metadataDoc = metadataCollection.FindById((BsonValue)collectionName);
 
             if (metadataDoc == null)
@@ -745,11 +745,11 @@ public class TableStructureService
             // 使用反射获取集合，类型安全
             var getCollectionMethod = _engine.GetType()
                 .GetMethods()
-                .FirstOrDefault(m => m.Name == "GetCollectionWithName" && m.IsGenericMethod);
+                .FirstOrDefault(m => m.Name == "GetCollection" && m.IsGenericMethod);
 
             if (getCollectionMethod == null)
             {
-                throw new InvalidOperationException("无法找到GetCollectionWithName方法");
+                throw new InvalidOperationException("无法找到GetCollection方法");
             }
 
             var genericMethod = getCollectionMethod.MakeGenericMethod(entityType);
@@ -866,7 +866,7 @@ public class TableStructureService
             // 删除我们的表结构文档
             try
             {
-                var metadataCollection = _engine.GetCollectionWithName<BsonDocument>("__table_structures");
+                var metadataCollection = _engine.GetCollection<BsonDocument>("__table_structures");
                 var structureDoc = metadataCollection.FindById((BsonValue)tableName);
                 if (structureDoc != null)
                 {
@@ -897,7 +897,7 @@ public class TableStructureService
         {
             Console.WriteLine($"[DEBUG] 从实体系统加载表结构: {tableName}");
 
-            var metadataCollection = _engine.GetCollectionWithName<TableEntity>("__table_structures");
+            var metadataCollection = _engine.GetCollection<TableEntity>("__table_structures");
             var tableEntity = metadataCollection.FindById((BsonValue)tableName);
 
             if (tableEntity == null)

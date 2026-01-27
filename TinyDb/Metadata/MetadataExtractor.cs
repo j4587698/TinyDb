@@ -20,7 +20,7 @@ public static class MetadataExtractor
             throw new ArgumentNullException(nameof(entityType));
 
         var entityAttr = entityType.GetCustomAttribute<EntityAttribute>();
-        var collectionName = entityAttr?.CollectionName ?? entityType.Name;
+        var collectionName = entityAttr?.Name ?? entityType.Name;
 
         var metadata = new EntityMetadata
         {

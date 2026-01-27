@@ -15,19 +15,7 @@ namespace TinyDb.SourceGenerator;
 public class TinyDbSourceGenerator : IIncrementalGenerator
 {
     /// <summary>
-    /// 嵌套类不支持的诊断描述符
-    /// </summary>
-    private static readonly DiagnosticDescriptor NestedClassNotSupportedDescriptor = new(
-        id: "TINYDB001",
-        title: "Nested class does not support [Entity] attribute",
-        messageFormat: "Type '{0}' is a nested class. TinyDb source generator does not support nested classes. Please move the class to a top-level namespace.",
-        category: "TinyDb.SourceGenerator",
-        DiagnosticSeverity.Error,
-        isEnabledByDefault: true,
-        description: "TinyDb source generator does not support generating AOT adapter code for nested classes. Please define classes with [Entity] attribute at the top-level namespace instead of nesting them inside other classes.");
-
-    /// <summary>
-    /// 循环引用警告的诊断描述符
+    /// 循环引用警告的诊断描述符（非Entity类型）
     /// </summary>
     private static readonly DiagnosticDescriptor CircularReferenceWarningDescriptor = new(
         id: "TINYDB002",
@@ -37,6 +25,18 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "A circular reference was detected among non-Entity complex types. The source generator will break the cycle to prevent infinite recursion, but properties involved in the cycle may not be fully serialized. Consider marking one of the types with [Entity] attribute or restructuring the types to avoid circular dependencies.");
+
+    /// <summary>
+    /// Entity类型间循环引用警告的诊断描述符
+    /// </summary>
+    private static readonly DiagnosticDescriptor EntityCircularReferenceWarningDescriptor = new(
+        id: "TINYDB003",
+        title: "Circular reference detected between Entity types",
+        messageFormat: "Circular reference detected between Entity types in '{0}': {1}. While this is handled at runtime, it may cause performance overhead and incomplete data during serialization.",
+        category: "TinyDb.SourceGenerator",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "A circular reference was detected between Entity types. The runtime will handle this by breaking the cycle during serialization (returning only the ID for circular references), but this may cause performance overhead due to circular reference tracking. Consider redesigning the data model to avoid circular dependencies between entities.");
 
     /// <summary>
     /// 初始化生成器
@@ -62,17 +62,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             {
                 if (classInfo == null) continue;
 
-                // 检查是否是嵌套类
-                if (!string.IsNullOrEmpty(classInfo.ContainingTypePath))
-                {
-                    // 报告诊断错误
-                    var diagnostic = Diagnostic.Create(
-                        NestedClassNotSupportedDescriptor,
-                        classInfo.Location,
-                        classInfo.FullName);
-                    spc.ReportDiagnostic(diagnostic);
-                    continue;
-                }
+                // 嵌套类现在已支持 - 因为复杂类型的 AOT 优化机制同样适用于嵌套的 Entity 类
+                // 生成的帮助器类使用唯一的类名（如 OuterClass_InnerClassAotHelper）
+                // 并通过 TypeReference（如 OuterClass.InnerClass）正确引用嵌套类型
 
                 if (ShouldGenerateMapper(classInfo))
                 {
@@ -84,7 +76,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
             foreach (var classInfo in validClasses)
             {
-                // 报告循环引用警告
+                // 报告非Entity类型的循环引用警告
                 foreach (var circularRef in classInfo.CircularReferences)
                 {
                     var diagnostic = Diagnostic.Create(
@@ -92,6 +84,17 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                         classInfo.Location,
                         circularRef.ContainingTypeName,
                         circularRef.CycleChain);
+                    spc.ReportDiagnostic(diagnostic);
+                }
+                
+                // 报告Entity类型间的循环引用警告
+                foreach (var entityCircularRef in classInfo.EntityCircularReferences)
+                {
+                    var diagnostic = Diagnostic.Create(
+                        EntityCircularReferenceWarningDescriptor,
+                        classInfo.Location,
+                        entityCircularRef.CurrentEntityName,
+                        entityCircularRef.CycleChain);
                     spc.ReportDiagnostic(diagnostic);
                 }
                 
@@ -148,7 +151,13 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         var entityAttribute = classSymbol?.GetAttributes()
             .FirstOrDefault(attr => attr.AttributeClass?.Name == "EntityAttribute");
 
+        // 优先从构造函数参数获取Name，否则从命名参数获取
         var collectionName = entityAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+        if (string.IsNullOrEmpty(collectionName))
+        {
+            collectionName = entityAttribute?.NamedArguments
+                .FirstOrDefault(arg => arg.Key == "Name").Value.Value?.ToString();
+        }
 
         // 获取Entity属性中指定的IdProperty名称
         var specifiedIdProperty = entityAttribute?.NamedArguments
@@ -268,6 +277,121 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     isDictionaryValueValueType: typeAnalysis.IsDictionaryValueValueType);
                 properties.Add(propInfo);
             }
+            // 处理公共字段 (FieldDeclarationSyntax)
+            else if (member is FieldDeclarationSyntax field)
+            {
+                // 跳过静态字段
+                if (field.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
+                {
+                    continue;
+                }
+                
+                // 只处理公共字段
+                if (!field.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)))
+                {
+                    continue;
+                }
+
+                foreach (var variable in field.Declaration.Variables)
+                {
+                    var fieldName = variable.Identifier.Text;
+                    var fieldType = field.Declaration.Type.ToString();
+
+                    // 获取字段符号
+                    var fieldSymbol = semanticModel.GetDeclaredSymbol(variable) as IFieldSymbol;
+
+                    // 检查是否有 BsonIgnore 属性
+                    var hasIgnoreAttribute = fieldSymbol?.GetAttributes()
+                        .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute") ?? false;
+
+                    var typeSymbol = fieldSymbol?.Type;
+                    var isValueType = typeSymbol?.IsValueType ?? false;
+                    var isNullableValueType = typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+                                               namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+                    var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
+                                                  fieldSymbol?.NullableAnnotation == NullableAnnotation.Annotated;
+
+                    var fullyQualifiedType = typeSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? fieldType;
+                    var nonNullableType = fieldType;
+                    var fullyQualifiedNonNullableType = fullyQualifiedType;
+
+                    if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
+                    {
+                        var underlyingType = nullableType.TypeArguments[0];
+                        nonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+                        fullyQualifiedNonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                        
+                        if (!typeSymbolMap.ContainsKey(fullyQualifiedNonNullableType))
+                        {
+                            typeSymbolMap[fullyQualifiedNonNullableType] = underlyingType;
+                        }
+                    }
+                    else if (!isValueType && fieldType.EndsWith("?", StringComparison.Ordinal))
+                    {
+                        nonNullableType = fieldType.TrimEnd('?').Trim();
+                        fullyQualifiedNonNullableType = fullyQualifiedType.TrimEnd('?').Trim();
+                    }
+
+                    // 分析类型的复杂性
+                    var typeAnalysis = AnalyzePropertyType(typeSymbol);
+                    
+                    // 收集类型符号用于依赖分析
+                    if (typeSymbol != null && !typeSymbolMap.ContainsKey(fullyQualifiedNonNullableType))
+                    {
+                        var actualTypeSymbol = typeSymbol;
+                        if (isNullableValueType && typeSymbol is INamedTypeSymbol nt && nt.TypeArguments.Length == 1)
+                        {
+                            actualTypeSymbol = nt.TypeArguments[0];
+                        }
+                        typeSymbolMap[fullyQualifiedNonNullableType] = actualTypeSymbol;
+                    }
+                    
+                    // 收集集合元素类型
+                    if (typeAnalysis.IsCollection && !string.IsNullOrEmpty(typeAnalysis.ElementType))
+                    {
+                        var elementTypeSymbol = GetElementTypeSymbol(typeSymbol);
+                        if (elementTypeSymbol != null && !typeSymbolMap.ContainsKey(typeAnalysis.ElementType!))
+                        {
+                            typeSymbolMap[typeAnalysis.ElementType!] = elementTypeSymbol;
+                        }
+                    }
+                    
+                    // 收集字典值类型
+                    if (typeAnalysis.IsDictionary && !string.IsNullOrEmpty(typeAnalysis.DictionaryValueType))
+                    {
+                        var valueTypeSymbol = GetDictionaryValueTypeSymbol(typeSymbol);
+                        if (valueTypeSymbol != null && !typeSymbolMap.ContainsKey(typeAnalysis.DictionaryValueType!))
+                        {
+                            typeSymbolMap[typeAnalysis.DictionaryValueType!] = valueTypeSymbol;
+                        }
+                    }
+
+                    var propInfo = new PropertyInfo(
+                        fieldName,
+                        fieldType,
+                        isId: false,
+                        isIgnored: hasIgnoreAttribute,
+                        hasIgnoreAttribute: hasIgnoreAttribute,
+                        isValueType: isValueType,
+                        isNullableValueType: isNullableValueType,
+                        isNullableReferenceType: isNullableReferenceType,
+                        nonNullableType: nonNullableType,
+                        fullyQualifiedType: fullyQualifiedType,
+                        fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
+                        isComplexType: typeAnalysis.IsComplexType,
+                        isCollection: typeAnalysis.IsCollection,
+                        isDictionary: typeAnalysis.IsDictionary,
+                        isArray: typeAnalysis.IsArray,
+                        elementType: typeAnalysis.ElementType,
+                        isElementComplexType: typeAnalysis.IsElementComplexType,
+                        isElementValueType: typeAnalysis.IsElementValueType,
+                        dictionaryKeyType: typeAnalysis.DictionaryKeyType,
+                        dictionaryValueType: typeAnalysis.DictionaryValueType,
+                        isDictionaryValueComplexType: typeAnalysis.IsDictionaryValueComplexType,
+                        isDictionaryValueValueType: typeAnalysis.IsDictionaryValueValueType);
+                    properties.Add(propInfo);
+                }
+            }
         }
 
         // 智能ID识别逻辑
@@ -323,8 +447,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 收集依赖的非Entity复杂类型
         var (dependentComplexTypes, circularReferences) = CollectDependentComplexTypes(properties, typeSymbolMap);
+        
+        // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
+        var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
 
-        return new ClassInfo(namespaceName, className, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences);
+        return new ClassInfo(namespaceName, className, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences, entityCircularReferences);
     }
 
     /// <summary>
@@ -493,6 +620,13 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             {
                 sb.AppendLine("            if (id is BsonInt64 bsonInt64)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonInt64.Value;");
+            }
+            else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
+            {
+                sb.AppendLine("            if (id is BsonBinary bsonBinary)");
+                sb.AppendLine($"                entity.{idProp.Name} = new Guid(bsonBinary.Bytes);");
+                sb.AppendLine("            else if (id is BsonString bsonGuidString && Guid.TryParse(bsonGuidString.Value, out var parsedGuid))");
+                sb.AppendLine($"                entity.{idProp.Name} = parsedGuid;");
             }
 
             sb.AppendLine("        }");
@@ -911,13 +1045,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine();
         }
         
-        sb.AppendLine("            // 首先尝试使用已注册的 AOT 适配器");
-        sb.AppendLine("            if (global::TinyDb.Serialization.AotHelperRegistry.TryGetAdapter<T>(out var adapter))");
-        sb.AppendLine("            {");
-        sb.AppendLine("                return adapter.ToDocument(obj);");
-        sb.AppendLine("            }");
-        sb.AppendLine();
-        sb.AppendLine("            // 回退到通用序列化（可能使用反射）");
+        sb.AppendLine("            // 通过 AotBsonMapper.ToDocument 来序列化，以支持循环引用检测");
         sb.AppendLine("            return global::TinyDb.Serialization.AotBsonMapper.ToDocument(obj);");
         sb.AppendLine("        }");
         sb.AppendLine();
@@ -977,13 +1105,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        {");
         sb.AppendLine("            if (obj == null) return new BsonDocument();");
         sb.AppendLine();
-        sb.AppendLine("            // 首先尝试使用已注册的 AOT 适配器");
-        sb.AppendLine("            if (global::TinyDb.Serialization.AotHelperRegistry.TryGetAdapter<T>(out var adapter))");
-        sb.AppendLine("            {");
-        sb.AppendLine("                return adapter.ToDocument(obj);");
-        sb.AppendLine("            }");
-        sb.AppendLine();
-        sb.AppendLine("            // 回退到通用序列化（可能使用反射）");
+        sb.AppendLine("            // 通过 AotBsonMapper.ToDocument 来序列化，以支持循环引用检测");
         sb.AppendLine("            return global::TinyDb.Serialization.AotBsonMapper.ToDocument(obj);");
         sb.AppendLine("        }");
         sb.AppendLine();
@@ -1032,7 +1154,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 为每个属性生成序列化代码
         foreach (var prop in depType.Properties)
         {
-            var bsonFieldName = prop.Name;
+            var bsonFieldName = ToCamelCase(prop.Name);
             
             if (prop.IsComplexType && !string.IsNullOrEmpty(prop.ComplexTypeFullName))
             {
@@ -1096,7 +1218,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 为每个属性生成反序列化代码
         foreach (var prop in depType.Properties)
         {
-            var bsonFieldName = prop.Name;
+            var bsonFieldName = ToCamelCase(prop.Name);
             
             if (prop.IsComplexType && !string.IsNullOrEmpty(prop.ComplexTypeFullName))
             {
@@ -1636,6 +1758,200 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     }
 
     /// <summary>
+    /// 检测Entity类型间的循环引用
+    /// </summary>
+    /// <param name="currentClassSymbol">当前Entity类的符号</param>
+    /// <param name="properties">当前类的属性列表</param>
+    /// <param name="typeSymbols">类型符号映射</param>
+    /// <returns>检测到的Entity循环引用列表</returns>
+    private static List<EntityCircularReferenceInfo> DetectEntityCircularReferences(
+        INamedTypeSymbol? currentClassSymbol,
+        List<PropertyInfo> properties,
+        IReadOnlyDictionary<string, ITypeSymbol> typeSymbols)
+    {
+        var result = new List<EntityCircularReferenceInfo>();
+        if (currentClassSymbol == null) return result;
+
+        var currentTypeName = currentClassSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        var visited = new HashSet<string> { currentTypeName };
+        var toProcess = new Queue<(ITypeSymbol Symbol, string PropertyName, List<string> Path)>();
+
+        // 遍历当前类的所有属性，查找引用了Entity类型的属性
+        foreach (var prop in properties)
+        {
+            if (prop.HasIgnoreAttribute) continue;
+
+            ITypeSymbol? propTypeSymbol = null;
+            
+            // 获取属性的类型符号
+            if (prop.IsComplexType && typeSymbols.TryGetValue(prop.FullyQualifiedNonNullableType, out var directType))
+            {
+                propTypeSymbol = directType;
+            }
+            else if (prop.IsCollection && prop.IsElementComplexType && !string.IsNullOrEmpty(prop.ElementType) &&
+                     typeSymbols.TryGetValue(prop.ElementType!, out var elementType))
+            {
+                propTypeSymbol = elementType;
+            }
+            else if (prop.IsDictionary && prop.IsDictionaryValueComplexType && !string.IsNullOrEmpty(prop.DictionaryValueType) &&
+                     typeSymbols.TryGetValue(prop.DictionaryValueType!, out var valueType))
+            {
+                propTypeSymbol = valueType;
+            }
+
+            if (propTypeSymbol != null && HasEntityAttribute(propTypeSymbol))
+            {
+                var propTypeName = propTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                
+                // 检查是否直接引用回当前类（自引用）
+                if (propTypeName == currentTypeName)
+                {
+                    var cycleChain = $"{GetShortTypeName(currentTypeName)} -> {prop.Name} -> {GetShortTypeName(currentTypeName)}";
+                    result.Add(new EntityCircularReferenceInfo(
+                        GetShortTypeName(currentTypeName),
+                        GetShortTypeName(propTypeName),
+                        prop.Name,
+                        cycleChain));
+                }
+                else if (!visited.Contains(propTypeName))
+                {
+                    visited.Add(propTypeName);
+                    var path = new List<string> { currentTypeName, propTypeName };
+                    toProcess.Enqueue((propTypeSymbol, prop.Name, path));
+                }
+            }
+        }
+
+        // BFS检测更深层的循环引用
+        while (toProcess.Count > 0)
+        {
+            var (typeSymbol, originPropertyName, path) = toProcess.Dequeue();
+            
+            // 获取该Entity类型的所有公共属性
+            foreach (var member in typeSymbol.GetMembers())
+            {
+                if (member is IPropertySymbol propertySymbol &&
+                    propertySymbol.DeclaredAccessibility == Accessibility.Public &&
+                    !propertySymbol.IsStatic &&
+                    propertySymbol.GetMethod != null)
+                {
+                    // 检查是否有BsonIgnore
+                    var hasIgnore = propertySymbol.GetAttributes()
+                        .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute");
+                    if (hasIgnore) continue;
+
+                    var propType = GetActualType(propertySymbol.Type);
+                    if (propType != null && HasEntityAttribute(propType))
+                    {
+                        var propTypeName = propType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                        
+                        // 检查是否形成循环（回到当前类或路径中的任意类）
+                        if (propTypeName == currentTypeName)
+                        {
+                            // 找到循环引用回当前类
+                            var cycleChain = string.Join(" -> ", path.Select(GetShortTypeName)) + " -> " + GetShortTypeName(currentTypeName);
+                            result.Add(new EntityCircularReferenceInfo(
+                                GetShortTypeName(currentTypeName),
+                                GetShortTypeName(propTypeName),
+                                originPropertyName,
+                                cycleChain));
+                        }
+                        else if (path.Contains(propTypeName))
+                        {
+                            // 路径中已包含此类型，存在循环但不是回到当前类
+                            // 这种情况可以选择是否报告，这里也报告
+                            var cycleStartIndex = path.IndexOf(propTypeName);
+                            var cyclePath = path.Skip(cycleStartIndex).ToList();
+                            cyclePath.Add(propTypeName);
+                            var cycleChain = string.Join(" -> ", cyclePath.Select(GetShortTypeName));
+                            result.Add(new EntityCircularReferenceInfo(
+                                GetShortTypeName(currentTypeName),
+                                GetShortTypeName(propTypeName),
+                                originPropertyName,
+                                cycleChain));
+                        }
+                        else if (!visited.Contains(propTypeName))
+                        {
+                            visited.Add(propTypeName);
+                            var newPath = new List<string>(path) { propTypeName };
+                            toProcess.Enqueue((propType, originPropertyName, newPath));
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 获取实际的类型（处理可空类型和集合类型）
+    /// </summary>
+    private static ITypeSymbol? GetActualType(ITypeSymbol typeSymbol)
+    {
+        // 处理可空值类型
+        if (typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            return namedType.TypeArguments[0];
+        }
+
+        // 处理数组
+        if (typeSymbol is IArrayTypeSymbol arrayType)
+        {
+            return arrayType.ElementType;
+        }
+
+        // 处理泛型集合（List<T>, ICollection<T> 等）
+        if (typeSymbol is INamedTypeSymbol genericType && genericType.IsGenericType)
+        {
+            var typeName = genericType.OriginalDefinition.ToDisplayString();
+            
+            // 检查是否是常见的单元素泛型集合
+            if (typeName.StartsWith("System.Collections.Generic.List<", StringComparison.Ordinal) ||
+                typeName.StartsWith("System.Collections.Generic.IList<", StringComparison.Ordinal) ||
+                typeName.StartsWith("System.Collections.Generic.ICollection<", StringComparison.Ordinal) ||
+                typeName.StartsWith("System.Collections.Generic.IEnumerable<", StringComparison.Ordinal) ||
+                typeName.StartsWith("System.Collections.Generic.HashSet<", StringComparison.Ordinal))
+            {
+                if (genericType.TypeArguments.Length == 1)
+                {
+                    return genericType.TypeArguments[0];
+                }
+            }
+            
+            // 检查字典类型，返回值类型
+            if (typeName.StartsWith("System.Collections.Generic.Dictionary<", StringComparison.Ordinal) ||
+                typeName.StartsWith("System.Collections.Generic.IDictionary<", StringComparison.Ordinal))
+            {
+                if (genericType.TypeArguments.Length == 2)
+                {
+                    return genericType.TypeArguments[1]; // 返回值类型
+                }
+            }
+        }
+
+        // 检查是否是复杂对象类型
+        if (IsComplexObjectType(typeSymbol))
+        {
+            return typeSymbol;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 获取类型的简短名称（移除 global:: 前缀和命名空间）
+    /// </summary>
+    private static string GetShortTypeName(string fullTypeName)
+    {
+        var name = fullTypeName.Replace("global::", "");
+        var lastDot = name.LastIndexOf('.');
+        return lastDot >= 0 ? name.Substring(lastDot + 1) : name;
+    }
+
+    /// <summary>
     /// 收集所有依赖的非Entity复杂类型
     /// </summary>
     private static (List<DependentComplexType> Types, List<CircularReferenceInfo> CircularRefs) CollectDependentComplexTypes(
@@ -1805,6 +2121,18 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             properties), circularRefs);
     }
 
+    /// <summary>
+    /// 将属性名转换为 camelCase
+    /// </summary>
+    /// <param name="name">属性名</param>
+    /// <returns>camelCase 格式的名称</returns>
+    private static string ToCamelCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+    }
+
 }
 
 /// <summary>
@@ -1824,7 +2152,10 @@ public class ClassInfo
         {
             if (!string.IsNullOrEmpty(ContainingTypePath))
             {
-                return $"{ContainingTypePath}.{Name}";
+                // ContainingTypePath 使用下划线分隔（如 OuterClass_MiddleClass），
+                // 需要转换为点分隔（如 OuterClass.MiddleClass）以便在代码中引用嵌套类型
+                var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
+                return $"{dotSeparatedPath}.{Name}";
             }
             return Name;
         }
@@ -1836,7 +2167,9 @@ public class ClassInfo
             var baseName = string.IsNullOrEmpty(Namespace) ? "" : $"{Namespace}.";
             if (!string.IsNullOrEmpty(ContainingTypePath))
             {
-                return $"{baseName}{ContainingTypePath}.{Name}";
+                // ContainingTypePath 使用下划线分隔，需要转换为点分隔
+                var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
+                return $"{baseName}{dotSeparatedPath}.{Name}";
             }
             return $"{baseName}{Name}";
         }
@@ -1880,11 +2213,16 @@ public class ClassInfo
     public List<DependentComplexType> DependentComplexTypes { get; }
     
     /// <summary>
-    /// 检测到的循环引用信息
+    /// 检测到的循环引用信息（非Entity类型）
     /// </summary>
     public List<CircularReferenceInfo> CircularReferences { get; }
+    
+    /// <summary>
+    /// 检测到的Entity类型间循环引用信息
+    /// </summary>
+    public List<EntityCircularReferenceInfo> EntityCircularReferences { get; }
 
-    public ClassInfo(string @namespace, string name, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null)
+    public ClassInfo(string @namespace, string name, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null)
     {
         Namespace = @namespace;
         Name = name;
@@ -1895,6 +2233,7 @@ public class ClassInfo
         Location = location;
         DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
         CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
+        EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
     }
 }
 
@@ -2129,6 +2468,40 @@ public class CircularReferenceInfo
 }
 
 /// <summary>
+/// Entity类型间的循环引用信息
+/// </summary>
+public class EntityCircularReferenceInfo
+{
+    /// <summary>
+    /// 当前Entity类型名称
+    /// </summary>
+    public string CurrentEntityName { get; }
+    
+    /// <summary>
+    /// 引用的目标Entity类型名称
+    /// </summary>
+    public string TargetEntityName { get; }
+    
+    /// <summary>
+    /// 导致循环引用的属性名称
+    /// </summary>
+    public string PropertyName { get; }
+    
+    /// <summary>
+    /// 循环链的描述（如 EntityA -> EntityB -> EntityA）
+    /// </summary>
+    public string CycleChain { get; }
+
+    public EntityCircularReferenceInfo(string currentEntityName, string targetEntityName, string propertyName, string cycleChain)
+    {
+        CurrentEntityName = currentEntityName;
+        TargetEntityName = targetEntityName;
+        PropertyName = propertyName;
+        CycleChain = cycleChain;
+    }
+}
+
+/// <summary>
 /// 生成属性序列化代码的辅助方法
 /// </summary>
 public static partial class SourceGeneratorHelpers
@@ -2150,8 +2523,8 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyType = prop.Type;
 
-        // 检查是否是ID属性，如果是则映射到_id字段
-        var bsonFieldName = IsIdProperty(prop) ? "_id" : propertyName;
+        // 检查是否是ID属性，如果是则映射到_id字段，否则使用camelCase
+        var bsonFieldName = IsIdProperty(prop) ? "_id" : ToCamelCase(propertyName);
 
         // 处理复杂类型
         if (prop.IsComplexType)
@@ -2328,8 +2701,8 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyType = prop.Type;
 
-        // 检查是否是ID属性，如果是则从_id字段读取
-        var bsonFieldName = IsIdProperty(prop) ? "_id" : propertyName;
+        // 检查是否是ID属性，如果是则从_id字段读取，否则使用camelCase
+        var bsonFieldName = IsIdProperty(prop) ? "_id" : ToCamelCase(propertyName);
 
         // 处理复杂类型
         if (prop.IsComplexType)
@@ -2508,5 +2881,17 @@ public static partial class SourceGeneratorHelpers
             }}");
         
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// 将属性名转换为 camelCase
+    /// </summary>
+    /// <param name="name">属性名</param>
+    /// <returns>camelCase 格式的名称</returns>
+    private static string ToCamelCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
     }
 }

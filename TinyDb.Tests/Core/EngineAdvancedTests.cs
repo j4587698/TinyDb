@@ -31,7 +31,7 @@ public class EngineAdvancedTests
     {
         using (var engine = new TinyDbEngine(_dbFile))
         {
-            var col = engine.GetCollectionWithName<BsonDocument>("test");
+            var col = engine.GetCollection<BsonDocument>("test");
             col.Insert(new BsonDocument().Set("a", 1));
             
             await Assert.That(engine.CollectionExists("test")).IsTrue();

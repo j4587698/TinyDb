@@ -37,7 +37,7 @@ public class CollectionPersistenceTests
         // 创建集合并插入数据
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<User>(collectionName);
+            var collection = engine.GetCollection<User>(collectionName);
             collection.Insert(new User { Name = "Persistent User", Age = 30, Email = "persistent@example.com" });
             engine.Flush();
         }
@@ -50,7 +50,7 @@ public class CollectionPersistenceTests
                 var collections = engine.GetCollectionNames().ToList();
                 await Assert.That(collections.Contains(collectionName)).IsTrue();
 
-                var collection = engine.GetCollectionWithName<User>(collectionName);
+                var collection = engine.GetCollection<User>(collectionName);
                 var count = collection.Count();
                 await Assert.That(count).IsEqualTo(1);
             }
@@ -66,11 +66,11 @@ public class CollectionPersistenceTests
         // 创建两个集合
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            engine.GetCollectionWithName<User>(collectionToDrop);
-            engine.GetCollectionWithName<Product>(collectionToKeep);
+            engine.GetCollection<User>(collectionToDrop);
+            engine.GetCollection<Product>(collectionToKeep);
 
             // 插入数据
-            engine.GetCollectionWithName<User>(collectionToDrop)
+            engine.GetCollection<User>(collectionToDrop)
                   .Insert(new User { Name = "Will Be Dropped", Age = 25, Email = "drop@example.com" });
 
             engine.Flush();
@@ -100,7 +100,7 @@ public class CollectionPersistenceTests
         // 创建空集合
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var emptyCollection = engine.GetCollectionWithName<User>(emptyCollectionName);
+            var emptyCollection = engine.GetCollection<User>(emptyCollectionName);
             await Assert.That(emptyCollection.Count()).IsEqualTo(0);
             engine.Flush();
         }
@@ -111,7 +111,7 @@ public class CollectionPersistenceTests
             var collections = reopenedEngine.GetCollectionNames().ToList();
             await Assert.That(collections.Contains(emptyCollectionName)).IsTrue();
 
-            var emptyCollection = reopenedEngine.GetCollectionWithName<User>(emptyCollectionName);
+            var emptyCollection = reopenedEngine.GetCollection<User>(emptyCollectionName);
             await Assert.That(emptyCollection.Count()).IsEqualTo(0);
         }
     }

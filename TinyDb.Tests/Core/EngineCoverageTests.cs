@@ -35,7 +35,7 @@ public class EngineCoverageTests
         await Assert.That(engine.DropCollection("nonexistent")).IsFalse();
         
         // Create and drop
-        engine.GetCollectionWithName<BsonDocument>("col1").Insert(new BsonDocument());
+        engine.GetCollection<BsonDocument>("col1").Insert(new BsonDocument());
         await Assert.That(engine.CollectionExists("col1")).IsTrue();
         await Assert.That(engine.GetCollectionNames()).Contains("col1");
         
@@ -63,7 +63,7 @@ public class EngineCoverageTests
     public async Task Engine_CachedDocumentCount_ShouldWork()
     {
         using var engine = new TinyDbEngine(_dbFile);
-        var col = engine.GetCollectionWithName<BsonDocument>("col3");
+        var col = engine.GetCollection<BsonDocument>("col3");
         col.Insert(new BsonDocument());
         col.Insert(new BsonDocument());
         
@@ -84,7 +84,7 @@ public class EngineCoverageTests
         // Create database with some data and fragmentation
         using (var engine = new TinyDbEngine(_dbFile))
         {
-            var col = engine.GetCollectionWithName<BsonDocument>("compact_test");
+            var col = engine.GetCollection<BsonDocument>("compact_test");
             
             // Insert documents
             for (int i = 0; i < 50; i++)
@@ -112,7 +112,7 @@ public class EngineCoverageTests
         // Reopen and verify
         using (var engine = new TinyDbEngine(_dbFile))
         {
-            var col = engine.GetCollectionWithName<BsonDocument>("compact_test");
+            var col = engine.GetCollection<BsonDocument>("compact_test");
             var docs = col.FindAll().ToList();
             await Assert.That(docs.Count).IsGreaterThan(20);
         }
@@ -127,8 +127,8 @@ public class EngineCoverageTests
         using var engine = new TinyDbEngine(_dbFile);
         
         // Create multiple collections
-        var col1 = engine.GetCollectionWithName<BsonDocument>("col_a");
-        var col2 = engine.GetCollectionWithName<BsonDocument>("col_b");
+        var col1 = engine.GetCollection<BsonDocument>("col_a");
+        var col2 = engine.GetCollection<BsonDocument>("col_b");
         
         col1.Insert(new BsonDocument().Set("name", "doc1"));
         col1.Insert(new BsonDocument().Set("name", "doc2"));
@@ -153,7 +153,7 @@ public class EngineCoverageTests
         using var engine = new TinyDbEngine(_dbFile);
         
         // Create collection with no data (just metadata)
-        var col = engine.GetCollectionWithName<BsonDocument>("empty_col");
+        var col = engine.GetCollection<BsonDocument>("empty_col");
         col.Insert(new BsonDocument().Set("temp", 1));
         col.Delete(new BsonDocument().Set("temp", 1)["_id"]);
         
@@ -194,7 +194,7 @@ public class EngineCoverageTests
     public async Task Engine_BatchInsert_WithNullDocuments_ShouldSkipNulls()
     {
         using var engine = new TinyDbEngine(_dbFile);
-        var col = engine.GetCollectionWithName<BsonDocument>("batch_null_test");
+        var col = engine.GetCollection<BsonDocument>("batch_null_test");
         
         var docs = new BsonDocument?[]
         {
@@ -220,7 +220,7 @@ public class EngineCoverageTests
     public async Task Engine_BatchInsert_MultiplePages_ShouldWork()
     {
         using var engine = new TinyDbEngine(_dbFile, new TinyDbOptions { PageSize = 4096 });
-        var col = engine.GetCollectionWithName<BsonDocument>("multi_page_batch");
+        var col = engine.GetCollection<BsonDocument>("multi_page_batch");
         
         // Create enough documents to span multiple pages
         var docs = new List<BsonDocument>();
@@ -246,7 +246,7 @@ public class EngineCoverageTests
     public async Task Engine_Delete_EmptiesPage_ShouldFreePage()
     {
         using var engine = new TinyDbEngine(_dbFile);
-        var col = engine.GetCollectionWithName<BsonDocument>("delete_page_test");
+        var col = engine.GetCollection<BsonDocument>("delete_page_test");
         
         // Insert a single document
         col.Insert(new BsonDocument().Set("_id", 1).Set("data", "test"));
@@ -283,7 +283,7 @@ public class EngineCoverageTests
     public async Task Engine_Delete_NonExistent_ShouldReturnZero()
     {
         using var engine = new TinyDbEngine(_dbFile);
-        var col = engine.GetCollectionWithName<BsonDocument>("delete_test");
+        var col = engine.GetCollection<BsonDocument>("delete_test");
         
         // Insert something first
         col.Insert(new BsonDocument().Set("_id", 1));
@@ -303,7 +303,7 @@ public class EngineCoverageTests
         
         using (var engine = new TinyDbEngine(_dbFile, options))
         {
-            var col = engine.GetCollectionWithName<BsonDocument>("journal_test");
+            var col = engine.GetCollection<BsonDocument>("journal_test");
             col.Insert(new BsonDocument().Set("_id", 1).Set("data", "test"));
             engine.Flush();
         }
@@ -311,7 +311,7 @@ public class EngineCoverageTests
         // Reopen and verify
         using (var engine = new TinyDbEngine(_dbFile, options))
         {
-            var col = engine.GetCollectionWithName<BsonDocument>("journal_test");
+            var col = engine.GetCollection<BsonDocument>("journal_test");
             var doc = col.FindById(1);
             await Assert.That(doc).IsNotNull();
         }
@@ -324,7 +324,7 @@ public class EngineCoverageTests
     public async Task Engine_GetStatistics_ShouldReturnValidData()
     {
         using var engine = new TinyDbEngine(_dbFile);
-        var col = engine.GetCollectionWithName<BsonDocument>("stats_test");
+        var col = engine.GetCollection<BsonDocument>("stats_test");
         
         for (int i = 0; i < 10; i++)
         {

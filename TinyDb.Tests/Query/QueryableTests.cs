@@ -97,7 +97,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -127,7 +127,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -156,7 +156,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -187,7 +187,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Pen", Price = 2.99m, Category = "Stationery", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -216,7 +216,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -244,7 +244,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -273,7 +273,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -317,7 +317,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = false, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -349,7 +349,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Book", Price = 19.99m, Category = "Books", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);
@@ -383,7 +383,7 @@ public class QueryableTests : IDisposable
             new() { Name = "Pen", Price = 2.99m, Category = "Stationery", InStock = true, CreatedAt = DateTime.UtcNow }
         };
 
-        var collection = _engine.GetCollectionWithName<TestProduct>(collectionName);
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
         foreach (var product in products)
         {
             collection.Insert(product);

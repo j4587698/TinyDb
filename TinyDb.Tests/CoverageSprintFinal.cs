@@ -396,15 +396,15 @@ public class CoverageSprintFinal : IDisposable
         var doc = AotBsonMapper.ToDocument(entity);
 
         // Debug: print Sub field type
-        var subVal = doc["Sub"];
+        var subVal = doc["sub"];
         Console.WriteLine($"DEBUG Sub type: {subVal.GetType().FullName}");
         Console.WriteLine($"DEBUG Sub.IsDocument: {subVal.IsDocument}");
         Console.WriteLine($"DEBUG Sub.BsonType: {subVal.BsonType}");
         Console.WriteLine($"DEBUG Sub.RawValue: {subVal.RawValue?.GetType().FullName ?? "null"}");
 
         await Assert.That(doc["_id"].ToInt32(null)).IsEqualTo(1);
-        await Assert.That(doc["IntList"].IsArray).IsTrue();
-        await Assert.That(doc["Dict"].IsDocument).IsTrue();
+        await Assert.That(doc["intList"].IsArray).IsTrue();
+        await Assert.That(doc["dict"].IsDocument).IsTrue();
 
         var entity2 = AotBsonMapper.FromDocument<CoverageComplexEntity>(doc);
         await Assert.That(entity2?.Name).IsEqualTo("Complex");

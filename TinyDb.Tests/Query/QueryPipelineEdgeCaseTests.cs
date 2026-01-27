@@ -40,7 +40,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
 
     private void SeedData()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("test");
+        var col = _engine.GetCollection<TestEntity>("test");
         col.Insert(new TestEntity { Id = 1, Name = "Alice", Score = 100, Category = "A" });
         col.Insert(new TestEntity { Id = 2, Name = "Bob", Score = 80, Category = "B" });
         col.Insert(new TestEntity { Id = 3, Name = "Charlie", Score = 90, Category = "A" });
@@ -93,7 +93,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_Distinct_ShouldRemoveDuplicates()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("distinct_test");
+        var col = _engine.GetCollection<TestEntity>("distinct_test");
         col.Insert(new TestEntity { Id = 1, Category = "A" });
         col.Insert(new TestEntity { Id = 2, Category = "A" });
         col.Insert(new TestEntity { Id = 3, Category = "B" });
@@ -124,7 +124,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_ThenBy_ShouldSecondarySort()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("thenby_test");
+        var col = _engine.GetCollection<TestEntity>("thenby_test");
         col.Insert(new TestEntity { Id = 1, Category = "A", Score = 90 });
         col.Insert(new TestEntity { Id = 2, Category = "A", Score = 80 });
         col.Insert(new TestEntity { Id = 3, Category = "B", Score = 100 });
@@ -144,7 +144,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_ThenByDescending_ShouldSecondarySortDesc()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("thenbydesc_test");
+        var col = _engine.GetCollection<TestEntity>("thenbydesc_test");
         col.Insert(new TestEntity { Id = 1, Category = "A", Score = 80 });
         col.Insert(new TestEntity { Id = 2, Category = "A", Score = 90 });
         col.Insert(new TestEntity { Id = 3, Category = "B", Score = 100 });
@@ -181,7 +181,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_FirstOrDefault_WithEmptyResult_ShouldReturnNull()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("empty_test");
+        var col = _engine.GetCollection<TestEntity>("empty_test");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "empty_test");
         
         var call = Expression.Call(
@@ -216,7 +216,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_LastOrDefault_WithEmptyResult_ShouldReturnNull()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("empty_last");
+        var col = _engine.GetCollection<TestEntity>("empty_last");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "empty_last");
         
         var call = Expression.Call(
@@ -250,7 +250,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_Any_WithEmptyCollection_ShouldReturnFalse()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("empty_any");
+        var col = _engine.GetCollection<TestEntity>("empty_any");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "empty_any");
         
         var call = Expression.Call(
@@ -304,7 +304,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_Single_WithOneItem_ShouldReturnItem()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("single_test");
+        var col = _engine.GetCollection<TestEntity>("single_test");
         col.Insert(new TestEntity { Id = 42 });
         
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "single_test");
@@ -323,7 +323,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
     [Test]
     public async Task Execute_SingleOrDefault_WithEmpty_ShouldReturnNull()
     {
-        var col = _engine.GetCollectionWithName<TestEntity>("single_empty");
+        var col = _engine.GetCollection<TestEntity>("single_empty");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "single_empty");
         
         var call = Expression.Call(

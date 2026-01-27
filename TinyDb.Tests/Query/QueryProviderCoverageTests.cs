@@ -79,7 +79,7 @@ public class QueryProviderCoverageTests : IDisposable
     [Test]
     public async Task QueryProvider_Execute_ShouldWork()
     {
-        var collection = _engine.GetCollectionWithName<TestEntity>("test");
+        var collection = _engine.GetCollection<TestEntity>("test");
         collection.Insert(new TestEntity { Id = 1, Name = "A" });
         
         var q = collection.Query();

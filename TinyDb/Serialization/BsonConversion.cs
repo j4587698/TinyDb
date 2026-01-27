@@ -146,6 +146,22 @@ public static class BsonConversion
             return ConvertFromBsonValueToEnum(bsonValue, targetType);
         }
 
+        // 处理数组类型（如 string[], int[] 等）
+        if (targetType.IsArray)
+        {
+            var elementType = targetType.GetElementType()!;
+            if (bsonValue is BsonArray bsonArray)
+            {
+                var array = Array.CreateInstance(elementType, bsonArray.Count);
+                for (int i = 0; i < bsonArray.Count; i++)
+                {
+                    var convertedItem = FromBsonValue(bsonArray[i], elementType);
+                    array.SetValue(convertedItem, i);
+                }
+                return array;
+            }
+        }
+
         // 处理集合类型
         if (targetType.IsGenericType)
         {

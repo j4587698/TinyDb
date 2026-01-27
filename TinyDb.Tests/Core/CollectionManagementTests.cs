@@ -31,7 +31,7 @@ public class CollectionManagementTests : IDisposable
     public async Task DropCollection_Should_Remove_Collection_And_Data()
     {
         var colName = "drop_test";
-        var col = _engine.GetCollectionWithName<TestItem>(colName);
+        var col = _engine.GetCollection<TestItem>(colName);
         col.Insert(new TestItem { Id = 1, Val = "A" });
         
         await Assert.That(_engine.CollectionExists(colName)).IsTrue();
@@ -43,7 +43,7 @@ public class CollectionManagementTests : IDisposable
         await Assert.That(_engine.CollectionExists(colName)).IsFalse();
         
         // Re-create
-        var col2 = _engine.GetCollectionWithName<TestItem>(colName);
+        var col2 = _engine.GetCollection<TestItem>(colName);
         await Assert.That(col2.Count()).IsEqualTo(0);
     }
 
@@ -56,8 +56,8 @@ public class CollectionManagementTests : IDisposable
     [Test]
     public async Task GetCollectionNames_Should_Return_All_Names()
     {
-        _engine.GetCollectionWithName<TestItem>("col1");
-        _engine.GetCollectionWithName<TestItem>("col2");
+        _engine.GetCollection<TestItem>("col1");
+        _engine.GetCollection<TestItem>("col2");
         
         var names = _engine.GetCollectionNames().ToList();
         await Assert.That(names).Contains("col1");

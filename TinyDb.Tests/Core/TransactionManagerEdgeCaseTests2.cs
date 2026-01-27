@@ -213,7 +213,7 @@ public class TransactionManagerEdgeCaseTests2
         };
         
         // Store metadata
-        var metadataCollection = _engine.GetCollectionWithName<MetadataDocument>("__metadata_ChildEntity");
+        var metadataCollection = _engine.GetCollection<MetadataDocument>("__metadata_ChildEntity");
         metadataCollection.Insert(MetadataDocument.FromEntityMetadata(metadata));
 
         // Begin transaction and insert child with valid parent reference
@@ -258,7 +258,7 @@ public class TransactionManagerEdgeCaseTests2
                 }
             };
             
-            var metadataCollection = engine.GetCollectionWithName<MetadataDocument>("__metadata_ChildEntity");
+            var metadataCollection = engine.GetCollection<MetadataDocument>("__metadata_ChildEntity");
             metadataCollection.Insert(MetadataDocument.FromEntityMetadata(metadata));
 
             // Begin transaction and insert child with valid parent reference
@@ -303,7 +303,7 @@ public class TransactionManagerEdgeCaseTests2
                 }
             };
             
-            var metadataCollection = engine.GetCollectionWithName<MetadataDocument>("__metadata_NullableChildEntity");
+            var metadataCollection = engine.GetCollection<MetadataDocument>("__metadata_NullableChildEntity");
             metadataCollection.Insert(MetadataDocument.FromEntityMetadata(metadata));
 
             using var txn = engine.BeginTransaction();
@@ -355,7 +355,7 @@ public class TransactionManagerEdgeCaseTests2
                 }
             };
             
-            var metadataCollection = engine.GetCollectionWithName<MetadataDocument>("__metadata_CamelCaseChild");
+            var metadataCollection = engine.GetCollection<MetadataDocument>("__metadata_CamelCaseChild");
             metadataCollection.Insert(MetadataDocument.FromEntityMetadata(metadata));
 
             // Insert document with camelCase field name directly
@@ -603,7 +603,7 @@ public class TransactionManagerEdgeCaseTests2
                 }
             };
             
-            var metadataCollection = engine.GetCollectionWithName<MetadataDocument>("__metadata_SingleCharChild");
+            var metadataCollection = engine.GetCollection<MetadataDocument>("__metadata_SingleCharChild");
             metadataCollection.Insert(MetadataDocument.FromEntityMetadata(metadata));
 
             using var txn = engine.BeginTransaction();

@@ -204,10 +204,11 @@ public class DiskStreamRegionLockTests : IDisposable
             _diskStream.UnlockRegion(handle2);
         });
 
-        await Task.Delay(50);
+        // Wait for the task to complete (use a longer timeout to avoid flaky tests)
+        var completedInTime = await Task.WhenAny(task, Task.Delay(2000)) == task;
+        await Assert.That(completedInTime).IsTrue();
         await Assert.That(handle2Acquired).IsTrue();
 
-        await task;
         _diskStream.UnlockRegion(handle1);
     }
 }

@@ -29,7 +29,7 @@ public class BTreeNodeWrapperTests : IDisposable
     public async Task BTreeNode_Wrapper_Methods_Coverage()
     {
         // 1. Create a BTreeIndex via IndexManager
-        var col = _engine.GetCollectionWithName<object>("test");
+        var col = _engine.GetCollection<object>("test");
         var idxManager = _engine.GetIndexManager("test");
         idxManager.CreateIndex("idx_a", new[] { "A" });
         

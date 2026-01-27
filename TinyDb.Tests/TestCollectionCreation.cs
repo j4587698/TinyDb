@@ -25,7 +25,7 @@ public class TestCollectionCreation : IDisposable
         });
 
         // Act - 直接测试引擎级别的集合创建
-        var collection = engine.GetCollectionWithName<TestDocument>("TestCollection");
+        var collection = engine.GetCollection<TestDocument>("TestCollection");
         var testDoc = new TestDocument
         {
             Name = "Test Document",
@@ -62,9 +62,9 @@ public class TestCollectionCreation : IDisposable
         });
 
         // Act
-        var collection1 = engine.GetCollectionWithName<TestDocument>("Collection1");
-        var collection2 = engine.GetCollectionWithName<TestDocument>("Collection2");
-        var collection3 = engine.GetCollectionWithName<TestDocument>("Collection3");
+        var collection1 = engine.GetCollection<TestDocument>("Collection1");
+        var collection2 = engine.GetCollection<TestDocument>("Collection2");
+        var collection3 = engine.GetCollection<TestDocument>("Collection3");
 
         // 插入测试文档以确保集合被创建
         var doc1 = new TestDocument { Name = "Doc1", Created = DateTime.UtcNow, IsActive = true };
@@ -103,7 +103,7 @@ public class TestCollectionCreation : IDisposable
         var collectionName = "DocumentTestCollection";
 
         // Act
-        var collection = engine.GetCollectionWithName<TestDocument>(collectionName);
+        var collection = engine.GetCollection<TestDocument>(collectionName);
         var testDoc = new TestDocument
         {
             Name = "Test Document",

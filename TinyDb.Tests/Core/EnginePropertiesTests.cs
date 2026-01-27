@@ -38,8 +38,8 @@ public class EnginePropertiesTests : IDisposable
     [Test]
     public async Task GetCollectionNames_Should_Return_Names()
     {
-        _engine.GetCollectionWithName<object>("Col1");
-        _engine.GetCollectionWithName<object>("Col2");
+        _engine.GetCollection<object>("Col1");
+        _engine.GetCollection<object>("Col2");
         
         var names = _engine.GetCollectionNames().ToList();
         await Assert.That(names.Count).IsEqualTo(2);

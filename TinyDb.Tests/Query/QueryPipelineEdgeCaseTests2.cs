@@ -47,7 +47,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
 
     private void SeedData()
     {
-        var col = _engine.GetCollectionWithName<TestItem>("test");
+        var col = _engine.GetCollection<TestItem>("test");
         col.Insert(new TestItem { Id = 1, Name = "Item1", Value = 10, Category = "A", Price = 100m });
         col.Insert(new TestItem { Id = 2, Name = "Item2", Value = 20, Category = "A", Price = 200m });
         col.Insert(new TestItem { Id = 3, Name = "Item3", Value = 30, Category = "B", Price = 150m });
@@ -513,7 +513,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     [Test]
     public async Task Execute_EmptyCollection_CountShouldBeZero()
     {
-        var col = _engine.GetCollectionWithName<TestItem>("empty_count");
+        var col = _engine.GetCollection<TestItem>("empty_count");
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "empty_count");
         
         var call = Expression.Call(
@@ -533,7 +533,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     [Test]
     public async Task Execute_EmptyCollection_AnyShouldBeFalse()
     {
-        var col = _engine.GetCollectionWithName<TestItem>("empty_any2");
+        var col = _engine.GetCollection<TestItem>("empty_any2");
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "empty_any2");
         
         var call = Expression.Call(
@@ -553,7 +553,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     [Test]
     public async Task Execute_EmptyCollection_AllShouldBeTrue()
     {
-        var col = _engine.GetCollectionWithName<TestItem>("empty_all");
+        var col = _engine.GetCollection<TestItem>("empty_all");
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "empty_all");
         
         Expression<Func<TestItem, bool>> predicate = x => x.Value > 100;
@@ -580,7 +580,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     public async Task Query_Sum_ShouldCalculateTotal()
     {
         SeedData();
-        var col = _engine.GetCollectionWithName<TestItem>("test");
+        var col = _engine.GetCollection<TestItem>("test");
         
         var total = col.Query().Sum(x => x.Price);
         
@@ -594,7 +594,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     public async Task Query_Average_ShouldCalculateAverage()
     {
         SeedData();
-        var col = _engine.GetCollectionWithName<TestItem>("test");
+        var col = _engine.GetCollection<TestItem>("test");
         
         var avg = col.Query().Average(x => x.Price);
         
@@ -608,7 +608,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     public async Task Query_Min_ShouldFindMinimum()
     {
         SeedData();
-        var col = _engine.GetCollectionWithName<TestItem>("test");
+        var col = _engine.GetCollection<TestItem>("test");
         
         var min = col.Query().Min(x => x.Value);
         
@@ -622,7 +622,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     public async Task Query_Max_ShouldFindMaximum()
     {
         SeedData();
-        var col = _engine.GetCollectionWithName<TestItem>("test");
+        var col = _engine.GetCollection<TestItem>("test");
         
         var max = col.Query().Max(x => x.Value);
         
@@ -666,7 +666,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_ToString_ShouldIncludeBothTypes()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("two_type_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("two_type_test");
         col.Insert(new TwoTypeTestItem { Id = 1, Value = "Test" });
         
         var q = new TinyDb.Query.Queryable<TwoTypeTestItem>(_executor, "two_type_test");
@@ -684,7 +684,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_ElementType_ShouldReturnDataType()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("elem_type_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("elem_type_test");
         col.Insert(new TwoTypeTestItem { Id = 1, Value = "Test" });
         
         var q = new TinyDb.Query.Queryable<TwoTypeTestItem>(_executor, "elem_type_test");
@@ -699,7 +699,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_Provider_ShouldNotBeNull()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("provider_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("provider_test");
         
         var q = new TinyDb.Query.Queryable<TwoTypeTestItem>(_executor, "provider_test");
         var projected = q.Select(x => x.Id);
@@ -713,7 +713,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_Expression_ShouldNotBeNull()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("expr_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("expr_test");
         
         var q = new TinyDb.Query.Queryable<TwoTypeTestItem>(_executor, "expr_test");
         var projected = q.Select(x => x.Id);
@@ -727,7 +727,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_ChainedSelect_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("chain_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("chain_test");
         col.Insert(new TwoTypeTestItem { Id = 1, Value = "Hello" });
         col.Insert(new TwoTypeTestItem { Id = 2, Value = "World" });
         
@@ -746,7 +746,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_GetEnumerator_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("enum_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("enum_test");
         col.Insert(new TwoTypeTestItem { Id = 1, Value = "A" });
         col.Insert(new TwoTypeTestItem { Id = 2, Value = "B" });
         
@@ -768,7 +768,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
     [Test]
     public async Task QueryableTwoType_NonGenericGetEnumerator_ShouldWork()
     {
-        var col = _engine.GetCollectionWithName<TwoTypeTestItem>("ngenum_test");
+        var col = _engine.GetCollection<TwoTypeTestItem>("ngenum_test");
         col.Insert(new TwoTypeTestItem { Id = 1, Value = "X" });
         
         var q = new TinyDb.Query.Queryable<TwoTypeTestItem>(_executor, "ngenum_test");
@@ -818,7 +818,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
     [Test]
     public async Task Provider_CreateQuery_ShouldReturnIQueryable()
     {
-        var col = _engine.GetCollectionWithName<ProviderTestItem>("provider_create2");
+        var col = _engine.GetCollection<ProviderTestItem>("provider_create2");
         col.Insert(new ProviderTestItem { Id = 1, Name = "Test" });
         
         var q = new TinyDb.Query.Queryable<ProviderTestItem>(_executor, "provider_create2");
@@ -847,7 +847,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
     [Test]
     public async Task Provider_Execute_ShouldReturnObject()
     {
-        var col = _engine.GetCollectionWithName<ProviderTestItem>("provider_exec2");
+        var col = _engine.GetCollection<ProviderTestItem>("provider_exec2");
         col.Insert(new ProviderTestItem { Id = 1, Name = "Test" });
         
         var q = new TinyDb.Query.Queryable<ProviderTestItem>(_executor, "provider_exec2");
@@ -864,7 +864,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
     [Test]
     public async Task Provider_CreateQueryGeneric_ShouldReturnIQueryableT()
     {
-        var col = _engine.GetCollectionWithName<ProviderTestItem>("provider_create_gen");
+        var col = _engine.GetCollection<ProviderTestItem>("provider_create_gen");
         col.Insert(new ProviderTestItem { Id = 1, Name = "Test" });
         
         var q = new TinyDb.Query.Queryable<ProviderTestItem>(_executor, "provider_create_gen");
@@ -893,7 +893,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
     [Test]
     public async Task Provider_ExecuteGeneric_ShouldReturnCorrectType()
     {
-        var col = _engine.GetCollectionWithName<ProviderTestItem>("provider_exec_gen");
+        var col = _engine.GetCollection<ProviderTestItem>("provider_exec_gen");
         col.Insert(new ProviderTestItem { Id = 1, Name = "Test" });
         col.Insert(new ProviderTestItem { Id = 2, Name = "Test2" });
         
@@ -928,7 +928,7 @@ public class ObjectComparerEdgeCaseTests
     {
         using var engine = new TinyDbEngine(Path.Combine(Path.GetTempPath(), $"comparer_{Guid.NewGuid()}.db"));
         
-        var col = engine.GetCollectionWithName<MixedItem>("mixed");
+        var col = engine.GetCollection<MixedItem>("mixed");
         col.Insert(new MixedItem { Id = 1, Value = 10L });
         col.Insert(new MixedItem { Id = 2, Value = 5L });
         col.Insert(new MixedItem { Id = 3, Value = 20L });
@@ -983,7 +983,7 @@ public class PredicateExtractorTests : IDisposable
     [Test]
     public async Task PredicateExtractor_MultipleWheres_ShouldCombineWithAnd()
     {
-        var col = _engine.GetCollectionWithName<PredicateTestItem>("pred_test");
+        var col = _engine.GetCollection<PredicateTestItem>("pred_test");
         col.Insert(new PredicateTestItem { Id = 1, Value = 5 });
         col.Insert(new PredicateTestItem { Id = 2, Value = 15 });
         col.Insert(new PredicateTestItem { Id = 3, Value = 25 });
@@ -1007,7 +1007,7 @@ public class PredicateExtractorTests : IDisposable
     [Test]
     public async Task PredicateExtractor_NoWhere_ShouldReturnAll()
     {
-        var col = _engine.GetCollectionWithName<PredicateTestItem>("pred_nofilter");
+        var col = _engine.GetCollection<PredicateTestItem>("pred_nofilter");
         col.Insert(new PredicateTestItem { Id = 1, Value = 10 });
         col.Insert(new PredicateTestItem { Id = 2, Value = 20 });
         

@@ -21,7 +21,7 @@ public class IdGenerationTests
     [Before(Test)]
     public void Setup()
     {
-        _testFile = Path.GetTempFileName();
+        _testFile = Path.Combine(Path.GetTempPath(), $"tinydb_idgen_test_{Guid.NewGuid():N}.db");
         _engine = new TinyDbEngine(_testFile);
     }
 

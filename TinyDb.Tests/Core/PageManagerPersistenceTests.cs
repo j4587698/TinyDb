@@ -71,7 +71,7 @@ public class PageManagerPersistenceTests
         // 创建数据库并插入数据
         using (var engine = new TinyDbEngine(_testDbPath))
         {
-            var collection = engine.GetCollectionWithName<TinyDb.Tests.TestEntities.User>(collectionName);
+            var collection = engine.GetCollection<TinyDb.Tests.TestEntities.User>(collectionName);
             collection.Insert(new TinyDb.Tests.TestEntities.User
             {
                 Name = "Recovery Test User",
@@ -96,7 +96,7 @@ public class PageManagerPersistenceTests
             var collections = reopenedEngine.GetCollectionNames().ToList();
             await Assert.That(collections.Contains(collectionName)).IsTrue();
 
-            var collection = reopenedEngine.GetCollectionWithName<TinyDb.Tests.TestEntities.User>(collectionName);
+            var collection = reopenedEngine.GetCollection<TinyDb.Tests.TestEntities.User>(collectionName);
             var count = collection.Count();
 
             // 数据应该仍然可访问
@@ -119,7 +119,7 @@ public class PageManagerPersistenceTests
 
             using (var engine = new TinyDbEngine(_testDbPath, options))
             {
-                var collection = engine.GetCollectionWithName<TinyDb.Tests.TestEntities.User>("page_size_test");
+                var collection = engine.GetCollection<TinyDb.Tests.TestEntities.User>("page_size_test");
 
                 // 插入足够的数据以测试页面大小处理
                 for (int i = 0; i < 50; i++)
@@ -138,7 +138,7 @@ public class PageManagerPersistenceTests
             // 验证数据持久化
             using (var reopenedEngine = new TinyDbEngine(_testDbPath, options))
             {
-                var collection = reopenedEngine.GetCollectionWithName<TinyDb.Tests.TestEntities.User>("page_size_test");
+                var collection = reopenedEngine.GetCollection<TinyDb.Tests.TestEntities.User>("page_size_test");
                 var count = collection.Count();
                 await Assert.That(count).IsEqualTo(50);
 

@@ -79,7 +79,7 @@ public class SecurityTests
         // Create unprotected DB
         using (var engine = new TinyDbEngine(_testFile))
         {
-            engine.GetCollectionWithName<BsonDocument>("test").Insert(new BsonDocument().Set("a", 1));
+            engine.GetCollection<BsonDocument>("test").Insert(new BsonDocument().Set("a", 1));
         }
 
         // Open with SecureTinyDbEngine without password

@@ -247,7 +247,7 @@ public class QueryExecutorTests : IDisposable
         const string collectionName = "LargeDataset";
         const int userCount = 1000;
 
-        var collection = _engine.GetCollectionWithName<QueryTestUser>(collectionName);
+        var collection = _engine.GetCollection<QueryTestUser>(collectionName);
         for (int i = 0; i < userCount; i++)
         {
             var user = new QueryTestUser

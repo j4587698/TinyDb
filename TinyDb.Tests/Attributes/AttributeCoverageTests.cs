@@ -104,23 +104,23 @@ public class AttributeCoverageTests
     {
         // Default
         var attr1 = new EntityAttribute();
-        await Assert.That(attr1.CollectionName).IsNull();
+        await Assert.That(attr1.Name).IsNull();
         await Assert.That(attr1.IdProperty).IsNull();
         
-        // CollectionName
+        // Name
         var attr2 = new EntityAttribute("users");
-        await Assert.That(attr2.CollectionName).IsEqualTo("users");
+        await Assert.That(attr2.Name).IsEqualTo("users");
         await Assert.That(attr2.IdProperty).IsNull();
         
-        // CollectionName and IdProperty
+        // Name and IdProperty
         var attr3 = new EntityAttribute("users", "UserId");
-        await Assert.That(attr3.CollectionName).IsEqualTo("users");
+        await Assert.That(attr3.Name).IsEqualTo("users");
         await Assert.That(attr3.IdProperty).IsEqualTo("UserId");
         
         // Properties setter
-        attr1.CollectionName = "products";
+        attr1.Name = "products";
         attr1.IdProperty = "ProductId";
-        await Assert.That(attr1.CollectionName).IsEqualTo("products");
+        await Assert.That(attr1.Name).IsEqualTo("products");
         await Assert.That(attr1.IdProperty).IsEqualTo("ProductId");
     }
 

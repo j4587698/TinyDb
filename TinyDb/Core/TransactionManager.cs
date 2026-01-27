@@ -364,7 +364,7 @@ public sealed class TransactionManager : IDisposable
             {
                 try
                 {
-                    var metaCol = _engine.GetCollectionWithName<MetadataDocument>(metaColName);
+                    var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
                     var metaDoc = metaCol.FindAll().OrderByDescending(d => d.UpdatedAt).FirstOrDefault();
                     
                     if (metaDoc != null)

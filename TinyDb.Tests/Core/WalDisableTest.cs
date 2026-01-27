@@ -67,7 +67,7 @@ public class WalDisableTest
 
         using (var engine = new TinyDbEngine(_testDbPath, options))
         {
-            var collection = engine.GetCollectionWithName<User>("test_users");
+            var collection = engine.GetCollection<User>("test_users");
 
             // 插入一些数据
             for (int i = 0; i < 10; i++)
@@ -93,7 +93,7 @@ public class WalDisableTest
         // 重新打开数据库验证数据持久化
         using (var reopenedEngine = new TinyDbEngine(_testDbPath, options))
         {
-            var collection = reopenedEngine.GetCollectionWithName<User>("test_users");
+            var collection = reopenedEngine.GetCollection<User>("test_users");
             var count = collection.Count();
             await Assert.That(count).IsEqualTo(10);
         }
@@ -116,7 +116,7 @@ public class WalDisableTest
         // 第一次操作
         using (var engine = new TinyDbEngine(_testDbPath, options))
         {
-            var collection = engine.GetCollectionWithName<User>("users");
+            var collection = engine.GetCollection<User>("users");
             collection.Insert(new User { Name = "User1", Age = 25, Email = "user1@example.com" });
             engine.Flush();
         }
@@ -126,7 +126,7 @@ public class WalDisableTest
         // 第二次操作 - 重新打开
         using (var engine = new TinyDbEngine(_testDbPath, options))
         {
-            var collection = engine.GetCollectionWithName<User>("users");
+            var collection = engine.GetCollection<User>("users");
             collection.Insert(new User { Name = "User2", Age = 30, Email = "user2@example.com" });
             engine.Flush();
         }
@@ -136,7 +136,7 @@ public class WalDisableTest
         // 验证数据
         using (var engine = new TinyDbEngine(_testDbPath, options))
         {
-            var collection = engine.GetCollectionWithName<User>("users");
+            var collection = engine.GetCollection<User>("users");
             var count = collection.Count();
             await Assert.That(count).IsEqualTo(2);
         }

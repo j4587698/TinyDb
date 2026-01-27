@@ -34,7 +34,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_Or_Condition_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "A", Category = "Cat1" });
         col.Insert(new QueryExtendedProduct { Name = "B", Category = "Cat2" });
         col.Insert(new QueryExtendedProduct { Name = "C", Category = "Cat3" });
@@ -49,7 +49,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_NotEqual_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "A", Stock = 10 });
         col.Insert(new QueryExtendedProduct { Name = "B", Stock = 0 });
 
@@ -62,7 +62,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_LessThan_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "A", Price = 10 });
         col.Insert(new QueryExtendedProduct { Name = "B", Price = 20 });
 
@@ -75,7 +75,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_LessThanOrEqual_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "A", Price = 10 });
         col.Insert(new QueryExtendedProduct { Name = "B", Price = 20 });
 
@@ -88,7 +88,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_String_StartsWith_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "Apple" });
         col.Insert(new QueryExtendedProduct { Name = "Banana" });
 
@@ -101,7 +101,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_String_EndsWith_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "Apple" });
         col.Insert(new QueryExtendedProduct { Name = "Banana" });
 
@@ -115,7 +115,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_String_Contains_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "Pineapple" });
         col.Insert(new QueryExtendedProduct { Name = "Banana" });
 
@@ -128,7 +128,7 @@ public class QueryExecutorExtendedTests : IDisposable
     [Test]
     public async Task Execute_With_List_Contains_Should_Work()
     {
-        var col = _engine.GetCollectionWithName<QueryExtendedProduct>("Products");
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
         col.Insert(new QueryExtendedProduct { Name = "A", Tags = new List<string> { "Red", "Fruit" } });
         col.Insert(new QueryExtendedProduct { Name = "B", Tags = new List<string> { "Yellow", "Fruit" } });
 
