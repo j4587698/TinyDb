@@ -2,7 +2,7 @@ name: Release TinyDb to NuGet
 
 on:
   push:
-    branches: [ main, main ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -21,7 +21,10 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: |
+          8.0.x
+          9.0.x
+          10.0.x
 
     - name: Get previous version
       id: get_previous_version
@@ -69,15 +72,26 @@ jobs:
         # 构建整个解决方案
         dotnet build TinyDb.sln -c Release
 
-        # 运行测试（现在所有测试都通过了！）
-        echo "Running tests..."
-        dotnet test TinyDb.Tests/TinyDb.Tests.csproj -c Release --no-build --logger "console;verbosity=minimal"
+        # 运行测试 (TUnit 支持 dotnet test，会同时运行所有目标框架)
+        echo "Running tests on all target frameworks (net8.0, net9.0, net10.0)..."
+        dotnet test --project TinyDb.Tests/TinyDb.Tests.csproj -c Release --no-build
 
         # 构建 NuGet 包
         echo "Building NuGet package..."
         dotnet pack TinyDb/TinyDb.csproj -c Release --output ./nupkg
 
-        # 验证包内容
+    - name: Run AOT tests on .NET 10
+      if: env.version_changed == 'true'
+      run: |
+        echo "Publishing AOT test binary for .NET 10..."
+        dotnet publish TinyDb.Tests/TinyDb.Tests.csproj -c Release -f net10.0 -r linux-x64 --self-contained true
+
+        echo "Running AOT tests..."
+        ./TinyDb.Tests/bin/Release/net10.0/linux-x64/publish/TinyDb.Tests
+
+    - name: Verify NuGet package
+      if: env.version_changed == 'true'
+      run: |
         echo "Verifying package contents..."
         NUPKG_FILE=$(find ./nupkg -name "TinyDb.${{ env.current_version }}.nupkg" | head -1)
         if [ -n "$NUPKG_FILE" ]; then
@@ -90,6 +104,7 @@ jobs:
           echo "📋 Package contents:"
           [ -f "$TEMP_DIR/lib/net8.0/TinyDb.dll" ] && echo "  ✅ .NET 8.0 library"
           [ -f "$TEMP_DIR/lib/net9.0/TinyDb.dll" ] && echo "  ✅ .NET 9.0 library"
+          [ -f "$TEMP_DIR/lib/net10.0/TinyDb.dll" ] && echo "  ✅ .NET 10.0 library"
 
           if [ -f "$TEMP_DIR/analyzers/dotnet/cs/TinyDb.SourceGenerator.dll" ]; then
             echo "  ✅ SourceGenerator analyzer"
