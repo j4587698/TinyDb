@@ -37,6 +37,17 @@ TestResults/
 **/*.trx
 **/*.coverage
 **/*.coverage.xml
+test_results*.txt
+tests_list*.txt
+
+# Coverage reports
+coveragereport/
+coveragereport*/
+**/coveragereport/
+
+# Diagnostic files
+**/*.diag
+**/test-diag/
 
 # Logs
 *.log
@@ -55,12 +66,14 @@ logs/
 .Trashes
 ehthumbs.db
 Thumbs.db
+nul
 
 # Development files
 DEVELOPMENT.md
 PROJECT_SUMMARY.md
 test_*.cs
 IdTest.cs
+CODE_AUDIT_REPORT.md
 
 # Debug directories
 DebugTest/
