@@ -5,12 +5,14 @@ using TinyDb.Bson;
 using TinyDb.IdGeneration;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
+using TUnit.Core;
 
 namespace TinyDb.Tests.IdGeneration;
 
 /// <summary>
 /// Comprehensive tests for IdGeneratorFactory, AutoIdGenerator and IdentitySequences to improve coverage
 /// </summary>
+[NotInParallel]
 public class IdGenerationFullTests
 {
     #region IdentitySequences Tests
@@ -65,15 +67,14 @@ public class IdGenerationFullTests
     [Test]
     public async Task IdentitySequences_ResetAll_ShouldClearAllSequences()
     {
-        // Use unique keys to avoid race conditions with parallel tests
+        // Use unique keys for this test
         var key1 = $"all_1_{Guid.NewGuid():N}";
         var key2 = $"all_2_{Guid.NewGuid():N}";
         IdentitySequences.GetNextValue(key1);
         IdentitySequences.GetNextValue(key2);
         
-        // Reset specific keys instead of ResetAll to avoid affecting other parallel tests
-        IdentitySequences.Reset(key1);
-        IdentitySequences.Reset(key2);
+        // Actually test ResetAll - safe since we're NotInParallel
+        IdentitySequences.ResetAll();
 
         var v1 = IdentitySequences.GetNextValue(key1);
         var v2 = IdentitySequences.GetNextValue(key2);
@@ -176,7 +177,7 @@ public class IdGenerationFullTests
     [Test]
     public async Task AutoIdGenerator_IntId_EmptyValue_ShouldGenerate()
     {
-        IdentitySequences.ResetAll();
+        // Don't use ResetAll() as it affects parallel tests
         var entity = new IntIdEntity { Id = 0 };
         var prop = typeof(IntIdEntity).GetProperty(nameof(IntIdEntity.Id))!;
 
@@ -201,7 +202,7 @@ public class IdGenerationFullTests
     [Test]
     public async Task AutoIdGenerator_LongId_EmptyValue_ShouldGenerate()
     {
-        IdentitySequences.ResetAll();
+        // Don't use ResetAll() as it affects parallel tests
         var entity = new LongIdEntity { Id = 0L };
         var prop = typeof(LongIdEntity).GetProperty(nameof(LongIdEntity.Id))!;
 
