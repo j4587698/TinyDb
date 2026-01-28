@@ -147,6 +147,7 @@ public class QueryPipelineGroupByTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("Test uses anonymous types and dynamic which require dynamic code generation")]
     public async Task ExecuteGroupBy_WithNullKey_ShouldGroupCorrectly()
     {
         // Test grouping with null keys

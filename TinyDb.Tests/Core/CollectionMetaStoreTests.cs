@@ -2,6 +2,7 @@ using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Storage;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -12,6 +13,7 @@ namespace TinyDb.Tests.Core;
 /// Since CollectionMetaStore is internal, we test it through TinyDbEngine 
 /// and use reflection for direct testing where needed.
 /// </summary>
+[SkipInAot("Tests use reflection to access internal CollectionMetaStore methods")]
 public class CollectionMetaStoreTests : IDisposable
 {
     private readonly string _testDbPath;
@@ -334,6 +336,7 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task Collection_WithEmptyName_ShouldWork()
     {
         // Empty string as collection name (edge case)
@@ -417,6 +420,7 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task GetMetadata_AfterRemoveCollection_ShouldReturnEmptyDocument()
     {
         var metaStore = GetCollectionMetaStore();
@@ -438,6 +442,7 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task UpdateMetadata_MultipleTimes_ShouldOverwritePrevious()
     {
         var metaStore = GetCollectionMetaStore();
@@ -537,6 +542,7 @@ public class CollectionMetaStorePersistenceTests
     }
 
     [Test]
+    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task Persistence_MetadataUpdate_ShouldSurviveReopen()
     {
         var path = Path.Combine(Path.GetTempPath(), $"meta_update_persist_{Guid.NewGuid():N}.db");
