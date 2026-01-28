@@ -74,7 +74,7 @@ jobs:
 
         # 运行测试 (TUnit 支持 dotnet test，会同时运行所有目标框架)
         echo "Running tests on all target frameworks (net8.0, net9.0, net10.0)..."
-        dotnet test --project TinyDb.Tests/TinyDb.Tests.csproj -c Release --no-build
+        dotnet test --project TinyDb.Tests/TinyDb.Tests.csproj -c Release
 
         # 构建 NuGet 包
         echo "Building NuGet package..."
