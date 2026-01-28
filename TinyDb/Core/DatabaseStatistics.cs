@@ -26,6 +26,6 @@ public sealed class DatabaseStatistics
     public override string ToString()
     {
         return $"Database[{DatabaseName}]: {UsedPages}/{TotalPages} pages, {CollectionCount} collections, " +
-               $"{FileSize:N0} bytes, HitRatio={CacheHitRatio:P1}";
+               $"{FileSize:N0} bytes, HitRatio={CacheHitRatio * 100:F1}%";
     }
 }

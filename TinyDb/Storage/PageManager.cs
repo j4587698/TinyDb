@@ -652,6 +652,6 @@ public sealed class PageManagerStatistics
 
     public override string ToString()
     {
-        return $"PageManager: {UsedPages}/{TotalPages} used, {CachedPages}/{MaxCacheSize} cached, {DirtyPages} dirty, HitRatio={CacheHitRatio:P1}";
+        return $"PageManager: {UsedPages}/{TotalPages} used, {CachedPages}/{MaxCacheSize} cached, {DirtyPages} dirty, HitRatio={CacheHitRatio * 100:F1}%";
     }
 }

@@ -330,6 +330,6 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// </summary>
     public override string ToString()
     {
-        return $"LRUCache[{Count}/{_capacity}] HitRatio={HitRatio:P1}";
+        return $"LRUCache[{Count}/{_capacity}] HitRatio={HitRatio * 100:F1}%";
     }
 }
