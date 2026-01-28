@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
@@ -8,7 +8,7 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
         <PackageId>TinyDb</PackageId>
-        <Version>0.1.5</Version>
+        <Version>0.2.0</Version>
         <Authors>TinyDb Team</Authors>
         <Description>TinyDb - 轻量级的AOT兼容单文件NoSQL数据库，内置源码生成器支持</Description>
         <Copyright>Copyright © 2025 TinyDb Team</Copyright>
