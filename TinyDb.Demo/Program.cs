@@ -36,7 +36,8 @@ public class Program
             ("实体关系", "8", RelationshipsDemo.RunAsync),
             ("事务处理功能", "9", TransactionDemo.RunAsync),
             ("索引系统", "10", IndexDemo.RunAsync),
-            ("自动ID生成", "11", AutoIdSimpleDemo.RunAsync)
+            ("自动ID生成", "11", AutoIdSimpleDemo.RunAsync),
+            ("BsonIgnore忽略字段", "12", BsonIgnoreDemo.RunAsync)
         };
 
         Console.WriteLine("🎯 可用演示列表:");
@@ -129,7 +130,8 @@ public class Program
             "secure_demo.db", "normal_demo.db", "index_demo.db",
             "idgeneration_demo.db", "option_secure_demo.db", "advanced_demo.db",
             "linq_query_demo.db", "async_demo.db", "bulk_demo.db",
-            "nested_objects_demo.db", "relationships_demo.db", "auto_id_demo.db"
+            "nested_objects_demo.db", "relationships_demo.db", "auto_id_demo.db",
+            "bson_ignore_demo.db"
         };
 
         // 清理WAL文件
