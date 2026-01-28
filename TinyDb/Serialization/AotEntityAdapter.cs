@@ -12,6 +12,31 @@ public interface IAotEntityAdapter
 {
     BsonDocument ToDocumentUntyped(object entity);
     object FromDocumentUntyped(BsonDocument document);
+    
+    /// <summary>
+    /// 从文档转换为对象（返回 object 类型）
+    /// </summary>
+    object? FromDocumentObject(BsonDocument document);
+    
+    /// <summary>
+    /// 创建该类型的数组（AOT 兼容）
+    /// </summary>
+    /// <param name="length">数组长度</param>
+    /// <returns>新创建的数组</returns>
+    Array CreateArray(int length);
+    
+    /// <summary>
+    /// 创建该类型的 List 集合（AOT 兼容）
+    /// </summary>
+    /// <returns>新创建的 List</returns>
+    System.Collections.IList CreateList();
+    
+    /// <summary>
+    /// 创建该类型的 List 集合，并用指定元素初始化（AOT 兼容）
+    /// </summary>
+    /// <param name="items">要添加到集合的元素</param>
+    /// <returns>包含指定元素的 List</returns>
+    System.Collections.IList CreateListFrom(IEnumerable<object> items);
 }
 
 /// <summary>
@@ -45,6 +70,37 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter
     // 实现非泛型接口
     public BsonDocument ToDocumentUntyped(object entity) => ToDocument((T)entity);
     public object FromDocumentUntyped(BsonDocument document) => FromDocument(document)!;
+    public object? FromDocumentObject(BsonDocument document) => FromDocument(document);
+    
+    /// <summary>
+    /// 创建 T 类型的数组（AOT 兼容）
+    /// </summary>
+    public Array CreateArray(int length) => new T[length];
+    
+    /// <summary>
+    /// 创建 List&lt;T&gt;（AOT 兼容）
+    /// </summary>
+    public System.Collections.IList CreateList() => new List<T>();
+    
+    /// <summary>
+    /// 创建 List&lt;T&gt; 并用指定元素初始化（AOT 兼容）
+    /// </summary>
+    public System.Collections.IList CreateListFrom(IEnumerable<object> items)
+    {
+        var list = new List<T>();
+        foreach (var item in items)
+        {
+            if (item is T typedItem)
+            {
+                list.Add(typedItem);
+            }
+            else if (item == null)
+            {
+                list.Add(default!);
+            }
+        }
+        return list;
+    }
 }
 
 /// <summary>
@@ -82,6 +138,17 @@ public static partial class AotHelperRegistry
 
         adapter = null;
         return false;
+    }
+
+    /// <summary>
+    /// 尝试根据类型获取适配器（公共方法）
+    /// </summary>
+    /// <param name="entityType">实体类型</param>
+    /// <param name="adapter">适配器</param>
+    /// <returns>是否找到适配器</returns>
+    public static bool TryGetAdapter(Type entityType, [NotNullWhen(true)] out IAotEntityAdapter? adapter)
+    {
+        return TryGetUntypedAdapter(entityType, out adapter);
     }
 
     public static void Register<T>(AotEntityAdapter<T> adapter)

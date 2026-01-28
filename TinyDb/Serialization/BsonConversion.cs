@@ -131,6 +131,8 @@ public static class BsonConversion
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2070", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "数组元素类型在AOT模式下由源生成器保留。")]
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "数组类型在AOT模式下由源生成器保留。")]
     public static object? FromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties)] Type targetType)
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));

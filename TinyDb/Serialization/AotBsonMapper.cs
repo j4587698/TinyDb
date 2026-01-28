@@ -345,6 +345,10 @@ public static class AotBsonMapper
     private static BsonDocument FallbackToDocumentInternal([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, object entity)
     {
         var metadata = GetMetadata(entityType);
+        // 获取 DbRef 属性信息
+        var refProperties = References.DbRefSerializer.GetRefProperties(entityType);
+        var refPropertyNames = new HashSet<string>(refProperties.Select(r => r.Property.Name), StringComparer.OrdinalIgnoreCase);
+        
         // Optimize: Use Dictionary to collect elements first to avoid creating multiple BsonDocument instances via chaining Set()
         var elements = new Dictionary<string, BsonValue>(metadata.Properties.Count + metadata.Fields.Count + 1);
 
@@ -365,8 +369,20 @@ public static class AotBsonMapper
             }
 
             var value = property.GetValue(entity);
-            var bsonValue = ConvertToBsonValue(value);
-            elements[ToCamelCase(property.Name)] = bsonValue;
+            
+            // 检查是否是 DbRef 属性
+            var refInfo = refProperties.FirstOrDefault(r => r.Property.Name == property.Name);
+            if (refInfo.Property != null)
+            {
+                // 序列化为 DbRef 格式
+                var bsonValue = References.DbRefSerializer.SerializeToDbRef(value, refInfo.Attribute.CollectionName);
+                elements[ToCamelCase(property.Name)] = bsonValue;
+            }
+            else
+            {
+                var bsonValue = ConvertToBsonValue(value);
+                elements[ToCamelCase(property.Name)] = bsonValue;
+            }
         }
 
         foreach (var field in metadata.Fields)

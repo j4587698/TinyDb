@@ -365,6 +365,37 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     }
 
     /// <summary>
+    /// 创建支持 Include 的查询构建器
+    /// </summary>
+    /// <typeparam name="TProperty">属性类型</typeparam>
+    /// <param name="expression">要包含的引用属性表达式</param>
+    /// <returns>支持 Include 的查询构建器</returns>
+    /// <example>
+    /// <code>
+    /// var orders = db.GetCollection&lt;Order&gt;("orders")
+    ///     .Include(x => x.Customer)
+    ///     .Include(x => x.Products)
+    ///     .FindAll();
+    /// </code>
+    /// </example>
+    public References.IncludeQueryBuilder<T> Include<TProperty>(Expression<Func<T, TProperty>> expression)
+    {
+        ThrowIfDisposed();
+        return new References.IncludeQueryBuilder<T>(_engine, _name).Include(expression);
+    }
+
+    /// <summary>
+    /// 创建支持 Include 的查询构建器（通过路径）
+    /// </summary>
+    /// <param name="path">要包含的引用属性路径</param>
+    /// <returns>支持 Include 的查询构建器</returns>
+    public References.IncludeQueryBuilder<T> Include(string path)
+    {
+        ThrowIfDisposed();
+        return new References.IncludeQueryBuilder<T>(_engine, _name).Include(path);
+    }
+
+    /// <summary>
     /// 统计文档数量
     /// </summary>
     /// <returns>文档数量</returns>
