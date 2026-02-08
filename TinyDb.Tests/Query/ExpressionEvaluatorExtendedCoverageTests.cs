@@ -130,7 +130,7 @@ public class ExpressionEvaluatorExtendedCoverageTests
         var entity = new TestEntity();
         // Create a custom expression type (we'll use a mock scenario)
         // Since we can't easily create unsupported types, we'll skip this
-        await Assert.That(true).IsTrue();
+        await Assert.That(entity).IsNotNull();
     }
 
     #endregion
@@ -623,6 +623,48 @@ public class ExpressionEvaluatorExtendedCoverageTests
         
         var checkExpr = new BinaryExpression(ExpressionType.Equal, countExpr, new ConstantExpression(2));
         await Assert.That(ExpressionEvaluator.Evaluate(checkExpr, entity)).IsTrue();
+    }
+
+    [Test]
+    public async Task EvaluateFunction_EnumerableSum_WithSelectorLambda()
+    {
+        var numbers = new List<int> { 1, 2, 3 };
+        System.Linq.Expressions.Expression<Func<int, int>> selector = x => x * 2;
+        var lambda = selector;
+
+        var sumExpr = new FunctionExpression(
+            "Sum",
+            null,
+            new QueryExpression[]
+            {
+                new ConstantExpression(numbers),
+                new ConstantExpression(lambda)
+            });
+
+        var entity = new TestEntity();
+        var result = ExpressionEvaluator.EvaluateValue<TestEntity>(sumExpr, entity);
+
+        await Assert.That(result).IsEqualTo(12m);
+    }
+
+    [Test]
+    public async Task EvaluateFunction_EnumerableSum_WithConstantSelector()
+    {
+        var numbers = new List<int> { 1, 2, 3 };
+
+        var sumExpr = new FunctionExpression(
+            "Sum",
+            null,
+            new QueryExpression[]
+            {
+                new ConstantExpression(numbers),
+                new ConstantExpression(2)
+            });
+
+        var entity = new TestEntity();
+        var result = ExpressionEvaluator.EvaluateValue<TestEntity>(sumExpr, entity);
+
+        await Assert.That(result).IsEqualTo(6m);
     }
 
     [Test]

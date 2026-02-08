@@ -146,7 +146,7 @@ public class ExpressionEvaluatorMatrixTests
         return ExpressionEvaluator.Evaluate(eq, new BsonDocument());
     }
     
-    private bool EvalEq(object left, object right)
+    private bool EvalEq(object? left, object? right)
     {
         var eq = new TBinaryExpression(ExpressionType.Equal, new TConstantExpression(left), new TConstantExpression(right));
         return ExpressionEvaluator.Evaluate(eq, new BsonDocument());

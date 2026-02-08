@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using TinyDb.Core;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -24,6 +25,7 @@ public class QueryExecutorIndexTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class Product
     {
         public int Id { get; set; }

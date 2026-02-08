@@ -19,33 +19,28 @@ public class ExpressionParserErrorTests
     [Test]
     public async Task Parse_Unsupported_NodeType_ShouldThrow()
     {
-        // 1. Conditional (ternary)
-        // x => x.Id > 0 ? true : false
-        Expression<Func<TestDoc, bool>> conditional = x => x.Id > 0 ? true : false;
-        await Assert.That(() => _parser.Parse(conditional)).Throws<NotSupportedException>();
-
-        // 2. ListInit (New with initializer)
+        // 1. ListInit (New with initializer)
         // x => new List<int> { x.Id }.Count > 0
         Expression<Func<TestDoc, bool>> listInit = x => new List<int> { x.Id }.Count > 0;
         await Assert.That(() => _parser.Parse(listInit)).Throws<NotSupportedException>();
         
-        // 3. NewArrayInit
+        // 2. NewArrayInit
         // x => new int[] { x.Id }.Length > 0
         Expression<Func<TestDoc, bool>> newArrayInit = x => new int[] { x.Id }.Length > 0;
         await Assert.That(() => _parser.Parse(newArrayInit)).Throws<NotSupportedException>();
         
-        // 4. NewArrayBounds
+        // 3. NewArrayBounds
         // x => new int[x.Id].Length > 0
         Expression<Func<TestDoc, bool>> newArrayBounds = x => new int[x.Id].Length > 0;
         await Assert.That(() => _parser.Parse(newArrayBounds)).Throws<NotSupportedException>();
         
-        // 5. TypeIs (x is TestDoc)
+        // 4. TypeIs (x is TestDoc)
         // Note: x is TestDoc is always true, might be optimized by compiler?
         // Use: x is object
         Expression<Func<TestDoc, bool>> typeIs = x => x is object;
         await Assert.That(() => _parser.Parse(typeIs)).Throws<NotSupportedException>();
         
-        // 6. TypeAs (x as object)
+        // 5. TypeAs (x as object)
         Expression<Func<TestDoc, bool>> typeAs = x => (x as object) != null;
         await Assert.That(() => _parser.Parse(typeAs)).Throws<NotSupportedException>();
         
@@ -53,7 +48,7 @@ public class ExpressionParserErrorTests
         // x => new TestDoc { Id = x.Id } != null
         // MemberInitExpression is now parsed and can be evaluated
         
-        // 8. Invocation (invoking a delegate)
+        // 6. Invocation (invoking a delegate)
         Func<int, bool> d = i => i > 0;
         Expression<Func<TestDoc, bool>> invoke = x => d(x.Id);
         // Note: This might be compiled as InvocationExpression
@@ -100,19 +95,11 @@ public class ExpressionParserErrorTests
         
         // Negate is supported.
         
-        // UnaryPlus (+x.Id)
-        Expression<Func<TestDoc, bool>> unaryPlus = x => +x.Id == 1;
-        // C# compiler might optimize +x to x?
-        // If not, it's UnaryPlus.
-        // Let's see.
-        try 
-        {
-            _parser.Parse(unaryPlus); 
-            // If it passes (optimized), fine. If it throws, fine.
-            // If it returns UnaryExpression with UnaryPlus, evaluating it might fail if Evaluator doesn't support it.
-            // Parser supports: Not, Negate, Convert.
-            // UnaryPlus is likely not supported in Parser switch.
-        }
-        catch(NotSupportedException) {}
+        // UnaryPlus (+x): build expression manually to avoid compiler optimizations
+        var param = Expression.Parameter(typeof(int), "x");
+        var unaryPlus = Expression.MakeUnary(ExpressionType.UnaryPlus, param, typeof(int));
+
+        await Assert.That(() => _parser.ParseExpression(unaryPlus))
+            .Throws<NotSupportedException>();
     }
 }

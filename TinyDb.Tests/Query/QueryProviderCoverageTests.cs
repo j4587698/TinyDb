@@ -5,6 +5,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using TinyDb.Query;
 using TinyDb.Core;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -75,6 +76,17 @@ public class QueryProviderCoverageTests : IDisposable
         await Assert.That(newQObj).IsNotNull();
         await Assert.That(newQObj).IsTypeOf<Queryable<TestEntity, TestEntity>>();
     }
+
+    [Test]
+    public async Task QueryProvider_CreateQuery_WithInvalidCollection_ShouldThrow()
+    {
+        var executor = new QueryExecutor(_engine);
+        var q = new Queryable<TestEntity>(executor, "test");
+        var provider = new QueryProvider<TestEntity, TestEntity>(executor, null!);
+        var expr = Expression.Constant(q);
+
+        await Assert.That(() => provider.CreateQuery(expr)).Throws<ArgumentNullException>();
+    }
     
     [Test]
     public async Task QueryProvider_Execute_ShouldWork()
@@ -83,23 +95,17 @@ public class QueryProviderCoverageTests : IDisposable
         collection.Insert(new TestEntity { Id = 1, Name = "A" });
         
         var q = collection.Query();
-        // Execute<TResult> -> e.g. Count()
-        // Expression for Count()
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Count",
-            new[] { typeof(TestEntity) },
-            q.Expression
-        );
-        
-        var count = q.Provider.Execute<int>(call);
+        var count = q.Count();
         await Assert.That(count).IsEqualTo(1);
         
         // Execute (non-generic)
-        var countObj = q.Provider.Execute(call);
-        await Assert.That(countObj).IsEqualTo(1);
+        var result = q.Provider.Execute(q.Expression);
+        await Assert.That(result).IsNotNull();
+        var list = ((IEnumerable<TestEntity>)result!).ToList();
+        await Assert.That(list.Count).IsEqualTo(1);
     }
 
+    [Entity]
     public class TestEntity
     {
         public int Id { get; set; }

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using TinyDb.Query;
@@ -97,6 +99,53 @@ public class QueryExecutorCoverageTests
         };
         var rangeLTE = (IndexScanRange)method.Invoke(null, new object[] { planLTE })!;
         await Assert.That(rangeLTE.IncludeMax).IsTrue();
+
+        // Case 5: NotEqual (falls through switch without explicit handling)
+        var planNE = new QueryExecutionPlan
+        {
+            IndexScanKeys = new List<IndexScanKey>
+            {
+                new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.NotEqual }
+            }
+        };
+        var rangeNE = (IndexScanRange)method.Invoke(null, new object[] { planNE })!;
+        await Assert.That(rangeNE).IsNotNull();
+    }
+
+    [Test]
+    public async Task ExecuteFullTableScan_ShouldFilterMismatchedCollectionDocuments_And_HandleNullDocumentIdKeys()
+    {
+        var colA = $"col_a_{Guid.NewGuid():N}";
+        var colB = $"col_b_{Guid.NewGuid():N}";
+
+        var a = _engine.GetCollection<BsonDocument>(colA);
+        var b = _engine.GetCollection<BsonDocument>(colB);
+
+        _ = a.Insert(new BsonDocument().Set("n", 1));
+        _ = b.Insert(new BsonDocument().Set("n", 2));
+
+        var statesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(statesField).IsNotNull();
+
+        var states = (ConcurrentDictionary<string, CollectionState>?)statesField!.GetValue(_engine);
+        await Assert.That(states).IsNotNull();
+
+        var stateA = states![colA];
+        var stateB = states[colB];
+
+        var foreignPage = stateB.OwnedPages.Keys.First();
+        stateA.OwnedPages.TryAdd(foreignPage, 0);
+
+        using var tx = (Transaction)_engine.BeginTransaction();
+        tx.Operations.Add(new TransactionOperation(TransactionOperationType.Delete, colA, documentId: null));
+        tx.Operations.Add(new TransactionOperation(TransactionOperationType.Delete, colA, documentId: ObjectId.NewObjectId()));
+
+        var executor = new QueryExecutor(_engine);
+        var results = executor.Execute<BsonDocument>(colA).ToList();
+
+        await Assert.That(results.Count).IsEqualTo(1);
+        await Assert.That(results[0].TryGetValue("_collection", out var c)).IsTrue();
+        await Assert.That(c!.ToString()).IsEqualTo(colA);
     }
     
     [Test]
@@ -125,7 +174,6 @@ public class QueryExecutorCoverageTests
     }
 
     [Test]
-    [SkipInAot("Uses MakeGenericMethod which requires dynamic code generation")]
     public async Task ExecuteIndexScan_MissingIndex_Coverage()
     {
         var collectionName = "test_col_fallback";
@@ -142,11 +190,7 @@ public class QueryExecutorCoverageTests
         };
 
         var executor = new QueryExecutor(_engine);
-        var method = typeof(QueryExecutor).GetMethod("ExecuteIndexScan", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(method).IsNotNull();
-        var genericMethod = method!.MakeGenericMethod(typeof(BsonDocument));
-        
-        var result = genericMethod.Invoke(executor, new object[] { plan }) as IEnumerable<BsonDocument>;
+        var result = executor.ExecuteIndexScanForTests(plan);
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Count()).IsEqualTo(1);
     }

@@ -694,10 +694,10 @@ public sealed class BsonWriter : IDisposable
     {
         if (!_disposed)
         {
-            _writer?.Dispose();
+            _writer.Dispose();
             if (!_leaveOpen)
             {
-                _stream?.Dispose();
+                _stream.Dispose();
             }
             _disposed = true;
         }
@@ -1200,10 +1200,10 @@ public sealed class BsonReader : IDisposable
     {
         if (!_disposed)
         {
-            _reader?.Dispose();
+            _reader.Dispose();
             if (!_leaveOpen)
             {
-                _stream?.Dispose();
+                _stream.Dispose();
             }
             _disposed = true;
         }

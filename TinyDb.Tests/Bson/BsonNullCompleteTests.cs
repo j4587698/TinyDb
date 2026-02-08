@@ -416,6 +416,5 @@ public class BsonNullCompleteTests
 
     private struct TestStruct
     {
-        public int Value;
     }
 }

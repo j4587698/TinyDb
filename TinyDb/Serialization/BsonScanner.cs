@@ -65,39 +65,39 @@ public static class BsonScanner
     {
         switch (type)
         {
-            case BsonType.Double: offset += 8; break;
+            case BsonType.Double: offset += 8; return;
             case BsonType.String:
             case BsonType.JavaScript:
             case BsonType.Symbol:
                 int len = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
                 offset += 4 + len; 
-                break;
+                return;
             case BsonType.Document:
             case BsonType.Array:
             case BsonType.JavaScriptWithScope:
                 int size = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
                 offset += size;
-                break;
+                return;
             case BsonType.Binary:
                 int binLen = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
                 offset += 4 + 1 + binLen;
-                break;
-            case BsonType.ObjectId: offset += 12; break;
-            case BsonType.Boolean: offset += 1; break;
+                return;
+            case BsonType.ObjectId: offset += 12; return;
+            case BsonType.Boolean: offset += 1; return;
             case BsonType.DateTime:
             case BsonType.Timestamp:
-            case BsonType.Int64: offset += 8; break;
-            case BsonType.Decimal128: offset += 16; break;
+            case BsonType.Int64: offset += 8; return;
+            case BsonType.Decimal128: offset += 16; return;
             case BsonType.Null:
             case BsonType.Undefined:
             case BsonType.MinKey:
             case BsonType.MaxKey:
-                break;
+                return;
             case BsonType.RegularExpression:
                 while (data[offset++] != 0) ;
                 while (data[offset++] != 0) ;
-                break;
-            case BsonType.Int32: offset += 4; break;
+                return;
+            case BsonType.Int32: offset += 4; return;
             default: throw new NotSupportedException($"Unknown BSON type {type} at offset {offset}");
         }
     }

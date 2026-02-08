@@ -36,6 +36,21 @@ public class BsonTypesCoverageTests
         await Assert.That(s1.ToString()).IsEqualTo("sym");
         await Assert.That(s1.CompareTo(s2)).IsEqualTo(0);
         await Assert.That(s1.CompareTo(s3)).IsGreaterThan(0); // 's' > 'o'
+
+        await Assert.That(() => new BsonSymbol(null!))
+            .ThrowsExactly<ArgumentNullException>();
+
+        await Assert.That(s1.ToType(typeof(string), provider: null))
+            .IsEqualTo("sym");
+
+        await Assert.That(() => s1.ToType(typeof(int), provider: null))
+            .Throws<InvalidCastException>();
+
+        await Assert.That(s1.CompareTo((BsonValue?)null)).IsEqualTo(1);
+        await Assert.That(s1.CompareTo((BsonValue)new BsonInt32(1))).IsNotEqualTo(0);
+
+        await Assert.That(s1.Equals((BsonValue?)s2)).IsTrue();
+        await Assert.That(s1.Equals((BsonValue?)new BsonInt32(1))).IsFalse();
     }
 
     [Test]

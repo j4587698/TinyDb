@@ -27,14 +27,11 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
 
         // 检查ID是否已有值
         var currentValue = idProperty.GetValue(entity);
-        if (currentValue != null && !IsEmptyValue(currentValue))
-        {
-            return false;
-        }
+        if (!IsEmptyValue(currentValue)) return false;
 
         // 检查是否有生成策略
         var generationAttribute = idProperty.GetCustomAttribute<IdGenerationAttribute>();
-        return generationAttribute?.Strategy != IdGenerationStrategy.None;
+        return generationAttribute != null && generationAttribute.Strategy != IdGenerationStrategy.None;
     }
 
     /// <summary>
@@ -50,7 +47,7 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
         if (idProperty == null) return false;
 
         var generationAttribute = idProperty.GetCustomAttribute<IdGenerationAttribute>();
-        if (generationAttribute?.Strategy == IdGenerationStrategy.None || generationAttribute?.Strategy == null)
+        if (generationAttribute == null || generationAttribute.Strategy == IdGenerationStrategy.None)
         {
             return false;
         }
@@ -80,16 +77,16 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
     /// </summary>
     /// <param name="value">要检查的值</param>
     /// <returns>是否为空值</returns>
-    private static bool IsEmptyValue(object value)
+    private static bool IsEmptyValue(object? value)
     {
         return value switch
         {
+            null => true,
             ObjectId objectId => objectId == ObjectId.Empty,
             string str => string.IsNullOrWhiteSpace(str),
             Guid guid => guid == Guid.Empty,
             int i => i == 0,
             long l => l == 0,
-            null => true,
             _ => false
         };
     }
@@ -133,7 +130,6 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
         {
             return rawValue switch
             {
-                Guid guid => guid,
                 byte[] bytes when bytes.Length == 16 => new Guid(bytes),
                 string str => Guid.Parse(str),
                 _ => Guid.Parse(rawValue.ToString() ?? string.Empty)
@@ -144,7 +140,6 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
         {
             return rawValue switch
             {
-                ObjectId objectId => objectId,
                 string str => ObjectId.Parse(str),
                 _ => ObjectId.Parse(rawValue.ToString() ?? string.Empty)
             };

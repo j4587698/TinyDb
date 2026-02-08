@@ -59,6 +59,15 @@ public class PageTests : IDisposable
     }
 
     [Test]
+    public async Task ResetBytes_WithInvalidReservedBytes_ShouldThrow()
+    {
+        using var page = new Page(1u, TestPageSize, PageType.Data);
+
+        await Assert.That(() => page.ResetBytes(-1)).Throws<ArgumentOutOfRangeException>();
+        await Assert.That(() => page.ResetBytes(page.DataCapacity + 1)).Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
     public async Task WriteData_Should_Write_Data_To_Page()
     {
         // Arrange
@@ -96,6 +105,13 @@ public class PageTests : IDisposable
         var readData = page.ReadData(0, 5);
         var expected = new byte[] { 1, 2, 9, 8, 7 };
         await Assert.That(readData.SequenceEqual(expected)).IsTrue();
+    }
+
+    [Test]
+    public async Task WriteData_OutOfRange_ShouldThrow()
+    {
+        using var page = new Page(1u, TestPageSize, PageType.Data);
+        await Assert.That(() => page.WriteData(page.DataCapacity, new byte[] { 1 })).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -184,6 +200,37 @@ public class PageTests : IDisposable
 
         // Assert
         await Assert.That(page.IsDirty).IsFalse();
+    }
+
+    [Test]
+    public async Task Append_WhenPageIsFull_ShouldThrow()
+    {
+        using var page = new Page(1u, TestPageSize, PageType.Data);
+        page.Append(new byte[page.DataCapacity - 4]);
+
+        await Assert.That(() => page.Append(new byte[] { 1 })).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task SetContent_WhenContentTooLarge_ShouldThrow()
+    {
+        using var page = new Page(1u, TestPageSize, PageType.Data);
+        await Assert.That(() => page.SetContent(new byte[page.DataCapacity])).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task VerifyIntegrity_ShouldReflectChecksumAndHeaderValidity()
+    {
+        using var page = new Page(1u, TestPageSize, PageType.Data);
+
+        page.UpdateChecksum();
+        await Assert.That(page.VerifyIntegrity()).IsTrue();
+
+        page.WriteData(0, new byte[] { 1 });
+        await Assert.That(page.VerifyIntegrity()).IsFalse();
+
+        page.Header.PageID = 0;
+        await Assert.That(page.VerifyIntegrity()).IsFalse();
     }
 
     [Test]
@@ -349,6 +396,19 @@ public class PageTests : IDisposable
         await Assert.That(originalData.SequenceEqual(clonedData)).IsTrue();
 
         clonedPage.Dispose();
+    }
+
+    [Test]
+    public async Task DataSpan_ShouldExposeDataArea()
+    {
+        using var page = new Page(1u, TestPageSize, PageType.Data);
+
+        var length = page.DataSpan.Length;
+        page.DataSpan[0] = 123;
+        var readBack = page.ReadData(0, 1);
+
+        await Assert.That(length).IsEqualTo(page.DataCapacity);
+        await Assert.That(readBack[0]).IsEqualTo((byte)123);
     }
 
     public void Dispose()

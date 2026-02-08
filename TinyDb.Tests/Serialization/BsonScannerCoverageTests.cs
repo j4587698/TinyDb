@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Text;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TUnit.Assertions;
@@ -55,6 +57,172 @@ public class BsonScannerCoverageTests
         await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
         await Assert.That(((BsonInt32)val!).Value).IsEqualTo(999);
     }
+
+    [Test]
+    public async Task TryGetValue_SkipDouble_ShouldWork()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        writer.Write(0); // placeholder length
+
+        writer.Write((byte)BsonType.Double);
+        writer.Write(Encoding.UTF8.GetBytes("skipDouble"));
+        writer.Write((byte)0);
+        writer.Write(1.23d);
+
+        writer.Write((byte)BsonType.Int32);
+        writer.Write(Encoding.UTF8.GetBytes("target"));
+        writer.Write((byte)0);
+        writer.Write(42);
+
+        writer.Write((byte)0); // end
+
+        var bytes = ms.ToArray();
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 0);
+
+        await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
+        await Assert.That(((BsonInt32)val!).Value).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task TryGetValue_SkipBoolean_ShouldWork()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        writer.Write(0); // placeholder length
+
+        writer.Write((byte)BsonType.Boolean);
+        writer.Write(Encoding.UTF8.GetBytes("skipBool"));
+        writer.Write((byte)0);
+        writer.Write((byte)1);
+
+        writer.Write((byte)BsonType.Int32);
+        writer.Write(Encoding.UTF8.GetBytes("target"));
+        writer.Write((byte)0);
+        writer.Write(42);
+
+        writer.Write((byte)0); // end
+
+        var bytes = ms.ToArray();
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 0);
+
+        await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
+        await Assert.That(((BsonInt32)val!).Value).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task TryGetValue_SkipString_ShouldWork()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        writer.Write(0); // placeholder length
+
+        writer.Write((byte)BsonType.String);
+        writer.Write(Encoding.UTF8.GetBytes("skipStr"));
+        writer.Write((byte)0);
+
+        var strBytes = Encoding.UTF8.GetBytes("hello");
+        writer.Write(strBytes.Length + 1);
+        writer.Write(strBytes);
+        writer.Write((byte)0);
+
+        writer.Write((byte)BsonType.Int32);
+        writer.Write(Encoding.UTF8.GetBytes("target"));
+        writer.Write((byte)0);
+        writer.Write(42);
+
+        writer.Write((byte)0); // end
+
+        var bytes = ms.ToArray();
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 0);
+
+        await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
+        await Assert.That(((BsonInt32)val!).Value).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task TryGetValue_SkipObjectId_ShouldWork()
+    {
+        var doc = new BsonDocument()
+            .Set("oid", new BsonObjectId(ObjectId.NewObjectId()))
+            .Set("target", 1);
+
+        var bytes = BsonSerializer.SerializeDocument(doc);
+
+        await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
+        await Assert.That(((BsonInt32)val!).Value).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task TryGetValue_SkipRawObjectId_ShouldWork()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        writer.Write(0); // placeholder for length
+
+        writer.Write((byte)BsonType.ObjectId);
+        writer.Write((byte)'o');
+        writer.Write((byte)'i');
+        writer.Write((byte)'d');
+        writer.Write((byte)0);
+        writer.Write(new byte[12]);
+
+        writer.Write((byte)BsonType.Int32);
+        writer.Write((byte)'t');
+        writer.Write((byte)'a');
+        writer.Write((byte)'r');
+        writer.Write((byte)'g');
+        writer.Write((byte)'e');
+        writer.Write((byte)'t');
+        writer.Write((byte)0);
+        writer.Write(42);
+
+        writer.Write((byte)0); // end
+
+        var bytes = ms.ToArray();
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 0);
+
+        await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
+        await Assert.That(((BsonInt32)val!).Value).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task TryGetValue_SkipRawDecimal128_ShouldWork()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        writer.Write(0); // placeholder for length
+
+        writer.Write((byte)BsonType.Decimal128);
+        writer.Write((byte)'d');
+        writer.Write((byte)'e');
+        writer.Write((byte)'c');
+        writer.Write((byte)0);
+        writer.Write(new byte[16]);
+
+        writer.Write((byte)BsonType.Int32);
+        writer.Write((byte)'t');
+        writer.Write((byte)'a');
+        writer.Write((byte)'r');
+        writer.Write((byte)'g');
+        writer.Write((byte)'e');
+        writer.Write((byte)'t');
+        writer.Write((byte)0);
+        writer.Write(7);
+
+        writer.Write((byte)0); // end
+
+        var bytes = ms.ToArray();
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 0);
+
+        await Assert.That(BsonScanner.TryGetValue(bytes, "target", out var val)).IsTrue();
+        await Assert.That(((BsonInt32)val!).Value).IsEqualTo(7);
+    }
     
     [Test]
     public async Task TryGetValue_SkipRegex_ShouldWork()
@@ -79,7 +247,7 @@ public class BsonScannerCoverageTests
         
         await Assert.That(BsonScanner.TryGetValue(bytes, "bin", out var val)).IsTrue();
         await Assert.That(val).IsTypeOf<BsonBinary>();
-        await Assert.That(((BsonBinary)val!).Bytes).IsEquivalentTo(bin);
+        await Assert.That(((BsonBinary)val!).Bytes.SequenceEqual(bin)).IsTrue();
     }
 
     [Test]
@@ -108,5 +276,24 @@ public class BsonScannerCoverageTests
         var bytes = ms.ToArray();
         // The scanner loop checks nameEnd < document.Length
         await Assert.That(BsonScanner.TryGetValue(bytes, "a", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task TryGetValue_UnknownType_ShouldThrow()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+
+        writer.Write(0); // placeholder for length
+        writer.Write((byte)250); // unknown type
+        writer.Write((byte)'x');
+        writer.Write((byte)0);
+        writer.Write((byte)0); // end
+
+        var bytes = ms.ToArray();
+        BitConverter.GetBytes(bytes.Length).CopyTo(bytes, 0);
+
+        await Assert.That(() => BsonScanner.TryGetValue(bytes, "target", out _))
+            .Throws<NotSupportedException>();
     }
 }

@@ -1,5 +1,6 @@
 using TinyDb.Serialization;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -28,6 +29,7 @@ public class AotMapperTypeTests
         await Assert.That(replayed.Price).IsEqualTo(9.99m);
     }
 
+    [Entity]
     public class TypeEntity
     {
         public Guid Id { get; set; }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using TinyDb.Bson;
 using TinyDb.Serialization;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -11,6 +12,12 @@ namespace TinyDb.Tests.Serialization;
 public class BsonConversionTests
 {
     public enum TestEnum { Value1 = 1, Value2 = 2 }
+    public enum UIntEnum : uint { E = 5 }
+
+    public class NoEntityType
+    {
+        public int Id { get; set; }
+    }
 
     [Test]
     public async Task ToBsonValue_ShouldHandleVariousTypes()
@@ -116,6 +123,87 @@ public class BsonConversionTests
         // Guid from string
         var guid = Guid.NewGuid();
         await Assert.That(BsonConversion.FromBsonValue(new BsonString(guid.ToString()), typeof(Guid))).IsEqualTo(guid);
+    }
+
+    [Test]
+    public async Task FromBsonValueEnum_ShouldHandleUnderlyingTypes()
+    {
+        var fromLong = BsonConversion.FromBsonValueEnum<LongEnum>(new BsonString("2"));
+        await Assert.That(fromLong).IsEqualTo(LongEnum.B);
+
+        var fromShort = BsonConversion.FromBsonValueEnum<ShortEnum>(new BsonInt64(3));
+        await Assert.That(fromShort).IsEqualTo(ShortEnum.C);
+
+        var fromByte = BsonConversion.FromBsonValueEnum<ByteEnum>(new BsonDouble(4.0));
+        await Assert.That(fromByte).IsEqualTo(ByteEnum.D);
+
+        var fromUint = BsonConversion.FromBsonValueEnum<UIntEnum>(new BsonInt32(5));
+        await Assert.That(fromUint).IsEqualTo(UIntEnum.E);
+
+        var fromNull = BsonConversion.FromBsonValueEnum<TestEnum>(BsonNull.Value);
+        await Assert.That(fromNull).IsEqualTo(default(TestEnum));
+    }
+
+    [Test]
+    public async Task ToBsonValue_ComplexType_WithoutEntity_ShouldThrow()
+    {
+        var entity = new NoEntityType { Id = 1 };
+
+        await Assert.That(() => BsonConversion.ToBsonValue(entity))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task ToBsonValue_PrimitiveBranches_ShouldWork()
+    {
+        var guid = Guid.NewGuid();
+        await Assert.That(BsonConversion.ToBsonValue(guid)).IsTypeOf<BsonString>();
+
+        var oid = ObjectId.NewObjectId();
+        await Assert.That(BsonConversion.ToBsonValue(oid)).IsTypeOf<BsonObjectId>();
+
+        var date = new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        await Assert.That(BsonConversion.ToBsonValue(date)).IsTypeOf<BsonDateTime>();
+
+        await Assert.That(BsonConversion.ToBsonValue(true)).IsTypeOf<BsonBoolean>();
+        await Assert.That(BsonConversion.ToBsonValue(12.34m)).IsTypeOf<BsonDecimal128>();
+
+        var bytes = new byte[] { 1, 2, 3 };
+        await Assert.That(BsonConversion.ToBsonValue(bytes)).IsTypeOf<BsonBinary>();
+    }
+
+    [Test]
+    public async Task FromBsonValue_Object_Target_ShouldUnwrap()
+    {
+        var guid = Guid.NewGuid();
+        var uuid = new BsonBinary(guid.ToByteArray(), BsonBinary.BinarySubType.Uuid);
+        await Assert.That(BsonConversion.FromBsonValue(uuid, typeof(object))).IsEqualTo(guid);
+
+        var bytes = new byte[] { 1, 2, 3 };
+        var bin = new BsonBinary(bytes, BsonBinary.BinarySubType.Generic);
+        var byteResult = (byte[])BsonConversion.FromBsonValue(bin, typeof(object))!;
+        await Assert.That(byteResult.SequenceEqual(bytes)).IsTrue();
+
+        var doc = new BsonDocument().Set("a", 1);
+        var dict = (Dictionary<string, object?>)BsonConversion.FromBsonValue(doc, typeof(object))!;
+        await Assert.That(dict["a"]).IsEqualTo(1);
+
+        var array = new BsonArray(new BsonValue[] { 1, 2 });
+        var list = (List<object?>)BsonConversion.FromBsonValue(array, typeof(object))!;
+        await Assert.That(list.Count).IsEqualTo(2);
+        await Assert.That(list[0]).IsEqualTo(1);
+
+        var dec = new BsonDecimal128(12.5m);
+        await Assert.That(BsonConversion.FromBsonValue(dec, typeof(object))).IsEqualTo(12.5m);
+
+        var date = new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        await Assert.That(BsonConversion.FromBsonValue(new BsonDateTime(date), typeof(object))).IsEqualTo(date);
+
+        var oid = ObjectId.NewObjectId();
+        await Assert.That(BsonConversion.FromBsonValue(new BsonObjectId(oid), typeof(object))).IsEqualTo(oid);
+
+        await Assert.That(BsonConversion.FromBsonValue(new BsonBoolean(true), typeof(object))).IsEqualTo(true);
+        await Assert.That(BsonConversion.FromBsonValue(BsonNull.Value, typeof(object))).IsNull();
     }
 
     [Test]
@@ -299,17 +387,12 @@ public class BsonConversionTests
     /// Test byte conversion from fallback ToString
     /// </summary>
     [Test]
-    public async Task FromBsonValue_Byte_FromBsonBoolean_Fallback_ShouldWork()
+    public async Task FromBsonValue_Byte_Fallback_ToString_ShouldWork()
     {
-        var bsonBool = new BsonBoolean(true); // ToString() -> "True" won't work, need a type that works
-        // Use DateTime which has specific ToString that can be parsed
-        // Actually, let's use a custom type for coverage of fallback branch
-        // For byte, the fallback is Convert.ToByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
-        // BsonInt32 with value 50 toString() is "50"
-        var bsonNull = BsonNull.Value;
-        // Actually BsonNull returns null, let's try a different approach
-        // The fallback branch is hard to hit, skip for now
-        await Assert.That(true).IsTrue(); // placeholder
+        // Hits: _ => Convert.ToByte(bsonValue.ToString(), CultureInfo.InvariantCulture)
+        var bsonDec = new BsonDecimal128(50m);
+        var result = BsonConversion.FromBsonValue(bsonDec, typeof(byte));
+        await Assert.That(result).IsEqualTo((byte)50);
     }
 
     /// <summary>
@@ -665,6 +748,7 @@ public class BsonConversionTests
     /// <summary>
     /// Test complex object to BsonValue (fallback to string when AotBsonMapper fails)
     /// </summary>
+    [Entity]
     public class UnregisteredComplexType
     {
         public int Value { get; set; }

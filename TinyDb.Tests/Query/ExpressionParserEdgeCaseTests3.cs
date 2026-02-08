@@ -380,7 +380,6 @@ public class ExpressionParserEdgeCaseTests3
     }
 
     [Test]
-    [SkipInAot("Array.Length requires Lambda.Compile() to evaluate in AOT mode")]
     public async Task ParseExpression_ArrayLength_ShouldEvaluateToConstant()
     {
         var arr = new int[] { 1, 2, 3, 4, 5 };
@@ -430,7 +429,6 @@ public class ExpressionParserEdgeCaseTests3
     #region MemberInit Expression Tests
 
     [Test]
-    [SkipInAot("This test requires runtime code generation")]
     public async Task ParseExpression_MemberInitWithMultipleBindings_ShouldParseMemberBindings()
     {
         Expression<Func<TestEntity, ResultEntity>> expr = x => new ResultEntity

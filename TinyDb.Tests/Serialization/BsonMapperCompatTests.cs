@@ -1,5 +1,6 @@
 using TinyDb.Bson;
 using TinyDb.Serialization;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -7,6 +8,7 @@ namespace TinyDb.Tests.Serialization;
 
 public class BsonMapperCompatTests
 {
+    [Entity]
     public class Simple { public int Id { get; set; } public string Name { get; set; } = ""; }
 
     [Test]

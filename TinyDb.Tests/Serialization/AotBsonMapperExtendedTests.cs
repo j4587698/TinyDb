@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Serialization;
@@ -11,6 +12,7 @@ namespace TinyDb.Tests.Serialization;
 /// <summary>
 /// A class with Id property for GetId/SetId tests
 /// </summary>
+[Entity]
 public class MapperSimpleEntity
 {
     public int Id { get; set; }
@@ -30,6 +32,7 @@ public class EntityWithSpecifiedIdProperty
 /// <summary>
 /// A class with [Id] attribute on a property
 /// </summary>
+[Entity]
 public class EntityWithIdAttribute
 {
     [Id]
@@ -40,6 +43,7 @@ public class EntityWithIdAttribute
 /// <summary>
 /// A class without any Id property
 /// </summary>
+[Entity]
 public class MapperNoIdEntity
 {
     public string Name { get; set; } = "";
@@ -107,8 +111,10 @@ public class AotBsonMapperExtendedTests
         var bin = new BsonBinary(data);
         var base64 = Convert.ToBase64String(data);
         
-        await Assert.That(AotBsonMapper.ConvertValue(bin, typeof(byte[]))).IsEquivalentTo(data);
-        await Assert.That(AotBsonMapper.ConvertValue((BsonValue)base64, typeof(byte[]))).IsEquivalentTo(data);
+        var binResult = (byte[])AotBsonMapper.ConvertValue(bin, typeof(byte[]))!;
+        var base64Result = (byte[])AotBsonMapper.ConvertValue((BsonValue)base64, typeof(byte[]))!;
+        await Assert.That(binResult.SequenceEqual(data)).IsTrue();
+        await Assert.That(base64Result.SequenceEqual(data)).IsTrue();
     }
 
     [Test]

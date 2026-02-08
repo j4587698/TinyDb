@@ -259,7 +259,6 @@ public sealed class DiskBTree : IDisposable
     public bool Delete(IndexKey key, BsonValue value)
     {
         var node = FindLeafNode(key);
-        if (node == null) return false;
 
         while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
         {
@@ -328,7 +327,6 @@ public sealed class DiskBTree : IDisposable
     public List<BsonValue> Find(IndexKey key)
     {
         var node = FindLeafNode(key);
-        if (node == null) return new List<BsonValue>();
 
         while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
         {
@@ -378,7 +376,6 @@ public sealed class DiskBTree : IDisposable
     public BsonValue? FindExact(IndexKey key)
     {
         var node = FindLeafNode(key);
-        if (node == null) return null;
 
         // 查找精确匹配的第一个值
         for (int i = 0; i < node.KeyCount; i++)
@@ -407,7 +404,6 @@ public sealed class DiskBTree : IDisposable
     public IEnumerable<BsonValue> FindRange(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
     {
         var node = FindLeafNode(startKey);
-        if (node == null) yield break;
 
         while (node != null)
         {
@@ -436,7 +432,7 @@ public sealed class DiskBTree : IDisposable
         }
     }
 
-    private DiskBTreeNode? FindLeafNode(IndexKey key)
+    private DiskBTreeNode FindLeafNode(IndexKey key)
     {
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf)

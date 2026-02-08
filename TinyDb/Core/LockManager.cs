@@ -102,7 +102,7 @@ public sealed class LockRequest
     /// <returns>是否超时</returns>
     public bool IsExpired()
     {
-        return DateTime.UtcNow - RequestTime > Timeout;
+        return DateTime.UtcNow - RequestTime >= Timeout;
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using TinyDb.Core;
 using TinyDb.Storage;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -138,6 +139,7 @@ public class EngineEdgeCasesTests : IDisposable
         }
     }
 
+    [Entity]
     public class TestDoc
     {
         public int Id { get; set; }

@@ -533,15 +533,8 @@ public sealed class TransactionManager : IDisposable
     {
         while (!_disposed)
         {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(30)); // 每30秒检查一次
-                CheckAndCleanupExpiredTransactions();
-            }
-            catch
-            {
-                // 记录错误但继续运行
-            }
+            await Task.Delay(TimeSpan.FromSeconds(30)); // 每30秒检查一次
+            CheckAndCleanupExpiredTransactions();
         }
     }
 
@@ -559,18 +552,8 @@ public sealed class TransactionManager : IDisposable
 
             foreach (var expiredTransaction in expiredTransactions)
             {
-                try
-                {
-                    expiredTransaction.State = TransactionState.Failed;
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"Error failing expired transaction {expiredTransaction.TransactionId}: {ex}");
-                }
-                finally
-                {
-                    _activeTransactions.Remove(expiredTransaction.TransactionId);
-                }
+                expiredTransaction.State = TransactionState.Failed;
+                _activeTransactions.Remove(expiredTransaction.TransactionId);
             }
         }
     }
@@ -614,35 +597,18 @@ public sealed class TransactionManager : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
-        {
-            try
-            {
-                // 回滚所有活动事务
-                lock (_lock)
-                {
-                    foreach (var transaction in _activeTransactions.Values)
-                    {
-                        try
-                        {
-                            transaction.State = TransactionState.Failed;
-                        }
-                        catch
-                        {
-                            // 忽略错误
-                        }
-                    }
+        if (_disposed) return;
+        _disposed = true;
 
-                    _activeTransactions.Clear();
-                }
-            }
-            catch
+        // 回滚所有活动事务
+        lock (_lock)
+        {
+            foreach (var transaction in _activeTransactions.Values)
             {
+                transaction.State = TransactionState.Failed;
             }
-            finally
-            {
-                _disposed = true;
-            }
+
+            _activeTransactions.Clear();
         }
     }
 

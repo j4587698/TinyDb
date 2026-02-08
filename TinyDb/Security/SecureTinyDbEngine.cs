@@ -48,36 +48,9 @@ public sealed class SecureTinyDbEngine : IDisposable
         FilePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _password = password;
 
-        try
-        {
-            var options = new TinyDbOptions { Password = password };
-            _engine = new TinyDbEngine(filePath, options);
-
-            // 检查数据库是否已存在并受保护
-            if (DatabaseSecurity.IsDatabaseSecure(_engine))
-            {
-                // 验证密码 (TinyDbEngine already does this in EnsureDatabaseSecurity, 
-                // but we can double check or just set IsAuthenticated if no exception)
-                _isAuthenticated = true;
-            }
-            else if (createIfNotExists)
-            {
-                // 创建新的受保护数据库
-                DatabaseSecurity.CreateSecureDatabase(_engine, password);
-                _isAuthenticated = true;
-            }
-            else
-            {
-                // 数据库未受保护，但提供了密码
-                _engine.Dispose();
-                throw new InvalidOperationException("指定数据库未设置密码保护");
-            }
-        }
-        catch
-        {
-            _engine?.Dispose();
-            throw;
-        }
+        var options = new TinyDbOptions { Password = password };
+        _engine = new TinyDbEngine(filePath, options);
+        _isAuthenticated = true;
     }
 
     /// <summary>
@@ -90,24 +63,8 @@ public sealed class SecureTinyDbEngine : IDisposable
         FilePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _password = null;
 
-        try
-        {
-            _engine = new TinyDbEngine(filePath);
-
-            // 检查数据库是否受保护
-            if (DatabaseSecurity.IsDatabaseSecure(_engine))
-            {
-                _engine.Dispose();
-                throw new UnauthorizedAccessException("数据库受密码保护，请提供正确密码");
-            }
-
-            _isAuthenticated = true;
-        }
-        catch
-        {
-            _engine?.Dispose();
-            throw;
-        }
+        _engine = new TinyDbEngine(filePath);
+        _isAuthenticated = true;
     }
 
     /// <summary>
@@ -233,7 +190,7 @@ public sealed class SecureTinyDbEngine : IDisposable
     {
         if (!_disposed)
         {
-            _engine?.Dispose();
+            _engine.Dispose();
             _disposed = true;
         }
     }

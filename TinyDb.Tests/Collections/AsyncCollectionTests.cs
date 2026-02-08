@@ -88,6 +88,55 @@ public class AsyncCollectionTests : IDisposable
         });
     }
 
+    [Test]
+    public async Task InsertAsync_InTransaction_ShouldCommit()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var entity = new AsyncTestEntity { Name = "TxInsert" };
+
+        using var transaction = _engine.BeginTransaction();
+        var id = await collection.InsertAsync(entity);
+
+        await Assert.That(collection.Count()).IsEqualTo(1);
+
+        transaction.Commit();
+
+        var loaded = collection.FindById(id);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!.Name).IsEqualTo("TxInsert");
+    }
+
+    [Test]
+    public async Task InsertAsync_BsonDocument_ShouldAssignId()
+    {
+        var collection = _engine.GetCollection<BsonDocument>("bson_insert");
+        var doc = new BsonDocument().Set("name", "doc");
+
+        var id = await collection.InsertAsync(doc);
+
+        await Assert.That(id).IsNotNull();
+        var loaded = collection.FindById(id);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(((BsonString)loaded!["name"]).Value).IsEqualTo("doc");
+    }
+
+    [Test]
+    public async Task InsertAsync_Multiple_WithNullEntries_ShouldSkipNulls()
+    {
+        var collection = _engine.GetCollection<BsonDocument>("bson_insert_many");
+        var docs = new BsonDocument?[]
+        {
+            new BsonDocument().Set("name", "a"),
+            null,
+            new BsonDocument().Set("name", "b")
+        };
+
+        var count = await collection.InsertAsync(docs!);
+
+        await Assert.That(count).IsEqualTo(2);
+        await Assert.That(collection.Count()).IsEqualTo(2);
+    }
+
     #endregion
 
     #region UpdateAsync Tests
@@ -136,6 +185,46 @@ public class AsyncCollectionTests : IDisposable
     // AOT 适配器可能无法正确生成，导致回退到反射路径时行为不一致。
     // HasValidId 的正确行为已在 AotIdAccessorCoverageTests.cs 中充分测试。
 
+    [Test]
+    public async Task UpdateAsync_InTransaction_WhenMissing_ShouldInsert()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var entity = new AsyncTestEntity { Name = "TxNew" };
+
+        using var transaction = _engine.BeginTransaction();
+        var count = await collection.UpdateAsync(entity);
+
+        await Assert.That(count).IsEqualTo(1);
+        await Assert.That(collection.Count()).IsEqualTo(1);
+
+        transaction.Commit();
+
+        var loaded = collection.FindById(entity.Id);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!.Name).IsEqualTo("TxNew");
+    }
+
+    [Test]
+    public async Task UpdateAsync_InTransaction_WhenExists_ShouldUpdate()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var entity = new AsyncTestEntity { Name = "Before" };
+        collection.Insert(entity);
+
+        entity.Name = "After";
+
+        using var transaction = _engine.BeginTransaction();
+        var count = await collection.UpdateAsync(entity);
+
+        await Assert.That(count).IsEqualTo(1);
+
+        transaction.Commit();
+
+        var loaded = collection.FindById(entity.Id);
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!.Name).IsEqualTo("After");
+    }
+
     #endregion
 
     #region DeleteAsync Tests
@@ -180,6 +269,48 @@ public class AsyncCollectionTests : IDisposable
         var count = await collection.DeleteAsync(999);
 
         await Assert.That(count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DeleteAsync_BsonNull_Should_Return_Zero()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+
+        var count = await collection.DeleteAsync(BsonNull.Value);
+
+        await Assert.That(count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DeleteAsync_InTransaction_ShouldCommitDelete()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var entity = new AsyncTestEntity { Name = "TxDelete" };
+        var id = collection.Insert(entity);
+
+        using var transaction = _engine.BeginTransaction();
+        var count = await collection.DeleteAsync(id);
+
+        await Assert.That(count).IsEqualTo(1);
+        await Assert.That(collection.Count()).IsEqualTo(0);
+
+        transaction.Commit();
+
+        var loaded = collection.FindById(id);
+        await Assert.That(loaded).IsNull();
+    }
+
+    [Test]
+    public async Task DeleteAsync_InTransaction_WhenMissing_ShouldReturnZero()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+
+        using var transaction = _engine.BeginTransaction();
+        var count = await collection.DeleteAsync(new BsonInt32(999));
+
+        await Assert.That(count).IsEqualTo(0);
+
+        transaction.Commit();
     }
 
     [Test]

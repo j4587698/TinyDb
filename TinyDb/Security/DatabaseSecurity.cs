@@ -124,13 +124,26 @@ public static class DatabaseSecurity
             return false;
 
         using var stream = File.Open(databasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return TryReadSecurityMetadata(stream, out metadata);
+    }
+
+    internal static bool TryReadSecurityMetadata(Stream stream, out DatabaseSecurityMetadata metadata)
+    {
+        metadata = default;
+
         if (stream.Length < DatabaseHeader.Size)
             return false;
 
         var buffer = new byte[DatabaseHeader.Size];
-        var read = stream.Read(buffer, 0, buffer.Length);
-        if (read < buffer.Length)
-            return false;
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = stream.Read(buffer, offset, buffer.Length - offset);
+            if (read == 0)
+                return false;
+
+            offset += read;
+        }
 
         var header = DatabaseHeader.FromByteArray(buffer);
         return header.TryGetSecurityMetadata(out metadata);

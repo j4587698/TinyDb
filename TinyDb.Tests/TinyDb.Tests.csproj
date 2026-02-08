@@ -11,11 +11,15 @@
     <IlcGenerateCompleteTypeMetadata>true</IlcGenerateCompleteTypeMetadata>
     <IlcGenerateStackTraceData>true</IlcGenerateStackTraceData>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <NoWarn>$(NoWarn);TINYDB002;TINYDB003</NoWarn>
   </PropertyGroup>
 
   <!-- Only enable AOT publish on .NET 10+ due to ILCompiler bug in .NET 9 -->
   <PropertyGroup Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net10.0'))">
     <PublishAot>true</PublishAot>
+    <!-- Reduce NativeAOT linker/ilc memory pressure for the test assembly -->
+    <IlcGenerateCompleteTypeMetadata>false</IlcGenerateCompleteTypeMetadata>
+    <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,7 +29,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TinyDb\TinyDb.csproj" />
-    <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="PublishAot" />
   </ItemGroup>
 
 </Project>

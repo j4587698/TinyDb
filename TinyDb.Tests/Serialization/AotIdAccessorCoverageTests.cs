@@ -1,5 +1,6 @@
 using TinyDb.Bson;
 using TinyDb.Serialization;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -7,12 +8,13 @@ namespace TinyDb.Tests.Serialization;
 
 public class AotIdAccessorCoverageTests
 {
-    public class NoIdClass { public string Name { get; set; } = ""; }
-    public class IntIdClass { public int Id { get; set; } }
-    public class LongIdClass { public long Id { get; set; } }
-    public class GuidIdClass { public Guid Id { get; set; } }
-    public class StringIdClass { public string Id { get; set; } = ""; }
-    public class ObjectIdClass { public ObjectId Id { get; set; } }
+    [Entity] public class NoIdClass { public string Name { get; set; } = ""; }
+    [Entity] public class IntIdClass { public int Id { get; set; } }
+    [Entity] public class LongIdClass { public long Id { get; set; } }
+    [Entity] public class GuidIdClass { public Guid Id { get; set; } }
+    [Entity] public class StringIdClass { public string Id { get; set; } = ""; }
+    [Entity] public class ObjectIdClass { public ObjectId Id { get; set; } }
+    public class NoEntityClass { public int Id { get; set; } }
 
     [Test]
     public async Task GetId_NoIdProperty_ShouldReturnNull()
@@ -69,5 +71,31 @@ public class AotIdAccessorCoverageTests
         var strEntity = new StringIdClass();
         AotIdAccessor<StringIdClass>.SetId(strEntity, 123); // Int to String
         await Assert.That(strEntity.Id).IsEqualTo("123");
+    }
+
+    [Test]
+    public async Task BsonDocument_Path_ShouldWork()
+    {
+        var doc = new BsonDocument().Set("_id", 10);
+        var id = AotIdAccessor<BsonDocument>.GetId(doc);
+        await Assert.That(((BsonInt32)id).Value).IsEqualTo(10);
+
+        await Assert.That(AotIdAccessor<BsonDocument>.HasValidId(doc)).IsTrue();
+        await Assert.That(AotIdAccessor<BsonDocument>.GenerateIdIfNeeded(doc)).IsFalse();
+    }
+
+    [Test]
+    public async Task NoEntityAttribute_ShouldThrow()
+    {
+        var entity = new NoEntityClass { Id = 1 };
+
+        await Assert.That(() => AotIdAccessor<NoEntityClass>.GetId(entity))
+            .ThrowsExactly<InvalidOperationException>();
+        await Assert.That(() => AotIdAccessor<NoEntityClass>.SetId(entity, 1))
+            .ThrowsExactly<InvalidOperationException>();
+        await Assert.That(() => AotIdAccessor<NoEntityClass>.HasValidId(entity))
+            .ThrowsExactly<InvalidOperationException>();
+        await Assert.That(() => AotIdAccessor<NoEntityClass>.GenerateIdIfNeeded(entity))
+            .ThrowsExactly<InvalidOperationException>();
     }
 }

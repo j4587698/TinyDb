@@ -131,7 +131,7 @@ public class QueryTests
 
         // Case 2: ID 匹配，且 Name 匹配 -> 应该返回结果
         var resultPositive = col.Find(u => u.Id == 9999 && u.Name == "TargetUser").ToList();
-        await Assert.That(resultPositive).HasCount().EqualTo(1);
+        await Assert.That(resultPositive).Count().IsEqualTo(1);
         await Assert.That(resultPositive[0].Name).IsEqualTo("TargetUser");
         
         // Case 3: ID 匹配，Age 条件 (数值比较)
@@ -139,7 +139,7 @@ public class QueryTests
         await Assert.That(resultAgeMismatch).IsEmpty();
         
         var resultAgeMatch = col.Find(u => u.Id == 9999 && u.Age == 30).ToList();
-        await Assert.That(resultAgeMatch).HasCount().EqualTo(1);
+        await Assert.That(resultAgeMatch).Count().IsEqualTo(1);
     }
 
     [Test]
@@ -150,7 +150,7 @@ public class QueryTests
         col.Insert(new UserWithIntId { Id = 8888, Name = "  CHAINED  ", Age = 20 });
         
         var results = col.Find(u => u.Name.Trim().Substring(0, 5).ToLower() == "chain").ToList();
-        await Assert.That(results).HasCount().EqualTo(1);
+        await Assert.That(results).Count().IsEqualTo(1);
         await Assert.That(results[0].Id).IsEqualTo(8888);
     }
 

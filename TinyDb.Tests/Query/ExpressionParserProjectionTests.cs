@@ -1,10 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Runtime.CompilerServices;
 using TinyDb.Query;
-using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -20,7 +17,6 @@ public class ExpressionParserProjectionTests
     #region ConstructorExpression Tests
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_NewExpression_Simple_Should_Create_ConstructorExpression()
     {
         Expression<Func<TestEntity, SimpleDto>> expr = e => new SimpleDto(e.Name);
@@ -35,7 +31,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_NewExpression_MultipleArgs_Should_Create_ConstructorExpression()
     {
         Expression<Func<TestEntity, MultiArgDto>> expr = e => new MultiArgDto(e.Name, e.Value);
@@ -48,7 +43,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_NewExpression_NoArgs_Should_Create_ConstructorExpression()
     {
         Expression<Func<TestEntity, EmptyDto>> expr = e => new EmptyDto();
@@ -65,7 +59,6 @@ public class ExpressionParserProjectionTests
     #region MemberInitExpression Tests
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_MemberInitExpression_Should_Create_MemberInitQueryExpression()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name, Amount = e.Value };
@@ -80,7 +73,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_MemberInitExpression_Bindings_Should_Have_Correct_Names()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name, Amount = e.Value };
@@ -94,7 +86,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_MemberInitExpression_SingleBinding_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name };
@@ -108,7 +99,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_MemberInitExpression_WithArithmetic_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { Amount = e.Value * 2 };
@@ -121,7 +111,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_MemberInitExpression_WithStringConcat_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name + " - " + e.Category };
@@ -136,7 +125,6 @@ public class ExpressionParserProjectionTests
     #region Edge Cases
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_MemberInitExpression_EmptyBindings_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { };
@@ -148,7 +136,6 @@ public class ExpressionParserProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task Parse_NestedMemberInit_Should_Work()
     {
         Expression<Func<TestEntity, NestedDto>> expr = e => new NestedDto

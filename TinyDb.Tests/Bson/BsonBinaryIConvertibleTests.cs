@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using TinyDb.Bson;
 using TUnit.Assertions;
@@ -17,9 +18,9 @@ public class BsonBinaryIConvertibleTests
         var bytes = new byte[] { 1, 2, 3, 4, 5 };
         var binary = new BsonBinary(bytes);
         
-        await Assert.That(binary.Bytes).IsEquivalentTo(bytes);
+        await Assert.That(binary.Bytes.SequenceEqual(bytes)).IsTrue();
         await Assert.That(binary.SubType).IsEqualTo(BsonBinary.BinarySubType.Generic);
-        await Assert.That(binary.Value).IsEquivalentTo(bytes);
+        await Assert.That(binary.Value.SequenceEqual(bytes)).IsTrue();
     }
 
     [Test]
@@ -61,7 +62,7 @@ public class BsonBinaryIConvertibleTests
         byte[] bytes = new byte[] { 1, 2, 3 };
         BsonBinary binary = bytes;
         
-        await Assert.That(binary.Bytes).IsEquivalentTo(bytes);
+        await Assert.That(binary.Bytes.SequenceEqual(bytes)).IsTrue();
     }
 
     [Test]
@@ -70,7 +71,7 @@ public class BsonBinaryIConvertibleTests
         var binary = new BsonBinary(new byte[] { 1, 2, 3 });
         byte[] bytes = binary;
         
-        await Assert.That(bytes).IsEquivalentTo(new byte[] { 1, 2, 3 });
+        await Assert.That(bytes.SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
     }
 
     [Test]

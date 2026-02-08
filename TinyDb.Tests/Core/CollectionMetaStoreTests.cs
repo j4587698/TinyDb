@@ -1,8 +1,8 @@
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Storage;
 using TinyDb.Tests.Utils;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -10,10 +10,8 @@ namespace TinyDb.Tests.Core;
 
 /// <summary>
 /// Tests for CollectionMetaStore internal class.
-/// Since CollectionMetaStore is internal, we test it through TinyDbEngine 
-/// and use reflection for direct testing where needed.
+/// With InternalsVisibleTo, we can directly access internal members.
 /// </summary>
-[SkipInAot("Tests use reflection to access internal CollectionMetaStore methods")]
 public class CollectionMetaStoreTests : IDisposable
 {
     private readonly string _testDbPath;
@@ -31,50 +29,13 @@ public class CollectionMetaStoreTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
-    private object GetCollectionMetaStore()
-    {
-        var field = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
-            BindingFlags.NonPublic | BindingFlags.Instance);
-        return field?.GetValue(_engine) 
-            ?? throw new InvalidOperationException("Could not get _collectionMetaStore field");
-    }
-
-    private BsonDocument InvokeGetMetadata(object metaStore, string name)
-    {
-        var method = metaStore.GetType().GetMethod("GetMetadata", 
-            BindingFlags.Public | BindingFlags.Instance);
-        return (BsonDocument)(method?.Invoke(metaStore, [name]) 
-            ?? throw new InvalidOperationException("Could not invoke GetMetadata"));
-    }
-
-    private void InvokeUpdateMetadata(object metaStore, string name, BsonDocument metadata, bool forceFlush)
-    {
-        var method = metaStore.GetType().GetMethod("UpdateMetadata", 
-            BindingFlags.Public | BindingFlags.Instance);
-        method?.Invoke(metaStore, [name, metadata, forceFlush]);
-    }
-
-    private bool InvokeIsKnown(object metaStore, string name)
-    {
-        var method = metaStore.GetType().GetMethod("IsKnown", 
-            BindingFlags.Public | BindingFlags.Instance);
-        return (bool)(method?.Invoke(metaStore, [name]) 
-            ?? throw new InvalidOperationException("Could not invoke IsKnown"));
-    }
-
-    private List<string> InvokeGetCollectionNames(object metaStore)
-    {
-        var method = metaStore.GetType().GetMethod("GetCollectionNames", 
-            BindingFlags.Public | BindingFlags.Instance);
-        return (List<string>)(method?.Invoke(metaStore, []) 
-            ?? throw new InvalidOperationException("Could not invoke GetCollectionNames"));
-    }
+    private CollectionMetaStore GetCollectionMetaStore() => _engine._collectionMetaStore;
 
     [Test]
     public async Task GetMetadata_UnknownCollection_ReturnsEmptyDocument()
     {
         var metaStore = GetCollectionMetaStore();
-        var metadata = InvokeGetMetadata(metaStore, "unknown_collection");
+        var metadata = metaStore.GetMetadata("unknown_collection");
         
         await Assert.That(metadata).IsNotNull();
         await Assert.That(metadata.Count()).IsEqualTo(0);
@@ -87,7 +48,7 @@ public class CollectionMetaStoreTests : IDisposable
         _engine.GetCollection<TestItem>("test_collection");
         
         var metaStore = GetCollectionMetaStore();
-        var metadata = InvokeGetMetadata(metaStore, "test_collection");
+        var metadata = metaStore.GetMetadata("test_collection");
         
         await Assert.That(metadata).IsNotNull();
         await Assert.That(metadata.Count()).IsEqualTo(0);
@@ -102,13 +63,13 @@ public class CollectionMetaStoreTests : IDisposable
             .Set("rootIndexPage", new BsonInt32(123))
             .Set("customProperty", new BsonString("test value"));
         
-        InvokeUpdateMetadata(metaStore, "new_collection_with_meta", metadata, true);
+        metaStore.UpdateMetadata("new_collection_with_meta", metadata, true);
         
         // Verify it's registered
-        await Assert.That(InvokeIsKnown(metaStore, "new_collection_with_meta")).IsTrue();
+        await Assert.That(metaStore.IsKnown("new_collection_with_meta")).IsTrue();
         
         // Verify metadata was stored
-        var retrieved = InvokeGetMetadata(metaStore, "new_collection_with_meta");
+        var retrieved = metaStore.GetMetadata("new_collection_with_meta");
         await Assert.That(((BsonInt32)retrieved["rootIndexPage"]).Value).IsEqualTo(123);
         await Assert.That(((BsonString)retrieved["customProperty"]).Value).IsEqualTo("test value");
     }
@@ -120,16 +81,16 @@ public class CollectionMetaStoreTests : IDisposable
         
         // First update - creates collection
         var metadata1 = new BsonDocument().Set("version", new BsonInt32(1));
-        InvokeUpdateMetadata(metaStore, "existing_collection", metadata1, false);
+        metaStore.UpdateMetadata("existing_collection", metadata1, false);
         
         // Second update - updates metadata
         var metadata2 = new BsonDocument()
             .Set("version", new BsonInt32(2))
             .Set("newField", new BsonString("new value"));
-        InvokeUpdateMetadata(metaStore, "existing_collection", metadata2, true);
+        metaStore.UpdateMetadata("existing_collection", metadata2, true);
         
         // Verify updated metadata
-        var retrieved = InvokeGetMetadata(metaStore, "existing_collection");
+        var retrieved = metaStore.GetMetadata("existing_collection");
         await Assert.That(((BsonInt32)retrieved["version"]).Value).IsEqualTo(2);
         await Assert.That(((BsonString)retrieved["newField"]).Value).IsEqualTo("new value");
     }
@@ -144,15 +105,13 @@ public class CollectionMetaStoreTests : IDisposable
             // Create and update metadata
             using (var engine = new TinyDbEngine(path))
             {
-                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
-                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                var metaStore = engine._collectionMetaStore;
                 
                 var metadata = new BsonDocument()
                     .Set("persistedValue", new BsonInt32(42))
                     .Set("persistedString", new BsonString("hello world"));
                 
-                metaStore!.GetType().GetMethod("UpdateMetadata")!
-                    .Invoke(metaStore, [  "persistent_meta_col", metadata, true ]);
+                metaStore.UpdateMetadata("persistent_meta_col", metadata, true);
                 
                 engine.Flush();
             }
@@ -160,11 +119,9 @@ public class CollectionMetaStoreTests : IDisposable
             // Reopen and verify
             using (var engine = new TinyDbEngine(path))
             {
-                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
-                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                var metaStore = engine._collectionMetaStore;
                 
-                var retrieved = (BsonDocument)metaStore!.GetType().GetMethod("GetMetadata")!
-                    .Invoke(metaStore, [ "persistent_meta_col" ])!;
+                var retrieved = metaStore.GetMetadata("persistent_meta_col");
                 
                 await Assert.That(((BsonInt32)retrieved["persistedValue"]).Value).IsEqualTo(42);
                 await Assert.That(((BsonString)retrieved["persistedString"]).Value).IsEqualTo("hello world");
@@ -186,7 +143,7 @@ public class CollectionMetaStoreTests : IDisposable
         _engine.GetCollection<TestItem>("col_b");
         _engine.GetCollection<TestItem>("col_c");
         
-        var names = InvokeGetCollectionNames(metaStore);
+        var names = metaStore.GetCollectionNames();
         
         await Assert.That(names).Contains("col_a");
         await Assert.That(names).Contains("col_b");
@@ -197,7 +154,7 @@ public class CollectionMetaStoreTests : IDisposable
     public async Task IsKnown_UnknownCollection_ReturnsFalse()
     {
         var metaStore = GetCollectionMetaStore();
-        await Assert.That(InvokeIsKnown(metaStore, "does_not_exist")).IsFalse();
+        await Assert.That(metaStore.IsKnown("does_not_exist")).IsFalse();
     }
 
     [Test]
@@ -205,7 +162,7 @@ public class CollectionMetaStoreTests : IDisposable
     {
         _engine.GetCollection<TestItem>("is_known_test");
         var metaStore = GetCollectionMetaStore();
-        await Assert.That(InvokeIsKnown(metaStore, "is_known_test")).IsTrue();
+        await Assert.That(metaStore.IsKnown("is_known_test")).IsTrue();
     }
 
     [Test]
@@ -228,11 +185,11 @@ public class CollectionMetaStoreTests : IDisposable
         _engine.GetCollection<TestItem>("to_remove");
         var metaStore = GetCollectionMetaStore();
         
-        await Assert.That(InvokeIsKnown(metaStore, "to_remove")).IsTrue();
+        await Assert.That(metaStore.IsKnown("to_remove")).IsTrue();
         
         _engine.DropCollection("to_remove");
         
-        await Assert.That(InvokeIsKnown(metaStore, "to_remove")).IsFalse();
+        await Assert.That(metaStore.IsKnown("to_remove")).IsFalse();
     }
 
     [Test]
@@ -253,7 +210,7 @@ public class CollectionMetaStoreTests : IDisposable
             var metadata = new BsonDocument()
                 .Set("index", new BsonInt32(i))
                 .Set("name", new BsonString($"collection_{i}"));
-            InvokeUpdateMetadata(metaStore, $"multi_col_{i}", metadata, false);
+            metaStore.UpdateMetadata($"multi_col_{i}", metadata, false);
         }
         
         // Force flush
@@ -262,7 +219,7 @@ public class CollectionMetaStoreTests : IDisposable
         // Verify all collections exist with correct metadata
         for (int i = 0; i < 5; i++)
         {
-            var retrieved = InvokeGetMetadata(metaStore, $"multi_col_{i}");
+            var retrieved = metaStore.GetMetadata($"multi_col_{i}");
             await Assert.That(((BsonInt32)retrieved["index"]).Value).IsEqualTo(i);
             await Assert.That(((BsonString)retrieved["name"]).Value).IsEqualTo($"collection_{i}");
         }
@@ -288,9 +245,9 @@ public class CollectionMetaStoreTests : IDisposable
             .Set("boolean", BsonBoolean.True)
             .Set("double", new BsonDouble(3.14));
         
-        InvokeUpdateMetadata(metaStore, "complex_meta_col", metadata, true);
+        metaStore.UpdateMetadata("complex_meta_col", metadata, true);
         
-        var retrieved = InvokeGetMetadata(metaStore, "complex_meta_col");
+        var retrieved = metaStore.GetMetadata("complex_meta_col");
         
         var nestedResult = (BsonDocument)retrieved["nested"];
         await Assert.That(((BsonInt32)nestedResult["nestedInt"]).Value).IsEqualTo(100);
@@ -300,6 +257,7 @@ public class CollectionMetaStoreTests : IDisposable
         await Assert.That(((BsonDouble)retrieved["double"]).Value).IsEqualTo(3.14);
     }
 
+    [Entity]
     public class TestItem
     {
         public int Id { get; set; }
@@ -327,28 +285,17 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
-    private object GetCollectionMetaStore()
-    {
-        var field = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
-            BindingFlags.NonPublic | BindingFlags.Instance);
-        return field?.GetValue(_engine) 
-            ?? throw new InvalidOperationException("Could not get _collectionMetaStore field");
-    }
+    private CollectionMetaStore GetCollectionMetaStore() => _engine._collectionMetaStore;
 
     [Test]
-    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task Collection_WithEmptyName_ShouldWork()
     {
         // Empty string as collection name (edge case)
         var metaStore = GetCollectionMetaStore();
-        var registerMethod = metaStore.GetType().GetMethod("RegisterCollection");
         
-        registerMethod?.Invoke(metaStore, [ "", true ]);
+        metaStore.RegisterCollection("", true);
         
-        var isKnownMethod = metaStore.GetType().GetMethod("IsKnown");
-        var result = (bool)(isKnownMethod?.Invoke(metaStore, [ "" ]) ?? false);
-        
-        await Assert.That(result).IsTrue();
+        await Assert.That(metaStore.IsKnown("")).IsTrue();
     }
 
     [Test]
@@ -420,51 +367,44 @@ public class CollectionMetaStoreEdgeCasesTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task GetMetadata_AfterRemoveCollection_ShouldReturnEmptyDocument()
     {
         var metaStore = GetCollectionMetaStore();
-        var updateMethod = metaStore.GetType().GetMethod("UpdateMetadata");
-        var getMethod = metaStore.GetType().GetMethod("GetMetadata");
         
         // Add collection with metadata
         var metadata = new BsonDocument().Set("test", new BsonInt32(123));
-        updateMethod?.Invoke(metaStore, [ "temp_collection", metadata, false ]);
+        metaStore.UpdateMetadata("temp_collection", metadata, false);
         
         // Remove collection
         _engine.DropCollection("temp_collection");
         
         // Get metadata - should return empty document
-        var result = (BsonDocument)(getMethod?.Invoke(metaStore, [ "temp_collection" ]) 
-            ?? throw new Exception());
+        var result = metaStore.GetMetadata("temp_collection");
         
         await Assert.That(result.Count()).IsEqualTo(0);
     }
 
     [Test]
-    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task UpdateMetadata_MultipleTimes_ShouldOverwritePrevious()
     {
         var metaStore = GetCollectionMetaStore();
-        var updateMethod = metaStore.GetType().GetMethod("UpdateMetadata");
-        var getMethod = metaStore.GetType().GetMethod("GetMetadata");
         
         // First update
         var meta1 = new BsonDocument().Set("version", new BsonInt32(1));
-        updateMethod?.Invoke(metaStore, [ "overwrite_test", meta1, false ]);
+        metaStore.UpdateMetadata("overwrite_test", meta1, false);
         
         // Second update - completely different structure
         var meta2 = new BsonDocument().Set("newKey", new BsonString("new value"));
-        updateMethod?.Invoke(metaStore, [ "overwrite_test", meta2, true ]);
+        metaStore.UpdateMetadata("overwrite_test", meta2, true);
         
-        var result = (BsonDocument)(getMethod?.Invoke(metaStore, [ "overwrite_test" ]) 
-            ?? throw new Exception());
+        var result = metaStore.GetMetadata("overwrite_test");
         
         // Should have new key, not old key
         await Assert.That(result.ContainsKey("newKey")).IsTrue();
         await Assert.That(result.ContainsKey("version")).IsFalse();
     }
 
+    [Entity]
     public class TestItem
     {
         public int Id { get; set; }
@@ -542,7 +482,6 @@ public class CollectionMetaStorePersistenceTests
     }
 
     [Test]
-    [SkipInAot("Test uses reflection to invoke internal methods")]
     public async Task Persistence_MetadataUpdate_ShouldSurviveReopen()
     {
         var path = Path.Combine(Path.GetTempPath(), $"meta_update_persist_{Guid.NewGuid():N}.db");
@@ -552,15 +491,13 @@ public class CollectionMetaStorePersistenceTests
             // Create collection with custom metadata
             using (var engine = new TinyDbEngine(path))
             {
-                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
-                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                var metaStore = engine._collectionMetaStore;
                 
                 var metadata = new BsonDocument()
                     .Set("customInt", new BsonInt32(999))
                     .Set("customString", new BsonString("persisted data"));
                 
-                metaStore!.GetType().GetMethod("UpdateMetadata")!
-                    .Invoke(metaStore, [ "meta_persist_test", metadata, true ]);
+                metaStore.UpdateMetadata("meta_persist_test", metadata, true);
                 
                 engine.Flush();
             }
@@ -568,11 +505,9 @@ public class CollectionMetaStorePersistenceTests
             // Reopen and verify metadata persisted
             using (var engine = new TinyDbEngine(path))
             {
-                var metaStore = typeof(TinyDbEngine).GetField("_collectionMetaStore", 
-                    BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(engine);
+                var metaStore = engine._collectionMetaStore;
                 
-                var retrieved = (BsonDocument)metaStore!.GetType().GetMethod("GetMetadata")!
-                    .Invoke(metaStore, [ "meta_persist_test" ])!;
+                var retrieved = metaStore.GetMetadata("meta_persist_test");
                 
                 await Assert.That(((BsonInt32)retrieved["customInt"]).Value).IsEqualTo(999);
                 await Assert.That(((BsonString)retrieved["customString"]).Value).IsEqualTo("persisted data");
@@ -646,6 +581,7 @@ public class CollectionMetaStorePersistenceTests
         }
     }
 
+    [Entity]
     public class TestItem
     {
         public int Id { get; set; }

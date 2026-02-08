@@ -1,12 +1,14 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using TinyDb.Serialization;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
 
 namespace TinyDb.Tests.Serialization;
 
+[Entity]
 public class ComplexObj
 {
     public int Id { get; set; }

@@ -145,7 +145,7 @@ public sealed class BTreeIndex : IDisposable
             lock (_lock) _tree.Dispose();
             if (_ownsPageManager)
             {
-                _tempPm?.Dispose();
+                _tempPm!.Dispose();
                 if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
                 {
                     try { File.Delete(_tempFilePath); } catch { }
@@ -170,7 +170,7 @@ public sealed class BTreeIndex : IDisposable
                 IsUnique = IsUnique,
                 NodeCount = nodeCount,
                 EntryCount = entryCount,
-                AverageKeysPerNode = nodeCount > 0 ? (double)entryCount / nodeCount : 0,
+                AverageKeysPerNode = (double)entryCount / nodeCount,
                 TreeHeight = _tree.Height,
                 MaxKeysPerNode = _maxKeys
             };
@@ -186,4 +186,3 @@ public sealed class BTreeIndex : IDisposable
         return $"BTreeIndex[{Name}] ({_fields.Length} fields, {count} entries)";
     }
 }
-

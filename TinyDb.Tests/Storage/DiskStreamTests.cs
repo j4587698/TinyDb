@@ -1,4 +1,5 @@
 using TinyDb.Storage;
+using System.Linq;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -70,7 +71,7 @@ public class DiskStreamTests : IDisposable
         var read = ds.Read(buffer, 0, 3);
         
         await Assert.That(read).IsEqualTo(3);
-        await Assert.That(buffer).IsEquivalentTo(data);
+        await Assert.That(buffer.SequenceEqual(data)).IsTrue();
     }
 
     [Test]

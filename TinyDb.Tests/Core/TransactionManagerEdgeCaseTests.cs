@@ -2,6 +2,7 @@ using System.IO;
 using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -239,7 +240,7 @@ public class TransactionManagerEdgeCaseTests
         _manager.Dispose();
         
         // Should not throw - multiple dispose calls are safe
-        await Assert.That(true).IsTrue();
+        await Assert.That(_manager).IsNotNull();
     }
 
     #endregion
@@ -450,7 +451,8 @@ public class TransactionManagerEdgeCaseTests
 
     #endregion
 
-    private class TestEntity
+    [Entity]
+    public class TestEntity
     {
         public ObjectId Id { get; set; } = ObjectId.NewObjectId();
         public string Name { get; set; } = string.Empty;

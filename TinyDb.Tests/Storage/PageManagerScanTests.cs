@@ -61,6 +61,56 @@ public class PageManagerScanTests : IDisposable
             await Assert.That(newStats.FreePages).IsLessThan(stats.FreePages);
         }
     }
+
+    [Test]
+    public async Task Initialize_WhenPagesAreCorrupt_ShouldSwallowScanErrors()
+    {
+        const uint pageSize = 4096;
+        using var ds = new ThrowOnWriteDiskStream("mem://scan", initialSize: (long)pageSize * 3);
+        using var pm = new PageManager(ds, pageSize);
+
+        pm.Initialize(3, 0);
+
+        await Assert.That(pm.FirstFreePageID).IsNotEqualTo(0u);
+    }
+
+    private sealed class ThrowOnWriteDiskStream : IDiskStream
+    {
+        public ThrowOnWriteDiskStream(string filePath, long initialSize)
+        {
+            FilePath = filePath;
+            Size = initialSize;
+        }
+
+        public string FilePath { get; }
+        public long Size { get; private set; }
+        public bool IsReadable => true;
+        public bool IsWritable => true;
+
+        public byte[] ReadPage(long pageOffset, int pageSize) => new byte[pageSize];
+
+        public void WritePage(long pageOffset, byte[] pageData) => throw new IOException("Simulated write failure");
+
+        public Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default) =>
+            Task.FromResult(ReadPage(pageOffset, pageSize));
+
+        public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default) =>
+            Task.FromException(new IOException("Simulated write failure"));
+
+        public void Flush()
+        {
+        }
+
+        public Task FlushAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public void SetLength(long length) => Size = length;
+
+        public DiskStreamStatistics GetStatistics() => new DiskStreamStatistics();
+
+        public void Dispose()
+        {
+        }
+    }
 }
 
 [Entity("test_docs")]

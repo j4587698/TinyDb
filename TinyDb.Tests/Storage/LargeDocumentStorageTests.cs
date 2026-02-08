@@ -22,6 +22,7 @@ public class LargeDocumentStorageTests : IDisposable
 
     public void Dispose()
     {
+        _pageManager.Dispose();
         _diskStream.Dispose();
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
@@ -87,6 +88,75 @@ public class LargeDocumentStorageTests : IDisposable
         var firstPage = _pageManager.GetPage(firstDataPageId);
         firstPage.UpdatePageType(PageType.Data);
         _pageManager.SavePage(firstPage);
+
+        await Assert.That(storage.ValidateLargeDocument(indexPageId)).IsFalse();
+    }
+
+    [Test]
+    public async Task ValidateLargeDocument_With_ZeroPageId_Should_Return_False()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+
+        await Assert.That(storage.ValidateLargeDocument(0)).IsFalse();
+    }
+
+    [Test]
+    public async Task GetStatistics_With_Wrong_PageType_Should_Throw()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var page = _pageManager.NewPage(PageType.Data);
+        _pageManager.SavePage(page);
+
+        await Assert.That(() => storage.GetStatistics(page.PageID))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task DeleteLargeDocument_With_Wrong_PageType_Should_NotThrow()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var page = _pageManager.NewPage(PageType.Data);
+        _pageManager.SavePage(page);
+
+        await Assert.That(() => storage.DeleteLargeDocument(page.PageID)).ThrowsNothing();
+    }
+
+    [Test]
+    public async Task ValidateLargeDocument_With_PageNumberMismatch_Should_Return_False()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var largeData = new byte[10000];
+        new Random(42).NextBytes(largeData);
+        var indexPageId = storage.StoreLargeDocument(largeData, "c");
+
+        var stats = storage.GetStatistics(indexPageId);
+        var firstDataPage = _pageManager.GetPage(stats.FirstDataPageId);
+        firstDataPage.WriteData(0, BitConverter.GetBytes(123));
+        _pageManager.SavePage(firstDataPage);
+
+        await Assert.That(storage.ValidateLargeDocument(indexPageId)).IsFalse();
+    }
+
+    [Test]
+    public async Task ValidateLargeDocument_With_Extra_NextPage_Should_Return_False()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var indexPageId = storage.StoreLargeDocument(new byte[10000], "c");
+
+        var stats = storage.GetStatistics(indexPageId);
+        uint current = stats.FirstDataPageId;
+        for (int i = 0; i < stats.PageCount - 1; i++)
+        {
+            var page = _pageManager.GetPage(current);
+            current = BitConverter.ToUInt32(page.ReadData(4, 4));
+        }
+
+        var lastPage = _pageManager.GetPage(current);
+        var extra = _pageManager.NewPage(PageType.LargeDocumentData);
+        _pageManager.SavePage(extra);
+
+        lastPage.WriteData(4, BitConverter.GetBytes(extra.PageID));
+        _pageManager.SavePage(lastPage);
 
         await Assert.That(storage.ValidateLargeDocument(indexPageId)).IsFalse();
     }

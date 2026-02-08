@@ -15,11 +15,11 @@ namespace TinyDb.Tests.Serialization;
 /// <summary>
 /// Additional coverage tests for AotBsonMapper edge cases and closures
 /// </summary>
-[SkipInAot("These tests use reflection-based fallback paths")]
 public class AotBsonMapperEdgeCaseTests
 {
     #region Test Entities
 
+    [Entity]
     internal class EntityWithIdAttribute
     {
         public int Key { get; set; }
@@ -32,12 +32,14 @@ public class AotBsonMapperEdgeCaseTests
 
     // Note: EntityAttribute triggers source generator which doesn't support nested classes
     // Testing EntityAttribute functionality moved to top-level class test files
+    [Entity]
     internal class EntityWithCustomIdProperty
     {
         public int EntityKey { get; set; }
         public string Name { get; set; } = "";
     }
 
+    [Entity]
     internal class EntityWithCircularReference
     {
         public int Id { get; set; }
@@ -45,12 +47,14 @@ public class AotBsonMapperEdgeCaseTests
         public EntityWithCircularReference? Parent { get; set; }
     }
 
+    [Entity]
     internal struct ValueTypeEntity
     {
         public int Id { get; set; }
         public string Name { get; set; }
     }
 
+    [Entity]
     internal class EntityWithNullableTypes
     {
         public int Id { get; set; }
@@ -59,12 +63,14 @@ public class AotBsonMapperEdgeCaseTests
         public bool? NullableBool { get; set; }
     }
 
+    [Entity]
     internal class EntityWithPublicField
     {
         public int Id { get; set; }
         public string FieldValue = "";
     }
 
+    [Entity]
     internal class EntityWithArray
     {
         public int Id { get; set; }
@@ -72,18 +78,7 @@ public class AotBsonMapperEdgeCaseTests
         public string[] Strings { get; set; } = Array.Empty<string>();
     }
 
-    internal class EntityWithNestedObject
-    {
-        public int Id { get; set; }
-        public NestedClass Nested { get; set; } = new();
-    }
-
-    internal class NestedClass
-    {
-        public string Value { get; set; } = "";
-        public int Number { get; set; }
-    }
-
+    [Entity]
     internal class EntityWithUnsignedTypes
     {
         public int Id { get; set; }
@@ -93,6 +88,7 @@ public class AotBsonMapperEdgeCaseTests
         public sbyte SByteVal { get; set; }
     }
 
+    [Entity]
     internal class EntityWithIndexer
     {
         public int Id { get; set; }
@@ -102,6 +98,7 @@ public class AotBsonMapperEdgeCaseTests
         public string this[int index] => Name;
     }
 
+    [Entity]
     internal class EntityWithIgnoredProperty
     {
         public int Id { get; set; }
@@ -511,6 +508,7 @@ public class AotBsonMapperEdgeCaseTests
 
     #region GetId/SetId Tests
 
+    [Entity]
     internal class SimpleEntity
     {
         public int Id { get; set; }
@@ -624,4 +622,18 @@ public class AotBsonMapperEdgeCaseTests
     }
 
     #endregion
+}
+
+[Entity]
+internal class EntityWithNestedObject
+{
+    public int Id { get; set; }
+    public NestedClass Nested { get; set; } = new();
+}
+
+[Entity]
+internal class NestedClass
+{
+    public string Value { get; set; } = "";
+    public int Number { get; set; }
 }

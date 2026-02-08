@@ -67,6 +67,38 @@ public class DatabaseSecurityTests : IDisposable
     }
 
     [Test]
+    public async Task AuthenticateDatabase_With_NullPassword_ShouldThrow()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+
+        await Assert.That(() => DatabaseSecurity.AuthenticateDatabase(engine, null!))
+            .ThrowsExactly<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task ChangePassword_With_InvalidNewPassword_ShouldThrow()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        DatabaseSecurity.CreateSecureDatabase(engine, "password123");
+
+        await Assert.That(() => DatabaseSecurity.ChangePassword(engine, "password123", null!))
+            .Throws<ArgumentException>();
+
+        await Assert.That(() => DatabaseSecurity.ChangePassword(engine, "password123", "123"))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task RemovePassword_With_WrongPassword_ShouldReturnFalse()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        DatabaseSecurity.CreateSecureDatabase(engine, "password123");
+
+        var removed = DatabaseSecurity.RemovePassword(engine, "wrongpassword");
+        await Assert.That(removed).IsFalse();
+    }
+
+    [Test]
     public async Task CreateSecureDatabase_With_Invalid_Password_Should_Throw()
     {
         using var engine = new TinyDbEngine(_testDbPath);

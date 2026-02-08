@@ -113,10 +113,9 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task AppendPageAsync(Page page, CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || _stream == null) return;
+        if (!IsEnabled) return;
 
         var data = page.Snapshot(includeUnusedTail: false);
-        if (data.Length == 0) return;
 
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -132,9 +131,8 @@ public sealed class WriteAheadLog : IDisposable
 
     public void AppendPage(Page page)
     {
-        if (!IsEnabled || _stream == null) return;
+        if (!IsEnabled) return;
         var data = page.Snapshot(includeUnusedTail: true);
-        if (data.Length == 0) return;
 
         _mutex.Wait();
         try
@@ -150,7 +148,7 @@ public sealed class WriteAheadLog : IDisposable
 
     private void WriteEntry(uint pageId, byte[] data)
     {
-        if (_stream == null) return;
+        var stream = _stream!;
         
         // 计算校验和
         var crc32 = System.IO.Hashing.Crc32.HashToUInt32(data);
@@ -162,13 +160,13 @@ public sealed class WriteAheadLog : IDisposable
         BinaryPrimitives.WriteInt32LittleEndian(header[5..9], data.Length);
         BinaryPrimitives.WriteUInt32LittleEndian(header[9..13], crc32);
         
-        _stream.Write(header);
-        _stream.Write(data, 0, data.Length);
+        stream.Write(header);
+        stream.Write(data, 0, data.Length);
     }
 
     private async Task WriteEntryAsync(uint pageId, byte[] data, CancellationToken cancellationToken)
     {
-        if (_stream == null) return;
+        var stream = _stream!;
         
         // 计算校验和
         var crc32 = System.IO.Hashing.Crc32.HashToUInt32(data);
@@ -179,20 +177,20 @@ public sealed class WriteAheadLog : IDisposable
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(5, 4), data.Length);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(9, 4), crc32);
         
-        await _stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
-        await _stream.WriteAsync(data, 0, data.Length, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(data, 0, data.Length, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task FlushLogAsync(CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || _stream == null || !_hasPendingEntries) return;
+        if (!IsEnabled || !_hasPendingEntries) return;
 
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_hasPendingEntries)
             {
-                _stream.Flush(true);
+                _stream!.Flush(true);
             }
         }
         finally
@@ -205,7 +203,7 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (flushDataAsync == null) throw new ArgumentNullException(nameof(flushDataAsync));
 
-        if (!IsEnabled || _stream == null)
+        if (!IsEnabled)
         {
             await flushDataAsync(cancellationToken).ConfigureAwait(false);
             return;
@@ -214,18 +212,20 @@ public sealed class WriteAheadLog : IDisposable
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var stream = _stream!;
+
             if (_hasPendingEntries)
             {
-                _stream.Flush(true);
+                stream.Flush(true);
             }
 
             await flushDataAsync(cancellationToken).ConfigureAwait(false);
 
             if (_hasPendingEntries)
             {
-                _stream.SetLength(0);
-                _stream.Seek(0, SeekOrigin.End);
-                _stream.Flush(true);
+                stream.SetLength(0);
+                stream.Seek(0, SeekOrigin.End);
+                stream.Flush(true);
                 _hasPendingEntries = false;
             }
         }
@@ -237,25 +237,26 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task ReplayAsync(Func<uint, byte[], Task> applyAsync, CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || _stream == null) return;
+        if (!IsEnabled) return;
         if (applyAsync == null) throw new ArgumentNullException(nameof(applyAsync));
 
+        var stream = _stream!;
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         long lastSuccessfulPosition = 0;
         try
         {
-            _stream.Flush(true);
-            _stream.Seek(0, SeekOrigin.Begin);
+            stream.Flush(true);
+            stream.Seek(0, SeekOrigin.Begin);
 
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
             var headerBuffer = new byte[FullHeaderSize];
             
-            while (_stream.Position < _stream.Length)
+            while (stream.Position < stream.Length)
             {
-                long currentEntryStart = _stream.Position;
+                long currentEntryStart = stream.Position;
                 
                 // 尝试读取完整头部
-                var read = await _stream.ReadAsync(headerBuffer, 0, FullHeaderSize, cancellationToken).ConfigureAwait(false);
+                var read = await stream.ReadAsync(headerBuffer, 0, FullHeaderSize, cancellationToken).ConfigureAwait(false);
                 
                 // 如果连最小头部 (HeaderSize = 9) 都读不够，说明文件结束或损坏
                 if (read < HeaderSize)
@@ -297,7 +298,7 @@ public sealed class WriteAheadLog : IDisposable
                 var offset = 0;
                 while (offset < length)
                 {
-                    var chunk = await _stream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
+                    var chunk = await stream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
                     if (chunk == 0)
                     {
                         break;
@@ -323,29 +324,29 @@ public sealed class WriteAheadLog : IDisposable
                 }
 
                 await applyAsync(pageId, buffer).ConfigureAwait(false);
-                lastSuccessfulPosition = _stream.Position;
+                lastSuccessfulPosition = stream.Position;
             }
 
             // 清理或截断日志
-            if (lastSuccessfulPosition < _stream.Length)
+            if (lastSuccessfulPosition < stream.Length)
             {
                 // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
-                _stream.SetLength(lastSuccessfulPosition);
+                stream.SetLength(lastSuccessfulPosition);
             }
             else if (lastSuccessfulPosition > 0)
             {
                 // 全部重放成功，清空日志
-                _stream.SetLength(0);
+                stream.SetLength(0);
             }
 
-            _stream.Seek(0, SeekOrigin.End);
-            _hasPendingEntries = _stream.Length > 0;
+            stream.Seek(0, SeekOrigin.End);
+            _hasPendingEntries = stream.Length > 0;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"WAL: Fatal error during replay: {ex.Message}");
             // 尽力而为：截断到已知正确的位置
-            try { _stream.SetLength(lastSuccessfulPosition); } catch { }
+            try { stream.SetLength(lastSuccessfulPosition); } catch { }
             throw;
         }
         finally
@@ -356,14 +357,15 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task TruncateAsync(CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || _stream == null) return;
+        if (!IsEnabled) return;
 
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _stream.SetLength(0);
-            _stream.Seek(0, SeekOrigin.End);
-            await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            var stream = _stream!;
+            stream.SetLength(0);
+            stream.Seek(0, SeekOrigin.End);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             _hasPendingEntries = false;
         }
         finally

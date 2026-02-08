@@ -5,7 +5,7 @@ namespace TinyDb.Attributes;
 /// <summary>
 /// 标记实体类以支持源代码生成器优化
 /// </summary>
-[AttributeUsage(AttributeTargets.Class, Inherited = false)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false)]
 public sealed class EntityAttribute : Attribute
 {
     /// <summary>

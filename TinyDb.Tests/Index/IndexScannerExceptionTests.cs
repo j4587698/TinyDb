@@ -14,7 +14,6 @@ namespace TinyDb.Tests.Index;
 public class IndexScannerExceptionTests : IDisposable
 {
     private readonly string _testDbPath;
-    private TinyDbEngine? _engine;
 
     public IndexScannerExceptionTests()
     {
@@ -23,7 +22,6 @@ public class IndexScannerExceptionTests : IDisposable
 
     public void Dispose()
     {
-        _engine?.Dispose();
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
@@ -71,34 +69,34 @@ public class IndexScannerExceptionTests : IDisposable
     [Test]
     public async Task ScanAndCreateIndexes_NullEntityType_ShouldThrow()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        await Assert.That(() => IndexScanner.ScanAndCreateIndexes(_engine, null!, "test"))
+        using var engine = new TinyDbEngine(_testDbPath);
+        await Assert.That(() => IndexScanner.ScanAndCreateIndexes(engine, null!, "test"))
             .Throws<ArgumentNullException>();
     }
 
     [Test]
     public async Task ScanAndCreateIndexes_NullCollectionName_ShouldThrow()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        await Assert.That(() => IndexScanner.ScanAndCreateIndexes(_engine, typeof(PlainEntity), null!))
+        using var engine = new TinyDbEngine(_testDbPath);
+        await Assert.That(() => IndexScanner.ScanAndCreateIndexes(engine, typeof(PlainEntity), null!))
             .Throws<ArgumentException>();
     }
 
     [Test]
     public async Task ScanAndCreateIndexes_EmptyCollectionName_ShouldThrow()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        await Assert.That(() => IndexScanner.ScanAndCreateIndexes(_engine, typeof(PlainEntity), ""))
+        using var engine = new TinyDbEngine(_testDbPath);
+        await Assert.That(() => IndexScanner.ScanAndCreateIndexes(engine, typeof(PlainEntity), ""))
             .Throws<ArgumentException>();
     }
 
     [Test]
     public async Task ScanAndCreateIndexes_PlainEntity_ShouldCreateOnlyPrimaryKeyIndex()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        IndexScanner.ScanAndCreateIndexes(_engine, typeof(PlainEntity), "plain");
+        using var engine = new TinyDbEngine(_testDbPath);
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(PlainEntity), "plain");
         
-        var idxMgr = _engine.GetIndexManager("plain");
+        var idxMgr = engine.GetIndexManager("plain");
         var stats = idxMgr.GetAllStatistics().ToList();
         
         // Should have at least the primary key index
@@ -108,22 +106,54 @@ public class IndexScannerExceptionTests : IDisposable
     [Test]
     public async Task ScanAndCreateIndexes_CompositeEntity_ShouldCreateCompositeIndex()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        IndexScanner.ScanAndCreateIndexes(_engine, typeof(CompositeEntity), "composite");
+        using var engine = new TinyDbEngine(_testDbPath);
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(CompositeEntity), "composite");
         
-        var idxMgr = _engine.GetIndexManager("composite");
+        var idxMgr = engine.GetIndexManager("composite");
         
         // Check that composite index exists
         await Assert.That(idxMgr.IndexExists("composite_name_age")).IsTrue();
     }
 
     [Test]
+    public async Task ScanAndCreateIndexes_CompositeEntity_CalledTwice_ShouldNotDuplicateCompositeIndex()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(CompositeEntity), "composite_dup");
+        var idxMgr = engine.GetIndexManager("composite_dup");
+        var count1 = idxMgr.GetAllStatistics().Count();
+
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(CompositeEntity), "composite_dup");
+        var count2 = idxMgr.GetAllStatistics().Count();
+
+        await Assert.That(count2).IsEqualTo(count1);
+    }
+
+    [Test]
+    public async Task ScanAndCreateIndexes_CompositeEntity_WhenIndexesAlreadyExist_ShouldNotRecreate()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        const string collectionName = "composite_exists";
+
+        var idxMgr = engine.GetIndexManager(collectionName);
+        idxMgr.CreateIndex($"pk_{collectionName}_id", new[] { "_id" }, true);
+        idxMgr.CreateIndex("composite_name_age", new[] { "name", "age" }, unique: true);
+
+        var count1 = idxMgr.GetAllStatistics().Count();
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(CompositeEntity), collectionName);
+        var count2 = idxMgr.GetAllStatistics().Count();
+
+        await Assert.That(count2).IsEqualTo(count1);
+    }
+
+    [Test]
     public async Task ScanAndCreateIndexes_NamedIndexEntity_ShouldUseCustomName()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        IndexScanner.ScanAndCreateIndexes(_engine, typeof(NamedIndexEntity), "named");
+        using var engine = new TinyDbEngine(_testDbPath);
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(NamedIndexEntity), "named");
         
-        var idxMgr = _engine.GetIndexManager("named");
+        var idxMgr = engine.GetIndexManager("named");
         
         // Check that custom named index exists
         await Assert.That(idxMgr.IndexExists("custom_email_idx")).IsTrue();
@@ -132,15 +162,15 @@ public class IndexScannerExceptionTests : IDisposable
     [Test]
     public async Task ScanAndCreateIndexes_CalledTwice_ShouldNotDuplicateIndexes()
     {
-        _engine = new TinyDbEngine(_testDbPath);
+        using var engine = new TinyDbEngine(_testDbPath);
         
         // First call
-        IndexScanner.ScanAndCreateIndexes(_engine, typeof(NamedIndexEntity), "dup_test");
-        var idxMgr1 = _engine.GetIndexManager("dup_test");
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(NamedIndexEntity), "dup_test");
+        var idxMgr1 = engine.GetIndexManager("dup_test");
         var count1 = idxMgr1.GetAllStatistics().Count();
         
         // Second call - should not throw and should not create duplicates
-        IndexScanner.ScanAndCreateIndexes(_engine, typeof(NamedIndexEntity), "dup_test");
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(NamedIndexEntity), "dup_test");
         var count2 = idxMgr1.GetAllStatistics().Count();
         
         await Assert.That(count2).IsEqualTo(count1);
@@ -232,10 +262,10 @@ public class IndexScannerExceptionTests : IDisposable
     [Test]
     public async Task ScanAndCreateIndexes_SharedIndexName_ShouldCreateSingleIndex()
     {
-        _engine = new TinyDbEngine(_testDbPath);
-        IndexScanner.ScanAndCreateIndexes(_engine, typeof(SharedIndexNameEntity), "shared");
+        using var engine = new TinyDbEngine(_testDbPath);
+        IndexScanner.ScanAndCreateIndexes(engine, typeof(SharedIndexNameEntity), "shared");
         
-        var idxMgr = _engine.GetIndexManager("shared");
+        var idxMgr = engine.GetIndexManager("shared");
         
         // Should create only one index with the shared name
         await Assert.That(idxMgr.IndexExists("shared_idx")).IsTrue();

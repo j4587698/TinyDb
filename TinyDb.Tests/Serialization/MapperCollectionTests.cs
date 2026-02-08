@@ -1,5 +1,6 @@
 using TinyDb.Serialization;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using System.Collections.Generic;
@@ -8,6 +9,7 @@ namespace TinyDb.Tests.Serialization;
 
 public class MapperCollectionTests
 {
+    [Entity]
     public class CollectionContainer
     {
         public List<int> IntList { get; set; } = new();
@@ -39,6 +41,7 @@ public class MapperCollectionTests
         await Assert.That(restored.DoubleList.Count).IsEqualTo(2);
     }
 
+    [Entity]
     public class NestedCollections
     {
         public List<List<int>> Matrix { get; set; } = new();

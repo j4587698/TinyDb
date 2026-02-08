@@ -7,6 +7,7 @@ using System.Reflection;
 using TinyDb.Query;
 using TinyDb.Core;
 using TinyDb.Tests.Utils;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using LinqExp = System.Linq.Expressions;
@@ -36,6 +37,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class TestItem
     {
         public int Id { get; set; }
@@ -43,6 +45,37 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         public int Value { get; set; }
         public string Category { get; set; } = "";
         public decimal Price { get; set; }
+    }
+
+    public class GroupAverageResult
+    {
+        public string Key { get; set; } = "";
+        public decimal Avg { get; set; }
+    }
+
+    public class GroupMinResult
+    {
+        public string Key { get; set; } = "";
+        public int Min { get; set; }
+    }
+
+    public class GroupMaxResult
+    {
+        public string Key { get; set; } = "";
+        public int Max { get; set; }
+    }
+
+    private sealed class ProjectedValueItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public int Value { get; set; }
+    }
+
+    private sealed class ProjectedCategoryValueItem
+    {
+        public string Category { get; set; } = "";
+        public int Value { get; set; }
     }
 
     private void SeedData()
@@ -66,15 +99,14 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        var query = q.Select(x => new { x.Id, x.Name, x.Value })
+        var query = q.Select(x => new ProjectedValueItem { Id = x.Id, Name = x.Name, Value = x.Value })
                      .OrderBy(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable)result!).Cast<object>().ToList();
+        var list = ((IEnumerable<ProjectedValueItem>)result!).ToList();
         
         await Assert.That(list.Count).IsEqualTo(5);
-        var firstValue = list[0].GetType().GetProperty("Value")?.GetValue(list[0]);
-        await Assert.That((int)firstValue!).IsEqualTo(10);
+        await Assert.That(list[0].Value).IsEqualTo(10);
     }
 
     /// <summary>
@@ -86,14 +118,13 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        var query = q.Select(x => new { x.Id, x.Value })
+        var query = q.Select(x => new ProjectedValueItem { Id = x.Id, Value = x.Value })
                      .OrderByDescending(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable)result!).Cast<object>().ToList();
+        var list = ((IEnumerable<ProjectedValueItem>)result!).ToList();
         
-        var firstValue = list[0].GetType().GetProperty("Value")?.GetValue(list[0]);
-        await Assert.That((int)firstValue!).IsEqualTo(50);
+        await Assert.That(list[0].Value).IsEqualTo(50);
     }
 
     /// <summary>
@@ -105,16 +136,15 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        var query = q.Select(x => new { x.Category, x.Value })
+        var query = q.Select(x => new ProjectedCategoryValueItem { Category = x.Category, Value = x.Value })
                      .OrderBy(x => x.Category)
                      .ThenBy(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable)result!).Cast<object>().ToList();
+        var list = ((IEnumerable<ProjectedCategoryValueItem>)result!).ToList();
         
         await Assert.That(list.Count).IsEqualTo(5);
-        var firstCat = list[0].GetType().GetProperty("Category")?.GetValue(list[0]);
-        await Assert.That((string)firstCat!).IsEqualTo("A");
+        await Assert.That(list[0].Category).IsEqualTo("A");
     }
 
     /// <summary>
@@ -126,18 +156,16 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        var query = q.Select(x => new { x.Category, x.Value })
+        var query = q.Select(x => new ProjectedCategoryValueItem { Category = x.Category, Value = x.Value })
                      .OrderBy(x => x.Category)
                      .ThenByDescending(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable)result!).Cast<object>().ToList();
+        var list = ((IEnumerable<ProjectedCategoryValueItem>)result!).ToList();
         
         // Category A should have values in descending order: 20, 10
-        var firstVal = list[0].GetType().GetProperty("Value")?.GetValue(list[0]);
-        var secondVal = list[1].GetType().GetProperty("Value")?.GetValue(list[1]);
-        await Assert.That((int)firstVal!).IsEqualTo(20);
-        await Assert.That((int)secondVal!).IsEqualTo(10);
+        await Assert.That(list[0].Value).IsEqualTo(20);
+        await Assert.That(list[1].Value).IsEqualTo(10);
     }
 
     #endregion
@@ -195,15 +223,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Value > 30;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "First",
-            new Type[] { typeof(TestItem) },
-            q.OrderBy(x => x.Id).Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "test", call);
+        var result = q.OrderBy(x => x.Id).First(x => x.Value > 30);
         
         await Assert.That(result).IsNotNull();
         await Assert.That(((TestItem)result!).Value).IsEqualTo(40);
@@ -218,15 +238,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Id == 3;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Single",
-            new Type[] { typeof(TestItem) },
-            q.Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "test", call);
+        var result = q.Single(x => x.Id == 3);
         
         await Assert.That(result).IsNotNull();
         await Assert.That(((TestItem)result!).Name).IsEqualTo("Item3");
@@ -241,15 +253,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Category == "B";
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Count",
-            new Type[] { typeof(TestItem) },
-            q.Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "test", call);
+        var result = q.Count(x => x.Category == "B");
         
         await Assert.That(result).IsEqualTo(2);
     }
@@ -263,15 +267,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Value >= 30;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "LongCount",
-            new Type[] { typeof(TestItem) },
-            q.Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "test", call);
+        var result = q.LongCount(x => x.Value >= 30);
         
         await Assert.That(result).IsEqualTo(3L);
     }
@@ -285,15 +281,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Category == "A";
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Last",
-            new Type[] { typeof(TestItem) },
-            q.OrderBy(x => x.Id).Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "test", call);
+        var result = q.OrderBy(x => x.Id).Last(x => x.Category == "A");
         
         await Assert.That(result).IsNotNull();
         await Assert.That(((TestItem)result!).Id).IsEqualTo(2);
@@ -308,15 +296,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Value > 1000;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "LastOrDefault",
-            new Type[] { typeof(TestItem) },
-            q.Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "test", call);
+        var result = q.LastOrDefault(x => x.Value > 1000);
         
         await Assert.That(result).IsNull();
     }
@@ -329,37 +309,35 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     /// Test AotGrouping Average method
     /// </summary>
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task AotGrouping_Average_ShouldCalculateCorrectly()
     {
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
         var result = q.GroupBy(x => x.Category)
-                      .Select(g => new { Key = g.Key, Avg = g.Average(x => x.Value) })
+                      .Select(g => new GroupAverageResult { Key = g.Key == null ? "" : g.Key.ToString(), Avg = g.Average(x => (decimal)x.Value) })
                       .OrderBy(x => x.Key)
                       .ToList();
         
         // Category A: (10 + 20) / 2 = 15
-        await Assert.That((double)result[0].Avg).IsEqualTo(15.0);
+        await Assert.That(result[0].Avg).IsEqualTo(15.0m);
         // Category B: (30 + 40) / 2 = 35
-        await Assert.That((double)result[1].Avg).IsEqualTo(35.0);
+        await Assert.That(result[1].Avg).IsEqualTo(35.0m);
         // Category C: 50 / 1 = 50
-        await Assert.That((double)result[2].Avg).IsEqualTo(50.0);
+        await Assert.That(result[2].Avg).IsEqualTo(50.0m);
     }
 
     /// <summary>
     /// Test AotGrouping Min method
     /// </summary>
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task AotGrouping_Min_ShouldFindMinimum()
     {
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
         var result = q.GroupBy(x => x.Category)
-                      .Select(g => new { Key = g.Key, Min = g.Min(x => x.Value) })
+                      .Select(g => new GroupMinResult { Key = g.Key == null ? "" : g.Key.ToString(), Min = g.Min(x => x.Value) })
                       .OrderBy(x => x.Key)
                       .ToList();
         
@@ -372,14 +350,13 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
     /// Test AotGrouping Max method
     /// </summary>
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task AotGrouping_Max_ShouldFindMaximum()
     {
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
         var result = q.GroupBy(x => x.Category)
-                      .Select(g => new { Key = g.Key, Max = g.Max(x => x.Value) })
+                      .Select(g => new GroupMaxResult { Key = g.Key == null ? "" : g.Key.ToString(), Max = g.Max(x => x.Value) })
                       .OrderBy(x => x.Key)
                       .ToList();
         
@@ -516,13 +493,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         var col = _engine.GetCollection<TestItem>("empty_count");
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "empty_count");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Count",
-            new Type[] { typeof(TestItem) },
-            q.Expression);
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "empty_count", call);
+        var result = q.Count();
         
         await Assert.That(result).IsEqualTo(0);
     }
@@ -536,13 +507,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         var col = _engine.GetCollection<TestItem>("empty_any2");
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "empty_any2");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Any",
-            new Type[] { typeof(TestItem) },
-            q.Expression);
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "empty_any2", call);
+        var result = q.Any();
         
         await Assert.That(result).IsEqualTo(false);
     }
@@ -556,15 +521,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         var col = _engine.GetCollection<TestItem>("empty_all");
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "empty_all");
         
-        Expression<Func<TestItem, bool>> predicate = x => x.Value > 100;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "All",
-            new Type[] { typeof(TestItem) },
-            q.Expression,
-            Expression.Quote(predicate));
-        
-        var result = QueryPipeline.Execute<TestItem>(_executor, "empty_all", call);
+        var result = q.All(x => x.Value > 100);
         
         await Assert.That(result).IsEqualTo(true);
     }
@@ -654,6 +611,7 @@ public class QueryableTwoTypeParamsTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class TwoTypeTestItem
     {
         public int Id { get; set; }
@@ -806,6 +764,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class ProviderTestItem
     {
         public int Id { get; set; }
@@ -826,14 +785,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
         
         // Create a simple Where expression
         Expression<Func<ProviderTestItem, bool>> predicate = x => x.Id > 0;
-        var whereMethod = typeof(System.Linq.Queryable).GetMethods()
-            .First(m => m.Name == "Where" && m.GetParameters().Length == 2)
-            .MakeGenericMethod(typeof(ProviderTestItem));
-        
-        var whereExpr = Expression.Call(
-            whereMethod,
-            q.Expression,
-            Expression.Quote(predicate));
+        var whereExpr = q.Where(predicate).Expression;
         
         var result = provider.CreateQuery(whereExpr);
         
@@ -872,14 +824,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
         
         // Create a Select expression that changes type to int
         Expression<Func<ProviderTestItem, int>> selector = x => x.Id;
-        var selectMethod = typeof(System.Linq.Queryable).GetMethods()
-            .First(m => m.Name == "Select" && m.GetParameters().Length == 2)
-            .MakeGenericMethod(typeof(ProviderTestItem), typeof(int));
-        
-        var selectExpr = Expression.Call(
-            selectMethod,
-            q.Expression,
-            Expression.Quote(selector));
+        var selectExpr = q.Select(selector).Expression;
         
         var result = provider.CreateQuery<int>(selectExpr);
         
@@ -898,18 +843,7 @@ public class QueryProviderEdgeCaseTests : IDisposable
         col.Insert(new ProviderTestItem { Id = 2, Name = "Test2" });
         
         var q = new TinyDb.Query.Queryable<ProviderTestItem>(_executor, "provider_exec_gen");
-        var provider = q.Provider;
-        
-        // Create Count expression
-        var countMethod = typeof(System.Linq.Queryable).GetMethods()
-            .First(m => m.Name == "Count" && m.GetParameters().Length == 1)
-            .MakeGenericMethod(typeof(ProviderTestItem));
-        
-        var countExpr = Expression.Call(
-            countMethod,
-            q.Expression);
-        
-        var result = provider.Execute<int>(countExpr);
+        var result = q.Count();
         
         await Assert.That(result).IsEqualTo(2);
     }
@@ -942,6 +876,7 @@ public class ObjectComparerEdgeCaseTests
         File.Delete(Path.Combine(Path.GetTempPath(), $"comparer_{Guid.NewGuid()}.db"));
     }
 
+    [Entity]
     public class MixedItem
     {
         public int Id { get; set; }
@@ -971,6 +906,7 @@ public class PredicateExtractorTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class PredicateTestItem
     {
         public int Id { get; set; }

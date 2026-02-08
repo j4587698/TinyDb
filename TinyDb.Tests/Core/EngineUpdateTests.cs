@@ -81,4 +81,61 @@ public class EngineUpdateTests : IDisposable
         var loadedData = (TinyDb.Bson.BsonBinary)loaded!["Data"];
         await Assert.That(loadedData.Bytes.Length).IsEqualTo(12000);
     }
+
+    [Test]
+    public async Task Update_PageOverflow_ShouldFallbackToDeleteAndInsert()
+    {
+        var options = new TinyDbOptions { PageSize = 4096 };
+        using var engine = new TinyDbEngine(_testDbPath, options);
+
+        const string collection = "sync_update_overflow";
+        var dataCapacity = (int)options.PageSize - TinyDb.Storage.Page.DataStartOffset;
+        var maxDocSize = (int)options.PageSize - 300;
+
+        int payload1 = FindPayloadLengthForEntrySize(1, dataCapacity / 2 - 200, collection);
+        int entry1 = GetEntrySize(1, payload1, collection);
+
+        int payloadUpdated = FindPayloadLengthForEntrySize(1, dataCapacity - entry1 + 50, collection);
+        int entryUpdated = GetEntrySize(1, payloadUpdated, collection);
+
+        await Assert.That(entryUpdated - 4).IsLessThanOrEqualTo(maxDocSize);
+        await Assert.That(entry1 + entryUpdated).IsGreaterThan(dataCapacity);
+
+        engine.InsertDocument(collection, CreateSizedDoc(1, payload1, collection));
+        engine.InsertDocument(collection, CreateSizedDoc(2, payload1, collection));
+
+        var updated = CreateSizedDoc(1, payloadUpdated, collection);
+        var count = engine.UpdateDocumentInternal(collection, updated);
+
+        await Assert.That(count).IsEqualTo(1);
+        var loaded = engine.FindById(collection, new TinyDb.Bson.BsonInt32(1));
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!["payload"].ToString()!.Length).IsEqualTo(payloadUpdated);
+
+        static TinyDb.Bson.BsonDocument CreateSizedDoc(int id, int payloadLength, string col)
+        {
+            var payload = new string('x', payloadLength);
+            return new TinyDb.Bson.BsonDocument().Set("_id", id).Set("_collection", col).Set("payload", payload);
+        }
+
+        static int GetEntrySize(int id, int payloadLength, string col)
+        {
+            var bytes = TinyDb.Serialization.BsonSerializer.SerializeDocument(CreateSizedDoc(id, payloadLength, col));
+            return bytes.Length + 4;
+        }
+
+        static int FindPayloadLengthForEntrySize(int id, int targetEntrySize, string col)
+        {
+            var payloadLength = Math.Max(0, targetEntrySize - 128);
+            while (true)
+            {
+                var entrySize = GetEntrySize(id, payloadLength, col);
+                if (entrySize >= targetEntrySize)
+                {
+                    return payloadLength;
+                }
+                payloadLength += Math.Max(1, targetEntrySize - entrySize);
+            }
+        }
+    }
 }

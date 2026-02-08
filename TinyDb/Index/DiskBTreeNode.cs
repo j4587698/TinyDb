@@ -291,7 +291,7 @@ public sealed class DiskBTreeNode
             case BsonType.Double: return 8;
             case BsonType.String: 
                 // Estimate: Length * 2 (conservative) + length prefix (4)
-                return (((BsonString)val).Value?.Length ?? 0) * 2 + 4;
+                return ((BsonString)val).Value.Length * 2 + 4;
             case BsonType.Int32: return 4;
             case BsonType.Int64: return 8;
             case BsonType.Boolean: return 1;
@@ -382,7 +382,7 @@ public sealed class DiskBTreeNode
     public bool IsFull(int pageSize)
     {
         // Use _page.DataCapacity if available as it represents the true space on the page
-        int limit = _page.DataCapacity > 0 ? _page.DataCapacity : pageSize;
+        int limit = _page.DataCapacity;
         return CalculateSize() >= limit;
     }
 }

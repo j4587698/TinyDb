@@ -298,25 +298,29 @@ public class LockRequestCoverageTests
     [Test]
     public async Task LockType_Read_HasCorrectValue()
     {
-        await Assert.That((int)LockType.Read).IsEqualTo(0);
+        var value = (int)LockType.Read;
+        await Assert.That(value).IsEqualTo(0);
     }
 
     [Test]
     public async Task LockType_Write_HasCorrectValue()
     {
-        await Assert.That((int)LockType.Write).IsEqualTo(1);
+        var value = (int)LockType.Write;
+        await Assert.That(value).IsEqualTo(1);
     }
 
     [Test]
     public async Task LockType_IntentWrite_HasCorrectValue()
     {
-        await Assert.That((int)LockType.IntentWrite).IsEqualTo(2);
+        var value = (int)LockType.IntentWrite;
+        await Assert.That(value).IsEqualTo(2);
     }
 
     [Test]
     public async Task LockType_Update_HasCorrectValue()
     {
-        await Assert.That((int)LockType.Update).IsEqualTo(3);
+        var value = (int)LockType.Update;
+        await Assert.That(value).IsEqualTo(3);
     }
 
     #endregion

@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Collections;
 using TinyDb.Core;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -665,6 +666,7 @@ public class DocumentCollectionEdgeCaseTests
 
     #endregion
 
+    [Entity]
     public class TestEntity
     {
         public ObjectId Id { get; set; } = ObjectId.NewObjectId();

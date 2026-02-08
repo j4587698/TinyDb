@@ -3,6 +3,7 @@ using TinyDb.Collections;
 using TinyDb.Core;
 using TinyDb.Query;
 using TinyDb.Tests.Utils;
+using TinyDb.Attributes;
 
 namespace TinyDb.Tests.Query;
 
@@ -44,12 +45,11 @@ public class QueryPipelineGroupByTests : IDisposable
     #region GroupBy Tests with Select (AOT Compatible)
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
     public async Task GroupBy_WithSelect_ShouldWork()
     {
         var query = _products.Query()
             .GroupBy(p => p.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() });
+            .Select(g => new GroupCountResult { Category = g.Key == null ? "" : g.Key.ToString(), Count = g.Count() });
 
         var results = query.ToList();
 
@@ -57,27 +57,40 @@ public class QueryPipelineGroupByTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
-    public async Task GroupBy_WithSum_ShouldCalculateCorrectly()
+    public async Task GroupBy_AfterSelect_ShouldWork()
     {
         var query = _products.Query()
+            .Select(p => new ProductProjection { Category = p.Category, Price = p.Price })
             .GroupBy(p => p.Category)
-            .Select(g => new { Category = g.Key, Total = g.Sum(p => p.Price) });
+            .Select(g => new GroupSumResult { Category = g.Key == null ? "" : g.Key.ToString(), Total = g.Sum(p => p.Price) });
 
         var results = query.ToList();
 
         await Assert.That(results.Count).IsEqualTo(3);
-        var fruitTotal = results.FirstOrDefault(r => r.Category?.ToString() == "Fruit");
+        var fruitTotal = results.FirstOrDefault(r => r.Category == "Fruit");
         await Assert.That(fruitTotal).IsNotNull();
     }
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
+    public async Task GroupBy_WithSum_ShouldCalculateCorrectly()
+    {
+        var query = _products.Query()
+            .GroupBy(p => p.Category)
+            .Select(g => new GroupSumResult { Category = g.Key == null ? "" : g.Key.ToString(), Total = g.Sum(p => p.Price) });
+
+        var results = query.ToList();
+
+        await Assert.That(results.Count).IsEqualTo(3);
+        var fruitTotal = results.FirstOrDefault(r => r.Category == "Fruit");
+        await Assert.That(fruitTotal).IsNotNull();
+    }
+
+    [Test]
     public async Task GroupBy_WithAverage_ShouldCalculateCorrectly()
     {
         var query = _products.Query()
             .GroupBy(p => p.Category)
-            .Select(g => new { Category = g.Key, AvgPrice = g.Average(p => p.Price) });
+            .Select(g => new GroupAverageResult { Category = g.Key == null ? "" : g.Key.ToString(), AvgPrice = g.Average(p => p.Price) });
 
         var results = query.ToList();
 
@@ -85,13 +98,13 @@ public class QueryPipelineGroupByTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
     public async Task GroupBy_WithMinMax_ShouldCalculateCorrectly()
     {
         var query = _products.Query()
             .GroupBy(p => p.Category)
-            .Select(g => new { 
-                Category = g.Key, 
+            .Select(g => new GroupMinMaxResult
+            { 
+                Category = g.Key == null ? "" : g.Key.ToString(),
                 MinPrice = g.Min(p => p.Price),
                 MaxPrice = g.Max(p => p.Price)
             });
@@ -106,13 +119,12 @@ public class QueryPipelineGroupByTests : IDisposable
     #region GroupBy with Filter (Where before GroupBy)
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
     public async Task GroupBy_AfterWhere_ShouldFilterFirst()
     {
         var query = _products.Query()
             .Where(p => p.Price > 1.0m)
             .GroupBy(p => p.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() });
+            .Select(g => new GroupCountResult { Category = g.Key == null ? "" : g.Key.ToString(), Count = g.Count() });
 
         var results = query.ToList();
 
@@ -147,18 +159,17 @@ public class QueryPipelineGroupByTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("Test uses anonymous types and dynamic which require dynamic code generation")]
     public async Task ExecuteGroupBy_WithNullKey_ShouldGroupCorrectly()
     {
         // Test grouping with null keys
-        var items = new object[] { 
-            new { Key = (string?)null, Value = 1 },
-            new { Key = (string?)null, Value = 2 },
-            new { Key = "A", Value = 3 }
+        var items = new GroupItem[] { 
+            new() { Key = null, Value = 1 },
+            new() { Key = null, Value = 2 },
+            new() { Key = "A", Value = 3 }
         };
 
         var groups = items
-            .GroupBy(x => ((dynamic)x).Key as string ?? "")
+            .GroupBy(x => x.Key ?? "")
             .Select(g => new QueryPipeline.AotGrouping(g.Key, g.Cast<object>()))
             .ToList();
 
@@ -170,7 +181,6 @@ public class QueryPipelineGroupByTests : IDisposable
     #region Aggregation Tests
 
     [Test]
-    [SkipInAot("Aggregation through LINQ requires dynamic code")]
     public async Task Sum_OnGroupedData_ShouldWork()
     {
         var query = _products.Query()
@@ -183,7 +193,6 @@ public class QueryPipelineGroupByTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("Aggregation through LINQ requires dynamic code")]
     public async Task Average_OnGroupedData_ShouldWork()
     {
         var query = _products.Query()
@@ -200,7 +209,6 @@ public class QueryPipelineGroupByTests : IDisposable
     #region Edge Cases
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
     public async Task GroupBy_EmptyCollection_ShouldReturnEmpty()
     {
         // Create empty collection
@@ -216,7 +224,6 @@ public class QueryPipelineGroupByTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy result enumeration requires dynamic code")]
     public async Task GroupBy_SingleCategory_ShouldReturnOneGroup()
     {
         var singleCollection = _engine.GetCollection<Product>("single_category");
@@ -226,7 +233,7 @@ public class QueryPipelineGroupByTests : IDisposable
 
         var query = singleCollection.Query()
             .GroupBy(p => p.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count() });
+            .Select(g => new GroupCountResult { Category = g.Key == null ? "" : g.Key.ToString(), Count = g.Count() });
 
         var results = query.ToList();
 
@@ -238,12 +245,50 @@ public class QueryPipelineGroupByTests : IDisposable
 
     #region Test Entity
 
+    [Entity]
     public class Product
     {
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public decimal Price { get; set; }
+    }
+
+    public class GroupCountResult
+    {
+        public string Category { get; set; } = string.Empty;
+        public int Count { get; set; }
+    }
+
+    public class GroupSumResult
+    {
+        public string Category { get; set; } = string.Empty;
+        public decimal Total { get; set; }
+    }
+
+    public class GroupAverageResult
+    {
+        public string Category { get; set; } = string.Empty;
+        public decimal AvgPrice { get; set; }
+    }
+
+    public class GroupMinMaxResult
+    {
+        public string Category { get; set; } = string.Empty;
+        public decimal MinPrice { get; set; }
+        public decimal MaxPrice { get; set; }
+    }
+
+    public class ProductProjection
+    {
+        public string Category { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+    }
+
+    public class GroupItem
+    {
+        public string? Key { get; set; }
+        public int Value { get; set; }
     }
 
     #endregion

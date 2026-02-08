@@ -32,6 +32,13 @@ public class IndexScannerTests : IDisposable
         public string Name { get; set; } = "";
     }
 
+    [CompositeIndex("ci_weird", "", "A")]
+    public class Weird
+    {
+        [Index]
+        public int A { get; set; }
+    }
+
     [Test]
     public async Task ScanAndCreateIndexes_Should_Create_Property_Indexes()
     {
@@ -43,6 +50,16 @@ public class IndexScannerTests : IDisposable
         // Actually, let's just check stats.
         var stats = idxMgr.GetAllStatistics().ToList();
         await Assert.That(stats.Count).IsGreaterThanOrEqualTo(3); // _id, Email, Name
+    }
+
+    [Test]
+    public async Task ScanAndCreateIndexes_Should_Handle_Empty_And_SingleChar_Fields()
+    {
+        IndexScanner.ScanAndCreateIndexes(_engine, typeof(Weird), "Weird");
+        var idxMgr = _engine.GetIndexManager("Weird");
+
+        var stats = idxMgr.GetAllStatistics().ToList();
+        await Assert.That(stats.Count).IsGreaterThanOrEqualTo(2);
     }
 
     [Test]

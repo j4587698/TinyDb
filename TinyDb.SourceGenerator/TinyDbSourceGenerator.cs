@@ -58,7 +58,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 查找所有类声明
         var classDeclarations = context.SyntaxProvider
             .CreateSyntaxProvider(
-                predicate: static (s, _) => s is ClassDeclarationSyntax,
+                predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax,
                 transform: static (ctx, _) => GetClassInfo(ctx))
             .Where(static m => m is not null)
             .Collect();
@@ -138,7 +138,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     /// </summary>
     private static ClassInfo? GetClassInfo(GeneratorSyntaxContext context)
     {
-        var classDeclaration = (ClassDeclarationSyntax)context.Node;
+        var classDeclaration = (TypeDeclarationSyntax)context.Node;
         var semanticModel = context.SemanticModel;
 
         // 获取类的完整名称
@@ -164,6 +164,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             containingType = containingType.ContainingType;
         }
         var containingTypePath = string.Join("_", containingTypeNames);
+
+        // 检查是否是值类型
+        var isValueType = classSymbol?.IsValueType ?? false;
 
         // 检查是否有Entity属性
         var hasEntityAttribute = classSymbol?.GetAttributes()
@@ -212,7 +215,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 }
 
                 var hasIgnoreAttribute = propertySymbol?.GetAttributes()
-                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute") ?? false;
+                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore") ?? false;
 
                 // 检查是否有 [BsonRef] 特性
                 var bsonRefAttribute = propertySymbol?.GetAttributes()
@@ -239,11 +242,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 }
 
                 var typeSymbol = propertySymbol?.Type;
-                var isValueType = typeSymbol?.IsValueType ?? false;
+                var propIsValueType = typeSymbol?.IsValueType ?? false;
                 var isNullableValueType = typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
                                            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
                 var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
                                               propertySymbol?.NullableAnnotation == NullableAnnotation.Annotated;
+                var isEnumType = typeSymbol?.TypeKind == TypeKind.Enum;
 
                 var fullyQualifiedType = typeSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? propertyType;
                 var nonNullableType = propertyType;
@@ -252,6 +256,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
                 {
                     var underlyingType = nullableType.TypeArguments[0];
+                    isEnumType = underlyingType.TypeKind == TypeKind.Enum;
                     nonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
                     fullyQualifiedNonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                     
@@ -261,7 +266,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                         typeSymbolMap[fullyQualifiedNonNullableType] = underlyingType;
                     }
                 }
-                else if (!isValueType && propertyType.EndsWith("?", StringComparison.Ordinal))
+                else if (!propIsValueType && propertyType.EndsWith("?", StringComparison.Ordinal))
                 {
                     nonNullableType = propertyType.TrimEnd('?').Trim();
                     fullyQualifiedNonNullableType = fullyQualifiedType.TrimEnd('?').Trim();
@@ -308,9 +313,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     isId: false,
                     isIgnored: hasIgnoreAttribute,
                     hasIgnoreAttribute: hasIgnoreAttribute,
-                    isValueType: isValueType,
+                    isValueType: propIsValueType,
                     isNullableValueType: isNullableValueType,
                     isNullableReferenceType: isNullableReferenceType,
+                    isEnum: isEnumType,
                     nonNullableType: nonNullableType,
                     fullyQualifiedType: fullyQualifiedType,
                     fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
@@ -353,7 +359,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
                     // 检查是否有 BsonIgnore 属性
                     var hasIgnoreAttribute = fieldSymbol?.GetAttributes()
-                        .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute") ?? false;
+                        .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore") ?? false;
 
                     // 检查是否有 [BsonRef] 特性
                     var bsonRefAttribute = fieldSymbol?.GetAttributes()
@@ -361,11 +367,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     var bsonRefCollectionName = bsonRefAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
 
                     var typeSymbol = fieldSymbol?.Type;
-                    var isValueType = typeSymbol?.IsValueType ?? false;
+                    var propIsValueType = typeSymbol?.IsValueType ?? false;
                     var isNullableValueType = typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
                                                namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
                     var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
                                                   fieldSymbol?.NullableAnnotation == NullableAnnotation.Annotated;
+                    var isEnumType = typeSymbol?.TypeKind == TypeKind.Enum;
 
                     var fullyQualifiedType = typeSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? fieldType;
                     var nonNullableType = fieldType;
@@ -374,6 +381,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
                     {
                         var underlyingType = nullableType.TypeArguments[0];
+                        isEnumType = underlyingType.TypeKind == TypeKind.Enum;
                         nonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
                         fullyQualifiedNonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                         
@@ -382,7 +390,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                             typeSymbolMap[fullyQualifiedNonNullableType] = underlyingType;
                         }
                     }
-                    else if (!isValueType && fieldType.EndsWith("?", StringComparison.Ordinal))
+                    else if (!propIsValueType && fieldType.EndsWith("?", StringComparison.Ordinal))
                     {
                         nonNullableType = fieldType.TrimEnd('?').Trim();
                         fullyQualifiedNonNullableType = fullyQualifiedType.TrimEnd('?').Trim();
@@ -428,9 +436,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                         isId: false,
                         isIgnored: hasIgnoreAttribute,
                         hasIgnoreAttribute: hasIgnoreAttribute,
-                        isValueType: isValueType,
+                        isValueType: propIsValueType,
                         isNullableValueType: isNullableValueType,
                         isNullableReferenceType: isNullableReferenceType,
+                        isEnum: isEnumType,
                         nonNullableType: nonNullableType,
                         fullyQualifiedType: fullyQualifiedType,
                         fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
@@ -508,7 +517,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
         var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
 
-        return new ClassInfo(namespaceName, className, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors);
+        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors);
     }
 
     /// <summary>
@@ -526,32 +535,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             {
                 return false;
             }
-
-            // 排除TinyDb核心命名空间（除了Demo、Tests和SourceGenerator）
-            if (classInfo.Namespace == "TinyDb" ||
-                (classInfo.Namespace.StartsWith("TinyDb.") &&
-                 classInfo.Namespace != "TinyDb.Demo" &&
-                 !classInfo.Namespace.StartsWith("TinyDb.Tests") &&
-                 !classInfo.Namespace.Contains("SourceGenerator")))
-            {
-                return false;
-            }
-        }
-
-        // 排除所有内部类型的类名
-        var excludePatterns = new[]
-        {
-            "ObjectSerializer", "Serializer", "Mapper", "Query", "Bson", "Cache", "Page",
-            "Index", "Lock", "Transaction", "Engine", "Collection", "Stream",
-            "BinaryExpression", "ConstantExpression", "MemberExpression",
-            "ParameterExpression", "PropertyAccessor", "BTreeNode", "DatabaseStatistics",
-            "TinyDbOptions", "InsertResult", "BTreeNodeStatistics",
-            "TinyDbEntityAttribute", "TinyDbIdAttribute", "TinyDbQueryBuilderAttribute"
-        };
-
-        if (excludePatterns.Any(pattern => classInfo.Name.Contains(pattern)))
-        {
-            return false;
+            
+            // 已移除TinyDb核心命名空间的排除逻辑，以便 MetadataDocument 等实体能正常生成
         }
 
         // 排除编译生成的类
@@ -596,7 +581,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine($"    /// <summary>");
         sb.AppendLine($"    /// {classInfo.TypeReference} 的AOT支持帮助器（源代码生成器生成）");
         sb.AppendLine($"    /// </summary>");
-        sb.AppendLine($"    public static class {classInfo.HelperClassName}");
+        sb.AppendLine($"    internal static class {classInfo.HelperClassName}");
         sb.AppendLine("    {");
 
         // 生成AOT兼容的ID访问方法
@@ -614,7 +599,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine("        /// <returns>ID值</returns>");
             sb.AppendLine($"        public static BsonValue GetId({classInfo.TypeReference} entity)");
             sb.AppendLine("        {");
-            sb.AppendLine($"            if (entity == null) return BsonNull.Value;");
+            if (!classInfo.IsValueType)
+            {
+                sb.AppendLine($"            if (entity == null) return BsonNull.Value;");
+            }
             sb.AppendLine($"            // 硬编码ID属性访问 - 避免AOT反射问题");
 
             if (isObjectId)
@@ -656,17 +644,28 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine("        /// <param name=\"id\">ID值</param>");
             sb.AppendLine($"        public static void SetId({classInfo.TypeReference} entity, BsonValue id)");
             sb.AppendLine("        {");
-            sb.AppendLine($"            if (entity == null || id?.IsNull != false) return;");
+            if (!classInfo.IsValueType)
+            {
+                sb.AppendLine($"            if (entity == null || id?.IsNull != false) return;");
+            }
+            else
+            {
+                sb.AppendLine($"            if (id?.IsNull != false) return;");
+            }
 
             if (isObjectId)
             {
                 sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonObjectId.Value;");
+                sb.AppendLine("            else if (id is BsonString bsonString && ObjectId.TryParse(bsonString.Value, out var parsedObjectId))");
+                sb.AppendLine($"                entity.{idProp.Name} = parsedObjectId;");
             }
             else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonString bsonString)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonString.Value ?? \"\";");
+                sb.AppendLine("            else if (id != null && !id.IsNull)");
+                sb.AppendLine($"                entity.{idProp.Name} = id.ToString();");
             }
             else if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
             {
@@ -696,7 +695,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine("        /// <returns>是否有有效ID</returns>");
             sb.AppendLine($"        public static bool HasValidId({classInfo.TypeReference} entity)");
             sb.AppendLine("        {");
-            sb.AppendLine($"            if (entity == null) return false;");
+            if (!classInfo.IsValueType)
+            {
+                sb.AppendLine($"            if (entity == null) return false;");
+            }
             sb.AppendLine($"            // 硬编码ID属性验证 - 避免AOT反射问题");
 
             if (isObjectId)
@@ -783,7 +785,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        /// <returns>BSON文档</returns>");
         sb.AppendLine($"        public static BsonDocument ToDocument({classInfo.TypeReference} entity)");
         sb.AppendLine("        {");
-        sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
+        if (!classInfo.IsValueType)
+        {
+            sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
+        }
         sb.AppendLine("            var document = new BsonDocument();");
         sb.AppendLine();
 
@@ -842,7 +847,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        /// <returns>属性值</returns>");
         sb.AppendLine($"        public static object? GetPropertyValue({classInfo.TypeReference} entity, string propertyName)");
         sb.AppendLine("        {");
-        sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
+        if (!classInfo.IsValueType)
+        {
+            sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
+        }
         sb.AppendLine("            return propertyName switch");
         sb.AppendLine("            {");
 
@@ -851,7 +859,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine($"                \"{prop.Name}\" => entity.{prop.Name},");
         }
 
-        sb.AppendLine("                _ => throw new ArgumentException($\"Unknown property: {propertyName}\")");
+        sb.AppendLine("                _ => null");
         sb.AppendLine("            };");
         sb.AppendLine("        }");
 
@@ -1032,22 +1040,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
         sb.AppendLine("        /// <summary>");
-        sb.AppendLine("        /// 从 BSON 值转换");
+        sb.AppendLine("        /// 辅助方法：将BSON值转换为目标类型");
         sb.AppendLine("        /// </summary>");
-        sb.AppendLine("        /// <typeparam name=\"T\">目标类型</typeparam>");
-        sb.AppendLine("        /// <param name=\"value\">BSON 值</param>");
-        sb.AppendLine("        /// <returns>转换后的值</returns>");
-        sb.AppendLine("        private static T ConvertFromBsonValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(BsonValue value)");
+        sb.AppendLine($"        private static T ConvertFromBsonValue<[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)] T>(BsonValue value)");
         sb.AppendLine("        {");
-        sb.AppendLine("            if (value == null || value.IsNull) return default!;");
-        sb.AppendLine();
-        sb.AppendLine("            var converted = global::TinyDb.Serialization.BsonConversion.FromBsonValue(value, typeof(T));");
-        sb.AppendLine("            if (converted is T typed)");
-        sb.AppendLine("            {");
-        sb.AppendLine("                return typed;");
-        sb.AppendLine("            }");
-        sb.AppendLine();
-        sb.AppendLine("            return converted is null ? default! : (T)converted;");
+        sb.AppendLine("            return (T)global::TinyDb.Serialization.BsonConversion.FromBsonValue(value, typeof(T))!;");
         sb.AppendLine("        }");
         sb.AppendLine();
         
@@ -1086,7 +1083,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        /// <typeparam name=\"T\">对象类型</typeparam>");
         sb.AppendLine("        /// <param name=\"obj\">要序列化的对象</param>");
         sb.AppendLine("        /// <returns>BSON 文档</returns>");
-        sb.AppendLine("        private static BsonDocument SerializeComplexObject<T>(T obj)");
+        sb.AppendLine("        private static BsonDocument SerializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(T obj)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (obj == null) return new BsonDocument();");
         sb.AppendLine();
@@ -1158,7 +1155,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        /// <typeparam name=\"T\">对象类型</typeparam>");
         sb.AppendLine("        /// <param name=\"obj\">要序列化的对象</param>");
         sb.AppendLine("        /// <returns>BSON 文档</returns>");
-        sb.AppendLine("        private static BsonDocument SerializeComplexObject<T>(T obj)");
+        sb.AppendLine("        private static BsonDocument SerializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(T obj)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (obj == null) return new BsonDocument();");
         sb.AppendLine();
@@ -1591,6 +1588,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             case SpecialType.System_Char:
             case SpecialType.System_String:
             case SpecialType.System_DateTime:
+            case SpecialType.System_Object:
                 return true;
         }
 
@@ -1598,6 +1596,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         var typeName = typeSymbol.ToDisplayString();
         return typeName switch
         {
+            "System.Object" or "object" => true,
             "System.Guid" or "Guid" => true,
             "System.TimeSpan" or "TimeSpan" => true,
             "System.DateTimeOffset" or "DateTimeOffset" => true,
@@ -2226,114 +2225,115 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
 }
 
-/// <summary>
-/// 类信息
-/// </summary>
-public class ClassInfo
-{
-    public string Namespace { get; }
-    public string Name { get; }
-    public string ContainingTypePath { get; }
     /// <summary>
-    /// 用于在代码中引用类型的名称（对于嵌套类，使用 OuterClass.InnerClass 格式）
+    /// 类信息
     /// </summary>
-    public string TypeReference
+    public class ClassInfo
     {
-        get
+        public string Namespace { get; }
+        public string Name { get; }
+        public string ContainingTypePath { get; }
+        public bool IsValueType { get; }
+        /// <summary>
+        /// 用于在代码中引用类型的名称（对于嵌套类，使用 OuterClass.InnerClass 格式）
+        /// </summary>
+        public string TypeReference
         {
-            if (!string.IsNullOrEmpty(ContainingTypePath))
+            get
             {
-                // ContainingTypePath 使用下划线分隔（如 OuterClass_MiddleClass），
-                // 需要转换为点分隔（如 OuterClass.MiddleClass）以便在代码中引用嵌套类型
-                var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
-                return $"{dotSeparatedPath}.{Name}";
+                if (!string.IsNullOrEmpty(ContainingTypePath))
+                {
+                    // ContainingTypePath 使用下划线分隔（如 OuterClass_MiddleClass），
+                    // 需要转换为点分隔（如 OuterClass.MiddleClass）以便在代码中引用嵌套类型
+                    var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
+                    return $"{dotSeparatedPath}.{Name}";
+                }
+                return Name;
             }
-            return Name;
         }
-    }
-    public string FullName
-    {
-        get
+        public string FullName
         {
-            var baseName = string.IsNullOrEmpty(Namespace) ? "" : $"{Namespace}.";
-            if (!string.IsNullOrEmpty(ContainingTypePath))
+            get
             {
-                // ContainingTypePath 使用下划线分隔，需要转换为点分隔
-                var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
-                return $"{baseName}{dotSeparatedPath}.{Name}";
+                var baseName = string.IsNullOrEmpty(Namespace) ? "" : $"{Namespace}.";
+                if (!string.IsNullOrEmpty(ContainingTypePath))
+                {
+                    // ContainingTypePath 使用下划线分隔，需要转换为点分隔
+                    var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
+                    return $"{baseName}{dotSeparatedPath}.{Name}";
+                }
+                return $"{baseName}{Name}";
             }
-            return $"{baseName}{Name}";
         }
-    }
-    public string UniqueFileName
-    {
-        get
+        public string UniqueFileName
         {
-            var parts = new List<string>();
-            if (!string.IsNullOrEmpty(Namespace)) parts.Add(Namespace.Replace(".", "_"));
-            if (!string.IsNullOrEmpty(ContainingTypePath)) parts.Add(ContainingTypePath);
-            parts.Add(Name);
-            return string.Join("_", parts);
-        }
-    }
-    /// <summary>
-    /// 用于生成帮助器类名的唯一标识（例如 CoverageSprintFinal_MathEntity）
-    /// </summary>
-    public string HelperClassName
-    {
-        get
-        {
-            if (!string.IsNullOrEmpty(ContainingTypePath))
+            get
             {
-                return $"{ContainingTypePath}_{Name}AotHelper";
+                var parts = new List<string>();
+                if (!string.IsNullOrEmpty(Namespace)) parts.Add(Namespace.Replace(".", "_"));
+                if (!string.IsNullOrEmpty(ContainingTypePath)) parts.Add(ContainingTypePath);
+                parts.Add(Name);
+                return string.Join("_", parts);
             }
-            return $"{Name}AotHelper";
         }
-    }
-    public List<PropertyInfo> Properties { get; }
-    public PropertyInfo? IdProperty { get; }
-    public string? CollectionName { get; }
-    /// <summary>
-    /// 类声明的源代码位置（用于诊断报告）
-    /// </summary>
-    public Location? Location { get; }
-    
-    /// <summary>
-    /// 依赖的非Entity复杂类型（需要生成内联序列化代码）
-    /// </summary>
-    public List<DependentComplexType> DependentComplexTypes { get; }
-    
-    /// <summary>
-    /// 检测到的循环引用信息（非Entity类型）
-    /// </summary>
-    public List<CircularReferenceInfo> CircularReferences { get; }
-    
-    /// <summary>
-    /// 检测到的Entity类型间循环引用信息
-    /// </summary>
-    public List<EntityCircularReferenceInfo> EntityCircularReferences { get; }
-    
-    /// <summary>
-    /// BsonRef 引用类型缺少 Entity 特性的错误列表
-    /// </summary>
-    public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
+        /// <summary>
+        /// 用于生成帮助器类名的唯一标识（例如 CoverageSprintFinal_MathEntity）
+        /// </summary>
+        public string HelperClassName
+        {
+            get
+            {
+                if (!string.IsNullOrEmpty(ContainingTypePath))
+                {
+                    return $"{ContainingTypePath}_{Name}AotHelper";
+                }
+                return $"{Name}AotHelper";
+            }
+        }
+        public List<PropertyInfo> Properties { get; }
+        public PropertyInfo? IdProperty { get; }
+        public string? CollectionName { get; }
+        /// <summary>
+        /// 类声明的源代码位置（用于诊断报告）
+        /// </summary>
+        public Location? Location { get; }
+        
+        /// <summary>
+        /// 依赖的非Entity复杂类型（需要生成内联序列化代码）
+        /// </summary>
+        public List<DependentComplexType> DependentComplexTypes { get; }
+        
+        /// <summary>
+        /// 检测到的循环引用信息（非Entity类型）
+        /// </summary>
+        public List<CircularReferenceInfo> CircularReferences { get; }
+        
+        /// <summary>
+        /// 检测到的Entity类型间循环引用信息
+        /// </summary>
+        public List<EntityCircularReferenceInfo> EntityCircularReferences { get; }
+        
+        /// <summary>
+        /// BsonRef 引用类型缺少 Entity 特性的错误列表
+        /// </summary>
+        public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
 
-    public ClassInfo(string @namespace, string name, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null)
-    {
-        Namespace = @namespace;
-        Name = name;
-        Properties = properties;
-        IdProperty = idProperty;
-        CollectionName = collectionName;
-        ContainingTypePath = containingTypePath ?? string.Empty;
-        Location = location;
-        DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
-        CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
-        EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
-        BsonRefMissingEntityErrors = bsonRefMissingEntityErrors ?? new List<BsonRefMissingEntityInfo>();
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null)
+        {
+            Namespace = @namespace;
+            Name = name;
+            IsValueType = isValueType;
+            Properties = properties;
+            IdProperty = idProperty;
+            CollectionName = collectionName;
+            ContainingTypePath = containingTypePath ?? string.Empty;
+            Location = location;
+            DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
+            CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
+            EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
+            BsonRefMissingEntityErrors = bsonRefMissingEntityErrors ?? new List<BsonRefMissingEntityInfo>();
+        }
     }
-}
-
 /// <summary>
 /// 依赖的复杂类型信息（非Entity类型，需要生成内联序列化代码）
 /// </summary>
@@ -2422,6 +2422,7 @@ public class PropertyInfo
     public bool IsValueType { get; }
     public bool IsNullableValueType { get; }
     public bool IsNullableReferenceType { get; }
+    public bool IsEnum { get; }
     public string NonNullableType { get; }
     public string FullyQualifiedType { get; }
     public string FullyQualifiedNonNullableType { get; }
@@ -2500,6 +2501,7 @@ public class PropertyInfo
         bool isValueType = false,
         bool isNullableValueType = false,
         bool isNullableReferenceType = false,
+        bool isEnum = false,
         string? nonNullableType = null,
         string? fullyQualifiedType = null,
         string? fullyQualifiedNonNullableType = null,
@@ -2524,6 +2526,7 @@ public class PropertyInfo
         IsValueType = isValueType;
         IsNullableValueType = isNullableValueType;
         IsNullableReferenceType = isNullableReferenceType;
+        IsEnum = isEnum;
         NonNullableType = nonNullableType ?? type.TrimEnd('?');
         FullyQualifiedType = fullyQualifiedType ?? type;
         FullyQualifiedNonNullableType = fullyQualifiedNonNullableType ?? NonNullableType;
@@ -2940,16 +2943,21 @@ public static partial class SourceGeneratorHelpers
             return GenerateComplexTypeDeserialization(prop, bsonFieldName);
         }
 
-        // 处理集合中包含复杂类型的情况
-        if (prop.IsCollection && prop.IsElementComplexType)
+        // 处理集合类型（List, Array等）
+        if (prop.IsCollection)
         {
-            return GenerateCollectionWithComplexElementDeserialization(prop, bsonFieldName);
+            return GenerateCollectionDeserialization(prop, bsonFieldName);
         }
 
-        // 处理字典中包含复杂类型值的情况
-        if (prop.IsDictionary && prop.IsDictionaryValueComplexType)
+        // 处理字典类型
+        if (prop.IsDictionary)
         {
-            return GenerateDictionaryWithComplexValueDeserialization(prop, bsonFieldName);
+            return GenerateDictionaryDeserialization(prop, bsonFieldName);
+        }
+
+        if (prop.IsEnum && !prop.IsNullableValueType && !prop.Type.EndsWith("?", StringComparison.Ordinal))
+        {
+            return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyName} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});";
         }
 
         return propertyType switch
@@ -3008,6 +3016,11 @@ public static partial class SourceGeneratorHelpers
             return GenerateComplexTypeDeserialization(prop, bsonFieldName);
         }
 
+        if (prop.IsEnum)
+        {
+            return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyName} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName}); else entity.{propertyName} = null;";
+        }
+
         return underlyingType switch
         {
             "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value; else entity.{propertyName} = null;",
@@ -3052,14 +3065,15 @@ public static partial class SourceGeneratorHelpers
     }
 
     /// <summary>
-    /// 生成包含复杂类型元素的集合的反序列化代码
+    /// 生成包含元素的集合的反序列化代码
     /// </summary>
-    private static string GenerateCollectionWithComplexElementDeserialization(PropertyInfo prop, string bsonFieldName)
+    private static string GenerateCollectionDeserialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
         var elementType = prop.ElementType ?? "object";
         var isArray = prop.IsArray;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isElementComplex = prop.IsElementComplexType;
         
         var sb = new StringBuilder();
         sb.AppendLine($@"if (document.TryGetValue(""{bsonFieldName}"", out var bson{propertyName}))
@@ -3079,10 +3093,22 @@ public static partial class SourceGeneratorHelpers
                     foreach (var item in array{propertyName})
                     {{
                         if (item.IsNull)
-                            list_{propertyName}.Add(default!);
-                        else if (item is BsonDocument itemDoc)
+                            list_{propertyName}.Add(default!);");
+        
+        if (isElementComplex)
+        {
+            sb.AppendLine($@"                        else if (item is BsonDocument itemDoc)
                             list_{propertyName}.Add(DeserializeComplexObject<{elementType}>(itemDoc));
-                    }}");
+                        else
+                            list_{propertyName}.Add(ConvertFromBsonValue<{elementType}>(item));");
+        }
+        else
+        {
+            sb.AppendLine($@"                        else
+                            list_{propertyName}.Add(ConvertFromBsonValue<{elementType}>(item));");
+        }
+        
+        sb.AppendLine(@"                    }");
         
         if (isArray)
         {
@@ -3100,14 +3126,15 @@ public static partial class SourceGeneratorHelpers
     }
 
     /// <summary>
-    /// 生成包含复杂类型值的字典的反序列化代码
+    /// 生成包含值的字典的反序列化代码
     /// </summary>
-    private static string GenerateDictionaryWithComplexValueDeserialization(PropertyInfo prop, string bsonFieldName)
+    private static string GenerateDictionaryDeserialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
         var keyType = prop.DictionaryKeyType ?? "string";
         var valueType = prop.DictionaryValueType ?? "object";
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isValueComplex = prop.IsDictionaryValueComplexType;
         
         var sb = new StringBuilder();
         sb.AppendLine($@"if (document.TryGetValue(""{bsonFieldName}"", out var bson{propertyName}))
@@ -3127,10 +3154,22 @@ public static partial class SourceGeneratorHelpers
                     foreach (var kvp in dict{propertyName})
                     {{
                         if (kvp.Value.IsNull)
-                            result_{propertyName}[kvp.Key] = default!;
-                        else if (kvp.Value is BsonDocument valueDoc)
+                            result_{propertyName}[kvp.Key] = default!;");
+                            
+        if (isValueComplex)
+        {
+            sb.AppendLine($@"                        else if (kvp.Value is BsonDocument valueDoc)
                             result_{propertyName}[kvp.Key] = DeserializeComplexObject<{valueType}>(valueDoc);
-                    }}
+                        else
+                            result_{propertyName}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+        }
+        else
+        {
+            sb.AppendLine($@"                        else
+                            result_{propertyName}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+        }
+
+        sb.AppendLine($@"                    }}
                     entity.{propertyName} = result_{propertyName};
                 }}
             }}");

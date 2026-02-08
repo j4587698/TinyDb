@@ -235,12 +235,11 @@ public class BsonExhaustiveIConvertibleTests
     }
 
     [Test]
-    [SkipInAot("Uses reflection to instantiate internal type BsonArrayValue")]
     public async Task BsonArrayValue_Internal_Coverage()
     {
-        var type = typeof(BsonArray).Assembly.GetType("TinyDb.Bson.BsonArrayValue");
+        // Direct access via InternalsVisibleTo
         var array = new BsonArray().AddValue(1);
-        var wrapper = (BsonValue)Activator.CreateInstance(type!, array)!;
+        BsonValue wrapper = new BsonArrayValue(array);
         
         await Assert.That(wrapper.BsonType).IsEqualTo(BsonType.Array);
         await Assert.That(wrapper.IsArray).IsTrue();

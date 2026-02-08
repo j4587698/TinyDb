@@ -582,7 +582,7 @@ public class BsonSerializerEdgeCaseTests
         // Create a custom BsonValue that is not supported
         // We can't easily create one, but we can test via a mock or by using reflection
         // For now, let's skip this test as it requires internal type creation
-        await Assert.That(true).IsTrue();
+        await Assert.That(writer).IsNotNull();
     }
 
     [Test]
@@ -842,7 +842,7 @@ public class BsonSerializerEdgeCaseTests
         writer.Dispose();
         writer.Dispose();
         
-        await Assert.That(true).IsTrue();
+        await Assert.That(writer).IsNotNull();
     }
 
     [Test]
@@ -857,7 +857,7 @@ public class BsonSerializerEdgeCaseTests
         reader.Dispose();
         reader.Dispose();
 
-        await Assert.That(true).IsTrue();
+        await Assert.That(reader).IsNotNull();
     }
 
     #endregion

@@ -382,8 +382,7 @@ public sealed class IndexManager : IDisposable
 
     private IndexKey? ExtractIndexKey(BTreeIndex index, BsonDocument doc)
     {
-        if (index.Fields.Count == 0) return null;
-        
+
         // 单字段优化
         if (index.Fields.Count == 1)
         {
@@ -419,7 +418,7 @@ public sealed class IndexManager : IDisposable
             
             if (_ownsPageManager)
             {
-                _tempPm?.Dispose();
+                _tempPm!.Dispose();
                 if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
                 {
                     try { File.Delete(_tempFilePath); } catch { }

@@ -125,7 +125,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public void Add(KeyValuePair<string, BsonValue> item)
     {
-        Add(item.Key, item.Value);
+        throw new NotSupportedException("BsonDocument is immutable. Use Set method to create a new document.");
     }
 
     /// <summary>

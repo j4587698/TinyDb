@@ -76,6 +76,15 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         // 转换为BSON文档（AOT兼容）
         var document = AotBsonMapper.ToDocument(entity);
 
+        // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
+        if (!document.ContainsKey("_id"))
+        {
+            var newId = ObjectId.NewObjectId();
+            document = document.Set("_id", newId);
+            // 尝试更新实体ID（如果是可变实体）
+            UpdateEntityId(entity, newId);
+        }
+
         // 检查是否在事务中
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
@@ -124,6 +133,15 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
             // 转换为BSON文档（AOT兼容）
             var document = AotBsonMapper.ToDocument(entity);
+            
+            // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
+            if (!document.ContainsKey("_id"))
+            {
+                var newId = ObjectId.NewObjectId();
+                document = document.Set("_id", newId);
+                // 尝试更新实体ID（如果是可变实体）
+                UpdateEntityId(entity, newId);
+            }
             
             entityBatch.Add(entity);
             docBatch.Add(document);
@@ -636,6 +654,15 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         // 转换为BSON文档（AOT兼容）
         var document = AotBsonMapper.ToDocument(entity);
 
+        // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
+        if (!document.ContainsKey("_id"))
+        {
+            var newId = ObjectId.NewObjectId();
+            document = document.Set("_id", newId);
+            // 尝试更新实体ID（如果是可变实体）
+            UpdateEntityId(entity, newId);
+        }
+
         // 检查是否在事务中
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
@@ -677,6 +704,15 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
             EnsureEntityHasId(entity);
             var document = AotBsonMapper.ToDocument(entity);
+            
+            // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
+            if (!document.ContainsKey("_id"))
+            {
+                var newId = ObjectId.NewObjectId();
+                document = document.Set("_id", newId);
+                // 尝试更新实体ID（如果是可变实体）
+                UpdateEntityId(entity, newId);
+            }
             
             entityBatch.Add(entity);
             docBatch.Add(document);

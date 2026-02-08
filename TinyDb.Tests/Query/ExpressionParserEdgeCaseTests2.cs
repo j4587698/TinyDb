@@ -1,7 +1,6 @@
 using System;
 using System.Linq.Expressions;
 using TinyDb.Query;
-using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using LinqExpression = System.Linq.Expressions.Expression;
@@ -314,18 +313,18 @@ public class ExpressionParserEdgeCaseTests2
     #region MemberInit Expression Tests
 
     [Test]
-    [SkipInAot("Uses Expression.Lambda.Compile")]
     public async Task ParseExpression_MemberInit_ShouldWork()
     {
         // Tests line 76-91: MemberInit expression
         // This is typically used in projections
         // MemberInit with bindings that reference parameters should return MemberInitQueryExpression
         var param = LinqExpression.Parameter(typeof(TestDoc), "x");
+        var nameProperty = typeof(TestDoc).GetProperty(nameof(TestDoc.Name))!;
         var memberInit = LinqExpression.MemberInit(
             LinqExpression.New(typeof(TestDoc)),
             LinqExpression.Bind(
-                typeof(TestDoc).GetProperty(nameof(TestDoc.Name))!,
-                LinqExpression.Property(param, nameof(TestDoc.Name))
+                nameProperty,
+                LinqExpression.Property(param, nameProperty)
             )
         );
         

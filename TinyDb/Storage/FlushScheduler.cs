@@ -172,13 +172,7 @@ public sealed class FlushScheduler : IDisposable
         _disposed = true;
 
         _cts.Cancel();
-        try
-        {
-            _backgroundTask?.Wait();
-        }
-        catch (AggregateException)
-        {
-        }
+        _backgroundTask?.Wait();
 
         try
         {

@@ -7,6 +7,7 @@
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
     <a href="https://www.nuget.org/packages/TinyDb"><img src="https://img.shields.io/nuget/v/TinyDb.svg" alt="NuGet"></a>
     <a href="https://www.nuget.org/packages/TinyDb"><img src="https://img.shields.io/nuget/dt/TinyDb.svg" alt="NuGet Downloads"></a>
+    <a href="https://app.codecov.io/gh/j4587698/TinyDb"><img src="https://codecov.io/gh/j4587698/TinyDb/graph/badge.svg" alt="codecov"></a>
     <img src="https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-blue.svg" alt=".NET Version">
     <img src="https://img.shields.io/badge/AOT-Compatible-green.svg" alt="AOT Compatible">
   </p>
@@ -16,6 +17,14 @@
 </p>
 
 ---
+
+## AOT 优先声明
+
+TinyDb 是一个 **AOT 优先**、受 **LiteDB** 启发的单文件嵌入式 NoSQL 数据库：
+
+- **以 AOT 为准**：一切功能以 NativeAOT 编译后的行为为准，不提供任何回退逻辑。
+- **开发一致性**：保障开发期（非 AOT/JIT）与 AOT 发布后的行为一致。
+- **非 AOT 场景建议**：如果你的应用不需要 NativeAOT，推荐直接使用 LiteDB（生态更成熟、特性更完整）。
 
 ## 特性亮点
 

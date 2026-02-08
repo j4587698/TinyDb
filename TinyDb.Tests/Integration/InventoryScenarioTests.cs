@@ -13,6 +13,7 @@ using TUnit.Core;
 
 namespace TinyDb.Tests.Integration;
 
+[Entity]
 public class StockItem
 {
     public ObjectId Id { get; set; } = ObjectId.NewObjectId();

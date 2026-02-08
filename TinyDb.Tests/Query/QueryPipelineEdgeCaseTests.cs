@@ -3,6 +3,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using TinyDb.Query;
 using TinyDb.Core;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -30,6 +31,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class TestEntity
     {
         public int Id { get; set; }
@@ -166,13 +168,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "First",
-            new Type[] { typeof(TestEntity) },
-            q.OrderBy(x => x.Id).Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.OrderBy(x => x.Id).First();
         
         await Assert.That(result).IsNotNull();
         await Assert.That(((TestEntity)result!).Id).IsEqualTo(1);
@@ -184,13 +180,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         var col = _engine.GetCollection<TestEntity>("empty_test");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "empty_test");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "FirstOrDefault",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "empty_test", call);
+        var result = q.FirstOrDefault();
         
         await Assert.That(result).IsNull();
     }
@@ -201,13 +191,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Last",
-            new Type[] { typeof(TestEntity) },
-            q.OrderBy(x => x.Id).Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.OrderBy(x => x.Id).Last();
         
         await Assert.That(result).IsNotNull();
         await Assert.That(((TestEntity)result!).Id).IsEqualTo(5);
@@ -219,13 +203,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         var col = _engine.GetCollection<TestEntity>("empty_last");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "empty_last");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "LastOrDefault",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "empty_last", call);
+        var result = q.LastOrDefault();
         
         await Assert.That(result).IsNull();
     }
@@ -236,13 +214,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Any",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.Any();
         
         await Assert.That(result).IsEqualTo(true);
     }
@@ -253,13 +225,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         var col = _engine.GetCollection<TestEntity>("empty_any");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "empty_any");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Any",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "empty_any", call);
+        var result = q.Any();
         
         await Assert.That(result).IsEqualTo(false);
     }
@@ -270,16 +236,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        // Any(x => x.Score > 90)
-        Expression<Func<TestEntity, bool>> predicate = x => x.Score > 90;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Any",
-            new Type[] { typeof(TestEntity) },
-            q.Expression,
-            Expression.Quote(predicate));
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.Any(x => x.Score > 90);
         
         await Assert.That(result).IsEqualTo(true);
     }
@@ -290,13 +247,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "LongCount",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.LongCount();
         
         await Assert.That(result).IsEqualTo(5L);
     }
@@ -309,13 +260,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "single_test");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "Single",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "single_test", call);
+        var result = q.Single();
         
         await Assert.That(((TestEntity)result!).Id).IsEqualTo(42);
     }
@@ -326,13 +271,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         var col = _engine.GetCollection<TestEntity>("single_empty");
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "single_empty");
         
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "SingleOrDefault",
-            new Type[] { typeof(TestEntity) },
-            q.Expression);
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "single_empty", call);
+        var result = q.SingleOrDefault();
         
         await Assert.That(result).IsNull();
     }
@@ -343,16 +282,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        // All(x => x.Score > 0)
-        Expression<Func<TestEntity, bool>> predicate = x => x.Score > 0;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "All",
-            new Type[] { typeof(TestEntity) },
-            q.Expression,
-            Expression.Quote(predicate));
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.All(x => x.Score > 0);
         
         await Assert.That(result).IsEqualTo(true);
     }
@@ -363,16 +293,7 @@ public class QueryPipelineEdgeCaseTests : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestEntity>(_executor, "test");
         
-        // All(x => x.Score > 90) - not all scores are > 90
-        Expression<Func<TestEntity, bool>> predicate = x => x.Score > 90;
-        var call = Expression.Call(
-            typeof(System.Linq.Queryable),
-            "All",
-            new Type[] { typeof(TestEntity) },
-            q.Expression,
-            Expression.Quote(predicate));
-
-        var result = QueryPipeline.Execute<TestEntity>(_executor, "test", call);
+        var result = q.All(x => x.Score > 90);
         
         await Assert.That(result).IsEqualTo(false);
     }

@@ -10,6 +10,77 @@ namespace TinyDb.Serialization;
 /// </summary>
 public static class BsonConversion
 {
+    public static TEnum FromBsonValueEnum<TEnum>(BsonValue bsonValue)
+        where TEnum : struct, Enum
+    {
+        if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
+
+        if (bsonValue.IsNull)
+        {
+            return default;
+        }
+
+        var enumType = typeof(TEnum);
+        var underlyingType = Enum.GetUnderlyingType(enumType);
+
+        object? convertedValue;
+        if (underlyingType == typeof(int))
+        {
+            convertedValue = bsonValue switch
+            {
+                BsonInt32 i32 => i32.Value,
+                BsonInt64 i64 => checked((int)i64.Value),
+                BsonDouble dbl => Convert.ToInt32(dbl.Value),
+                BsonString str => int.Parse(str.Value),
+                _ => Convert.ToInt32(bsonValue.ToString())
+            };
+        }
+        else if (underlyingType == typeof(long))
+        {
+            convertedValue = bsonValue switch
+            {
+                BsonInt64 i64 => i64.Value,
+                BsonInt32 i32 => i32.Value,
+                BsonDouble dbl => Convert.ToInt64(dbl.Value),
+                BsonString str => long.Parse(str.Value),
+                _ => Convert.ToInt64(bsonValue.ToString())
+            };
+        }
+        else if (underlyingType == typeof(short))
+        {
+            convertedValue = bsonValue switch
+            {
+                BsonInt32 i32 => (short)i32.Value,
+                BsonInt64 i64 => checked((short)i64.Value),
+                BsonDouble dbl => Convert.ToInt16(dbl.Value),
+                BsonString str => short.Parse(str.Value),
+                _ => Convert.ToInt16(bsonValue.ToString())
+            };
+        }
+        else if (underlyingType == typeof(byte))
+        {
+            convertedValue = bsonValue switch
+            {
+                BsonInt32 i32 => (byte)i32.Value,
+                BsonInt64 i64 => checked((byte)i64.Value),
+                BsonDouble dbl => Convert.ToByte(dbl.Value),
+                BsonString str => byte.Parse(str.Value),
+                _ => Convert.ToByte(bsonValue.ToString())
+            };
+        }
+        else
+        {
+            convertedValue = bsonValue.ToString();
+        }
+
+        if (convertedValue is string s)
+        {
+            return Enum.Parse<TEnum>(s, ignoreCase: true);
+        }
+
+        return (TEnum)Enum.ToObject(enumType, convertedValue!);
+    }
+
     /// <summary>
     /// 将对象转换为 BsonValue。
     /// </summary>
@@ -68,22 +139,18 @@ public static class BsonConversion
         // 检查是否为复杂对象类型
         if (IsComplexObjectType(type))
         {
-            // 首先尝试使用注册的AOT适配器（AOT兼容）
+            // 使用注册的AOT适配器（AOT兼容）
             if (AotHelperRegistry.TryGetUntypedAdapter(type, out var adapter))
             {
                 return adapter.ToDocumentUntyped(value);
             }
 
-            // 尝试使用AotBsonMapper序列化
-            var doc = AotBsonMapper.ToDocument(value);
-            if (doc != null)
-            {
-                return doc;
-            }
+            throw new InvalidOperationException(
+                $"Type '{type.FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
         }
 
-        // 回退到字符串表示
-        return new BsonString(value.ToString() ?? string.Empty);
+        throw new NotSupportedException($"Unsupported type for BSON conversion: {type.FullName}");
     }
 
     /// <summary>
@@ -128,12 +195,10 @@ public static class BsonConversion
     /// <param name="bsonValue">要转换的 BsonValue。</param>
     /// <param name="targetType">目标类型。</param>
     /// <returns>转换后的对象。</returns>
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2070", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Source generator在AOT模式下会生成确切的目标类型以保留所需成员。")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "数组元素类型在AOT模式下由源生成器保留。")]
-    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "数组类型在AOT模式下由源生成器保留。")]
-    public static object? FromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties)] Type targetType)
+    [UnconditionalSuppressMessage("Aot", "IL3050:RequiresDynamicCode", Justification = "Array.CreateInstance is used for primitive arrays fallback.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "集合/数组元素类型来源于运行时目标类型，AOT发布由源生成器保留所需成员。")]
+    public static object? FromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.Interfaces)] Type targetType)
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
         if (targetType == null) throw new ArgumentNullException(nameof(targetType));
@@ -143,67 +208,63 @@ public static class BsonConversion
         targetType = Nullable.GetUnderlyingType(targetType) ?? targetType;
 
         // 处理枚举类型
-        if (targetType.IsEnum)
-        {
-            return ConvertFromBsonValueToEnum(bsonValue, targetType);
-        }
-
         // 处理数组类型（如 string[], int[] 等）
         if (targetType.IsArray)
         {
             var elementType = targetType.GetElementType()!;
             if (bsonValue is BsonArray bsonArray)
             {
+                // Suppress warning for Array.CreateInstance as we are in a fallback context
+#pragma warning disable IL3050
                 var array = Array.CreateInstance(elementType, bsonArray.Count);
+#pragma warning restore IL3050
                 for (int i = 0; i < bsonArray.Count; i++)
                 {
+#pragma warning disable IL2062
                     var convertedItem = FromBsonValue(bsonArray[i], elementType);
+#pragma warning restore IL2062
                     array.SetValue(convertedItem, i);
                 }
                 return array;
             }
         }
 
-        // 处理集合类型
-        if (targetType.IsGenericType)
+        // Handle generic collections ONLY if they have adapters or are not using reflection creation
+        if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(List<>))
         {
-            var genericTypeDefinition = targetType.GetGenericTypeDefinition();
-
-            // 处理 List<T>
-            if (genericTypeDefinition == typeof(List<>))
+            if (bsonValue is BsonArray bsonArray)
             {
-                if (bsonValue is BsonArray array)
+                var elementType = targetType.GetGenericArguments()[0];
+                var list = (System.Collections.IList)Activator.CreateInstance(targetType)!;
+                foreach (var item in bsonArray)
                 {
-                    var elementType = targetType.GetGenericArguments()[0];
-                    var list = Activator.CreateInstance(targetType);
-
-                    foreach (var item in array)
-                    {
-                        var convertedItem = FromBsonValue(item, elementType);
-                        targetType.GetMethod("Add")?.Invoke(list, new[] { convertedItem });
-                    }
-
-                    return list;
+#pragma warning disable IL2062
+                    list.Add(FromBsonValue(item, elementType));
+#pragma warning restore IL2062
                 }
+                return list;
             }
-
-            // 处理 Dictionary<string, T>
-            if (genericTypeDefinition == typeof(Dictionary<,>) &&
-                targetType.GetGenericArguments()[0] == typeof(string))
+        }
+        else if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+        {
+            if (bsonValue is BsonDocument bsonDoc)
             {
-                if (bsonValue is BsonDocument document)
+                var keyType = targetType.GetGenericArguments()[0];
+                var valueType = targetType.GetGenericArguments()[1];
+                var dict = (System.Collections.IDictionary)Activator.CreateInstance(targetType)!;
+                
+                foreach (var element in bsonDoc)
                 {
-                    var valueType = targetType.GetGenericArguments()[1];
-                    var dictionary = Activator.CreateInstance(targetType);
-
-                    foreach (var kvp in document)
-                    {
-                        var convertedValue = FromBsonValue(kvp.Value, valueType);
-                        targetType.GetMethod("Add")?.Invoke(dictionary, new[] { kvp.Key, convertedValue });
-                    }
-
-                    return dictionary;
+                    object key = keyType.IsEnum 
+                        ? Enum.Parse(keyType, element.Key) 
+                        : Convert.ChangeType(element.Key, keyType);
+                        
+#pragma warning disable IL2062
+                    var value = FromBsonValue(element.Value, valueType);
+#pragma warning restore IL2062
+                    dict.Add(key, value);
                 }
+                return dict;
             }
         }
 
@@ -229,19 +290,36 @@ public static class BsonConversion
 
             if (nestedDoc != null)
             {
-                // 首先尝试使用注册的AOT适配器（AOT兼容）
+                // 使用注册的AOT适配器（AOT兼容）
                 if (AotHelperRegistry.TryGetUntypedAdapter(targetType, out var adapter))
                 {
                     return adapter.FromDocumentUntyped(nestedDoc);
                 }
 
-                // 回退到AotBsonMapper.ConvertValue (使用反射)
-                return AotBsonMapper.ConvertValue(nestedDoc, targetType);
+                throw new InvalidOperationException(
+                    $"Type '{targetType.FullName}' must have [Entity] attribute for AOT serialization. " +
+                    $"Add [Entity] attribute to the type to enable source generator support.");
             }
         }
 
         return targetType switch
         {
+            var t when t == typeof(object) =>
+                bsonValue switch
+                {
+                    BsonInt32 i32 => i32.Value,
+                    BsonInt64 i64 => i64.Value,
+                    BsonString str => str.Value,
+                    BsonBoolean b => b.Value,
+                    BsonDouble d => d.Value,
+                    BsonDecimal128 dec => dec.Value.ToDecimal(),
+                    BsonDateTime dt => dt.Value,
+                    BsonObjectId oid => oid.Value,
+                    BsonDocument doc => doc.ToDictionary(),
+                    BsonArray arr => arr.Select(x => FromBsonValue(x, typeof(object))).ToList(),
+                    BsonBinary bin => bin.SubType == BsonBinary.BinarySubType.Uuid ? new Guid(bin.Bytes) : bin.Bytes,
+                    _ => bsonValue.RawValue
+                },
             var t when t == typeof(string) =>
                 bsonValue is BsonString bsonString ? bsonString.Value : bsonValue.ToString(),
             var t when t == typeof(int) =>
@@ -374,6 +452,7 @@ public static class BsonConversion
     /// <summary>
     /// 将BsonValue转换为枚举
     /// </summary>
+    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "枚举解析依赖保留的枚举元数据，AOT场景可用。")]
     private static object ConvertFromBsonValueToEnum(BsonValue bsonValue, Type enumType)
     {
         try
@@ -455,6 +534,7 @@ public static class BsonConversion
             type == typeof(Guid) ||
             type == typeof(ObjectId) ||
             type == typeof(decimal) ||
+            type == typeof(object) || // 排除 object 类型，避免尝试查找 object 的适配器
             type.IsEnum)
         {
             return false;

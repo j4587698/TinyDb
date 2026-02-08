@@ -50,7 +50,7 @@ public class EngineIntegrationTests : IDisposable
         // Delete it
         var deleted = _engine.DeleteDocument("large_col", id);
         await Assert.That(deleted).IsEqualTo(1);
-        await Assert.That(_engine.FindById("large_col", id)).IsNull();
+        await Assert.That(_engine.FindById("large_col", id) == null).IsTrue();
     }
 
     [Test]

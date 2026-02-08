@@ -128,12 +128,6 @@ internal sealed class CollectionMetaStore
     public void SaveCollections(bool forceFlush)
     {
         var pageId = _getCollectionPageId();
-        if (pageId == 0)
-        {
-            var newPage = _pageManager.NewPage(PageType.Collection);
-            pageId = newPage.PageID;
-            _setCollectionPageId(pageId);
-        }
         var collectionInfo = new BsonDocument();
         lock (_lock)
         {
@@ -143,6 +137,12 @@ internal sealed class CollectionMetaStore
                 // Store Metadata as value
                 collectionInfo = collectionInfo.Set(kvp.Key, kvp.Value);
             }
+        }
+        if (pageId == 0)
+        {
+            var newPage = _pageManager.NewPage(PageType.Collection);
+            pageId = newPage.PageID;
+            _setCollectionPageId(pageId);
         }
         var collectionData = BsonSerializer.SerializeDocument(collectionInfo);
         

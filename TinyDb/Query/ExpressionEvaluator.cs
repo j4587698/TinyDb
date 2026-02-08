@@ -20,6 +20,7 @@ public static class ExpressionEvaluator
             UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, entity),
             ParameterExpression paramExpr => true,
             FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, entity) ?? false,
+            ConditionalQueryExpression conditionalExpr => EvaluateConditionalBoolean(conditionalExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
         };
     }
@@ -34,6 +35,7 @@ public static class ExpressionEvaluator
             UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, document),
             ParameterExpression paramExpr => true,
             FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, document) ?? false,
+            ConditionalQueryExpression conditionalExpr => EvaluateConditionalBoolean(conditionalExpr, (object)document),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
         };
     }
@@ -60,6 +62,7 @@ public static class ExpressionEvaluator
             FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
             ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, entity),
             MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, entity),
+            ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }
@@ -76,6 +79,7 @@ public static class ExpressionEvaluator
             FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, (object)document),
             ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, (object)document),
             MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, (object)document),
+            ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, (object)document),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }
@@ -94,6 +98,7 @@ public static class ExpressionEvaluator
             FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
             ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, entity),
             MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, entity),
+            ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, entity),
             _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
         };
     }
@@ -103,6 +108,28 @@ public static class ExpressionEvaluator
     {
         var args = expression.Arguments.Select(a => EvaluateValue(a, (object)entity!)).ToArray();
         return Activator.CreateInstance(expression.Type, args);
+    }
+
+    private static bool EvaluateConditionalBoolean(ConditionalQueryExpression expression, object entity)
+    {
+        var result = EvaluateConditionalValue(expression, entity);
+        if (result is bool b) return b;
+        if (result is null) return false;
+        throw new InvalidOperationException("Conditional expression must evaluate to a boolean value");
+    }
+
+    private static object? EvaluateConditionalValue(ConditionalQueryExpression expression, object entity)
+    {
+        var testValue = EvaluateValue(expression.Test, entity);
+        if (testValue is bool test)
+        {
+            return EvaluateValue(test ? expression.IfTrue : expression.IfFalse, entity);
+        }
+        if (testValue is null)
+        {
+            return null;
+        }
+        throw new InvalidOperationException("Conditional test must be a boolean value");
     }
 
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "Type and properties come from expression tree.")]
@@ -170,10 +197,6 @@ public static class ExpressionEvaluator
         if (nodeType == ExpressionType.Convert)
         {
             if (value == null) return null;
-            if (IsNumericType(value) && IsNumericType(Activator.CreateInstance(targetType) ?? 0))
-            {
-                return Convert.ChangeType(value, targetType);
-            }
             return Convert.ChangeType(value, targetType);
         }
         else if (nodeType == ExpressionType.Not)
@@ -254,8 +277,6 @@ public static class ExpressionEvaluator
             case ExpressionType.GreaterThanOrEqual: return Compare(leftValue, rightValue) >= 0;
             case ExpressionType.LessThan: return Compare(leftValue, rightValue) < 0;
             case ExpressionType.LessThanOrEqual: return Compare(leftValue, rightValue) <= 0;
-            case ExpressionType.AndAlso: return leftValue is bool leftBool && rightValue is bool rightBool && leftBool && rightBool;
-            case ExpressionType.OrElse: return leftValue is bool leftBool2 && rightValue is bool rightBool2 && (leftBool2 || rightBool2);
 
             case ExpressionType.Add:
                 // Handle string concatenation
@@ -391,18 +412,15 @@ public static class ExpressionEvaluator
         }
         else if (target is DateTime dt)
         {
-            return memberName switch
-            {
-                "Year" => dt.Year,
-                "Month" => dt.Month,
-                "Day" => dt.Day,
-                "Hour" => dt.Hour,
-                "Minute" => dt.Minute,
-                "Second" => dt.Second,
-                "Date" => dt.Date,
-                "DayOfWeek" => (int)dt.DayOfWeek,
-                _ => null
-            };
+            if (memberName == "Year") return dt.Year;
+            if (memberName == "Month") return dt.Month;
+            if (memberName == "Day") return dt.Day;
+            if (memberName == "Hour") return dt.Hour;
+            if (memberName == "Minute") return dt.Minute;
+            if (memberName == "Second") return dt.Second;
+            if (memberName == "Date") return dt.Date;
+            if (memberName == "DayOfWeek") return (int)dt.DayOfWeek;
+            return null;
         }
         else if (target is System.Collections.ICollection col)
         {
@@ -419,8 +437,14 @@ public static class ExpressionEvaluator
             }
         }
 
-        // Fallback to reflection for other properties
         var type = target.GetType();
+
+        if (AotHelperRegistry.TryGetAdapter(type, out var adapter) && adapter is IAotEntityPropertyAccessor accessor)
+        {
+            return accessor.GetPropertyValueUntyped(target, memberName);
+        }
+
+        // Fallback to reflection for other properties
         var prop = GetPropertySafe(type, memberName);
         return prop?.GetValue(target);
     }
@@ -451,25 +475,34 @@ public static class ExpressionEvaluator
 
     private static object? EvaluateFunction(string functionName, object? targetValue, object?[] args)
     {
+        if (targetValue == null && args.Length > 0 && args[0] is System.Collections.IEnumerable && IsEnumerableFunction(functionName))
+        {
+            targetValue = args[0];
+            args = args.Skip(1).ToArray();
+        }
+
+        if (functionName == "ToString" && args.Length == 0 && targetValue != null)
+        {
+            return targetValue.ToString();
+        }
+
         if (targetValue is string str)
         {
-            return functionName switch
+            if (functionName == "Contains") return args.Length == 1 && args[0] is string s ? str.Contains(s) : false;
+            if (functionName == "StartsWith") return args.Length == 1 && args[0] is string s ? str.StartsWith(s) : false;
+            if (functionName == "EndsWith") return args.Length == 1 && args[0] is string s ? str.EndsWith(s) : false;
+            if (functionName == "ToLower") return str.ToLower();
+            if (functionName == "ToUpper") return str.ToUpper();
+            if (functionName == "Trim") return str.Trim();
+            if (functionName == "Substring")
             {
-                "Contains" => args.Length == 1 && args[0] is string s ? str.Contains(s) : false,
-                "StartsWith" => args.Length == 1 && args[0] is string s ? str.StartsWith(s) : false,
-                "EndsWith" => args.Length == 1 && args[0] is string s ? str.EndsWith(s) : false,
-                "ToLower" => str.ToLower(),
-                "ToUpper" => str.ToUpper(),
-                "Trim" => str.Trim(),
-                "Substring" => args.Length switch
-                {
-                    1 => str.Substring(Convert.ToInt32(args[0])),
-                    2 => str.Substring(Convert.ToInt32(args[0]), Convert.ToInt32(args[1])),
-                    _ => throw new ArgumentException("Invalid arguments for Substring")
-                },
-                "Replace" => args.Length == 2 && args[0] is string o && args[1] is string n ? str.Replace(o, n) : str,
-                _ => throw new NotSupportedException($"String function '{functionName}' is not supported")
-            };
+                if (args.Length == 1) return str.Substring(Convert.ToInt32(args[0]));
+                if (args.Length == 2) return str.Substring(Convert.ToInt32(args[0]), Convert.ToInt32(args[1]));
+                throw new ArgumentException("Invalid arguments for Substring");
+            }
+            if (functionName == "Replace") return args.Length == 2 && args[0] is string o && args[1] is string n ? str.Replace(o, n) : str;
+
+            throw new NotSupportedException($"String function '{functionName}' is not supported");
         }
 
         if (targetValue is System.Collections.IEnumerable enumerable)
@@ -492,50 +525,146 @@ public static class ExpressionEvaluator
                 while (e.MoveNext()) count++;
                 return count;
             }
+            if (functionName == "Sum" || functionName == "Average" || functionName == "Min" || functionName == "Max")
+            {
+                var selector = BuildSelector(args);
+                return EvaluateEnumerableAggregate(functionName, enumerable, selector);
+            }
         }
 
         if (targetValue == null)
         {
-            switch (functionName)
+            if (functionName == "Abs") return EvaluateMathOneArg(args, Math.Abs, Math.Abs);
+            if (functionName == "Ceiling") return EvaluateMathOneArg(args, Math.Ceiling, Math.Ceiling);
+            if (functionName == "Floor") return EvaluateMathOneArg(args, Math.Floor, Math.Floor);
+            if (functionName == "Round")
             {
-                case "Abs": return EvaluateMathOneArg(args, Math.Abs, Math.Abs, Math.Abs);
-                case "Ceiling": return EvaluateMathOneArg(args, Math.Ceiling, Math.Ceiling, d => (decimal)Math.Ceiling((double)d));
-                case "Floor": return EvaluateMathOneArg(args, Math.Floor, Math.Floor, d => (decimal)Math.Floor((double)d));
-                case "Round":
-                    if (args.Length == 1) return EvaluateMathOneArg(args, Math.Round, Math.Round, Math.Round);
-                    if (args.Length == 2) return EvaluateMathTwoArgs(args, (v, p) => Math.Round(v, (int)p), (v, p) => Math.Round(v, (int)p), (v, p) => Math.Round(v, (int)p));
-                    break;
-                case "Min": return EvaluateMathTwoArgs(args, Math.Min, Math.Min, Math.Min);
-                case "Max": return EvaluateMathTwoArgs(args, Math.Max, Math.Max, Math.Max);
-                case "Pow": return args.Length == 2 ? Math.Pow(Convert.ToDouble(args[0]), Convert.ToDouble(args[1])) : 0.0;
-                case "Sqrt": return args.Length == 1 ? Math.Sqrt(Convert.ToDouble(args[0])) : 0.0;
+                if (args.Length == 1) return EvaluateMathOneArg(args, Math.Round, Math.Round);
+                if (args.Length == 2) return EvaluateMathTwoArgs(args, (v, p) => Math.Round(v, (int)p), (v, p) => Math.Round(v, (int)p));
+            }
+            else if (functionName == "Min")
+            {
+                return EvaluateMathTwoArgs(args, Math.Min, Math.Min);
+            }
+            else if (functionName == "Max")
+            {
+                return EvaluateMathTwoArgs(args, Math.Max, Math.Max);
+            }
+            else if (functionName == "Pow")
+            {
+                return args.Length == 2 ? Math.Pow(Convert.ToDouble(args[0]), Convert.ToDouble(args[1])) : 0.0;
+            }
+            else if (functionName == "Sqrt")
+            {
+                return args.Length == 1 ? Math.Sqrt(Convert.ToDouble(args[0])) : 0.0;
             }
         }
 
         if (targetValue is DateTime dt)
         {
-            return functionName switch
-            {
-                "AddDays" => dt.AddDays(Convert.ToDouble(args[0])),
-                "AddHours" => dt.AddHours(Convert.ToDouble(args[0])),
-                "AddMinutes" => dt.AddMinutes(Convert.ToDouble(args[0])),
-                "AddSeconds" => dt.AddSeconds(Convert.ToDouble(args[0])),
-                "AddYears" => dt.AddYears(Convert.ToInt32(args[0])),
-                "AddMonths" => dt.AddMonths(Convert.ToInt32(args[0])),
-                "ToString" => dt.ToString(),
-                _ => throw new NotSupportedException($"DateTime function '{functionName}' is not supported")
-            };
-        }
-
-        if (functionName == "ToString" && args.Length == 0 && targetValue != null)
-        {
-            return targetValue.ToString();
+            if (functionName == "AddDays") return dt.AddDays(Convert.ToDouble(args[0]));
+            if (functionName == "AddHours") return dt.AddHours(Convert.ToDouble(args[0]));
+            if (functionName == "AddMinutes") return dt.AddMinutes(Convert.ToDouble(args[0]));
+            if (functionName == "AddSeconds") return dt.AddSeconds(Convert.ToDouble(args[0]));
+            if (functionName == "AddYears") return dt.AddYears(Convert.ToInt32(args[0]));
+            if (functionName == "AddMonths") return dt.AddMonths(Convert.ToInt32(args[0]));
+            throw new NotSupportedException($"DateTime function '{functionName}' is not supported");
         }
 
         throw new NotSupportedException($"Function '{functionName}' is not supported for type {targetValue?.GetType().Name ?? "null"}");
     }
 
-    private static object EvaluateMathOneArg(object?[] args, Func<double, double> doubleFunc, Func<decimal, decimal> decimalFunc, Func<decimal, decimal>? decimalFuncFallback = null)
+    private static bool IsEnumerableFunction(string functionName)
+    {
+        return EnumerableFunctionNames.Contains(functionName);
+    }
+
+    private static readonly HashSet<string> EnumerableFunctionNames = new(StringComparer.Ordinal)
+    {
+        "Contains",
+        "Count",
+        "Sum",
+        "Average",
+        "Min",
+        "Max"
+    };
+
+    private static Func<object, object> BuildSelector(object?[] args)
+    {
+        if (args.Length == 0) return item => item;
+        if (args.Length == 1 && args[0] is LambdaExpression lambda)
+        {
+            var parser = new ExpressionParser();
+            var selectorExpr = parser.ParseExpression(lambda.Body);
+            return item => EvaluateValue(selectorExpr, item)!;
+        }
+
+        return item => args[0] ?? item;
+    }
+
+    private static object? EvaluateEnumerableAggregate(string functionName, System.Collections.IEnumerable enumerable, Func<object, object> selector)
+    {
+        if (enumerable is QueryPipeline.AotGrouping aotGroup)
+        {
+            return functionName switch
+            {
+                "Sum" => aotGroup.Sum(selector),
+                "Average" => aotGroup.Average(selector),
+                "Min" => aotGroup.Min(selector),
+                "Max" => aotGroup.Max(selector),
+                _ => null
+            };
+        }
+
+        var items = enumerable.Cast<object>().ToList();
+        if (functionName == "Sum")
+        {
+            decimal sum = 0m;
+            foreach (var item in items)
+            {
+                var value = selector(item);
+                if (value != null) sum += Convert.ToDecimal(value);
+            }
+            return sum;
+        }
+        if (functionName == "Average")
+        {
+            if (items.Count == 0) return 0m;
+            decimal sum = 0m;
+            foreach (var item in items)
+            {
+                var value = selector(item);
+                if (value != null) sum += Convert.ToDecimal(value);
+            }
+            return sum / items.Count;
+        }
+        if (functionName == "Min")
+        {
+            object? min = null;
+            foreach (var item in items)
+            {
+                var value = selector(item);
+                if (value == null) continue;
+                if (min == null || Comparer<object>.Default.Compare(value, min) < 0) min = value;
+            }
+            return min;
+        }
+        if (functionName == "Max")
+        {
+            object? max = null;
+            foreach (var item in items)
+            {
+                var value = selector(item);
+                if (value == null) continue;
+                if (max == null || Comparer<object>.Default.Compare(value, max) > 0) max = value;
+            }
+            return max;
+        }
+
+        return null;
+    }
+
+    private static object EvaluateMathOneArg(object?[] args, Func<double, double> doubleFunc, Func<decimal, decimal> decimalFunc)
     {
         if (args.Length != 1) throw new ArgumentException("Function requires 1 argument");
         var val = args[0];
@@ -548,7 +677,7 @@ public static class ExpressionEvaluator
         return doubleFunc(Convert.ToDouble(val));
     }
 
-    private static object EvaluateMathTwoArgs(object?[] args, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc, Func<decimal, decimal, decimal>? decimalFuncFallback = null)
+    private static object EvaluateMathTwoArgs(object?[] args, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc)
     {
         if (args.Length != 2) throw new ArgumentException("Function requires 2 arguments");
         var v1 = args[0];
@@ -560,26 +689,6 @@ public static class ExpressionEvaluator
             return decimalFunc(ToDecimal(v1), ToDecimal(v2));
 
         return doubleFunc(ToDouble(v1), ToDouble(v2));
-    }
-
-    private static bool EvaluateStartsWithFunction(object? targetValue, object? argumentValue)
-    {
-        if (targetValue is string targetStr && argumentValue is string argStr)
-        {
-            return targetStr.StartsWith(argStr);
-        }
-
-        throw new NotSupportedException($"StartsWith operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
-    }
-
-    private static bool EvaluateEndsWithFunction(object? targetValue, object? argumentValue)
-    {
-        if (targetValue is string targetStr && argumentValue is string argStr)
-        {
-            return targetStr.EndsWith(argStr);
-        }
-
-        throw new NotSupportedException($"EndsWith operation is not supported for types {targetValue?.GetType().Name} and {argumentValue?.GetType().Name}");
     }
 
     private static int Compare(object? left, object? right)
@@ -615,6 +724,11 @@ public static class ExpressionEvaluator
             return 0;
         }
 
+        if (left is string leftStr && right is string rightStr)
+        {
+            return string.Compare(leftStr, rightStr, StringComparison.Ordinal);
+        }
+
         if (left is IComparable leftComparable)
         {
             try
@@ -624,11 +738,6 @@ public static class ExpressionEvaluator
             catch (ArgumentException)
             {
             }
-        }
-
-        if (left is string leftStr && right is string rightStr)
-        {
-            return string.Compare(leftStr, rightStr, StringComparison.Ordinal);
         }
 
         return string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal);

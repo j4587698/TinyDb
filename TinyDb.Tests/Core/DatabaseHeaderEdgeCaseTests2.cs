@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text;
 using TinyDb.Core;
 using TUnit.Assertions;
@@ -120,7 +121,7 @@ public class DatabaseHeaderEdgeCaseTests2
         header.UserData = maxData;
         
         var retrieved = header.UserData;
-        await Assert.That(retrieved).IsEquivalentTo(maxData);
+        await Assert.That(retrieved.SequenceEqual(maxData)).IsTrue();
     }
 
     [Test]
@@ -436,7 +437,7 @@ public class DatabaseHeaderEdgeCaseTests2
         await Assert.That(restored.EnableJournaling).IsEqualTo(original.EnableJournaling);
         
         await Assert.That(restored.TryGetSecurityMetadata(out var restoredMeta)).IsTrue();
-        await Assert.That(restoredMeta.Salt).IsEquivalentTo(salt);
+        await Assert.That(restoredMeta.Salt.SequenceEqual(salt)).IsTrue();
     }
 
     #endregion
@@ -493,31 +494,36 @@ public class DatabaseHeaderEdgeCaseTests2
     [Test]
     public async Task Size_ShouldBe256()
     {
-        await Assert.That(DatabaseHeader.Size).IsEqualTo(256);
+        var size = DatabaseHeader.Size;
+        await Assert.That(size).IsEqualTo(256);
     }
 
     [Test]
     public async Task MagicNumber_ShouldBeCorrect()
     {
-        await Assert.That(DatabaseHeader.MagicNumber).IsEqualTo(0x44425353u);
+        var magic = DatabaseHeader.MagicNumber;
+        await Assert.That(magic).IsEqualTo(0x44425353u);
     }
 
     [Test]
     public async Task Version_ShouldBeCorrect()
     {
-        await Assert.That(DatabaseHeader.Version).IsEqualTo(0x00010000u);
+        var version = DatabaseHeader.Version;
+        await Assert.That(version).IsEqualTo(0x00010000u);
     }
 
     [Test]
     public async Task SaltLength_ShouldBe16()
     {
-        await Assert.That(DatabaseSecurityMetadata.SaltLength).IsEqualTo(16);
+        var length = DatabaseSecurityMetadata.SaltLength;
+        await Assert.That(length).IsEqualTo(16);
     }
 
     [Test]
     public async Task KeyHashLength_ShouldBe32()
     {
-        await Assert.That(DatabaseSecurityMetadata.KeyHashLength).IsEqualTo(32);
+        var length = DatabaseSecurityMetadata.KeyHashLength;
+        await Assert.That(length).IsEqualTo(32);
     }
 
     #endregion

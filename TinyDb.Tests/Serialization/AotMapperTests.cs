@@ -1,5 +1,6 @@
 using TinyDb.Serialization;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -72,6 +73,7 @@ public class AotMapperTests
         await Assert.That(val).IsEqualTo(123);
     }
 
+    [Entity]
     public class MyUnregisteredEntity
     {
         public string Name { get; set; } = "";

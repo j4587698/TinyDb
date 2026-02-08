@@ -36,8 +36,19 @@ public static class DbRefSerializer
     }
 
     /// <summary>
+    /// 获取实体的 ID 值（AOT 安全）
+    /// </summary>
+    public static BsonValue GetEntityId(object entity)
+    {
+        if (entity == null) return BsonNull.Value;
+        // 使用 AOT 适配器获取 ID，避免反射
+        return AotBsonMapper.GetId(entity);
+    }
+
+    /// <summary>
     /// 将对象序列化为 DbRef 格式
     /// </summary>
+    [Obsolete("Use GetEntityId and manual BsonDocument construction instead.")]
     public static BsonValue SerializeToDbRef(object? value, string collectionName)
     {
         if (value == null)
@@ -45,17 +56,8 @@ public static class DbRefSerializer
             return BsonNull.Value;
         }
 
-        // 获取对象的 ID
-        var type = value.GetType();
-        var idProperty = type.GetProperty("Id") ?? type.GetProperty("_id") ?? type.GetProperty("ID");
-        
-        if (idProperty == null)
-        {
-            return BsonNull.Value;
-        }
-
-        var idValue = idProperty.GetValue(value);
-        if (idValue == null)
+        var idValue = GetEntityId(value);
+        if (idValue == BsonNull.Value)
         {
             return BsonNull.Value;
         }
@@ -63,7 +65,7 @@ public static class DbRefSerializer
         // 创建 DbRef 文档
         var dbRef = new BsonDocument()
             .Set("$ref", new BsonString(collectionName))
-            .Set("$id", BsonConversion.ToBsonValue(idValue));
+            .Set("$id", idValue);
 
         return dbRef;
     }

@@ -33,10 +33,11 @@ public class ExpressionParserFullTests
     }
 
     [Test]
-    public async Task Parse_Conditional_Should_Throw()
+    public async Task Parse_Conditional_Should_Work()
     {
         Expression<Func<TestObj, bool>> expr = x => x.Flag ? true : false;
-        await Assert.That(() => _parser.Parse(expr)).Throws<NotSupportedException>();
+        var q = _parser.Parse(expr);
+        await Assert.That(q).IsNotNull();
     }
 
     [Test]

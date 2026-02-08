@@ -7,6 +7,34 @@ namespace TinyDb.Tests.Core;
 
 public class EngineBatchInsertTests : IDisposable
 {
+    private sealed class UnsupportedBsonValue : BsonValue
+    {
+        public override BsonType BsonType => BsonType.Undefined;
+        public override object? RawValue => null;
+
+        public override int CompareTo(BsonValue? other) => 0;
+        public override bool Equals(BsonValue? other) => ReferenceEquals(this, other);
+        public override int GetHashCode() => 0;
+
+        public override TypeCode GetTypeCode() => TypeCode.Object;
+        public override bool ToBoolean(IFormatProvider? provider) => throw new InvalidCastException();
+        public override byte ToByte(IFormatProvider? provider) => throw new InvalidCastException();
+        public override char ToChar(IFormatProvider? provider) => throw new InvalidCastException();
+        public override DateTime ToDateTime(IFormatProvider? provider) => throw new InvalidCastException();
+        public override decimal ToDecimal(IFormatProvider? provider) => throw new InvalidCastException();
+        public override double ToDouble(IFormatProvider? provider) => throw new InvalidCastException();
+        public override short ToInt16(IFormatProvider? provider) => throw new InvalidCastException();
+        public override int ToInt32(IFormatProvider? provider) => throw new InvalidCastException();
+        public override long ToInt64(IFormatProvider? provider) => throw new InvalidCastException();
+        public override sbyte ToSByte(IFormatProvider? provider) => throw new InvalidCastException();
+        public override float ToSingle(IFormatProvider? provider) => throw new InvalidCastException();
+        public override string ToString(IFormatProvider? provider) => string.Empty;
+        public override object ToType(Type conversionType, IFormatProvider? provider) => throw new InvalidCastException();
+        public override ushort ToUInt16(IFormatProvider? provider) => throw new InvalidCastException();
+        public override uint ToUInt32(IFormatProvider? provider) => throw new InvalidCastException();
+        public override ulong ToUInt64(IFormatProvider? provider) => throw new InvalidCastException();
+    }
+
     private readonly string _testDbPath;
     private readonly TinyDbEngine _engine;
 
@@ -35,5 +63,33 @@ public class EngineBatchInsertTests : IDisposable
         var docs = new BsonDocument[] { null!, new BsonDocument().Set("a", 1) };
         var result = _engine.InsertDocuments("col", docs);
         await Assert.That(result).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task InsertDocuments_LargeDoc_And_UniqueIndexViolation_ShouldThrowAggregateException()
+    {
+        var idx = _engine.GetIndexManager("col");
+        idx.CreateIndex("idx_code_unique", new[] { "Code" }, unique: true);
+
+        var largePayload = new string('x', 20000);
+        var docs = new[]
+        {
+            new BsonDocument().Set("Code", "dup").Set("payload", largePayload),
+            new BsonDocument().Set("Code", "dup").Set("payload", "small")
+        };
+
+        await Assert.That(() => _engine.InsertDocuments("col", docs)).Throws<AggregateException>();
+    }
+
+    [Test]
+    public async Task InsertDocuments_WhenSerializationFails_ShouldAggregateException()
+    {
+        var docs = new[]
+        {
+            new BsonDocument().Set("bad", new UnsupportedBsonValue()),
+            new BsonDocument().Set("ok", 1)
+        };
+
+        await Assert.That(() => _engine.InsertDocuments("col_serialization", docs)).Throws<AggregateException>();
     }
 }

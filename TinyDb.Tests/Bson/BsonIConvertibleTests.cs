@@ -61,6 +61,16 @@ public class BsonIConvertibleTests
         await Assert.That(val.ToInt32(null)).IsEqualTo(123);
         await Assert.That(val.ToBoolean(null)).IsTrue();
         await Assert.That(val.ToString(null)).IsEqualTo("123");
+        await Assert.That(val.GetTypeCode()).IsEqualTo(TypeCode.Int64);
+
+        await Assert.That(val.ToType(typeof(int), null)).IsEqualTo(123);
+        await Assert.That(val.ToType(typeof(string), null)).IsEqualTo("123");
+
+        await Assert.That(val.CompareTo(null)).IsEqualTo(1);
+        await Assert.That(val.CompareTo(new BsonDouble(123.0))).IsEqualTo(0);
+        await Assert.That(val.CompareTo(new BsonString("x"))).IsNotEqualTo(0);
+
+        await Assert.That(val.Equals(new BsonInt32(123))).IsFalse();
     }
 
     [Test]

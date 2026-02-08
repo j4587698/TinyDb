@@ -1,3 +1,4 @@
+using TinyDb.Bson;
 using TinyDb.Security;
 using TinyDb.Core;
 using TUnit.Assertions;
@@ -30,6 +31,16 @@ public class SecureTinyDbEngineCoverageTests : IDisposable
         var path = GetDbPath();
         await Assert.That(() => new SecureTinyDbEngine(path, "123")).Throws<ArgumentException>();
         await Assert.That(() => new SecureTinyDbEngine(path, "   ")).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullFilePath_ShouldThrow()
+    {
+        await Assert.That(() => new SecureTinyDbEngine(null!, "password123"))
+            .Throws<ArgumentNullException>();
+
+        await Assert.That(() => new SecureTinyDbEngine(null!))
+            .Throws<ArgumentNullException>();
     }
 
     [Test]
@@ -98,5 +109,36 @@ public class SecureTinyDbEngineCoverageTests : IDisposable
         await Assert.That(secureEngine.CollectionExists("test")).IsFalse();
         
         await Assert.That(secureEngine.GetDatabaseStats()).IsNotNull();
+    }
+
+    [Test]
+    public async Task DropCollection_ShouldWork_WhenAuthenticated()
+    {
+        var path = GetDbPath();
+        using var secureEngine = new SecureTinyDbEngine(path, "password123", createIfNotExists: true);
+
+        var col = secureEngine.Engine.GetCollection<BsonDocument>("test");
+        col.Insert(new BsonDocument().Set("_id", 1).Set("x", 1));
+
+        await Assert.That(secureEngine.CollectionExists("test")).IsTrue();
+
+        secureEngine.DropCollection("test");
+
+        await Assert.That(secureEngine.CollectionExists("test")).IsFalse();
+    }
+
+    [Test]
+    public async Task Operations_WhenNotAuthenticated_ShouldThrow()
+    {
+        var path = GetDbPath();
+        using var secureEngine = new SecureTinyDbEngine(path, "password123", createIfNotExists: true);
+
+        var field = typeof(SecureTinyDbEngine)
+            .GetField("_isAuthenticated", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        field!.SetValue(secureEngine, false);
+
+        await Assert.That(() => secureEngine.CollectionExists("test"))
+            .Throws<UnauthorizedAccessException>();
     }
 }

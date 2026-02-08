@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Collections.Generic;
 using TinyDb.Bson;
@@ -70,7 +71,7 @@ public class BsonSpanReaderCoverageTests
         await Assert.That(arr.Count).IsEqualTo(2);
         
         var bin = (BsonBinary)results["Binary"];
-        await Assert.That(bin.Bytes).IsEquivalentTo(new byte[] { 1, 2, 3 });
+        await Assert.That(bin.Bytes.SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
         
         var jsScope = (BsonJavaScriptWithScope)results["JavaScriptWithScope"];
         await Assert.That(jsScope.Code).IsEqualTo("code");
@@ -145,16 +146,108 @@ public class BsonSpanReaderCoverageTests
         bytes = ms.ToArray(); 
         await Assert.That(() => ReadDocumentHelper(bytes)).Throws<InvalidOperationException>();
 
-        // 3. String missing null
+        // 3. Document size mismatch
+        bytes = BsonSerializer.SerializeDocument(new BsonDocument().Set("a", 1));
+        BitConverter.GetBytes(bytes.Length - 1).CopyTo(bytes, 0);
+        await Assert.That(() => ReadDocumentHelper(bytes)).Throws<InvalidOperationException>();
+
+        // 4. String missing null
         ms.SetLength(0);
         writer.Write(5); // len
         writer.Write(Encoding.UTF8.GetBytes("test")); // 4 bytes
         bytes = ms.ToArray();
         await Assert.That(() => ReadStringHelper(bytes)).Throws<EndOfStreamException>();
         
-        // 4. Unsupported Type
+        // 5. Unsupported Type
         bytes = new byte[10];
         await Assert.That(() => ReadValueHelper(bytes, (BsonType)250)).Throws<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task BoundaryChecks_And_SkipValue_ErrorPaths_ShouldThrow()
+    {
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(Array.Empty<byte>());
+            reader.ReadByte();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(new byte[3]);
+            reader.ReadInt32();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(new byte[7]);
+            reader.ReadInt64();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(new byte[7]);
+            reader.ReadDouble();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(new byte[11]);
+            reader.ReadObjectId();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(Encoding.UTF8.GetBytes("abc"));
+            reader.ReadCString();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(new byte[] { 0, 0, 0, 0 });
+            reader.ReadString();
+        }).Throws<InvalidOperationException>();
+
+        await Assert.That(() =>
+        {
+            var bytes = new byte[] { 3, 0, 0, 0, 0, 1, 2 };
+            var reader = new BsonSpanReader(bytes);
+            reader.ReadBinary();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var reader = new BsonSpanReader(new byte[15]);
+            reader.ReadDecimal128();
+        }).Throws<EndOfStreamException>();
+
+        await Assert.That(() =>
+        {
+            var bytes = new byte[]
+            {
+                8, 0, 0, 0,
+                250,
+                (byte)'a', 0,
+                0
+            };
+
+            var reader = new BsonSpanReader(bytes);
+            reader.ReadDocument(new HashSet<string>());
+        }).Throws<NotSupportedException>();
+
+        await Assert.That(() =>
+        {
+            var bytes = new byte[]
+            {
+                10, 0, 0, 0,
+                (byte)BsonType.RegularExpression,
+                (byte)'a', 0,
+                (byte)'a', (byte)'b', (byte)'c'
+            };
+
+            var reader = new BsonSpanReader(bytes);
+            reader.ReadDocument(new HashSet<string>());
+        }).Throws<EndOfStreamException>();
     }
 
     private void ReadDocumentHelper(byte[] bytes)

@@ -334,7 +334,16 @@ public sealed class PageManager : IDisposable
             page.UpdateChecksum();
 
             var pageOffset = CalculatePageOffset(page.PageID);
-            _diskStream.WritePage(pageOffset, page.FullData.ToArray());
+            byte[] pageData;
+            try
+            {
+                pageData = page.FullData.ToArray();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            _diskStream.WritePage(pageOffset, pageData);
 
             if (forceFlush)
             {
@@ -357,14 +366,26 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
 
+        byte[] pageData;
+        uint pageID;
         lock (_allocationLock)
         {
             // 更新页面校验和
             page.UpdateChecksum();
+
+            pageID = page.PageID;
+            try
+            {
+                pageData = page.FullData.ToArray();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
         }
 
-        var pageOffset = CalculatePageOffset(page.PageID);
-        await _diskStream.WritePageAsync(pageOffset, page.FullData.ToArray(), cancellationToken);
+        var pageOffset = CalculatePageOffset(pageID);
+        await _diskStream.WritePageAsync(pageOffset, pageData, cancellationToken);
 
         if (forceFlush)
         {
@@ -621,7 +642,7 @@ public sealed class PageManager : IDisposable
                 // 清理缓存
                 ClearCache();
 
-                _diskStream?.Dispose();
+                _diskStream.Dispose();
             }
             catch
             {

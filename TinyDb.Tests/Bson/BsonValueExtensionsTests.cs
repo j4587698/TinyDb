@@ -49,6 +49,14 @@ public class BsonValueExtensionsTests
     }
 
     [Test]
+    public async Task Extension_ToString_Should_Work_WhenCalledStatically()
+    {
+        BsonValue val = new BsonString("test");
+        await Assert.That(BsonValueExtensions.ToString(val, null)).IsEqualTo("test");
+        await Assert.That(() => BsonValueExtensions.ToString(null!, null)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
     public async Task ToDateTime_Should_Work()
     {
         var now = DateTime.UtcNow;
@@ -111,5 +119,21 @@ public class BsonValueExtensionsTests
         BsonValue val = new BsonInt64(42L);
         await Assert.That(val.ToUInt64()).IsEqualTo(42UL);
         await Assert.That(() => ((BsonValue)null!).ToUInt64()).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task ToUInt16_Should_Work()
+    {
+        BsonValue val = new BsonInt32(42);
+        await Assert.That(val.ToUInt16()).IsEqualTo((ushort)42);
+        await Assert.That(() => ((BsonValue)null!).ToUInt16()).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task ToUInt32_Should_Work()
+    {
+        BsonValue val = new BsonInt32(42);
+        await Assert.That(val.ToUInt32()).IsEqualTo(42U);
+        await Assert.That(() => ((BsonValue)null!).ToUInt32()).Throws<ArgumentNullException>();
     }
 }

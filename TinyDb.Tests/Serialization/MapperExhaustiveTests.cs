@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TinyDb.Bson;
 using TinyDb.Serialization;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -11,6 +12,7 @@ namespace TinyDb.Tests.Serialization;
 
 public class MapperExhaustiveTests
 {
+    [Entity]
     public class AllTypesEntity
     {
         public string String { get; set; } = "";
@@ -80,6 +82,7 @@ public class MapperExhaustiveTests
         await Assert.That(BsonMapper.ConvertFromBsonValue(BsonNull.Value, typeof(object))).IsNull();
     }
 
+    [Entity]
     public class CyclicEntity
     {
         public string Name { get; set; } = "";

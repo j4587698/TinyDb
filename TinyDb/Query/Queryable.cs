@@ -8,7 +8,7 @@ using LinqExp = System.Linq.Expressions;
 
 namespace TinyDb.Query;
 
-public class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource, TData> : IOrderedQueryable<TData>
+public class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource, TData> : IOrderedQueryable<TData>
     where TSource : class, new()
 {
     private readonly QueryExecutor _executor;
@@ -22,6 +22,16 @@ public class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         _collectionName = collectionName;
         Expression = expression ?? LinqExp.Expression.Constant(this);
         Provider = new QueryProvider<TSource, TData>(_executor, _collectionName);
+    }
+
+    internal Queryable(QueryExecutor executor, string collectionName, IQueryProvider provider, LinqExp.Expression? expression = null)
+    {
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        if (string.IsNullOrWhiteSpace(collectionName)) throw new ArgumentNullException(nameof(collectionName));
+        Provider = provider ?? throw new ArgumentNullException(nameof(provider));
+
+        _collectionName = collectionName;
+        Expression = expression ?? LinqExp.Expression.Constant(this);
     }
 
     public Type ElementType => typeof(TData);
@@ -42,7 +52,7 @@ public class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
 }
 
 // Helper for initial creation
-public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T> : Queryable<T, T>
+public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : Queryable<T, T>
     where T : class, new()
 {
     public Queryable(QueryExecutor executor, string collectionName) 
@@ -51,7 +61,7 @@ public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMem
     }
 }
 
-internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource, TData> : IQueryProvider
+internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource, TData> : IQueryProvider
     where TSource : class, new()
 {
     private readonly QueryExecutor _executor;
@@ -79,7 +89,8 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
         }
         catch (TargetInvocationException tie)
         {
-            throw tie.InnerException ?? tie;
+            System.Diagnostics.Debug.Assert(tie.InnerException is not null);
+            throw tie.InnerException!;
         }
     }
 
@@ -101,15 +112,21 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
 
 internal static class QueryPipeline
 {
-    public static object? Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(QueryExecutor executor, string collectionName, LinqExp.Expression expression)
+    public static object? Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource>(QueryExecutor executor, string collectionName, LinqExp.Expression expression)
         where TSource : class, new()
     {
         // 1. 提取可下推到数据库的查询条件 (Where)
         // Note: PredicateExtractor.Extract may use Expression.Lambda for combining predicates,
         // but the actual execution path in AOT uses ExecuteAot which doesn't require dynamic code.
-#pragma warning disable IL3050 // RequiresDynamicCode
-        var (predicate, sourceConstant) = PredicateExtractor.Extract(expression, typeof(TSource));
-#pragma warning restore IL3050
+        LinqExp.Expression? predicate = null;
+        LinqExp.ConstantExpression? sourceConstant = null;
+        var result = PredicateExtractor.ExtractAot(expression, typeof(TSource));
+        predicate = result.Predicate;
+        sourceConstant = result.Source;
+        if (result.HasMultiplePredicates)
+        {
+            predicate = null;
+        }
 
         // 2. 执行数据库查询 (直接调用泛型方法，无需反射)
         // Predicate is Expression<Func<TSource, bool>>?
@@ -124,17 +141,17 @@ internal static class QueryPipeline
             {
                 return ExecuteAot(expression, queryResult, predicate);
             }
-            catch (NotSupportedException) when (RuntimeFeature.IsDynamicCodeSupported)
+            catch (NotSupportedException)
             {
                 // AOT 路径不支持此操作，回退到动态编译路径（仅在非 AOT 环境下）
-                return ExecuteInMemory(expression, sourceConstant, queryResult);
+                throw;
             }
         }
         
         return queryResult;
     }
 
-    private static object? ExecuteAot<TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
+    private static object? ExecuteAot<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
         where TSource : class, new()
     {
         var stack = new Stack<LinqExp.MethodCallExpression>();
@@ -157,64 +174,68 @@ internal static class QueryPipeline
                 return ExecuteTerminal(source, m);
             }
 
-            switch (m.Method.Name)
-            {
-                case "Where":
-                    // If the database extracted a predicate, we assume it handles ALL Where clauses.
-                    // We skip all in-memory filtering to avoid AOT reflection issues.
-                    if (extractedPredicate != null)
-                    {
-                        continue; 
-                    }
+            var methodName = m.Method.Name;
 
-                    if (isTyped && currentType == typeof(TSource))
-                        source = ExecuteWhereGeneric<TSource>((IEnumerable<TSource>)source, m);
-                    else
-                        source = ExecuteWhere(source, m);
-                    break;
-                case "Select":
-                    var selector = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
-                    source = ExecuteSelect(source, selector);
-                    currentType = selector.ReturnType;
-                    isTyped = false; // Type changed, lost generic context
-                    break;
-                case "Skip":
-                     if (m.Arguments[1] is LinqExp.ConstantExpression s)
-                        source = ExecuteSkip(source, (int)s.Value!);
-                    break;
-                case "Take":
-                     if (m.Arguments[1] is LinqExp.ConstantExpression t)
-                        source = ExecuteTake(source, (int)t.Value!);
-                    break;
-                case "Distinct":
-                    source = ExecuteDistinct(source);
-                    break;
-                case "OrderBy":
-                case "OrderByDescending":
-                case "ThenBy":
-                case "ThenByDescending":
-                    if (isTyped && currentType == typeof(TSource))
-                        source = ExecuteOrderByGeneric<TSource>((IEnumerable<TSource>)source, m);
-                    else
-                        source = ExecuteOrderBy(source, m);
-                    break;
-                case "GroupBy":
-                    // GroupBy in AOT mode - returns AotGrouping objects
-                    if (isTyped && currentType == typeof(TSource))
-                        source = ExecuteGroupByGeneric<TSource>((IEnumerable<TSource>)source, m);
-                    else
-                        source = ExecuteGroupBy(source, m);
-                    currentType = typeof(AotGrouping);
-                    isTyped = false;
-                    break;
-                case "Sum":
-                case "Average":
-                case "Min":
-                case "Max":
-                    // These are terminal operations when called on a grouped source
-                    return ExecuteAggregation(source, m);
-                default:
-                    throw new NotSupportedException($"Operation {m.Method.Name} is not supported in AOT mode.");
+            if (methodName == "Where")
+            {
+                // If the database extracted a predicate, we assume it handles ALL Where clauses.
+                // We skip all in-memory filtering to avoid AOT reflection issues.
+                if (extractedPredicate != null)
+                {
+                    continue;
+                }
+
+                if (isTyped && currentType == typeof(TSource))
+                    source = ExecuteWhereGeneric<TSource>((IEnumerable<TSource>)source, m);
+                else
+                    source = ExecuteWhere(source, m);
+            }
+            else if (methodName == "Select")
+            {
+                var selector = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
+                source = ExecuteSelect(source, selector);
+                currentType = selector.ReturnType;
+                isTyped = false; // Type changed, lost generic context
+            }
+            else if (methodName == "Skip")
+            {
+                if (m.Arguments[1] is LinqExp.ConstantExpression s)
+                    source = ExecuteSkip(source, (int)s.Value!);
+            }
+            else if (methodName == "Take")
+            {
+                if (m.Arguments[1] is LinqExp.ConstantExpression t)
+                    source = ExecuteTake(source, (int)t.Value!);
+            }
+            else if (methodName == "Distinct")
+            {
+                source = ExecuteDistinct(source);
+            }
+            else if (methodName == "OrderBy" || methodName == "OrderByDescending" || methodName == "ThenBy" || methodName == "ThenByDescending")
+            {
+                if (isTyped && currentType == typeof(TSource))
+                    source = ExecuteOrderByGeneric<TSource>((IEnumerable<TSource>)source, m);
+                else
+                    source = ExecuteOrderBy(source, m);
+            }
+            else if (methodName == "GroupBy")
+            {
+                // GroupBy in AOT mode - returns AotGrouping objects
+                if (isTyped && currentType == typeof(TSource))
+                    source = ExecuteGroupByGeneric<TSource>((IEnumerable<TSource>)source, m);
+                else
+                    source = ExecuteGroupBy(source, m);
+                currentType = typeof(AotGrouping);
+                isTyped = false;
+            }
+            else if (methodName == "Sum" || methodName == "Average" || methodName == "Min" || methodName == "Max")
+            {
+                // These are terminal operations when called on a grouped source
+                return ExecuteAggregation(source, m);
+            }
+            else
+            {
+                throw new NotSupportedException($"Operation {methodName} is not supported in AOT mode.");
             }
         }
 
@@ -228,9 +249,15 @@ internal static class QueryPipeline
         return CreateTypedEnumerable(source, currentType);
     }
 
+    internal static object? ExecuteAotForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
+        where TSource : class, new()
+    {
+        return ExecuteAot(expression, queryResult, extractedPredicate);
+    }
+
     // ... IsTerminal, ExecuteTerminal ...
 
-    private static IEnumerable<T> ExecuteWhereGeneric<T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
+    private static IEnumerable<T> ExecuteWhereGeneric<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
         where T : class, new()
     {
         var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
@@ -245,7 +272,7 @@ internal static class QueryPipeline
         });
     }
 
-    private static IEnumerable<T> ExecuteOrderByGeneric<T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
+    private static IEnumerable<T> ExecuteOrderByGeneric<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
         where T : class, new()
     {
         var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
@@ -273,10 +300,23 @@ internal static class QueryPipeline
 
     // ... existing ExecuteWhere, ExecuteOrderBy (non-generic), ExecuteSelect, etc. ...
 
-    private static bool IsTerminal(string name)
+    private static readonly HashSet<string> TerminalMethods = new(StringComparer.Ordinal)
     {
-        return name is "Count" or "LongCount" or "Any" or "All" or "First" or "FirstOrDefault" or "Single" or "SingleOrDefault" or "Last" or "LastOrDefault" or "ElementAt" or "ElementAtOrDefault";
-    }
+        "Count",
+        "LongCount",
+        "Any",
+        "All",
+        "First",
+        "FirstOrDefault",
+        "Single",
+        "SingleOrDefault",
+        "Last",
+        "LastOrDefault",
+        "ElementAt",
+        "ElementAtOrDefault"
+    };
+
+    private static bool IsTerminal(string name) => TerminalMethods.Contains(name);
 
     private static object? ExecuteTerminal(IEnumerable source, LinqExp.MethodCallExpression m)
     {
@@ -306,20 +346,18 @@ internal static class QueryPipeline
 
          var typedSource = source.Cast<object>();
 
-         switch (m.Method.Name)
-         {
-             case "Count": return typedSource.Count();
-             case "LongCount": return typedSource.LongCount();
-             case "Any": return typedSource.Any();
-             case "First": return typedSource.First();
-             case "FirstOrDefault": return typedSource.FirstOrDefault();
-             case "Single": return typedSource.Single();
-             case "SingleOrDefault": return typedSource.SingleOrDefault();
-             case "Last": return typedSource.Last();
-             case "LastOrDefault": return typedSource.LastOrDefault();
-             case "ElementAt": return typedSource.ElementAt((int)((LinqExp.ConstantExpression)m.Arguments[1]).Value!);
-             case "ElementAtOrDefault": return typedSource.ElementAtOrDefault((int)((LinqExp.ConstantExpression)m.Arguments[1]).Value!);
-         }
+         var methodName = m.Method.Name;
+         if (methodName == "Count") return typedSource.Count();
+         if (methodName == "LongCount") return typedSource.LongCount();
+         if (methodName == "Any") return typedSource.Any();
+         if (methodName == "First") return typedSource.First();
+         if (methodName == "FirstOrDefault") return typedSource.FirstOrDefault();
+         if (methodName == "Single") return typedSource.Single();
+         if (methodName == "SingleOrDefault") return typedSource.SingleOrDefault();
+         if (methodName == "Last") return typedSource.Last();
+         if (methodName == "LastOrDefault") return typedSource.LastOrDefault();
+         if (methodName == "ElementAt") return typedSource.ElementAt((int)((LinqExp.ConstantExpression)m.Arguments[1]).Value!);
+         if (methodName == "ElementAtOrDefault") return typedSource.ElementAtOrDefault((int)((LinqExp.ConstantExpression)m.Arguments[1]).Value!);
          return null;
     }
 
@@ -471,7 +509,7 @@ internal static class QueryPipeline
         }
     }
 
-    private static IEnumerable<AotGrouping> ExecuteGroupByGeneric<T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
+    private static IEnumerable<AotGrouping> ExecuteGroupByGeneric<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
         where T : class, new()
     {
         var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
@@ -569,23 +607,17 @@ internal static class QueryPipeline
                 try { return Convert.ToDouble(x).CompareTo(Convert.ToDouble(y)); } catch { }
             }
 
+            if (x is string xs && y is string ys)
+            {
+                return string.Compare(xs, ys, StringComparison.Ordinal);
+            }
+
             if (x is IComparable cx && x.GetType() == y.GetType()) return cx.CompareTo(y);
             
             return string.Compare(x.ToString(), y.ToString(), StringComparison.Ordinal);
         }
         
         private static bool IsNumeric(object x) => x is int || x is long || x is double || x is float || x is decimal || x is short || x is byte;
-    }
-
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "Guarded by IsDynamicCodeSupported check in Execute.")]
-    private static object? ExecuteInMemory(LinqExp.Expression expression, LinqExp.ConstantExpression sourceConstant, object queryResult)
-    {
-        var rewriter = new QueryableToEnumerableRewriter(sourceConstant, queryResult);
-        var newExpression = rewriter.Visit(expression);
-        
-        var lambda = LinqExp.Expression.Lambda(newExpression);
-        var func = lambda.Compile();
-        return func.DynamicInvoke();
     }
 
     [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "Creating generic List for known types.")]
@@ -603,110 +635,23 @@ internal static class QueryPipeline
     }
 }
 
-internal sealed class QueryableToEnumerableRewriter : LinqExp.ExpressionVisitor
-{
-    private readonly LinqExp.ConstantExpression _target;
-    private readonly object _replacement;
-
-    public QueryableToEnumerableRewriter(LinqExp.ConstantExpression target, object replacement)
-    {
-        _target = target;
-        _replacement = replacement;
-    }
-
-    protected override LinqExp.Expression VisitConstant(LinqExp.ConstantExpression node)
-    {
-        if (node == _target)
-        {
-            return LinqExp.Expression.Constant(_replacement);
-        }
-        return base.VisitConstant(node);
-    }
-
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "In-memory LINQ requires dynamic code.")]
-    [UnconditionalSuppressMessage("Trimming", "IL2060", Justification = "MakeGenericMethod for Enumerable.")]
-    protected override LinqExp.Expression VisitMethodCall(LinqExp.MethodCallExpression node)
-    {
-        if (node.Method.DeclaringType == typeof(System.Linq.Queryable))
-        {
-            var args = new LinqExp.Expression[node.Arguments.Count];
-            for (int i = 0; i < node.Arguments.Count; i++)
-            {
-                var arg = node.Arguments[i];
-                if (arg is LinqExp.UnaryExpression u && u.NodeType == LinqExp.ExpressionType.Quote && u.Operand is LinqExp.LambdaExpression lambda)
-                {
-                    var compiled = lambda.Compile();
-                    args[i] = LinqExp.Expression.Constant(compiled);
-                }
-                else
-                {
-                    args[i] = Visit(arg);
-                }
-            }
-
-            var enumerableMethod = FindEnumerableMethod(node.Method.Name, args.Select(a => a.Type).ToArray(), node.Method.GetGenericArguments());
-            
-            if (enumerableMethod != null)
-            {
-                return LinqExp.Expression.Call(enumerableMethod, args);
-            }
-        }
-        return base.VisitMethodCall(node);
-    }
-
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "Runtime LINQ composition.")]
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2060", Justification = "Runtime LINQ composition.")]
-    private static MethodInfo? FindEnumerableMethod(string name, Type[] argTypes, Type[] genericArgs)
-    {
-        var methods = typeof(System.Linq.Enumerable).GetMethods(BindingFlags.Static | BindingFlags.Public)
-            .Where(m => m.Name == name && m.GetParameters().Length == argTypes.Length);
-
-        foreach (var m in methods)
-        {
-            if (m.IsGenericMethodDefinition && m.GetGenericArguments().Length == genericArgs.Length)
-            {
-                try
-                {
-                    var concrete = m.MakeGenericMethod(genericArgs);
-                    var parameters = concrete.GetParameters();
-                    bool match = true;
-                    for (int i = 0; i < parameters.Length; i++)
-                    {
-                        if (!parameters[i].ParameterType.IsAssignableFrom(argTypes[i]))
-                        {
-                            match = false;
-                            break;
-                        }
-                    }
-                    
-                    if (match) return concrete;
-                }
-                catch
-                {
-                }
-            }
-        }
-        return null;
-    }
-}
-
 internal static class PredicateExtractor
 {
-    [RequiresDynamicCode("Expression.Lambda requires dynamic code generation for combining predicates.")]
-    public static (LinqExp.Expression? Predicate, LinqExp.ConstantExpression? Source) Extract(LinqExp.Expression expression, Type entityType)
+    public static (LinqExp.Expression? Predicate, LinqExp.ConstantExpression? Source, bool HasMultiplePredicates) ExtractAot(LinqExp.Expression expression, Type entityType)
     {
-        var visitor = new ExtractionVisitor(entityType);
+        var visitor = new AotExtractionVisitor(entityType);
         visitor.Visit(expression);
-        return (visitor.Predicate, visitor.SourceQueryable);
+        return (visitor.Predicate, visitor.SourceQueryable, visitor.HasMultiplePredicates);
     }
 
-    internal class ExtractionVisitor : LinqExp.ExpressionVisitor
+    internal class AotExtractionVisitor : LinqExp.ExpressionVisitor
     {
         private readonly Type _entityType;
         public LinqExp.Expression? Predicate { get; private set; }
         public LinqExp.ConstantExpression? SourceQueryable { get; private set; }
+        public bool HasMultiplePredicates { get; private set; }
 
-        public ExtractionVisitor(Type entityType)
+        public AotExtractionVisitor(Type entityType)
         {
             _entityType = entityType;
         }
@@ -723,15 +668,9 @@ internal static class PredicateExtractor
                         {
                             Predicate = l;
                         }
-                        else if (Predicate is LinqExp.LambdaExpression current)
+                        else
                         {
-                            // Combine predicates: current AND new
-                            // Note: We don't rebind parameters because TinyDb's parser/evaluator
-                            // handles ParameterExpression by type/context, not by strict reference identity.
-                            var combinedBody = LinqExp.Expression.AndAlso(current.Body, l.Body);
-#pragma warning disable IL3050 // Expression.Lambda requires dynamic code - this path only runs when dynamic code is supported
-                            Predicate = LinqExp.Expression.Lambda(combinedBody, current.Parameters);
-#pragma warning restore IL3050
+                            HasMultiplePredicates = true;
                         }
                     }
                 }
@@ -740,7 +679,7 @@ internal static class PredicateExtractor
             {
                 SourceQueryable = c;
             }
-            
+
             return base.Visit(node);
         }
     }

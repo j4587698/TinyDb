@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using TinyDb.Core;
 using TinyDb.Bson;
 using TUnit.Assertions;
@@ -40,7 +42,7 @@ public class EngineAdditionalTests : IDisposable
     public async Task FindById_With_NonExistent_Id_Should_Return_Null()
     {
         var result = _engine.FindById("test_col", new BsonObjectId(TinyDb.Bson.ObjectId.NewObjectId()));
-        await Assert.That(result).IsNull();
+        await Assert.That(result == null).IsTrue();
     }
 
     [Test]
@@ -72,5 +74,31 @@ public class EngineAdditionalTests : IDisposable
         
         var all = _engine.FindAll("batch_col").ToList();
         await Assert.That(all.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task InternalWrappers_InsertUpdateDelete_ShouldWork()
+    {
+        var doc = new BsonDocument().Set("_id", 1).Set("val", 1);
+        var id = _engine.InsertDocumentInternal("internal_col", doc);
+
+        await Assert.That(id.ToInt32(null)).IsEqualTo(1);
+        await Assert.That(_engine.UpdateDocumentInternal("internal_col", new BsonDocument().Set("_id", 1).Set("val", 2))).IsEqualTo(1);
+        await Assert.That(_engine.DeleteDocumentInternal("internal_col", id)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task FindAll_WhenOwnedPagesContainsInvalidPageId_ShouldSkipAndContinue()
+    {
+        const string col = "owned_pages_skip";
+        _engine.InsertDocument(col, new BsonDocument().Set("_id", 1).Set("val", 1));
+
+        var statesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
+        var states = (ConcurrentDictionary<string, CollectionState>)statesField!.GetValue(_engine)!;
+        var st = states[col];
+        st.OwnedPages.TryAdd(0, 0);
+
+        var all = _engine.FindAll(col).ToList();
+        await Assert.That(all.Count).IsEqualTo(1);
     }
 }

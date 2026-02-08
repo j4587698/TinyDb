@@ -470,7 +470,7 @@ public sealed class DiskStream : IDiskStream
         if (!_disposed)
         {
             _semaphore.Dispose();
-            _fileStream?.Dispose();
+            _fileStream.Dispose();
             _disposed = true;
         }
     }

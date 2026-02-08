@@ -27,6 +27,12 @@ public class EngineCoverageTests
     }
 
     [Test]
+    public async Task Engine_Ctor_NullPath_ShouldThrow()
+    {
+        await Assert.That(() => new TinyDbEngine(null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
     public async Task Engine_CollectionOperations_ShouldWork()
     {
         using var engine = new TinyDbEngine(_dbFile);
@@ -116,6 +122,33 @@ public class EngineCoverageTests
             var docs = col.FindAll().ToList();
             await Assert.That(docs.Count).IsGreaterThan(20);
         }
+    }
+
+    [Test]
+    public async Task Engine_CompactDatabase_WhenTargetLocked_ShouldThrow()
+    {
+        using var engine = new TinyDbEngine(_dbFile);
+        engine.GetCollection<BsonDocument>("locked_compact").Insert(new BsonDocument().Set("x", 1));
+
+        using var lockStream = new FileStream(_dbFile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+
+        Exception? caught = null;
+        try { engine.CompactDatabase(); } catch (Exception ex) { caught = ex; }
+
+        await Assert.That(caught).IsNotNull();
+        await Assert.That(caught is IOException || caught is UnauthorizedAccessException).IsTrue();
+    }
+
+    [Test]
+    public async Task Engine_InsertDocumentsAsync_ExistingPage_ShouldHitGetPagePath()
+    {
+        using var engine = new TinyDbEngine(_dbFile);
+
+        var first = await engine.InsertDocumentsAsync("async_page_reuse", new[] { new BsonDocument().Set("v", 1) });
+        var second = await engine.InsertDocumentsAsync("async_page_reuse", new[] { new BsonDocument().Set("v", 2) });
+
+        await Assert.That(first).IsEqualTo(1);
+        await Assert.That(second).IsEqualTo(1);
     }
 
     /// <summary>

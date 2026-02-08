@@ -239,11 +239,6 @@ public struct DatabaseHeader
     {
         metadata = default;
 
-        if (_reserved.Length < SecurityBlockLength)
-        {
-            return false;
-        }
-
         var span = _reserved.AsSpan();
         if (!span.Slice(0, SecurityMarkerLength).SequenceEqual(SecurityMarker))
         {
@@ -261,11 +256,6 @@ public struct DatabaseHeader
 
     public void SetSecurityMetadata(in DatabaseSecurityMetadata metadata)
     {
-        if (metadata.Salt.Length != SecuritySaltLength)
-            throw new ArgumentException($"Salt must be {SecuritySaltLength} bytes", nameof(metadata));
-        if (metadata.KeyHash.Length != SecurityKeyLength)
-            throw new ArgumentException($"Key hash must be {SecurityKeyLength} bytes", nameof(metadata));
-
         var span = _reserved.AsSpan();
         SecurityMarker.CopyTo(span);
         metadata.Salt.CopyTo(span.Slice(SecurityMarkerLength, SecuritySaltLength));
@@ -275,11 +265,6 @@ public struct DatabaseHeader
 
     public void ClearSecurityMetadata()
     {
-        if (_reserved.Length < SecurityBlockLength)
-        {
-            return;
-        }
-
         _reserved.AsSpan(0, SecurityBlockLength).Clear();
     }
 

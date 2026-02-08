@@ -57,6 +57,17 @@ public sealed class QueryExecutor
         };
     }
 
+    internal IEnumerable<BsonDocument> ExecuteIndexScanForTests(QueryExecutionPlan executionPlan)
+    {
+        return ExecuteIndexScan<BsonDocument>(executionPlan);
+    }
+
+    internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
+        where T : class, new()
+    {
+        return ExecuteIndexSeek<T>(executionPlan);
+    }
+
     /// <summary>
     /// 执行主键查找
     /// </summary>
@@ -263,7 +274,6 @@ public sealed class QueryExecutor
     {
         var tx = _engine.GetCurrentTransaction();
         QueryExpression? queryExpression = null;
-        bool fallbackToMemoryFilter = false;
 
         if (expression != null)
         {
@@ -271,10 +281,10 @@ public sealed class QueryExecutor
             {
                 queryExpression = _expressionParser.Parse(expression);
             }
-            catch
+            catch (Exception ex)
             {
                 // 解析失败（例如包含不支持的方法），回退到内存过滤
-                fallbackToMemoryFilter = true;
+                throw new NotSupportedException("不支持的查询表达式：AOT-only 模式下不再提供运行时编译回退。", ex);
             }
         }
 
@@ -314,7 +324,7 @@ public sealed class QueryExecutor
         {
             docs = rawPipeline
                 .Select(doc => {
-                    var id = doc["_id"].ToString() ?? "";
+                    var id = doc["_id"].ToString();
                     if (txOverlay.TryRemove(id, out var txDoc))
                     {
                         Console.WriteLine($"[DEBUG] Replaced {id} with tx version");
@@ -340,12 +350,6 @@ public sealed class QueryExecutor
             .Where(entity => entity != null)!;
 
         // 4. 如果 BSON 解析失败，应用内存过滤
-        if (fallbackToMemoryFilter && expression != null)
-        {
-            var compiled = expression.Compile();
-            result = result.Where(compiled);
-        }
-
         return result;
     }
 

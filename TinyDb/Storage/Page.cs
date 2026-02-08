@@ -282,8 +282,8 @@ public sealed class Page : IDisposable
     public void UpdateStats(ushort free, ushort count) { lock(_lock) { Header.FreeBytes = free; Header.ItemCount = count; Header.UpdateModification(); WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
     public void UpdateChecksum() { lock(_lock) { Header.Checksum = 0; WriteHeader(); Header.Checksum = Header.CalculateChecksum(_data); WriteHeader(); } }
     public bool VerifyIntegrity() { lock(_lock) { return Header.IsValid() && Header.VerifyChecksum(_data); } }
-    public void MarkClean() => _isDirty = false;
-    private void MarkDirty() => _isDirty = true;
+    public void MarkClean() => IsDirty = false;
+    private void MarkDirty() => IsDirty = true;
     private void WriteHeader() { Header.WriteTo(new Span<byte>(_data, 0, PageHeader.Size)); }
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(Page)); }
     public void Dispose() { _disposed = true; }

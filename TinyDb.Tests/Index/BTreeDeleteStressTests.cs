@@ -52,14 +52,14 @@ public class BTreeDeleteStressTests : IDisposable
         for (int i = 0; i < count; i += 2)
         {
             var doc = _engine.FindById(colName, new BsonInt32(i));
-            await Assert.That(doc).IsNull();
+            await Assert.That(doc == null).IsTrue();
         }
 
         // Verify index consistency
         for (int i = 1; i < count; i += 2)
         {
             var doc = _engine.FindById(colName, new BsonInt32(i));
-            await Assert.That(doc).IsNotNull();
+            await Assert.That(doc != null).IsTrue();
         }
     }
 }

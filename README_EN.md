@@ -7,6 +7,7 @@
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
     <a href="https://www.nuget.org/packages/TinyDb"><img src="https://img.shields.io/nuget/v/TinyDb.svg" alt="NuGet"></a>
     <a href="https://www.nuget.org/packages/TinyDb"><img src="https://img.shields.io/nuget/dt/TinyDb.svg" alt="NuGet Downloads"></a>
+    <a href="https://app.codecov.io/gh/j4587698/TinyDb"><img src="https://codecov.io/gh/j4587698/TinyDb/graph/badge.svg" alt="codecov"></a>
     <img src="https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-blue.svg" alt=".NET Version">
     <img src="https://img.shields.io/badge/AOT-Compatible-green.svg" alt="AOT Compatible">
   </p>
@@ -16,6 +17,14 @@
 </p>
 
 ---
+
+## AOT-First Philosophy
+
+TinyDb is an **AOT-first**, **LiteDB-inspired** single-file embedded NoSQL database:
+
+- **AOT is the source of truth**: behavior after NativeAOT compilation is the reference; no fallback logic.
+- **Dev/prod parity**: JIT (non-AOT) development should behave the same as the AOT-published binary.
+- **If you don't need AOT**: consider using LiteDB (more mature ecosystem and features).
 
 ## Key Features
 

@@ -202,7 +202,7 @@ public class TransactionManagerTimeoutTests
         var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         manager.Dispose();
         manager.Dispose(); // 不应该抛出异常
-        await Assert.That(true).IsTrue();
+        await Assert.That(manager).IsNotNull();
     }
 
     [Test]

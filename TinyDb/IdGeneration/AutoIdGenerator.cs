@@ -160,7 +160,6 @@ public static class AutoIdGenerator
             Guid guid => guid == Guid.Empty,
             int i => i == 0,
             long l => l == 0,
-            null => true,
             _ => false
         };
     }

@@ -20,7 +20,6 @@ public class ExpressionEvaluatorProjectionTests
     #region ConstructorExpression Evaluation Tests
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance for constructor invocation")]
     public async Task Evaluate_ConstructorExpression_Simple_Should_Create_Instance()
     {
         Expression<Func<TestEntity, SimpleDto>> expr = e => new SimpleDto(e.Name);
@@ -35,7 +34,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance for constructor invocation")]
     public async Task Evaluate_ConstructorExpression_MultipleArgs_Should_Work()
     {
         Expression<Func<TestEntity, MultiArgDto>> expr = e => new MultiArgDto(e.Name, e.Value);
@@ -51,7 +49,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance for constructor invocation")]
     public async Task Evaluate_ConstructorExpression_WithArithmetic_Should_Work()
     {
         Expression<Func<TestEntity, MultiArgDto>> expr = e => new MultiArgDto(e.Name, e.Value * 2);
@@ -69,7 +66,6 @@ public class ExpressionEvaluatorProjectionTests
     #region MemberInitExpression Evaluation Tests
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance and reflection for property setting")]
     public async Task Evaluate_MemberInitExpression_Should_Create_And_Initialize()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name, Amount = e.Value };
@@ -86,7 +82,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance and reflection for property setting")]
     public async Task Evaluate_MemberInitExpression_WithConcat_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Category + ": " + e.Name };
@@ -99,7 +94,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance and reflection for property setting")]
     public async Task Evaluate_MemberInitExpression_WithTypeConversion_Should_Work()
     {
         Expression<Func<TestEntity, IntDto>> expr = e => new IntDto { IntValue = (int)e.Value };
@@ -115,7 +109,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance and reflection for property setting")]
     public async Task Evaluate_MemberInitExpression_PartialInit_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name };
@@ -133,7 +126,6 @@ public class ExpressionEvaluatorProjectionTests
     #region BsonDocument Evaluation Tests
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance and reflection")]
     public async Task Evaluate_MemberInit_WithBsonDocument_Should_Work()
     {
         var queryExpr = new MemberInitQueryExpression(
@@ -158,7 +150,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance")]
     public async Task Evaluate_ConstructorExpression_Direct_Should_Work()
     {
         var ctorExpr = new TinyDb.Query.ConstructorExpression(
@@ -178,7 +169,6 @@ public class ExpressionEvaluatorProjectionTests
     #region Edge Cases
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance")]
     public async Task Evaluate_MemberInit_NullPropertyValue_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = null! };
@@ -191,7 +181,6 @@ public class ExpressionEvaluatorProjectionTests
     }
 
     [Test]
-    [SkipInAot("Uses Activator.CreateInstance")]
     public async Task Evaluate_MemberInit_WithNestedAccess_Should_Work()
     {
         Expression<Func<TestEntity, ProjectedDto>> expr = e => new ProjectedDto { DisplayName = e.Name.ToUpper() };

@@ -37,9 +37,10 @@ public sealed class BTreeNode
     {
         if (IsLeaf) throw new InvalidOperationException("Leaf node has no children");
         // Use reflection to call private LoadNode on DiskBTree
-        var method = typeof(DiskBTree).GetMethod("LoadNode", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        if (method == null) throw new InvalidOperationException("DiskBTree.LoadNode not found");
-        
+        var method = typeof(DiskBTree).GetMethod(
+            "LoadNode",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+         
         var childId = _diskNode.ChildrenIds[index];
         var childNode = (DiskBTreeNode)method.Invoke(_diskTree, new object[] { childId })!;
         return new BTreeNode(childNode, _diskTree);

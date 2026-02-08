@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TinyDb.Bson;
@@ -78,12 +79,13 @@ public class ObjectIdCoverageTests
             oid1 = oid2;
             oid2 = temp;
         }
+        var oid1Copy = oid1;
         
         await Assert.That(oid1 < oid2).IsTrue();
         await Assert.That(oid1 <= oid2).IsTrue();
         await Assert.That(oid2 > oid1).IsTrue();
         await Assert.That(oid2 >= oid1).IsTrue();
-        await Assert.That(oid1 == oid1).IsTrue();
+        await Assert.That(oid1 == oid1Copy).IsTrue();
         await Assert.That(oid1 != oid2).IsTrue();
         
         await Assert.That(oid1.CompareTo(oid2)).IsLessThan(0);
@@ -113,7 +115,8 @@ public class ObjectIdCoverageTests
         await Assert.That(convertible.ToString(null)).IsEqualTo(oid.ToString());
         await Assert.That(convertible.ToType(typeof(string), null)).IsEqualTo(oid.ToString());
         await Assert.That(convertible.ToType(typeof(ObjectId), null)).IsEqualTo(oid);
-        await Assert.That((byte[])convertible.ToType(typeof(byte[]), null)).IsEquivalentTo(oid.ToByteArray().ToArray());
+        var bytes = (byte[])convertible.ToType(typeof(byte[]), null);
+        await Assert.That(bytes.SequenceEqual(oid.ToByteArray().ToArray())).IsTrue();
         
         // Unsupported types
         await Assert.ThrowsAsync<InvalidCastException>(async () => convertible.ToBoolean(null));

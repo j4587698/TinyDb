@@ -179,7 +179,7 @@ public class ExpressionParserTests
         
         await Assert.That(query).IsTypeOf<TinyDb.Query.MemberInitQueryExpression>();
         var memberInit = (TinyDb.Query.MemberInitQueryExpression)query;
-        await Assert.That(memberInit.Bindings).HasCount(2);
+        await Assert.That(memberInit.Bindings).Count().IsEqualTo(2);
         
         // Constructor Expression using Tuples (assuming one that takes params)
         Expression<Func<QueryDoc, Tuple<int>>> tupleSelector = x => new Tuple<int>(x.Id);

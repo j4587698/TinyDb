@@ -39,10 +39,15 @@ public interface IAotEntityAdapter
     System.Collections.IList CreateListFrom(IEnumerable<object> items);
 }
 
+internal interface IAotEntityPropertyAccessor
+{
+    object? GetPropertyValueUntyped(object entity, string propertyName);
+}
+
 /// <summary>
 /// 表示针对特定实体类型由源生成器生成的AOT辅助适配器
 /// </summary>
-public sealed class AotEntityAdapter<T> : IAotEntityAdapter
+public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyAccessor
 {
     public Func<T, BsonDocument> ToDocument { get; }
     public Func<BsonDocument, T> FromDocument { get; }
@@ -71,6 +76,7 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter
     public BsonDocument ToDocumentUntyped(object entity) => ToDocument((T)entity);
     public object FromDocumentUntyped(BsonDocument document) => FromDocument(document)!;
     public object? FromDocumentObject(BsonDocument document) => FromDocument(document);
+    object? IAotEntityPropertyAccessor.GetPropertyValueUntyped(object entity, string propertyName) => GetPropertyValue((T)entity, propertyName);
     
     /// <summary>
     /// 创建 T 类型的数组（AOT 兼容）

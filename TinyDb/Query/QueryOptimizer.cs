@@ -82,12 +82,6 @@ public sealed class QueryOptimizer
 
         // 获取集合的索引管理器
         var indexManager = _engine.GetIndexManager(collectionName);
-        if (indexManager == null)
-        {
-            plan.Strategy = QueryExecutionStrategy.FullTableScan;
-            return plan;
-        }
-
         // 分析可用的索引
         var availableIndexes = indexManager.GetAllStatistics().ToList();
         if (!availableIndexes.Any())

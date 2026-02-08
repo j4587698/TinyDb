@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TUnit.Assertions;
@@ -11,7 +12,16 @@ public class AotMapperMatrixTests
 {
     private enum TestEnum { Zero = 0, One = 1 }
 
+    private static readonly Type[] ConversionTargets =
+    {
+        typeof(bool), typeof(byte), typeof(sbyte), typeof(char),
+        typeof(short), typeof(ushort), typeof(int), typeof(uint),
+        typeof(long), typeof(ulong), typeof(float), typeof(double),
+        typeof(decimal), typeof(string)
+    };
+
     [Test]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "Test-only conversion matrix uses fixed primitive types.")]
     public async Task ConvertPrimitiveValue_ExhaustiveMatrix()
     {
         var sources = new List<BsonValue>
@@ -26,17 +36,9 @@ public class AotMapperMatrixTests
             // new BsonBinary(...) // Handle separately
         };
 
-        var targets = new List<Type>
-        {
-            typeof(bool), typeof(byte), typeof(sbyte), typeof(char),
-            typeof(short), typeof(ushort), typeof(int), typeof(uint),
-            typeof(long), typeof(ulong), typeof(float), typeof(double),
-            typeof(decimal), typeof(string)
-        };
-
         foreach (var src in sources)
         {
-            foreach (var target in targets)
+            foreach (var target in ConversionTargets)
             {
                 try
                 {

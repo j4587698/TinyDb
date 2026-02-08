@@ -1,7 +1,6 @@
 using System;
 using System.Linq.Expressions;
 using TinyDb.Query;
-using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TinyDb.Bson;
@@ -24,6 +23,27 @@ public class ExpressionParserCoverageTests
         public bool IsActive { get; set; }
         public DateTime Created { get; set; }
         public double Score { get; set; }
+    }
+
+    public class Holder
+    {
+        public int Value { get; set; }
+        public int Field;
+    }
+
+    private sealed class NestedHolder
+    {
+        public Holder Inner = new();
+    }
+
+    public class ThrowingHolder
+    {
+        public int Value => throw new InvalidOperationException("value");
+    }
+
+    public static class ThrowingStatic
+    {
+        public static int Value => throw new InvalidOperationException("boom");
     }
 
     [Test]
@@ -204,6 +224,15 @@ public class ExpressionParserCoverageTests
     }
 
     [Test]
+    public async Task Parse_Static_Member_Access_ShouldThrow_WhenGetterFails()
+    {
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > ThrowingStatic.Value;
+
+        await Assert.That(() => _parser.Parse(expr))
+            .Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task Parse_Closure_Variable_Access()
     {
         int limit = 100;
@@ -218,13 +247,25 @@ public class ExpressionParserCoverageTests
     [Test]
     public async Task Parse_Closure_Variable_Field_Access()
     {
-        var config = new { Limit = 50 };
-        Expression<Func<TestDoc, bool>> expr = x => x.Id > config.Limit;
+        var holder = new Holder { Field = 50 };
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > holder.Field;
         var result = _parser.Parse(expr);
         await Assert.That(result).IsNotNull();
         var binary = (BinaryExpression)result;
         await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
         await Assert.That(((ConstantExpression)binary.Right).Value).IsEqualTo(50);
+    }
+
+    [Test]
+    public async Task Parse_Closure_Property_Throws_ShouldReturnMemberExpression()
+    {
+        var holder = new ThrowingHolder();
+        Expression<Func<TestDoc, bool>> expr = x => x.Id > holder.Value;
+
+        var result = _parser.Parse(expr);
+        await Assert.That(result).IsNotNull();
+        var binary = (BinaryExpression)result;
+        await Assert.That(binary.Right).IsTypeOf<MemberExpression>();
     }
 
     [Test]
@@ -370,8 +411,8 @@ public class ExpressionParserCoverageTests
     [Test]
     public async Task Parse_Nested_Closure_Access()
     {
-        var outer = new { Inner = new { Value = 123 } };
-        Expression<Func<TestDoc, bool>> expr = x => x.Id == outer.Inner.Value;
+        var outer = new NestedHolder { Inner = new Holder { Field = 123 } };
+        Expression<Func<TestDoc, bool>> expr = x => x.Id == outer.Inner.Field;
         var result = _parser.Parse(expr);
         await Assert.That(result).IsNotNull();
         var binary = (BinaryExpression)result;
@@ -456,6 +497,117 @@ public class ExpressionParserCoverageTests
         await Assert.That(convert.NodeType).IsEqualTo(ExpressionType.Convert);
     }
 
+    [Test]
+    public async Task Parse_Constant_Convert_ShouldOptimize()
+    {
+        var convert = Expression.Convert(Expression.Constant(5), typeof(double));
+        var result = _parser.ParseExpression(convert);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(5d);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Add_Int_Long_ShouldOptimize()
+    {
+        Expression<Func<long>> expr = () => 1 + 2L;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(3L);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Add_Int_Int_ShouldOptimize()
+    {
+        Expression<Func<int>> expr = () => 2 + 3;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Add_Double_ShouldOptimize()
+    {
+        Expression<Func<double>> expr = () => 1.5 + 2.5;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(4d);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Subtract_Int_ShouldOptimize()
+    {
+        Expression<Func<int>> expr = () => 10 - 3;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Multiply_Long_Int_ShouldOptimize()
+    {
+        Expression<Func<long>> expr = () => 2L * 3;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(6L);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Multiply_Int_Int_ShouldOptimize()
+    {
+        Expression<Func<int>> expr = () => 4 * 5;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(20);
+    }
+
+    [Test]
+    public async Task Parse_ArrayLength_WithParameter_ShouldReturnUnary()
+    {
+        var param = Expression.Parameter(typeof(int[]), "arr");
+        var arrayLength = Expression.ArrayLength(param);
+        var result = _parser.ParseExpression(arrayLength);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<UnaryExpression>();
+        await Assert.That(result.NodeType).IsEqualTo(ExpressionType.ArrayLength);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Divide_Decimal_ShouldOptimize()
+    {
+        Expression<Func<decimal>> expr = () => 10m / 2m;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(5m);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Divide_Int_ShouldOptimize()
+    {
+        Expression<Func<int>> expr = () => 10 / 2;
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(5);
+    }
+
     /// <summary>
     /// Test OrElse operator
     /// </summary>
@@ -497,11 +649,92 @@ public class ExpressionParserCoverageTests
         await Assert.That(((ConstantExpression)result).Value).IsEqualTo(true);
     }
 
+    [Test]
+    public async Task Parse_ArrayLength_Constant_ShouldOptimize()
+    {
+        var arrayLength = Expression.ArrayLength(Expression.Constant(new[] { 1, 2, 3 }));
+        var result = _parser.ParseExpression(arrayLength);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Member_Property_ShouldNotOptimize_InAotOnlyMode()
+    {
+        var holder = new Holder { Value = 7 };
+        Expression<Func<int>> expr = () => holder.Value;
+
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<MemberExpression>();
+    }
+
+    [Test]
+    public async Task Parse_Constant_Member_Field_ShouldOptimize()
+    {
+        var holder = new Holder { Field = 9 };
+        Expression<Func<int>> expr = () => holder.Field;
+
+        var result = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(9);
+    }
+
+    [Test]
+    public async Task Parse_Constant_Conditional_ShouldOptimize()
+    {
+        var conditional = Expression.Condition(
+            Expression.Constant(true),
+            Expression.Constant("yes"),
+            Expression.Constant("no"));
+
+        var result = _parser.ParseExpression(conditional);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo("yes");
+    }
+
+    [Test]
+    public async Task Parse_NewExpression_WithoutParameter_ShouldOptimize()
+    {
+        var ctor = typeof(DateTime).GetConstructor(new[] { typeof(int), typeof(int), typeof(int) });
+        await Assert.That(ctor).IsNotNull();
+
+        var newExpr = Expression.New(
+            ctor!,
+            Expression.Constant(2024),
+            Expression.Constant(1),
+            Expression.Constant(2));
+
+        var result = _parser.ParseExpression(newExpr);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(new DateTime(2024, 1, 2));
+    }
+
+    [Test]
+    public async Task Parse_Constant_MethodCall_ShouldBeConstantFolded()
+    {
+        Expression<Func<TestDoc, bool>> expr = x => Guid.NewGuid().ToString().Length > 0;
+
+        var result = _parser.Parse(expr);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(true);
+    }
+
     /// <summary>
     /// Test complex math expression without parameter
     /// </summary>
     [Test]
-    [SkipInAot("Complex math expressions require Lambda.Compile() which is not available in AOT")]
     public async Task Parse_Complex_Math_Without_Parameter()
     {
         var a = 10;

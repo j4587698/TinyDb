@@ -103,7 +103,7 @@ public class AotGroupingDirectTests
         var elements = new object[] { new TestItem(10), new TestItemNullable(null), new TestItem(20) };
         var grouping = new QueryPipeline.AotGrouping("key", elements);
 
-        var sum = grouping.Sum(x => x is TestItem t ? (object)t.Value : null);
+        var sum = grouping.Sum(x => x is TestItem t ? (object)t.Value : null!);
 
         await Assert.That(sum).IsEqualTo(30m);
     }
@@ -218,7 +218,7 @@ public class AotGroupingDirectTests
         var elements = new object[] { new TestItemNullable(null), new TestItemNullable(null) };
         var grouping = new QueryPipeline.AotGrouping("key", elements);
 
-        var min = grouping.Min(x => ((TestItemNullable)x).Value);
+        var min = grouping.Min(x => ((TestItemNullable)x).Value!);
 
         await Assert.That(min).IsNull();
     }
@@ -287,7 +287,7 @@ public class AotGroupingDirectTests
         var elements = new object[] { new TestItemNullable(null), new TestItemNullable(null) };
         var grouping = new QueryPipeline.AotGrouping("key", elements);
 
-        var max = grouping.Max(x => ((TestItemNullable)x).Value);
+        var max = grouping.Max(x => ((TestItemNullable)x).Value!);
 
         await Assert.That(max).IsNull();
     }

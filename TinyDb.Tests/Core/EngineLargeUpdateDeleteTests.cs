@@ -56,6 +56,6 @@ public class EngineLargeUpdateDeleteTests : IDisposable
         await Assert.That(result).IsEqualTo(1);
         
         var loaded = _engine.FindById("col", id);
-        await Assert.That(loaded).IsNull();
+        await Assert.That(loaded == null).IsTrue();
     }
 }

@@ -14,7 +14,6 @@ namespace TinyDb.Tests.Serialization;
 /// <summary>
 /// BsonIgnore 属性的全面测试，验证序列化时忽略指定字段
 /// </summary>
-[SkipInAot("These tests use reflection-based fallback paths")]
 public class BsonIgnoreTests
 {
     #region Test Entities
@@ -22,6 +21,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 基本的忽略属性测试实体
     /// </summary>
+    [Entity]
     internal class BasicIgnoreEntity
     {
         public int Id { get; set; }
@@ -37,6 +37,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 多个忽略属性的实体
     /// </summary>
+    [Entity]
     internal class MultipleIgnoreEntity
     {
         public int Id { get; set; }
@@ -57,6 +58,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 忽略复杂类型的实体
     /// </summary>
+    [Entity]
     internal class IgnoreComplexTypeEntity
     {
         public int Id { get; set; }
@@ -72,6 +74,7 @@ public class BsonIgnoreTests
         public Dictionary<string, int>? IgnoredDict { get; set; }
     }
 
+    [Entity]
     internal class NestedObject
     {
         public string Value { get; set; } = "";
@@ -81,6 +84,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 忽略可空类型的实体
     /// </summary>
+    [Entity]
     internal class IgnoreNullableEntity
     {
         public int Id { get; set; }
@@ -100,6 +104,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 忽略计算属性的实体
     /// </summary>
+    [Entity]
     internal class IgnoreComputedPropertyEntity
     {
         public int Id { get; set; }
@@ -122,6 +127,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 忽略敏感数据的实体
     /// </summary>
+    [Entity]
     internal class IgnoreSensitiveDataEntity
     {
         public int Id { get; set; }
@@ -139,6 +145,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 忽略缓存属性的实体
     /// </summary>
+    [Entity]
     internal class IgnoreCacheEntity
     {
         public int Id { get; set; }
@@ -154,6 +161,7 @@ public class BsonIgnoreTests
     /// <summary>
     /// 带有公共字段和BsonIgnore的实体
     /// </summary>
+    [Entity]
     internal class IgnoreFieldEntity
     {
         public int Id { get; set; }
@@ -441,8 +449,8 @@ public class BsonIgnoreTests
 
         var doc = AotBsonMapper.ToDocument(entity);
 
-        // Should only have _id and name keys (2 keys)
-        await Assert.That(doc.Keys.Count).IsEqualTo(2);
+        // Should have _id, name, and _collection keys (3 keys)
+        await Assert.That(doc.Keys.Count).IsEqualTo(3);
     }
 
     [Test]
@@ -460,8 +468,8 @@ public class BsonIgnoreTests
 
         var doc = AotBsonMapper.ToDocument(entity);
 
-        // Should only have _id, visibleName, visiblePrice keys (3 keys)
-        await Assert.That(doc.Keys.Count).IsEqualTo(3);
+        // Should have _id, visibleName, visiblePrice, and _collection keys (4 keys)
+        await Assert.That(doc.Keys.Count).IsEqualTo(4);
     }
 
     #endregion

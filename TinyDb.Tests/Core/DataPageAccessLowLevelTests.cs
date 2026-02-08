@@ -266,9 +266,9 @@ public class DataPageAccessLowLevelTests : IDisposable
         
         var fields = new HashSet<string> { "_id", "name" };
         var result = _dpa.ReadDocumentAt(page, 0, fields);
-        await Assert.That(result).IsNotNull();
+        await Assert.That(result!).IsNotNull();
         await Assert.That(result!.ContainsKey("_id")).IsTrue();
-        await Assert.That(result.ContainsKey("name")).IsTrue();
+        await Assert.That(result!.ContainsKey("name")).IsTrue();
     }
 
     [Test]
@@ -282,7 +282,7 @@ public class DataPageAccessLowLevelTests : IDisposable
         
         var fields = new HashSet<string> { "_id" };
         var result = _dpa.ReadDocumentAt(page, 5, fields);
-        await Assert.That(result).IsNull();
+        await Assert.That(result == null).IsTrue();
     }
 
     #endregion
@@ -508,9 +508,12 @@ public class DataPageAccessLowLevelTests : IDisposable
         // Add valid document
         var validDoc = new BsonDocument().Set("_id", 1);
         page.Append(BsonSerializer.SerializeDocument(validDoc));
+
+        // Add corrupted document bytes (invalid BSON)
+        page.Append(new byte[] { 1, 2, 3 });
         
         var scanned = _dpa.ScanDocumentsFromPage(page).ToList();
-        await Assert.That(scanned.Count).IsGreaterThanOrEqualTo(1);
+        await Assert.That(scanned.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -555,6 +558,267 @@ public class DataPageAccessLowLevelTests : IDisposable
             await Assert.That(entry).IsNotNull();
             await Assert.That(entry!.Value.Document["_id"].ToInt32(null)).IsEqualTo(i);
         }
+    }
+
+    [Test]
+    public async Task ReadDocumentsFromPage_WithInvalidBson_SkipsInvalidEntryAndContinues()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        // Invalid BSON entry
+        page.Append(new byte[] { 1, 2, 3 });
+
+        // Valid entry after invalid one
+        var validDoc = new BsonDocument().Set("_id", 7).Set("name", "ok");
+        page.Append(BsonSerializer.SerializeDocument(validDoc));
+
+        var entries = _dpa.ReadDocumentsFromPage(page);
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].Document["_id"].ToInt32(null)).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithInvalidBson_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        page.Append(new byte[] { 1, 2, 3 });
+
+        var entry = _dpa.ReadDocumentAt(page, 0);
+        await Assert.That(entry).IsNull();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_SpanTooShortDuringSkip_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        // Corrupt header: claim 2 entries but keep no valid data span.
+        page.Header.ItemCount = 2;
+
+        var entry = _dpa.ReadDocumentAt(page, 1);
+        await Assert.That(entry).IsNull();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_TargetLengthExceedsSpan_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        // Corrupt header to expose a 4-byte span (len prefix) but no content.
+        page.Header.ItemCount = 1;
+        page.Header.FreeBytes = (ushort)(page.DataCapacity - 4);
+
+        // Write a target length larger than the available span.
+        page.WriteData(0, BitConverter.GetBytes(10));
+
+        var entry = _dpa.ReadDocumentAt(page, 0);
+        await Assert.That(entry).IsNull();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_SpanTooShortForLengthPrefix_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        // Corrupt header: claim 1 entry but keep no valid data span.
+        page.Header.ItemCount = 1;
+
+        var entry = _dpa.ReadDocumentAt(page, 0);
+        await Assert.That(entry).IsNull();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithFields_SpanTooShortDuringSkip_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        page.Header.ItemCount = 2;
+
+        var fields = new HashSet<string> { "_id" };
+        var doc = _dpa.ReadDocumentAt(page, 1, fields);
+        await Assert.That(doc is null).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithFields_SpanAllowsSkipButNotTarget_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        // Expose a 4-byte span so skip loop can read a length (0 by default).
+        page.Header.ItemCount = 2;
+        page.Header.FreeBytes = (ushort)(page.DataCapacity - 4);
+
+        var fields = new HashSet<string> { "_id" };
+        var doc = _dpa.ReadDocumentAt(page, 1, fields);
+        await Assert.That(doc is null).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithFields_TargetLengthExceedsSpan_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        page.Header.ItemCount = 1;
+        page.Header.FreeBytes = (ushort)(page.DataCapacity - 4);
+        page.WriteData(0, BitConverter.GetBytes(10));
+
+        var fields = new HashSet<string> { "_id" };
+        var doc = _dpa.ReadDocumentAt(page, 0, fields);
+        await Assert.That(doc is null).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithFields_InvalidBson_ReturnsNull()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+        page.Append(new byte[] { 1, 2, 3 });
+
+        var fields = new HashSet<string> { "_id" };
+        var doc = _dpa.ReadDocumentAt(page, 0, fields);
+        await Assert.That(doc is null).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithFields_LargeDocument_NullFields_ReturnsFullLargeDocument()
+    {
+        var largeDoc = new BsonDocument()
+            .Set("_id", 1)
+            .Set("name", "big")
+            .Set("payload", new string('x', 5000));
+
+        var indexPageId = _lds.StoreLargeDocument(largeDoc, "col");
+        var largeBytes = BsonSerializer.SerializeDocument(largeDoc);
+
+        var meta = new BsonDocument()
+            .Set("_isLargeDocument", true)
+            .Set("_largeDocumentIndex", (long)indexPageId)
+            .Set("_largeDocumentSize", (long)largeBytes.Length);
+
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+        page.Append(BsonSerializer.SerializeDocument(meta));
+
+        var doc = _dpa.ReadDocumentAt(page, 0, null);
+        await Assert.That(doc).IsNotNull();
+        await Assert.That(doc!.ContainsKey("payload")).IsTrue();
+        await Assert.That(doc["name"].ToString()).IsEqualTo("big");
+    }
+
+    [Test]
+    public async Task ReadDocumentAt_WithFields_LargeDocument_WithProjection_ReturnsProjectedLargeDocument()
+    {
+        var largeDoc = new BsonDocument()
+            .Set("_id", 1)
+            .Set("name", "big")
+            .Set("payload", new string('x', 5000));
+
+        var indexPageId = _lds.StoreLargeDocument(largeDoc, "col");
+        var largeBytes = BsonSerializer.SerializeDocument(largeDoc);
+
+        var meta = new BsonDocument()
+            .Set("_isLargeDocument", true)
+            .Set("_largeDocumentIndex", (long)indexPageId)
+            .Set("_largeDocumentSize", (long)largeBytes.Length);
+
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+        page.Append(BsonSerializer.SerializeDocument(meta));
+
+        var fields = new HashSet<string> { "_id", "name" };
+        var doc = _dpa.ReadDocumentAt(page, 0, fields);
+        await Assert.That(doc).IsNotNull();
+        await Assert.That(doc!.ContainsKey("_id")).IsTrue();
+        await Assert.That(doc.ContainsKey("name")).IsTrue();
+        await Assert.That(doc.ContainsKey("payload")).IsFalse();
+        await Assert.That(doc["name"].ToString()).IsEqualTo("big");
+    }
+
+    [Test]
+    public async Task RewritePageWithDocuments_WhenEntryIdIsNull_DoesNotInvokeUpdateCallback()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        var rawBytes = BsonSerializer.SerializeDocument(new BsonDocument().Set("_id", 1).Set("x", 1));
+
+        var docWithNullId = new BsonDocument().Set("_id", null!);
+        var docs = new List<PageDocumentEntry>
+        {
+            new PageDocumentEntry(docWithNullId, rawBytes, false, 0, 0)
+        };
+
+        var called = false;
+        _dpa.RewritePageWithDocuments(
+            "test_col",
+            new CollectionState(),
+            page,
+            docs,
+            (_, _, _) => called = true);
+
+        await Assert.That(called).IsFalse();
+    }
+
+    [Test]
+    public async Task RewritePageWithDocuments_WhenIdToStringReturnsNull_UsesEmptyString()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        var rawBytes = BsonSerializer.SerializeDocument(new BsonDocument().Set("_id", 1).Set("x", 1));
+        var docWithNullToStringId = new BsonDocument().Set("_id", new NullToStringBsonValue());
+
+        var docs = new List<PageDocumentEntry>
+        {
+            new PageDocumentEntry(docWithNullToStringId, rawBytes, false, 0, 0)
+        };
+
+        string? captured = null;
+        _dpa.RewritePageWithDocuments(
+            "test_col",
+            new CollectionState(),
+            page,
+            docs,
+            (id, _, _) => captured = id);
+
+        await Assert.That(captured).IsEqualTo(string.Empty);
+    }
+
+    private sealed class NullToStringBsonValue : BsonValue
+    {
+        public override BsonType BsonType => BsonType.String;
+        public override object? RawValue => null;
+        public override int CompareTo(BsonValue? other) => 0;
+        public override bool Equals(BsonValue? other) => ReferenceEquals(this, other);
+        public override int GetHashCode() => 0;
+        public override string ToString() => null!;
+
+        public override TypeCode GetTypeCode() => TypeCode.Object;
+        public override bool ToBoolean(IFormatProvider? provider) => throw new NotSupportedException();
+        public override byte ToByte(IFormatProvider? provider) => throw new NotSupportedException();
+        public override char ToChar(IFormatProvider? provider) => throw new NotSupportedException();
+        public override DateTime ToDateTime(IFormatProvider? provider) => throw new NotSupportedException();
+        public override decimal ToDecimal(IFormatProvider? provider) => throw new NotSupportedException();
+        public override double ToDouble(IFormatProvider? provider) => throw new NotSupportedException();
+        public override short ToInt16(IFormatProvider? provider) => throw new NotSupportedException();
+        public override int ToInt32(IFormatProvider? provider) => throw new NotSupportedException();
+        public override long ToInt64(IFormatProvider? provider) => throw new NotSupportedException();
+        public override sbyte ToSByte(IFormatProvider? provider) => throw new NotSupportedException();
+        public override float ToSingle(IFormatProvider? provider) => throw new NotSupportedException();
+        public override string ToString(IFormatProvider? provider) => null!;
+        public override object ToType(Type conversionType, IFormatProvider? provider) => throw new NotSupportedException();
+        public override ushort ToUInt16(IFormatProvider? provider) => throw new NotSupportedException();
+        public override uint ToUInt32(IFormatProvider? provider) => throw new NotSupportedException();
+        public override ulong ToUInt64(IFormatProvider? provider) => throw new NotSupportedException();
     }
 
     #endregion

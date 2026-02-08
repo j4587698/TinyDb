@@ -14,7 +14,6 @@ namespace TinyDb.Tests.Storage;
 public class DiskStreamRegionLockTests : IDisposable
 {
     private readonly string _dbPath;
-    private DiskStream? _diskStream;
 
     public DiskStreamRegionLockTests()
     {
@@ -23,54 +22,53 @@ public class DiskStreamRegionLockTests : IDisposable
 
     public void Dispose()
     {
-        _diskStream?.Dispose();
         if (File.Exists(_dbPath)) try { File.Delete(_dbPath); } catch { }
     }
 
     [Test]
     public async Task LockRegion_ShouldReturnLockHandle()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
-        var handle = _diskStream.LockRegion(0, 100);
+        var handle = diskStream.LockRegion(0, 100);
 
         await Assert.That(handle).IsNotNull();
 
-        _diskStream.UnlockRegion(handle);
+        diskStream.UnlockRegion(handle);
     }
 
     [Test]
     public async Task LockRegion_MultipleDifferentRegions_ShouldNotBlock()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
-        var handle1 = _diskStream.LockRegion(0, 100);
-        var handle2 = _diskStream.LockRegion(100, 100);
-        var handle3 = _diskStream.LockRegion(200, 100);
+        var handle1 = diskStream.LockRegion(0, 100);
+        var handle2 = diskStream.LockRegion(100, 100);
+        var handle3 = diskStream.LockRegion(200, 100);
 
         await Assert.That(handle1).IsNotNull();
         await Assert.That(handle2).IsNotNull();
         await Assert.That(handle3).IsNotNull();
 
-        _diskStream.UnlockRegion(handle1);
-        _diskStream.UnlockRegion(handle2);
-        _diskStream.UnlockRegion(handle3);
+        diskStream.UnlockRegion(handle1);
+        diskStream.UnlockRegion(handle2);
+        diskStream.UnlockRegion(handle3);
     }
 
     [Test]
     public async Task LockRegion_OverlappingRegions_ShouldBlockUntilReleased()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
-        var handle1 = _diskStream.LockRegion(0, 100);
+        var handle1 = diskStream.LockRegion(0, 100);
 
         var acquired = false;
         var task = Task.Run(() =>
         {
             // Try to lock an overlapping region
-            var handle2 = _diskStream.LockRegion(50, 100);
+            var handle2 = diskStream.LockRegion(50, 100);
             acquired = true;
-            _diskStream.UnlockRegion(handle2);
+            diskStream.UnlockRegion(handle2);
         });
 
         // Give the task time to start and block
@@ -78,7 +76,7 @@ public class DiskStreamRegionLockTests : IDisposable
         await Assert.That(acquired).IsFalse();
 
         // Release the first lock
-        _diskStream.UnlockRegion(handle1);
+        diskStream.UnlockRegion(handle1);
 
         // Wait for the second lock to be acquired
         await task;
@@ -88,46 +86,46 @@ public class DiskStreamRegionLockTests : IDisposable
     [Test]
     public async Task UnlockRegion_InvalidHandle_ShouldThrow()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
-        await Assert.That(() => _diskStream.UnlockRegion("invalid"))
+        await Assert.That(() => diskStream.UnlockRegion("invalid"))
             .Throws<ArgumentException>();
     }
 
     [Test]
     public async Task LockRegion_AfterDispose_ShouldThrow()
     {
-        _diskStream = new DiskStream(_dbPath);
-        _diskStream.Dispose();
+        var diskStream = new DiskStream(_dbPath);
+        diskStream.Dispose();
 
-        await Assert.That(() => _diskStream.LockRegion(0, 100))
+        await Assert.That(() => diskStream.LockRegion(0, 100))
             .Throws<ObjectDisposedException>();
     }
 
     [Test]
     public async Task UnlockRegion_AfterDispose_ShouldThrow()
     {
-        _diskStream = new DiskStream(_dbPath);
-        var handle = _diskStream.LockRegion(0, 100);
-        _diskStream.Dispose();
+        var diskStream = new DiskStream(_dbPath);
+        var handle = diskStream.LockRegion(0, 100);
+        diskStream.Dispose();
 
-        await Assert.That(() => _diskStream.UnlockRegion(handle))
+        await Assert.That(() => diskStream.UnlockRegion(handle))
             .Throws<ObjectDisposedException>();
     }
 
     [Test]
     public async Task LockRegion_SameRegionMultipleTimes_ShouldBlockUntilReleased()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
-        var handle1 = _diskStream.LockRegion(0, 100);
+        var handle1 = diskStream.LockRegion(0, 100);
 
         var secondLockAcquired = false;
         var task = Task.Run(() =>
         {
-            var handle2 = _diskStream.LockRegion(0, 100);
+            var handle2 = diskStream.LockRegion(0, 100);
             secondLockAcquired = true;
-            _diskStream.UnlockRegion(handle2);
+            diskStream.UnlockRegion(handle2);
         });
 
         // Give the task time to start and block
@@ -135,7 +133,7 @@ public class DiskStreamRegionLockTests : IDisposable
         await Assert.That(secondLockAcquired).IsFalse();
 
         // Release the first lock
-        _diskStream.UnlockRegion(handle1);
+        diskStream.UnlockRegion(handle1);
 
         // Wait for the second lock
         await task;
@@ -145,12 +143,12 @@ public class DiskStreamRegionLockTests : IDisposable
     [Test]
     public async Task LockRegion_ReleaseTwice_ShouldBeIdempotent()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
-        var handle = _diskStream.LockRegion(0, 100);
+        var handle = diskStream.LockRegion(0, 100);
 
         // First release
-        _diskStream.UnlockRegion(handle);
+        diskStream.UnlockRegion(handle);
 
         // Second release should not throw (idempotent)
         // Note: This tests the internal RegionLock.Release() idempotency
@@ -161,7 +159,7 @@ public class DiskStreamRegionLockTests : IDisposable
     [Test]
     public async Task LockRegion_ConcurrentLocks_ShouldMaintainConsistency()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
         var counter = 0;
         var tasks = new Task[10];
@@ -172,11 +170,11 @@ public class DiskStreamRegionLockTests : IDisposable
             {
                 for (int j = 0; j < 10; j++)
                 {
-                    var handle = _diskStream.LockRegion(0, 100);
+                    var handle = diskStream.LockRegion(0, 100);
                     var currentValue = counter;
                     Thread.Sleep(1); // Simulate some work
                     counter = currentValue + 1;
-                    _diskStream.UnlockRegion(handle);
+                    diskStream.UnlockRegion(handle);
                 }
             });
         }
@@ -190,18 +188,18 @@ public class DiskStreamRegionLockTests : IDisposable
     [Test]
     public async Task LockRegion_AdjacentRegions_ShouldNotBlock()
     {
-        _diskStream = new DiskStream(_dbPath);
+        using var diskStream = new DiskStream(_dbPath);
 
         // Lock region [0, 100)
-        var handle1 = _diskStream.LockRegion(0, 100);
+        var handle1 = diskStream.LockRegion(0, 100);
 
         // Lock adjacent region [100, 200) - should not block
         var handle2Acquired = false;
         var task = Task.Run(() =>
         {
-            var handle2 = _diskStream.LockRegion(100, 100);
+            var handle2 = diskStream.LockRegion(100, 100);
             handle2Acquired = true;
-            _diskStream.UnlockRegion(handle2);
+            diskStream.UnlockRegion(handle2);
         });
 
         // Wait for the task to complete (use a longer timeout to avoid flaky tests)
@@ -209,6 +207,6 @@ public class DiskStreamRegionLockTests : IDisposable
         await Assert.That(completedInTime).IsTrue();
         await Assert.That(handle2Acquired).IsTrue();
 
-        _diskStream.UnlockRegion(handle1);
+        diskStream.UnlockRegion(handle1);
     }
 }

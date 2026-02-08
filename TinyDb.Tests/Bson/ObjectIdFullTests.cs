@@ -45,8 +45,7 @@ public class ObjectIdFullTests
     [Test]
     public async Task ObjectId_TryParse_EdgeCases_ShouldWork()
     {
-        string? nullStr = null;
-        await Assert.That(ObjectId.TryParse(nullStr, out _)).IsFalse();
+        await Assert.That(ObjectId.TryParse(null!, out _)).IsFalse();
         await Assert.That(ObjectId.TryParse("", out _)).IsFalse();
         await Assert.That(ObjectId.TryParse("invalid", out _)).IsFalse();
         

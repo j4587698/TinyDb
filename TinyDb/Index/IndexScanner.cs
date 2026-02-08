@@ -99,7 +99,11 @@ public static class IndexScanner
             if (!indexManager.IndexExists(compositeAttr.Name))
             {
                 // Convert fields to camelCase to match BsonMapper behavior
-                var fields = compositeAttr.Fields.Select(ToCamelCase).ToArray();
+                var fields = new string[compositeAttr.Fields.Length];
+                for (int i = 0; i < compositeAttr.Fields.Length; i++)
+                {
+                    fields[i] = ToCamelCase(compositeAttr.Fields[i]);
+                }
                 indexManager.CreateIndex(compositeAttr.Name, fields, compositeAttr.Unique);
             }
         }
@@ -185,20 +189,8 @@ public static class IndexScanner
             return; 
         }
 
-        try
-        {
-            // 创建主键索引，_id字段是唯一的
-            // 注意：如果底层存储已存在同名索引（但管理器尚未加载），CreateIndex 会抛出异常
-            indexManager.CreateIndex(primaryKeyIndexName, new[] { "_id" }, true);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("Duplicate key"))
-        {
-            // 忽略重复键错误，这说明索引已经存在并已初始化
-        }
-        catch
-        {
-            // 其他异常也不应阻止系统启动
-        }
+        // 创建主键索引，_id字段是唯一的
+        indexManager.CreateIndex(primaryKeyIndexName, new[] { "_id" }, true);
     }
 
     private static string ToCamelCase(string name)

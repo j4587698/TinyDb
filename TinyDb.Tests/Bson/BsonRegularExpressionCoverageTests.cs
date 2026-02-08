@@ -8,70 +8,111 @@ namespace TinyDb.Tests.Bson;
 public class BsonRegularExpressionCoverageTests
 {
     [Test]
-    public async Task Constructor_InvalidArguments_ShouldThrow()
+    public async Task Ctor_NullPattern_ShouldThrow()
     {
         await Assert.That(() => new BsonRegularExpression(null!)).Throws<ArgumentNullException>();
     }
 
     [Test]
-    public async Task FromRegex_AllOptions_ShouldWork()
+    public async Task Ctor_NullOptions_ShouldDefaultToEmpty()
     {
-        var options = RegexOptions.IgnoreCase | RegexOptions.Multiline | 
-                      RegexOptions.Singleline | RegexOptions.IgnorePatternWhitespace;
-        var regex = new Regex("pattern", options);
+        var bson = new BsonRegularExpression("ab", null!);
+        await Assert.That(bson.Options).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task FromRegex_Null_ShouldThrow()
+    {
+        await Assert.That(() => BsonRegularExpression.FromRegex(null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task FromRegex_And_ToRegex_ShouldRoundTripOptions()
+    {
+        var regex = new Regex(
+            "ab",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Singleline | RegexOptions.IgnorePatternWhitespace);
+
         var bson = BsonRegularExpression.FromRegex(regex);
-        
-        await Assert.That(bson.Pattern).IsEqualTo("pattern");
-        await Assert.That(bson.Options).Contains("i");
-        await Assert.That(bson.Options).Contains("m");
-        await Assert.That(bson.Options).Contains("s");
-        await Assert.That(bson.Options).Contains("x");
-        
-        var back = bson.ToRegex();
-        await Assert.That(back.Options.HasFlag(RegexOptions.IgnoreCase)).IsTrue();
-        await Assert.That(back.Options.HasFlag(RegexOptions.Multiline)).IsTrue();
-        await Assert.That(back.Options.HasFlag(RegexOptions.Singleline)).IsTrue();
-        await Assert.That(back.Options.HasFlag(RegexOptions.IgnorePatternWhitespace)).IsTrue();
+        var roundtrip = bson.ToRegex();
+
+        await Assert.That(roundtrip.ToString()).IsEqualTo("ab");
+        await Assert.That(roundtrip.Options.HasFlag(RegexOptions.IgnoreCase)).IsTrue();
+        await Assert.That(roundtrip.Options.HasFlag(RegexOptions.Multiline)).IsTrue();
+        await Assert.That(roundtrip.Options.HasFlag(RegexOptions.Singleline)).IsTrue();
+        await Assert.That(roundtrip.Options.HasFlag(RegexOptions.IgnorePatternWhitespace)).IsTrue();
     }
 
     [Test]
-    public async Task Implicits_And_ToString()
+    public async Task Operators_Equals_CompareTo_ShouldWork()
     {
-        BsonRegularExpression bson = "mypattern";
-        await Assert.That(bson.Pattern).IsEqualTo("mypattern");
-        await Assert.That(bson.Options).IsEqualTo("");
-        
-        BsonRegularExpression bson2 = new Regex("p2");
-        await Assert.That(bson2.Pattern).IsEqualTo("p2");
-        
-        await Assert.That(bson.ToString()).IsEqualTo("/mypattern/");
-        await Assert.That(new BsonRegularExpression("p", "i").ToString()).IsEqualTo("/p/i");
+        BsonRegularExpression bson = "ab";
+        BsonRegularExpression fromRegex = new Regex("ab", RegexOptions.IgnoreCase);
+
+        await Assert.That(bson.Equals(fromRegex)).IsFalse();
+        await Assert.That(bson.CompareTo(null)).IsEqualTo(1);
+        await Assert.That(bson.CompareTo(fromRegex)).IsLessThan(0);
+
+        await Assert.That(bson.ToString()).IsEqualTo("/ab/");
+        await Assert.That(((BsonValue)bson).RawValue).IsEqualTo("ab");
+        await Assert.That(bson.GetHashCode()).IsNotEqualTo(0);
+
+        await Assert.That(bson.CompareTo(new BsonInt32(1))).IsNotEqualTo(0);
     }
 
     [Test]
-    public async Task Comparisons_And_Equality()
+    public async Task ParseOptions_UnknownFlags_ShouldBeIgnored()
     {
-        var bson1 = new BsonRegularExpression("a", "i");
-        var bson2 = new BsonRegularExpression("a", "m");
-        var bson3 = new BsonRegularExpression("b", "i");
-        
-        await Assert.That(bson1.Equals(new BsonRegularExpression("a", "i"))).IsTrue();
-        await Assert.That(bson1.Equals(bson2)).IsFalse();
-        
-        await Assert.That(bson1.CompareTo(bson2)).IsNegative();
-        await Assert.That(bson3.CompareTo(bson1)).IsPositive();
-        await Assert.That(bson1.CompareTo(new BsonInt32(1))).IsNotEqualTo(0);
-        
-        await Assert.That(bson1.GetHashCode()).IsEqualTo(new BsonRegularExpression("a", "i").GetHashCode());
+        var bson = new BsonRegularExpression("ab", "imxsJZ");
+        var regex = bson.ToRegex();
+
+        await Assert.That(regex.Options.HasFlag(RegexOptions.IgnoreCase)).IsTrue();
+        await Assert.That(regex.Options.HasFlag(RegexOptions.Multiline)).IsTrue();
+        await Assert.That(regex.Options.HasFlag(RegexOptions.Singleline)).IsTrue();
+        await Assert.That(regex.Options.HasFlag(RegexOptions.IgnorePatternWhitespace)).IsTrue();
     }
 
     [Test]
-    public async Task IConvertible_Exceptions()
+    public async Task ToRegex_WithEmptyOptions_ShouldNotSetAnyFlags()
     {
-        var bson = new BsonRegularExpression("p");
+        var bson = new BsonRegularExpression("ab", string.Empty);
+        var regex = bson.ToRegex();
+
+        await Assert.That(regex.Options.HasFlag(RegexOptions.IgnoreCase)).IsFalse();
+        await Assert.That(regex.Options.HasFlag(RegexOptions.Multiline)).IsFalse();
+        await Assert.That(regex.Options.HasFlag(RegexOptions.Singleline)).IsFalse();
+        await Assert.That(regex.Options.HasFlag(RegexOptions.IgnorePatternWhitespace)).IsFalse();
+    }
+
+    [Test]
+    public async Task Conversions_ShouldThrowInvalidCast()
+    {
+        var bson = new BsonRegularExpression("ab");
+
+        await Assert.That(bson.GetTypeCode()).IsEqualTo(TypeCode.Object);
+        await Assert.That(bson.ToString(null)).IsEqualTo(bson.ToString());
+
         await Assert.That(() => bson.ToBoolean(null)).Throws<InvalidCastException>();
         await Assert.That(() => bson.ToByte(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToChar(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToDateTime(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToDecimal(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToDouble(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToInt16(null)).Throws<InvalidCastException>();
         await Assert.That(() => bson.ToInt32(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToInt64(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToSByte(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToSingle(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToUInt16(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToUInt32(null)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToUInt64(null)).Throws<InvalidCastException>();
         await Assert.That(() => bson.ToType(typeof(int), null)).Throws<InvalidCastException>();
+    }
+
+    [Test]
+    public async Task Equals_NonRegex_ShouldReturnFalse()
+    {
+        var bson = new BsonRegularExpression("ab");
+        await Assert.That(bson.Equals(new BsonInt32(1))).IsFalse();
     }
 }

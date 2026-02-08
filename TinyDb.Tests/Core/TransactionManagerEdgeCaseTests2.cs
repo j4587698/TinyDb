@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Metadata;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using PropertyMetadata = TinyDb.Metadata.PropertyMetadata;
@@ -628,26 +629,30 @@ public class TransactionManagerEdgeCaseTests2
 
     #region Test Entities
 
-    private class TestEntity
+    [Entity]
+    public class TestEntity
     {
         public ObjectId Id { get; set; } = ObjectId.NewObjectId();
         public string Name { get; set; } = string.Empty;
     }
 
-    private class ParentEntity
+    [Entity]
+    public class ParentEntity
     {
         public ObjectId Id { get; set; } = ObjectId.NewObjectId();
         public string Name { get; set; } = string.Empty;
     }
 
-    private class ChildEntity
+    [Entity]
+    public class ChildEntity
     {
         public ObjectId Id { get; set; } = ObjectId.NewObjectId();
         public string Name { get; set; } = string.Empty;
         public ObjectId ParentId { get; set; }
     }
 
-    private class NullableChildEntity
+    [Entity]
+    public class NullableChildEntity
     {
         public ObjectId Id { get; set; } = ObjectId.NewObjectId();
         public string Name { get; set; } = string.Empty;

@@ -1,0 +1,16 @@
+{
+  "codeCoverage": {
+    "Configuration": {
+      "CodeCoverage": {
+        "Sources": {
+          "Exclude": [
+            ".*[\\\\/]obj[\\\\/].*",
+            ".*\\\\.g\\\\.cs$",
+            ".*\\\\.generated\\\\.cs$",
+            ".*[\\\\/]Generated[\\\\/].*"
+          ]
+        }
+      }
+    }
+  }
+}

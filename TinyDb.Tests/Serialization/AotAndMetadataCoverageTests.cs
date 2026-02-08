@@ -7,13 +7,15 @@ using TUnit.Assertions.Extensions;
 using TinyDb.Bson;
 using TinyDb.Metadata;
 using TinyDb.Serialization;
+using TinyDb.Attributes;
 
 namespace TinyDb.Tests.Serialization;
 
 /// <summary>
 /// 文件局部测试实体，用于避免影响全局注册的适配器
 /// </summary>
-file class LocalTestEntityForCoverage
+[Entity]
+public class LocalTestEntityForCoverage
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
@@ -22,7 +24,8 @@ file class LocalTestEntityForCoverage
 /// <summary>
 /// 文件局部测试实体，用于 Clear 测试
 /// </summary>
-file class LocalClearTestEntity
+[Entity]
+public class LocalClearTestEntity
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
@@ -31,7 +34,8 @@ file class LocalClearTestEntity
 /// <summary>
 /// 文件局部无 ID 实体
 /// </summary>
-file class LocalNoIdEntity
+[Entity]
+public class LocalNoIdEntity
 {
     public string Name { get; set; } = "test";
 }
@@ -108,30 +112,6 @@ public class AotAndMetadataCoverageTests
         
         await Assert.That(AotIdAccessor<LocalNoIdEntity>.HasValidId(entity)).IsFalse();
         await Assert.That(AotIdAccessor<LocalNoIdEntity>.GenerateIdIfNeeded(entity)).IsFalse();
-    }
-
-    [Test]
-    public async Task AotIdAccessor_ConvertIdValue_Coverage()
-    {
-        // Use reflection to invoke private ConvertIdValue
-        var method = typeof(AotIdAccessor<LocalTestEntityForCoverage>).GetMethod("ConvertIdValue", BindingFlags.NonPublic | BindingFlags.Static);
-        
-        // String to Guid
-        var guid = Guid.NewGuid();
-        var guidStr = new BsonString(guid.ToString());
-        var resGuid = method!.Invoke(null, new object[] { guidStr, typeof(Guid) });
-        await Assert.That(resGuid).IsEqualTo(guid);
-
-        // String to ObjectId
-        var oid = ObjectId.NewObjectId();
-        var oidStr = new BsonString(oid.ToString());
-        var resOid = method!.Invoke(null, new object[] { oidStr, typeof(ObjectId) });
-        await Assert.That(resOid).IsEqualTo(oid);
-
-        // String to Enum
-        var enumStr = new BsonString("Synced");
-        var resEnum = method!.Invoke(null, new object[] { enumStr, typeof(TinyDb.Core.WriteConcern) });
-        await Assert.That(resEnum).IsEqualTo(TinyDb.Core.WriteConcern.Synced);
     }
 
     [Test]

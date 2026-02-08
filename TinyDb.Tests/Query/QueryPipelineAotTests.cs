@@ -9,6 +9,7 @@ using TinyDb.Collections;
 using TinyDb.Core;
 using TinyDb.Query;
 using TinyDb.Tests.Utils;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using LinqExp = System.Linq.Expressions;
@@ -382,6 +383,7 @@ public class QueryPipelineAotTests : IDisposable
 
     #endregion
 
+    [Entity]
     public class TestProduct
     {
         public int Id { get; set; }
@@ -535,23 +537,22 @@ public class AotGroupingTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Key_Should_Be_Accessible()
     {
         var groups = _items.Query()
             .GroupBy(x => x.Category)
+            .Select(g => new GroupKeyResult { Key = g.Key == null ? "" : g.Key.ToString() })
             .ToList();
 
         await Assert.That(groups.Count).IsEqualTo(2);
     }
 
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Count_Should_Work()
     {
         var result = _items.Query()
             .GroupBy(x => x.Category)
-            .Select(g => new { Key = g.Key, Count = g.Count() })
+            .Select(g => new GroupCountResult { Key = g.Key == null ? "" : g.Key.ToString(), Count = g.Count() })
             .OrderBy(x => x.Key)
             .ToList();
 
@@ -562,12 +563,11 @@ public class AotGroupingTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Sum_Should_Work()
     {
         var result = _items.Query()
             .GroupBy(x => x.Category)
-            .Select(g => new { Key = g.Key, Total = g.Sum(x => x.Value) })
+            .Select(g => new GroupTotalResult { Key = g.Key == null ? "" : g.Key.ToString(), Total = g.Sum(x => x.Value) })
             .OrderBy(x => x.Key)
             .ToList();
 
@@ -576,26 +576,24 @@ public class AotGroupingTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Average_Should_Work()
     {
         var result = _items.Query()
             .GroupBy(x => x.Category)
-            .Select(g => new { Key = g.Key, Avg = g.Average(x => x.Value) })
+            .Select(g => new GroupAverageResult { Key = g.Key == null ? "" : g.Key.ToString(), Avg = g.Average(x => (decimal)x.Value) })
             .OrderBy(x => x.Key)
             .ToList();
 
-        await Assert.That((double)result[0].Avg).IsEqualTo(15.0); // (10 + 20) / 2
-        await Assert.That((double)result[1].Avg).IsGreaterThan(39.0); // (30 + 40 + 50) / 3
+        await Assert.That(result[0].Avg).IsEqualTo(15.0m); // (10 + 20) / 2
+        await Assert.That(result[1].Avg).IsGreaterThan(39.0m); // (30 + 40 + 50) / 3
     }
 
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Min_Max_Should_Work()
     {
         var result = _items.Query()
             .GroupBy(x => x.Category)
-            .Select(g => new { Key = g.Key, Min = g.Min(x => x.Value), Max = g.Max(x => x.Value) })
+            .Select(g => new GroupMinMaxResult { Key = g.Key == null ? "" : g.Key.ToString(), Min = g.Min(x => x.Value), Max = g.Max(x => x.Value) })
             .OrderBy(x => x.Key)
             .ToList();
 
@@ -605,10 +603,41 @@ public class AotGroupingTests : IDisposable
         await Assert.That(result[1].Max).IsEqualTo(50);
     }
 
+    [Entity]
     public class GroupTestItem
     {
         public int Id { get; set; }
         public string Category { get; set; } = "";
         public int Value { get; set; }
+    }
+
+    public class GroupKeyResult
+    {
+        public string Key { get; set; } = "";
+    }
+
+    public class GroupCountResult
+    {
+        public string Key { get; set; } = "";
+        public int Count { get; set; }
+    }
+
+    public class GroupTotalResult
+    {
+        public string Key { get; set; } = "";
+        public decimal Total { get; set; }
+    }
+
+    public class GroupAverageResult
+    {
+        public string Key { get; set; } = "";
+        public decimal Avg { get; set; }
+    }
+
+    public class GroupMinMaxResult
+    {
+        public string Key { get; set; } = "";
+        public int Min { get; set; }
+        public int Max { get; set; }
     }
 }

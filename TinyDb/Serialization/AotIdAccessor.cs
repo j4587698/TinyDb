@@ -19,19 +19,19 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        if (entity is BsonDocument doc)
         {
-            return adapter.GetId(entity);
+            return doc.ContainsKey("_id") ? doc["_id"] : BsonNull.Value;
         }
 
-        var idProperty = EntityMetadata<T>.IdProperty;
-        if (idProperty == null)
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            return BsonNull.Value;
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
         }
 
-        var value = idProperty.GetValue(entity);
-        return value != null ? BsonConversion.ToBsonValue(value) : BsonNull.Value;
+        return adapter.GetId(entity);
     }
 
     /// <summary>
@@ -43,20 +43,20 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        if (entity is BsonDocument)
         {
-            adapter.SetId(entity, id);
+            // BsonDocument is immutable, cannot set ID in place
             return;
         }
 
-        var idProperty = EntityMetadata<T>.IdProperty;
-        if (idProperty == null || id == null || id.IsNull)
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            return;
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
         }
 
-        var converted = ConvertIdValue(id, idProperty.PropertyType);
-        idProperty.SetValue(entity, converted);
+        adapter.SetId(entity, id);
     }
 
     /// <summary>
@@ -68,32 +68,19 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
     {
         if (entity == null) return false;
 
-        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        if (entity is BsonDocument doc)
         {
-            return adapter.HasValidId(entity);
+            return doc.ContainsKey("_id") && !doc["_id"].IsNull;
         }
 
-        var idProperty = EntityMetadata<T>.IdProperty;
-        if (idProperty == null)
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
         {
-            return false;
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
         }
 
-        var value = idProperty.GetValue(entity);
-        if (value == null)
-        {
-            return false;
-        }
-
-        return value switch
-        {
-            ObjectId objectId => objectId != ObjectId.Empty,
-            string str => !string.IsNullOrWhiteSpace(str),
-            Guid guid => guid != Guid.Empty,
-            int i => i != 0,
-            long l => l != 0,
-            _ => true
-        };
+        return adapter.HasValidId(entity);
     }
 
     /// <summary>
@@ -105,65 +92,29 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
     {
         if (entity == null) return false;
 
-        var idProperty = TinyDb.Serialization.EntityMetadata<T>.IdProperty;
+        if (entity is BsonDocument)
+        {
+            // BsonDocument is immutable, cannot generate ID in place
+            return false;
+        }
+
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
+        }
+
+        // 如果已有有效 ID，则不需要生成
+        if (adapter.HasValidId(entity))
+        {
+            return false;
+        }
+
+        // 获取 ID 属性信息并生成 ID
+        var idProperty = EntityMetadata<T>.IdProperty;
         if (idProperty == null) return false;
 
         return AutoIdGenerator.GenerateIdIfNeeded(entity, idProperty);
-    }
-
-    /// <summary>
-    /// 将 BSON 值转换为 ID 属性的目标类型。
-    /// </summary>
-    /// <param name="bsonValue">BSON 值。</param>
-    /// <param name="targetType">目标类型。</param>
-    /// <returns>转换后的对象。</returns>
-    private static object? ConvertIdValue(BsonValue bsonValue, Type targetType)
-    {
-        if (targetType == null) throw new ArgumentNullException(nameof(targetType));
-
-        var nonNullableType = Nullable.GetUnderlyingType(targetType) ?? targetType;
-        var rawValue = bsonValue.RawValue;
-
-        if (rawValue == null)
-        {
-            return null;
-        }
-
-        if (nonNullableType.IsInstanceOfType(rawValue))
-        {
-            return rawValue;
-        }
-
-        if (nonNullableType == typeof(string))
-        {
-            return rawValue.ToString();
-        }
-
-        if (nonNullableType == typeof(Guid))
-        {
-            return rawValue switch
-            {
-                Guid guid => guid,
-                string str => Guid.Parse(str),
-                _ => Guid.Parse(rawValue.ToString() ?? string.Empty)
-            };
-        }
-
-        if (nonNullableType == typeof(ObjectId))
-        {
-            return rawValue switch
-            {
-                ObjectId objectId => objectId,
-                string str => ObjectId.Parse(str),
-                _ => ObjectId.Parse(rawValue.ToString() ?? string.Empty)
-            };
-        }
-
-        if (nonNullableType.IsEnum)
-        {
-            return Enum.Parse(nonNullableType, rawValue.ToString() ?? string.Empty, ignoreCase: true);
-        }
-
-        return Convert.ChangeType(rawValue, nonNullableType);
     }
 }

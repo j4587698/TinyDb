@@ -1,4 +1,5 @@
 using TinyDb.Core;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -21,6 +22,7 @@ public class CollectionManagementTests : IDisposable
         try { if (File.Exists(_testDbPath)) File.Delete(_testDbPath); } catch { }
     }
 
+    [Entity]
     public class TestItem
     {
         public int Id { get; set; }

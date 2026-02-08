@@ -73,9 +73,9 @@ public class DataPageAccessExtendedTests : IDisposable
         var doc2 = col.FindById(1);
         var doc3 = col.FindById(1);
         
-        await Assert.That(doc1).IsNotNull();
-        await Assert.That(doc2).IsNotNull();
-        await Assert.That(doc3).IsNotNull();
+        await Assert.That(doc1!).IsNotNull();
+        await Assert.That(doc2!).IsNotNull();
+        await Assert.That(doc3!).IsNotNull();
         
         await Assert.That(((BsonInt32)doc1!["value"]).Value).IsEqualTo(100);
         await Assert.That(((BsonInt32)doc2!["value"]).Value).IsEqualTo(100);
@@ -98,7 +98,7 @@ public class DataPageAccessExtendedTests : IDisposable
         
         // Read specific document
         var doc = col.FindById(2);
-        await Assert.That(doc).IsNotNull();
+        await Assert.That(doc!).IsNotNull();
         await Assert.That(((BsonString)doc!["name"]).Value).IsEqualTo("doc_2");
     }
 
@@ -110,7 +110,7 @@ public class DataPageAccessExtendedTests : IDisposable
         
         // Try to find non-existent document
         var doc = col.FindById(999);
-        await Assert.That(doc).IsNull();
+        await Assert.That(doc == null).IsTrue();
     }
 
     [Test]
@@ -125,10 +125,10 @@ public class DataPageAccessExtendedTests : IDisposable
         
         // Find with all fields
         var fullDoc = col.FindById(1);
-        await Assert.That(fullDoc).IsNotNull();
+        await Assert.That(fullDoc!).IsNotNull();
         await Assert.That(fullDoc!.ContainsKey("field1")).IsTrue();
-        await Assert.That(fullDoc.ContainsKey("field2")).IsTrue();
-        await Assert.That(fullDoc.ContainsKey("field3")).IsTrue();
+        await Assert.That(fullDoc!.ContainsKey("field2")).IsTrue();
+        await Assert.That(fullDoc!.ContainsKey("field3")).IsTrue();
     }
 
     #endregion
@@ -171,7 +171,7 @@ public class DataPageAccessExtendedTests : IDisposable
         for (int i = 0; i < 5; i++)
         {
             var doc = col.FindById(i);
-            await Assert.That(doc).IsNotNull();
+            await Assert.That(doc!).IsNotNull();
             await Assert.That(((BsonString)doc!["data"]).Value.Length).IsEqualTo(5000);
         }
     }
@@ -215,7 +215,7 @@ public class DataPageAccessExtendedTests : IDisposable
         _engine.UpdateDocumentInternal("update_rewrite", updatedDoc);
         
         var doc = col.FindById(1);
-        await Assert.That(doc).IsNotNull();
+        await Assert.That(doc!).IsNotNull();
         await Assert.That(((BsonInt32)doc!["value"]).Value).IsEqualTo(200);
         await Assert.That(doc.ContainsKey("extra")).IsTrue();
     }
@@ -232,7 +232,7 @@ public class DataPageAccessExtendedTests : IDisposable
         col.Insert(new BsonDocument().Set("_id", 1));
         
         var doc = col.FindById(1);
-        await Assert.That(doc).IsNotNull();
+        await Assert.That(doc!).IsNotNull();
         await Assert.That(((BsonInt32)doc!["_id"]).Value).IsEqualTo(1);
     }
 
@@ -314,7 +314,7 @@ public class DataPageAccessExtendedTests : IDisposable
                 await Assert.That(count).IsEqualTo(10);
                 
                 var doc5 = col.FindById(5);
-                await Assert.That(doc5).IsNotNull();
+                await Assert.That(doc5!).IsNotNull();
                 await Assert.That(((BsonString)doc5!["name"]).Value).IsEqualTo("doc_5");
             }
         }
@@ -354,7 +354,7 @@ public class DataPageAccessBoundaryTests : IDisposable
         col.Insert(new BsonDocument().Set("_id", 1));
         
         var notFound = col.FindById(9999);
-        await Assert.That(notFound).IsNull();
+        await Assert.That(notFound == null).IsTrue();
     }
 
     [Test]
@@ -427,6 +427,6 @@ public class DataPageAccessBoundaryTests : IDisposable
         await Assert.That(deleted).IsEqualTo(1); // Delete returns int (1 = success)
         
         var doc3 = col.FindById(1);
-        await Assert.That(doc3).IsNull();
+        await Assert.That(doc3 == null).IsTrue();
     }
 }

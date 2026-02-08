@@ -200,6 +200,30 @@ public class IdGenerationFullTests
     }
 
     [Test]
+    public async Task AutoIdGenerator_IntId_Overflow_ShouldReturnFalse()
+    {
+        var entity = new OverflowIntIdEntity { MyId = 0 };
+        var prop = typeof(OverflowIntIdEntity).GetProperty(nameof(OverflowIntIdEntity.MyId))!;
+        var key = $"{entity.GetType().Name}_{prop.Name}_int";
+
+        var sequencesField = typeof(IdentitySequences).GetField("_sequences", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(sequencesField).IsNotNull();
+
+        var sequences = (System.Collections.Concurrent.ConcurrentDictionary<string, long>)sequencesField!.GetValue(null)!;
+        sequences[key] = int.MaxValue;
+
+        try
+        {
+            var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
+            await Assert.That(result).IsFalse();
+        }
+        finally
+        {
+            IdentitySequences.Reset(key);
+        }
+    }
+
+    [Test]
     public async Task AutoIdGenerator_LongId_EmptyValue_ShouldGenerate()
     {
         // Don't use ResetAll() as it affects parallel tests
@@ -293,8 +317,19 @@ public class IdGenerationFullTests
     [Test]
     public async Task AutoIdGenerator_UnsupportedType_ShouldReturnFalse()
     {
-        var entity = new DecimalIdEntity { Id = 0m };
+        var entity = new DecimalIdEntity { Id = null };
         var prop = typeof(DecimalIdEntity).GetProperty(nameof(DecimalIdEntity.Id))!;
+
+        var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task AutoIdGenerator_UnknownIdTypeWithNonEmptyValue_ShouldReturnFalse()
+    {
+        var entity = new ObjectIdAsObjectEntity { Id = new object() };
+        var prop = typeof(ObjectIdAsObjectEntity).GetProperty(nameof(ObjectIdAsObjectEntity.Id))!;
 
         var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
 
@@ -332,7 +367,17 @@ public class IdGenerationFullTests
 
     private class DecimalIdEntity
     {
-        public decimal Id { get; set; }
+        public decimal? Id { get; set; }
+    }
+
+    private class ObjectIdAsObjectEntity
+    {
+        public object? Id { get; set; }
+    }
+
+    private class OverflowIntIdEntity
+    {
+        public int MyId { get; set; }
     }
 
     #endregion

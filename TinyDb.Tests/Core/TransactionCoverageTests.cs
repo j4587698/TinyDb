@@ -1,5 +1,6 @@
 using TinyDb.Core;
 using TinyDb.Bson;
+using System.Reflection;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -43,6 +44,12 @@ public class TransactionCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task Transaction_Ctor_WithNullManager_ShouldThrow()
+    {
+        await Assert.That(() => new Transaction(null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
     public async Task Rollback_InvalidState_ShouldThrow()
     {
         using var engine = CreateTestEngine();
@@ -51,6 +58,20 @@ public class TransactionCoverageTests : IDisposable
         trans.Commit(); // State becomes Committed
         
         await Assert.That(() => trans.Rollback()).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Rollback_WhenStateIsFailed_ShouldResetAndRollback()
+    {
+        using var engine = CreateTestEngine();
+        using var trans = engine.BeginTransaction();
+
+        var t = (Transaction)trans;
+        t.State = TransactionState.Failed;
+
+        trans.Rollback();
+
+        await Assert.That(trans.State).IsEqualTo(TransactionState.RolledBack);
     }
 
     [Test]
@@ -130,6 +151,21 @@ public class TransactionCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task Dispose_UntrackedTransaction_ShouldSwallowRollbackErrors()
+    {
+        using var engine = CreateTestEngine();
+
+        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", BindingFlags.Instance | BindingFlags.NonPublic);
+        await Assert.That(managerField).IsNotNull();
+
+        var manager = (TransactionManager)managerField!.GetValue(engine)!;
+        var untracked = new Transaction(manager);
+
+        await Assert.That(() => untracked.Dispose()).ThrowsNothing();
+        await Assert.That(() => untracked.Commit()).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
     public async Task ToString_ShouldReturnCorrectFormat()
     {
         using var engine = CreateTestEngine();
@@ -166,6 +202,19 @@ public class TransactionCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task GetStatistics_WhenNoOperations_ShouldReportReadOnly()
+    {
+        using var engine = CreateTestEngine();
+        using var trans = engine.BeginTransaction();
+
+        var t = (Transaction)trans;
+        var stats = t.GetStatistics();
+
+        await Assert.That(stats.IsReadOnly).IsTrue();
+        await Assert.That(stats.ToString()).Contains("read-only");
+    }
+
+    [Test]
     public async Task RecordDropIndex_ShouldAttemptToGetIndexInfo()
     {
         using var engine = CreateTestEngine();
@@ -189,5 +238,21 @@ public class TransactionCoverageTests : IDisposable
         await Assert.That(op.IndexFields).IsNotNull();
         await Assert.That(op.IndexFields!.Length).IsEqualTo(1);
         await Assert.That(op.IndexFields![0]).IsEqualTo("name");
+    }
+
+    [Test]
+    public async Task RecordDropIndex_WhenIndexLookupThrows_ShouldStillRecordOperation()
+    {
+        using var engine = CreateTestEngine();
+        engine.GetCollection<BsonDocument>("users");
+
+        using var trans = engine.BeginTransaction();
+        var t = (Transaction)trans;
+
+        t.RecordDropIndex("users", null!);
+
+        var op = t.Operations.LastOrDefault(o => o.OperationType == TransactionOperationType.DropIndex);
+        await Assert.That(op).IsNotNull();
+        await Assert.That(op!.IndexName).IsNull();
     }
 }

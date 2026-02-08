@@ -4,7 +4,6 @@ using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
-using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -41,7 +40,6 @@ public class QueryOptimizerEdgeCaseTests
     #region Primary Key in AND Expression Tests
 
     [Test]
-    [SkipInAot("ObjectId constructor expression requires Lambda.Compile() which is not available in AOT")]
     public async Task CreateExecutionPlan_IdOnLeftSideOfAnd_ShouldUsePrimaryKeyLookup()
     {
         // Arrange: x => x.Id == 123 && x.Name == "Test"
@@ -57,7 +55,6 @@ public class QueryOptimizerEdgeCaseTests
     }
 
     [Test]
-    [SkipInAot("ObjectId constructor expression requires Lambda.Compile() which is not available in AOT")]
     public async Task CreateExecutionPlan_IdOnRightSideOfAnd_ShouldUsePrimaryKeyLookup()
     {
         // Arrange: x => x.Name == "Test" && x.Id == 123
@@ -70,7 +67,6 @@ public class QueryOptimizerEdgeCaseTests
     }
 
     [Test]
-    [SkipInAot("ObjectId constructor expression requires Lambda.Compile() which is not available in AOT")]
     public async Task CreateExecutionPlan_NestedAndWithId_ShouldUsePrimaryKeyLookup()
     {
         // Arrange: x => (x.Age > 20 && x.Id == 123) && x.Name == "Test"

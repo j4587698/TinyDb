@@ -111,9 +111,6 @@ public class LargeDocumentStorage
             // 我们在 DataPageHeaderSize (8) 处开始写入。
             var dataBytes = dataPage.ReadBytes(DataPageHeaderSize, dataToRead);
 
-            if (dataBytes.Length != dataToRead)
-                throw new InvalidOperationException($"Insufficient data in page {currentPageId}");
-
             Buffer.BlockCopy(dataBytes, 0, result, offset, dataToRead);
             offset += dataToRead;
 

@@ -103,10 +103,21 @@ public class BsonValueCoverageTests
     public async Task BsonMaxKey_Coverage()
     {
         var m1 = BsonMaxKey.Value;
+        await Assert.That(m1.RawValue).IsNull();
+
+        await Assert.That(m1.CompareTo(null)).IsEqualTo(1);
+        await Assert.That(m1.CompareTo(BsonMaxKey.Value)).IsEqualTo(0);
         await Assert.That(m1.CompareTo(BsonNull.Value)).IsGreaterThan(0);
+
+        await Assert.That(m1.Equals(BsonMaxKey.Value)).IsTrue();
+        await Assert.That(m1.Equals(BsonNull.Value)).IsFalse();
+
+        await Assert.That(m1.GetTypeCode()).IsEqualTo(TypeCode.Object);
         await Assert.That(m1.ToString(null)).IsEqualTo("$maxKey");
+        await Assert.That(m1.ToString()).IsEqualTo("$maxKey");
         await Assert.That(m1.ToBoolean(null)).IsTrue();
         await Assert.That(m1.ToInt32(null)).IsEqualTo(int.MaxValue);
+        await Assert.That(() => m1.ToType(typeof(object), null)).Throws<InvalidCastException>();
     }
 
     [Test]
@@ -115,16 +126,37 @@ public class BsonValueCoverageTests
         var m1 = BsonMinKey.Value;
         await Assert.That(m1.CompareTo(BsonNull.Value)).IsLessThan(0);
         await Assert.That(m1.ToString(null)).IsEqualTo("$minKey");
+        await Assert.That(m1.ToString()).IsEqualTo("$minKey");
+        await Assert.That(m1.RawValue).IsNull();
         await Assert.That(m1.ToBoolean(null)).IsFalse();
+
+        await Assert.That(m1.CompareTo(null)).IsEqualTo(1);
+        await Assert.That(m1.Equals(BsonMinKey.Value)).IsTrue();
+        await Assert.That(m1.Equals(new BsonInt32(0))).IsFalse();
     }
 
     [Test]
     public async Task BsonTimestamp_Coverage()
     {
-        var t1 = new BsonTimestamp(100);
-        await Assert.That(t1.Value).IsEqualTo(100u);
+        var t1 = new BsonTimestamp(100L);
+        await Assert.That(t1.Value).IsEqualTo(100L);
+        await Assert.That(t1.RawValue).IsEqualTo(100L);
+        await Assert.That(t1.GetTypeCode()).IsEqualTo(TypeCode.Object);
+
         await Assert.That(t1.CompareTo(new BsonTimestamp(200))).IsLessThan(0);
+        await Assert.That(t1.CompareTo(null)).IsEqualTo(1);
+        await Assert.That(t1.CompareTo(new BsonInt32(1))).IsEqualTo(BsonType.Timestamp.CompareTo(BsonType.Int32));
+
         await Assert.That(t1.ToString()).IsNotNull();
+        await Assert.That(t1.ToString(null)).IsEqualTo(t1.ToString());
+
+        await Assert.That(t1.ToType(typeof(long), null)).IsEqualTo(100L);
+        await Assert.That(t1.ToType(typeof(BsonTimestamp), null)).IsEqualTo(t1);
+        await Assert.That(t1.ToType(typeof(object), null)).IsEqualTo(t1);
+        await Assert.That(t1.ToType(typeof(string), null)).IsEqualTo(t1.ToString());
+        await Assert.That((decimal)t1.ToType(typeof(decimal), null)).IsEqualTo(100m);
+
+        await Assert.That(() => new BsonTimestamp(0, -1)).Throws<ArgumentOutOfRangeException>();
     }
 
     [Test]

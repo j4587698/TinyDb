@@ -217,4 +217,32 @@ public class PageHeaderTests
             await Assert.That(header.Version == (uint)(i / 10)).IsTrue();
         }
     }
+
+    [Test]
+    public async Task CalculateChecksum_With_Null_Or_ShortData_Should_Return_Zero()
+    {
+        var header = new PageHeader();
+
+        await Assert.That(header.CalculateChecksum(null!)).IsEqualTo(0u);
+        await Assert.That(header.CalculateChecksum(new byte[PageHeader.Size - 1])).IsEqualTo(0u);
+    }
+
+    [Test]
+    public async Task WriteTo_With_ShortDestination_Should_Throw()
+    {
+        var header = new PageHeader { PageID = 1, PageType = PageType.Data };
+
+        await Assert.That(() => header.WriteTo(new byte[PageHeader.Size - 1]))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task FromByteArray_With_Null_Or_ShortData_Should_Throw()
+    {
+        await Assert.That(() => PageHeader.FromByteArray(null!))
+            .Throws<ArgumentException>();
+
+        await Assert.That(() => PageHeader.FromByteArray(new byte[PageHeader.Size - 1]))
+            .Throws<ArgumentException>();
+    }
 }

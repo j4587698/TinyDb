@@ -3,26 +3,41 @@ using System.Threading.Tasks;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TinyDb.Core;
+using TinyDb.Attributes;
 
 namespace TinyDb.Tests;
 
 /// <summary>
 /// 集合创建功能测试
 /// </summary>
-public class TestCollectionCreation : IDisposable
+public class TestCollectionCreation
 {
-    private string _testDbPath = string.Empty;
+    private static void Cleanup(string testDbPath)
+    {
+        if (System.IO.File.Exists(testDbPath))
+        {
+            System.IO.File.Delete(testDbPath);
+        }
+
+        var walPath = testDbPath.Replace(".db", "-wal.db");
+        if (System.IO.File.Exists(walPath))
+        {
+            System.IO.File.Delete(walPath);
+        }
+    }
 
     [Test]
     public async Task CreateCollectionAsync_ShouldCreateCollectionSuccessfully()
     {
         // Arrange
-        _testDbPath = $"test_collection_creation_{Guid.NewGuid():N}.db";
-        using var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions
+        var testDbPath = $"test_collection_creation_{Guid.NewGuid():N}.db";
+        try
         {
-            EnableJournaling = false,
-            ReadOnly = false
-        });
+            using var engine = new TinyDbEngine(testDbPath, new TinyDbOptions
+            {
+                EnableJournaling = false,
+                ReadOnly = false
+            });
 
         // Act - 直接测试引擎级别的集合创建
         var collection = engine.GetCollection<TestDocument>("TestCollection");
@@ -47,19 +62,26 @@ public class TestCollectionCreation : IDisposable
         await Assert.That(count).IsEqualTo(1);
 
         // 清理测试数据
-        collection.Delete(id);
+            collection.Delete(id);
+        }
+        finally
+        {
+            Cleanup(testDbPath);
+        }
     }
 
     [Test]
     public async Task CreateCollectionAsync_ShouldCreateMultipleCollections()
     {
         // Arrange
-        _testDbPath = $"test_multiple_collections_{Guid.NewGuid():N}.db";
-        using var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions
+        var testDbPath = $"test_multiple_collections_{Guid.NewGuid():N}.db";
+        try
         {
-            EnableJournaling = false,
-            ReadOnly = false
-        });
+            using var engine = new TinyDbEngine(testDbPath, new TinyDbOptions
+            {
+                EnableJournaling = false,
+                ReadOnly = false
+            });
 
         // Act
         var collection1 = engine.GetCollection<TestDocument>("Collection1");
@@ -87,20 +109,27 @@ public class TestCollectionCreation : IDisposable
         // 清理测试数据
         collection1.Delete(id1);
         collection2.Delete(id2);
-        collection3.Delete(id3);
+            collection3.Delete(id3);
+        }
+        finally
+        {
+            Cleanup(testDbPath);
+        }
     }
 
     [Test]
     public async Task CreateCollectionAsync_ShouldAllowDocumentInsertionAfterCreation()
     {
         // Arrange
-        _testDbPath = $"test_document_insertion_{Guid.NewGuid():N}.db";
-        using var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions
+        var testDbPath = $"test_document_insertion_{Guid.NewGuid():N}.db";
+        try
         {
-            EnableJournaling = false,
-            ReadOnly = false
-        });
-        var collectionName = "DocumentTestCollection";
+            using var engine = new TinyDbEngine(testDbPath, new TinyDbOptions
+            {
+                EnableJournaling = false,
+                ReadOnly = false
+            });
+            var collectionName = "DocumentTestCollection";
 
         // Act
         var collection = engine.GetCollection<TestDocument>(collectionName);
@@ -122,22 +151,11 @@ public class TestCollectionCreation : IDisposable
         await Assert.That(retrievedDoc!.Name).IsEqualTo("Test Document");
 
         // 清理测试数据
-        collection.Delete(documentId);
-    }
-
-    public void Dispose()
-    {
-        // 清理测试文件
-        if (System.IO.File.Exists(_testDbPath))
-        {
-            System.IO.File.Delete(_testDbPath);
+            collection.Delete(documentId);
         }
-
-        // 清理可能的WAL文件
-        var walPath = _testDbPath.Replace(".db", "-wal.db");
-        if (System.IO.File.Exists(walPath))
+        finally
         {
-            System.IO.File.Delete(walPath);
+            Cleanup(testDbPath);
         }
     }
 }
@@ -145,6 +163,7 @@ public class TestCollectionCreation : IDisposable
 /// <summary>
 /// 测试文档类
 /// </summary>
+[Entity]
 public class TestDocument
 {
     public string? Name { get; set; }

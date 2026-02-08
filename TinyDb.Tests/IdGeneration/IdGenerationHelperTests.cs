@@ -27,6 +27,12 @@ public class IdGenerationHelperTests
         [IdGeneration(IdGenerationStrategy.GuidV4)]
         public Guid Id { get; set; }
     }
+
+    public class EntityWithGuidV7
+    {
+        [IdGeneration(IdGenerationStrategy.GuidV7)]
+        public Guid Id { get; set; }
+    }
     
     public class EntityWithStringGuid
     {
@@ -45,6 +51,17 @@ public class IdGenerationHelperTests
         [IdGeneration(IdGenerationStrategy.None)]
         public int Id { get; set; }
     }
+
+    public class EntityWithIntIdNoGenerator
+    {
+        public int Id { get; set; }
+    }
+
+    public class EntityWithDecimalId
+    {
+        [IdGeneration(IdGenerationStrategy.IdentityInt)]
+        public decimal Id { get; set; }
+    }
     
     public class EntityNoId
     {
@@ -57,6 +74,10 @@ public class IdGenerationHelperTests
         // Int
         await Assert.That(IdGenerationHelper<EntityWithIntAutoId>.ShouldGenerateId(new EntityWithIntAutoId { Id = 0 })).IsTrue();
         await Assert.That(IdGenerationHelper<EntityWithIntAutoId>.ShouldGenerateId(new EntityWithIntAutoId { Id = 1 })).IsFalse();
+
+        // Long
+        await Assert.That(IdGenerationHelper<EntityWithLongAutoId>.ShouldGenerateId(new EntityWithLongAutoId { Id = 0L })).IsTrue();
+        await Assert.That(IdGenerationHelper<EntityWithLongAutoId>.ShouldGenerateId(new EntityWithLongAutoId { Id = 1L })).IsFalse();
         
         // Guid
         await Assert.That(IdGenerationHelper<EntityWithGuidV4>.ShouldGenerateId(new EntityWithGuidV4 { Id = Guid.Empty })).IsTrue();
@@ -76,9 +97,17 @@ public class IdGenerationHelperTests
         
         // No ID property
         await Assert.That(IdGenerationHelper<EntityNoId>.ShouldGenerateId(new EntityNoId())).IsFalse();
+
+        // ID property without generator attribute
+        await Assert.That(IdGenerationHelper<EntityWithIntIdNoGenerator>.ShouldGenerateId(new EntityWithIntIdNoGenerator { Id = 0 }))
+            .IsFalse();
         
         // Strategy None
         await Assert.That(IdGenerationHelper<EntityWithNone>.ShouldGenerateId(new EntityWithNone { Id = 0 })).IsFalse();
+
+        // Non-empty value not handled by IsEmptyValue switch
+        await Assert.That(IdGenerationHelper<EntityWithDecimalId>.ShouldGenerateId(new EntityWithDecimalId { Id = 1m }))
+            .IsFalse();
     }
     
     [Test]
@@ -89,6 +118,12 @@ public class IdGenerationHelperTests
         var res1 = IdGenerationHelper<EntityWithGuidV4>.GenerateIdForEntity(eGuid);
         await Assert.That(res1).IsTrue();
         await Assert.That(eGuid.Id).IsNotEqualTo(Guid.Empty);
+
+        // Guid V7 (string generator + Guid target type conversion)
+        var eGuidV7 = new EntityWithGuidV7();
+        var resV7 = IdGenerationHelper<EntityWithGuidV7>.GenerateIdForEntity(eGuidV7);
+        await Assert.That(resV7).IsTrue();
+        await Assert.That(eGuidV7.Id).IsNotEqualTo(Guid.Empty);
         
         // String Guid
         var eStr = new EntityWithStringGuid();
@@ -101,7 +136,13 @@ public class IdGenerationHelperTests
         var res3 = IdGenerationHelper<EntityWithObjectId>.GenerateIdForEntity(eObj);
         await Assert.That(res3).IsTrue();
         await Assert.That(eObj.Id).IsNotEqualTo(ObjectId.Empty);
-        
+
+        // Identity long
+        var eLong = new EntityWithLongAutoId();
+        var resLong = IdGenerationHelper<EntityWithLongAutoId>.GenerateIdForEntity(eLong);
+        await Assert.That(resLong).IsTrue();
+        await Assert.That(eLong.Id).IsNotEqualTo(0L);
+         
         // None
         var eNone = new EntityWithNone();
         var res4 = IdGenerationHelper<EntityWithNone>.GenerateIdForEntity(eNone);
@@ -124,7 +165,11 @@ public class IdGenerationHelperTests
             
         await Assert.That(IdGenerationHelper<EntityWithGuidV4>.GetIdGenerationStrategy())
             .IsEqualTo(IdGenerationStrategy.GuidV4);
-            
+
+        // ID property exists but has no [IdGeneration] attribute
+        await Assert.That(IdGenerationHelper<EntityWithIntIdNoGenerator>.GetIdGenerationStrategy())
+            .IsEqualTo(IdGenerationStrategy.None);
+             
         await Assert.That(IdGenerationHelper<EntityNoId>.GetIdGenerationStrategy())
             .IsEqualTo(IdGenerationStrategy.None);
     }

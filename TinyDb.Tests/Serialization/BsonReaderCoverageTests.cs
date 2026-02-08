@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Collections.Generic;
 using TinyDb.Bson;
 using TinyDb.Serialization;
@@ -90,7 +91,7 @@ public class BsonReaderCoverageTests
         
         // Binary
         var bin = (BsonBinary)reader.ReadValue(BsonType.Binary);
-        await Assert.That(bin.Bytes).IsEquivalentTo(new byte[] { 1, 2, 3 });
+        await Assert.That(bin.Bytes.SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
         
         // JSWithScope
         var jsScope = (BsonJavaScriptWithScope)reader.ReadValue(BsonType.JavaScriptWithScope);

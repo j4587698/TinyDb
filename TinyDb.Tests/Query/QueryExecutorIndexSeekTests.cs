@@ -3,6 +3,8 @@ using TinyDb.Collections;
 using TinyDb.Core;
 using TinyDb.Index;
 using TinyDb.Query;
+using TinyDb.Attributes;
+using System.Linq.Expressions;
 
 namespace TinyDb.Tests.Query;
 
@@ -295,8 +297,118 @@ public class QueryExecutorIndexSeekTests : IDisposable
 
     #endregion
 
+    #region ExecuteIndexSeek Branch Tests
+
+    [Test]
+    public async Task ExecuteIndexSeek_UseIndexNull_ShouldFallbackToFullScan()
+    {
+        Expression<Func<User, bool>> expr = u => u.Email == "alice@test.com";
+        var plan = new QueryExecutionPlan
+        {
+            CollectionName = _users.CollectionName,
+            Strategy = QueryExecutionStrategy.IndexSeek,
+            OriginalExpression = expr
+        };
+
+        var results = ExecuteIndexSeekDirect(plan).ToList();
+
+        await Assert.That(results.Count).IsEqualTo(1);
+        await Assert.That(results[0].Name).IsEqualTo("Alice");
+    }
+
+    [Test]
+    public async Task ExecuteIndexSeek_IndexNotFound_ShouldFallbackToFullScan()
+    {
+        Expression<Func<User, bool>> expr = u => u.Email == "bob@test.com";
+        var plan = new QueryExecutionPlan
+        {
+            CollectionName = _users.CollectionName,
+            Strategy = QueryExecutionStrategy.IndexSeek,
+            OriginalExpression = expr,
+            UseIndex = new IndexStatistics
+            {
+                Name = "missing_idx",
+                Fields = new[] { "Email" },
+                IsUnique = true
+            },
+            IndexScanKeys = new List<IndexScanKey>
+            {
+                new() { FieldName = "Email", Value = new BsonString("bob@test.com"), ComparisonType = ComparisonType.Equal }
+            }
+        };
+
+        var results = ExecuteIndexSeekDirect(plan).ToList();
+
+        await Assert.That(results.Count).IsEqualTo(1);
+        await Assert.That(results[0].Name).IsEqualTo("Bob");
+    }
+
+    [Test]
+    public async Task ExecuteIndexSeek_ExactKeyNull_ShouldFallbackToFullScan()
+    {
+        Expression<Func<User, bool>> expr = u => u.Email == "alice@test.com";
+        var emailIndex = GetIndexStats("idx_email");
+
+        var plan = new QueryExecutionPlan
+        {
+            CollectionName = _users.CollectionName,
+            Strategy = QueryExecutionStrategy.IndexSeek,
+            OriginalExpression = expr,
+            UseIndex = emailIndex,
+            IndexScanKeys = new List<IndexScanKey>
+            {
+                new() { FieldName = "Email", Value = new BsonString("alice@test.com"), ComparisonType = ComparisonType.GreaterThan }
+            }
+        };
+
+        var results = ExecuteIndexSeekDirect(plan).ToList();
+
+        await Assert.That(results.Count).IsEqualTo(1);
+        await Assert.That(results[0].Name).IsEqualTo("Alice");
+    }
+
+    [Test]
+    public async Task ExecuteIndexSeek_NonUniqueIndex_ShouldUseFind()
+    {
+        Expression<Func<User, bool>> expr = u => u.Category == "User";
+        var categoryIndex = GetIndexStats("idx_category");
+
+        var plan = new QueryExecutionPlan
+        {
+            CollectionName = _users.CollectionName,
+            Strategy = QueryExecutionStrategy.IndexSeek,
+            OriginalExpression = expr,
+            UseIndex = categoryIndex,
+            IndexScanKeys = new List<IndexScanKey>
+            {
+                new() { FieldName = "Category", Value = new BsonString("User"), ComparisonType = ComparisonType.Equal }
+            }
+        };
+
+        var results = ExecuteIndexSeekDirect(plan).ToList();
+
+        await Assert.That(results.Count).IsEqualTo(2);
+    }
+
+    private IEnumerable<User> ExecuteIndexSeekDirect(QueryExecutionPlan plan)
+    {
+        var executor = new QueryExecutor(_engine);
+        return executor.ExecuteIndexSeekForTests<User>(plan);
+    }
+
+    private IndexStatistics GetIndexStats(string name)
+    {
+        var indexManager = _engine.GetIndexManager(_users.CollectionName);
+        var stats = indexManager.GetAllStatistics().FirstOrDefault(s => s.Name == name);
+        if (stats == null) throw new InvalidOperationException($"Index {name} not found.");
+        return stats;
+    }
+
+    #endregion
+
     #region Test Entity
 
+    [Entity]
     public class User
     {
         public int Id { get; set; }

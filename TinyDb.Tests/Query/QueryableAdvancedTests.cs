@@ -5,6 +5,7 @@ using TinyDb.Core;
 using TinyDb.Bson;
 using TinyDb.Collections;
 using TinyDb.Tests.Utils;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -31,12 +32,11 @@ public class QueryableAdvancedTests : IDisposable
     }
 
     [Test]
-    [SkipInAot("GroupBy requires dynamic code generation")]
     public async Task GroupBy_Should_Group_By_Category()
     {
         var groups = _products.Query()
             .GroupBy(p => p.Category)
-            .Select(g => new { Category = g.Key, Count = g.Count(), TotalPrice = g.Sum(p => p.Price) })
+            .Select(g => new CategoryGroupSummary { Category = g.Key == null ? "" : g.Key.ToString(), Count = g.Count(), TotalPrice = g.Sum(p => p.Price) })
             .OrderBy(x => x.Category)
             .ToList();
 
@@ -134,6 +134,7 @@ public class QueryableAdvancedTests : IDisposable
         }
     }
 
+    [Entity]
     public class Product
     {
         public ObjectId Id { get; set; }
@@ -147,5 +148,12 @@ public class QueryableAdvancedTests : IDisposable
     {
         public string DisplayName { get; set; } = "";
         public decimal Cost { get; set; }
+    }
+
+    public class CategoryGroupSummary
+    {
+        public string Category { get; set; } = "";
+        public int Count { get; set; }
+        public decimal TotalPrice { get; set; }
     }
 }

@@ -54,6 +54,21 @@ public class PageManagerAdvancedTests
     }
 
     [Test]
+    public async Task PageManager_SavePageAsync_ForceFlush_ShouldMarkClean()
+    {
+        using var pm = new PageManager(_diskStream, 8192, 100);
+
+        var page = await pm.GetPageAsync(1);
+        page.WriteData(0, new byte[] { 9, 9, 9 });
+
+        await Assert.That(page.IsDirty).IsTrue();
+
+        await pm.SavePageAsync(page, true);
+
+        await Assert.That(page.IsDirty).IsFalse();
+    }
+
+    [Test]
     public async Task PageManager_Statistics_ShouldWork()
     {
         using var pm = new PageManager(_diskStream, 8192, 100);
@@ -63,6 +78,17 @@ public class PageManagerAdvancedTests
         var stats = pm.GetStatistics();
         await Assert.That(stats.CachedPages).IsEqualTo(2);
         await Assert.That(stats.ToString()).Contains("2/100 cached");
+    }
+
+    [Test]
+    public async Task PageManager_GetPageAsync_WhenCached_ShouldHitCachePath()
+    {
+        using var pm = new PageManager(_diskStream, 8192, 100);
+
+        var page1 = await pm.GetPageAsync(1);
+        var page2 = await pm.GetPageAsync(1);
+
+        await Assert.That(ReferenceEquals(page1, page2)).IsTrue();
     }
 
     [Test]

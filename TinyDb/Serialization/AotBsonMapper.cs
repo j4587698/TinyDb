@@ -77,11 +77,19 @@ public static class AotBsonMapper
         return MetadataCache.GetOrAdd(type, BuildMetadata);
     }
 
+    internal static PropertyInfo? GetIdPropertyForTests(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type type)
+        => GetMetadata(type).IdProperty;
+
+    internal static IReadOnlyDictionary<string, PropertyInfo> GetPropertyMapForTests(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type type)
+        => GetMetadata(type).PropertyMap;
+
     private static ReflectionMetadata BuildMetadata([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] Type type)
     {
         var properties = type
             .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .Where(property => property.CanRead && property.GetMethod is { IsStatic: false })
+            .Where(property => property.CanRead)
             .Where(property => property.GetIndexParameters().Length == 0)
             .Where(property => property.GetCustomAttribute<BsonIgnoreAttribute>() == null)
             .ToArray();
@@ -91,7 +99,6 @@ public static class AotBsonMapper
 
         var fields = type
             .GetFields(BindingFlags.Instance | BindingFlags.Public)
-            .Where(field => !field.IsSpecialName && !field.IsLiteral)
             .ToArray();
         var camelCaseFieldMap = fields.ToDictionary(field => ToCamelCase(field.Name), StringComparer.Ordinal);
 
@@ -345,10 +352,7 @@ public static class AotBsonMapper
     private static BsonDocument FallbackToDocumentInternal([DynamicallyAccessedMembers(EntityMemberRequirements)] Type entityType, object entity)
     {
         var metadata = GetMetadata(entityType);
-        // 获取 DbRef 属性信息
-        var refProperties = References.DbRefSerializer.GetRefProperties(entityType);
-        var refPropertyNames = new HashSet<string>(refProperties.Select(r => r.Property.Name), StringComparer.OrdinalIgnoreCase);
-        
+
         // Optimize: Use Dictionary to collect elements first to avoid creating multiple BsonDocument instances via chaining Set()
         var elements = new Dictionary<string, BsonValue>(metadata.Properties.Count + metadata.Fields.Count + 1);
 
@@ -369,20 +373,9 @@ public static class AotBsonMapper
             }
 
             var value = property.GetValue(entity);
-            
-            // 检查是否是 DbRef 属性
-            var refInfo = refProperties.FirstOrDefault(r => r.Property.Name == property.Name);
-            if (refInfo.Property != null)
-            {
-                // 序列化为 DbRef 格式
-                var bsonValue = References.DbRefSerializer.SerializeToDbRef(value, refInfo.Attribute.CollectionName);
-                elements[ToCamelCase(property.Name)] = bsonValue;
-            }
-            else
-            {
-                var bsonValue = ConvertToBsonValue(value);
-                elements[ToCamelCase(property.Name)] = bsonValue;
-            }
+
+            var bsonValue = ConvertToBsonValue(value);
+            elements[ToCamelCase(property.Name)] = bsonValue;
         }
 
         foreach (var field in metadata.Fields)
@@ -402,11 +395,11 @@ public static class AotBsonMapper
 
         if (entityType.IsValueType)
         {
-            var boxed = Activator.CreateInstance(entityType) ?? throw new InvalidOperationException($"Failed to create instance of {entityType.FullName}");
+            var boxed = Activator.CreateInstance(entityType)!;
             return PopulateEntityMembers(entityType, boxed, document, isStruct: true);
         }
 
-        var entity = Activator.CreateInstance(entityType) ?? throw new InvalidOperationException($"Failed to create instance of {entityType.FullName}");
+        var entity = Activator.CreateInstance(entityType)!;
         PopulateEntityMembers(entityType, entity, document, isStruct: false);
         return entity;
     }
@@ -696,8 +689,7 @@ public static class AotBsonMapper
             throw new NotSupportedException($"AOT 回退模式仅支持字符串键的字典，但实际键类型为 {keyType.FullName}。");
         }
 
-        var dictionaryInstance = Activator.CreateInstance(concreteType)
-            ?? throw new InvalidOperationException($"无法创建字典类型 {concreteType.FullName} 的实例。");
+        var dictionaryInstance = Activator.CreateInstance(concreteType)!;
 
         var addMethod = concreteType
             .GetMethods(BindingFlags.Public | BindingFlags.Instance)
@@ -725,8 +717,7 @@ public static class AotBsonMapper
 
         if (collectionType.IsArray)
         {
-            var arrayElementType = GetArrayElementType(collectionType)
-                ?? throw new NotSupportedException($"无法确定数组类型 {collectionType.FullName} 的元素类型。");
+            var arrayElementType = GetArrayElementType(collectionType)!;
 
             var arrayInstance = Array.CreateInstance(arrayElementType, array.Count);
             for (int i = 0; i < array.Count; i++)
@@ -825,8 +816,7 @@ public static class AotBsonMapper
     {
         if (collectionType.IsArray)
         {
-            return GetArrayElementType(collectionType)
-                   ?? throw new NotSupportedException($"无法确定数组类型 {collectionType.FullName} 的元素类型。");
+            return GetArrayElementType(collectionType)!;
         }
 
         if (collectionType.IsGenericType && collectionType.GetGenericArguments().Length == 1)
@@ -867,18 +857,6 @@ public static class AotBsonMapper
         if (matchingCtor != null)
         {
             return matchingCtor.Invoke(new[] { sourceCollection });
-        }
-
-        var enumerableCtor = targetType.GetConstructors(BindingFlags.Public | BindingFlags.Instance)
-            .FirstOrDefault(ctor =>
-            {
-                var parameters = ctor.GetParameters();
-                return parameters.Length == 1 && typeof(IEnumerable).IsAssignableFrom(GetParameterType(parameters[0]));
-            });
-
-        if (enumerableCtor != null)
-        {
-            return enumerableCtor.Invoke(new[] { sourceCollection });
         }
 
         return null;

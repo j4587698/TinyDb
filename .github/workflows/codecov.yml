@@ -1,0 +1,46 @@
+name: Coverage (Codecov)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore "TinyDb.sln"
+
+      - name: Run tests with coverage (non-AOT, net9.0)
+        run: |
+          dotnet run --project "TinyDb.Tests/TinyDb.Tests.csproj" --configuration Release --framework net9.0 -- \
+            --no-progress \
+            --config-file "TinyDb.Tests/testconfig.json" \
+            --coverage \
+            --coverage-output-format cobertura \
+            --coverage-output "coverage.cobertura.xml" \
+            --results-directory "TinyDb.Tests/TestResults/codecov"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: "TinyDb.Tests/TestResults/codecov/coverage.cobertura.xml"
+          flags: "non-aot"
+          name: "non-aot-cobertura"
+          fail_ci_if_error: true

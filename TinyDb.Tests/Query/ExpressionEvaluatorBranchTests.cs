@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Query;
@@ -8,6 +9,7 @@ using TUnit.Assertions.Extensions;
 using BinaryExpression = TinyDb.Query.BinaryExpression;
 using ConstantExpression = TinyDb.Query.ConstantExpression;
 using FunctionExpression = TinyDb.Query.FunctionExpression;
+using MemberExpression = TinyDb.Query.MemberExpression;
 
 namespace TinyDb.Tests.Query;
 
@@ -28,10 +30,10 @@ public class ExpressionEvaluatorBranchTests
         // Or Reflection? Reflection is better to target Compare directly.
         var method = typeof(ExpressionEvaluator).GetMethod("Compare", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         
-        await Assert.That((int)method!.Invoke(null, new object[] { null, null })!).IsEqualTo(0);
-        await Assert.That((int)method.Invoke(null, new object[] { BsonNull.Value, null })!).IsEqualTo(0);
-        await Assert.That((int)method.Invoke(null, new object[] { null, 1 })!).IsEqualTo(-1);
-        await Assert.That((int)method.Invoke(null, new object[] { 1, null })!).IsEqualTo(1);
+        await Assert.That((int)method!.Invoke(null, new object?[] { null, null })!).IsEqualTo(0);
+        await Assert.That((int)method.Invoke(null, new object?[] { BsonNull.Value, null })!).IsEqualTo(0);
+        await Assert.That((int)method.Invoke(null, new object?[] { null, 1 })!).IsEqualTo(-1);
+        await Assert.That((int)method.Invoke(null, new object?[] { 1, null })!).IsEqualTo(1);
     }
 
     [Test]
@@ -111,7 +113,10 @@ public class ExpressionEvaluatorBranchTests
         // Check return type via reflection or careful assertion?
         // We can check if it equals double 3.0? Compare handles types.
         // Let's call EvaluateMathOp directly to check return type.
-        var method = typeof(ExpressionEvaluator).GetMethod("EvaluateMathOp", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var method = typeof(ExpressionEvaluator).GetMethod(
+            "EvaluateMathOp",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static
+        ) ?? throw new InvalidOperationException("EvaluateMathOp not found.");
         
         // Funcs
         Func<double, double, double> addD = (a, b) => a + b;
@@ -162,5 +167,167 @@ public class ExpressionEvaluatorBranchTests
         );
         
         await Assert.That(ExpressionEvaluator.Evaluate(orExpr, doc)).IsTrue();
+    }
+
+    [Test]
+    public async Task Evaluate_Binary_SubtractAndDivide_ShouldWork()
+    {
+        var entity = new object();
+
+        var subtract = new BinaryExpression(ExpressionType.Subtract, new ConstantExpression(10), new ConstantExpression(3));
+        await Assert.That(ExpressionEvaluator.EvaluateValue(subtract, entity)).IsEqualTo(7);
+
+        var subtractDecimal = new BinaryExpression(ExpressionType.Subtract, new ConstantExpression(10m), new ConstantExpression(3m));
+        await Assert.That(ExpressionEvaluator.EvaluateValue(subtractDecimal, entity)).IsEqualTo(7m);
+
+        var divide = new BinaryExpression(ExpressionType.Divide, new ConstantExpression(10), new ConstantExpression(4));
+        await Assert.That(ExpressionEvaluator.EvaluateValue(divide, entity)).IsEqualTo(2.5);
+
+        var divideDecimal = new BinaryExpression(ExpressionType.Divide, new ConstantExpression(10m), new ConstantExpression(4m));
+        await Assert.That(ExpressionEvaluator.EvaluateValue(divideDecimal, entity)).IsEqualTo(2.5m);
+    }
+
+    [Test]
+    public async Task Evaluate_Logic_NonBooleanOperands_ShouldReturnFalseWhenRightIsNotBool()
+    {
+        var doc = new BsonDocument();
+
+        var andRightNotBool = new BinaryExpression(
+            ExpressionType.AndAlso,
+            new ConstantExpression(true),
+            new ConstantExpression(123)
+        );
+        await Assert.That(ExpressionEvaluator.Evaluate(andRightNotBool, doc)).IsFalse();
+
+        var orRightNotBool = new BinaryExpression(
+            ExpressionType.OrElse,
+            new ConstantExpression(false),
+            new ConstantExpression(123)
+        );
+        await Assert.That(ExpressionEvaluator.Evaluate(orRightNotBool, doc)).IsFalse();
+    }
+
+    [Test]
+    public async Task Evaluate_Function_Math_CeilingFloorRound_TwoArgs_ShouldWork()
+    {
+        var entity = new object();
+
+        var ceil = new FunctionExpression("Ceiling", null, new[] { new ConstantExpression(1.2) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(ceil, entity)).IsEqualTo(2.0);
+
+        var floor = new FunctionExpression("Floor", null, new[] { new ConstantExpression(1.8) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(floor, entity)).IsEqualTo(1.0);
+
+        var ceilDecimal = new FunctionExpression("Ceiling", null, new[] { new ConstantExpression(1.2m) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(ceilDecimal, entity)).IsEqualTo(2m);
+
+        var floorDecimal = new FunctionExpression("Floor", null, new[] { new ConstantExpression(1.8m) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(floorDecimal, entity)).IsEqualTo(1m);
+
+        var round2 = new FunctionExpression("Round", null, new[] { new ConstantExpression(1.2345), new ConstantExpression(2) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(round2, entity)).IsEqualTo(1.23);
+
+        var round2Decimal = new FunctionExpression("Round", null, new[] { new ConstantExpression(1.2345m), new ConstantExpression(2) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(round2Decimal, entity)).IsEqualTo(1.23m);
+    }
+
+    [Test]
+    public async Task Evaluate_Function_String_InvalidArgs_ShouldReturnExpectedResults()
+    {
+        var entity = new object();
+
+        var containsWrongType = new FunctionExpression("Contains", new ConstantExpression("abc"), new[] { new ConstantExpression(123) });
+        await Assert.That(ExpressionEvaluator.Evaluate(containsWrongType, new BsonDocument())).IsFalse();
+
+        var containsWrongArity = new FunctionExpression("Contains", new ConstantExpression("abc"), new[] { new ConstantExpression("a"), new ConstantExpression("b") });
+        await Assert.That(ExpressionEvaluator.Evaluate(containsWrongArity, new BsonDocument())).IsFalse();
+
+        var replaceWrongType = new FunctionExpression("Replace", new ConstantExpression("abc"), new[] { new ConstantExpression(1), new ConstantExpression(2) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(replaceWrongType, entity)).IsEqualTo("abc");
+
+        var substringWrongArity = new FunctionExpression("Substring", new ConstantExpression("abcdef"), Array.Empty<QueryExpression>());
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(substringWrongArity, entity)).ThrowsExactly<ArgumentException>();
+
+        var unsupportedStringFunc = new FunctionExpression("NoSuchStringFunction", new ConstantExpression("abc"), Array.Empty<QueryExpression>());
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(unsupportedStringFunc, entity)).ThrowsExactly<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task Evaluate_Function_Enumerable_ShiftTarget_ShouldWork()
+    {
+        var entity = new object();
+
+        var countShift = new FunctionExpression("Count", null, new[] { new ConstantExpression(new[] { 1, 2, 3 }) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(countShift, entity)).IsEqualTo(3);
+
+        var containsShift = new FunctionExpression("Contains", null, new[] { new ConstantExpression(new[] { 1, 2, 3 }), new ConstantExpression(2) });
+        await Assert.That(ExpressionEvaluator.Evaluate(containsShift, new BsonDocument())).IsTrue();
+
+        var bsonArray = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2) });
+        var containsBsonArray = new FunctionExpression("Contains", null, new[] { new ConstantExpression(bsonArray), new ConstantExpression(2) });
+        await Assert.That(ExpressionEvaluator.Evaluate(containsBsonArray, new BsonDocument())).IsTrue();
+
+        var nonCollectionEnumerable = Enumerable.Range(0, 5).Where(x => x < 3);
+        var countNonCollection = new FunctionExpression("Count", new ConstantExpression(nonCollectionEnumerable), Array.Empty<QueryExpression>());
+        await Assert.That(ExpressionEvaluator.EvaluateValue(countNonCollection, entity)).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task Evaluate_MemberAccess_DateTimeProperties_ShouldWork()
+    {
+        var entity = new object();
+        var dt = new DateTime(2024, 1, 2, 3, 4, 5);
+
+        var expected = new (string Name, object Value)[]
+        {
+            ("Year", 2024),
+            ("Month", 1),
+            ("Day", 2),
+            ("Hour", 3),
+            ("Minute", 4),
+            ("Second", 5),
+            ("Date", dt.Date),
+            ("DayOfWeek", (int)dt.DayOfWeek)
+        };
+
+        foreach (var (name, value) in expected)
+        {
+            var expr = new MemberExpression(name, new ConstantExpression(dt));
+            await Assert.That(ExpressionEvaluator.EvaluateValue(expr, entity)).IsEqualTo(value);
+        }
+
+        var unknown = new MemberExpression("UnknownProperty", new ConstantExpression(dt));
+        await Assert.That(ExpressionEvaluator.EvaluateValue(unknown, entity)).IsNull();
+    }
+
+    [Test]
+    public async Task Evaluate_Function_DateTimeFunctions_ShouldWork()
+    {
+        var entity = new object();
+        var dt = new DateTime(2024, 1, 2, 3, 4, 5);
+
+        var addDays = new FunctionExpression("AddDays", new ConstantExpression(dt), new[] { new ConstantExpression(1) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(addDays, entity)).IsEqualTo(dt.AddDays(1));
+
+        var addHours = new FunctionExpression("AddHours", new ConstantExpression(dt), new[] { new ConstantExpression(1) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(addHours, entity)).IsEqualTo(dt.AddHours(1));
+
+        var addMinutes = new FunctionExpression("AddMinutes", new ConstantExpression(dt), new[] { new ConstantExpression(1) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(addMinutes, entity)).IsEqualTo(dt.AddMinutes(1));
+
+        var addSeconds = new FunctionExpression("AddSeconds", new ConstantExpression(dt), new[] { new ConstantExpression(1) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(addSeconds, entity)).IsEqualTo(dt.AddSeconds(1));
+
+        var addYears = new FunctionExpression("AddYears", new ConstantExpression(dt), new[] { new ConstantExpression(1) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(addYears, entity)).IsEqualTo(dt.AddYears(1));
+
+        var addMonths = new FunctionExpression("AddMonths", new ConstantExpression(dt), new[] { new ConstantExpression(1) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(addMonths, entity)).IsEqualTo(dt.AddMonths(1));
+
+        var dtToString = new FunctionExpression("ToString", new ConstantExpression(dt), Array.Empty<QueryExpression>());
+        await Assert.That(ExpressionEvaluator.EvaluateValue(dtToString, entity)).IsEqualTo(dt.ToString());
+
+        var unsupported = new FunctionExpression("NoSuchDateTimeFunction", new ConstantExpression(dt), Array.Empty<QueryExpression>());
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(unsupported, entity)).ThrowsExactly<NotSupportedException>();
     }
 }

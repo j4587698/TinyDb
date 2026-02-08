@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using TinyDb.Query;
 using TinyDb.Core;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -26,6 +27,7 @@ public class QueryExecutorFallbackTests : IDisposable
         if (File.Exists(_dbPath)) File.Delete(_dbPath);
     }
 
+    [Entity]
     public class TestEntity
     {
         public int Id { get; set; }

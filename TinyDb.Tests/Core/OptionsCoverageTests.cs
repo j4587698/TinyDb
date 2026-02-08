@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TinyDb.Core;
@@ -145,11 +146,11 @@ public class OptionsCoverageTests
         await Assert.That(cloned.ReadOnly).IsEqualTo(original.ReadOnly);
         await Assert.That(cloned.StrictMode).IsEqualTo(original.StrictMode);
         await Assert.That(cloned.DatabaseName).IsEqualTo(original.DatabaseName);
-        await Assert.That(cloned.UserData).IsEquivalentTo(original.UserData);
+        await Assert.That(cloned.UserData.SequenceEqual(original.UserData)).IsTrue();
         await Assert.That(cloned.UserData).IsNotSameReferenceAs(original.UserData); // Deep copy check
         await Assert.That(cloned.EnableCompression).IsEqualTo(original.EnableCompression);
         await Assert.That(cloned.EnableEncryption).IsEqualTo(original.EnableEncryption);
-        await Assert.That(cloned.EncryptionKey).IsEquivalentTo(original.EncryptionKey);
+        await Assert.That(cloned.EncryptionKey.SequenceEqual(original.EncryptionKey)).IsTrue();
         await Assert.That(cloned.Password).IsEqualTo(original.Password);
         await Assert.That(cloned.MaxTransactionSize).IsEqualTo(original.MaxTransactionSize);
         await Assert.That(cloned.MaxTransactions).IsEqualTo(original.MaxTransactions);

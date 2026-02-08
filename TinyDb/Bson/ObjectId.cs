@@ -358,7 +358,6 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         {
             var underlyingType = Nullable.GetUnderlyingType(conversionType);
             if (underlyingType == typeof(ObjectId)) return this;
-            if (underlyingType == typeof(string)) return ToString();
             if (underlyingType == typeof(DateTime)) return Timestamp;
         }
 

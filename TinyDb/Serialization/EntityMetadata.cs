@@ -15,7 +15,7 @@ internal static class EntityMetadata<[DynamicallyAccessedMembers(DynamicallyAcce
     private static readonly Lazy<PropertyInfo[]> _properties = new(() =>
         typeof(T)
             .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .Where(property => property.CanRead && property.GetMethod is { IsStatic: false })
+            .Where(property => property.CanRead)
             .Where(property => property.GetCustomAttribute<BsonIgnoreAttribute>() == null)
             .ToArray());
 

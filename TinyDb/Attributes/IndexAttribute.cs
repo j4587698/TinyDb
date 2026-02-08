@@ -163,8 +163,8 @@ public sealed class CompositeIndexAttribute : Attribute
     /// <param name="fields">索引字段列表</param>
     public CompositeIndexAttribute(params string[] fields)
     {
-        Name = $"idx_{string.Join("_", fields)}";
         Fields = fields ?? throw new ArgumentNullException(nameof(fields));
+        Name = $"idx_{string.Join("_", Fields)}";
         Unique = false;
     }
 

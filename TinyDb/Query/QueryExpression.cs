@@ -158,3 +158,21 @@ public sealed class MemberInitQueryExpression : QueryExpression
         Bindings = bindings?.ToList() ?? new List<(string, QueryExpression)>();
     }
 }
+
+/// <summary>
+/// ä¸‰å…ƒè¡¨è¾¾å¼ (condition ? ifTrue : ifFalse)
+/// </summary>
+public sealed class ConditionalQueryExpression : QueryExpression
+{
+    public override ExpressionType NodeType => ExpressionType.Conditional;
+    public QueryExpression Test { get; }
+    public QueryExpression IfTrue { get; }
+    public QueryExpression IfFalse { get; }
+
+    public ConditionalQueryExpression(QueryExpression test, QueryExpression ifTrue, QueryExpression ifFalse)
+    {
+        Test = test;
+        IfTrue = ifTrue;
+        IfFalse = ifFalse;
+    }
+}

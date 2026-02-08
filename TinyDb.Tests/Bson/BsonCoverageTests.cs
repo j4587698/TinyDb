@@ -160,65 +160,52 @@ public class BsonCoverageTests
     }
 
     [Test]
-    [SkipInAot("Uses reflection to instantiate internal type BsonDocumentValue")]
     public async Task BsonDocumentValue_Coverage()
     {
         var doc = new BsonDocument().Set("a", 1);
-        // Using reflection to instantiate internal type BsonDocumentValue
-        var type = typeof(BsonDocument).Assembly.GetType("TinyDb.Bson.BsonDocumentValue");
-        if (type != null)
-        {
-            var instance = Activator.CreateInstance(type, doc) as BsonValue;
-            await Assert.That(instance).IsNotNull();
-            await Assert.That(instance!.BsonType).IsEqualTo(BsonType.Document);
-            await Assert.That(instance.IsDocument).IsTrue();
-            await Assert.That(ReferenceEquals(instance.RawValue, doc)).IsTrue();
-            
-            // Test wrapper methods
-            await Assert.That(instance.ToString()).IsEqualTo(doc.ToString());
-            await Assert.That(instance.GetHashCode()).IsEqualTo(doc.GetHashCode());
-            
-            var instance2 = Activator.CreateInstance(type, doc) as BsonValue;
-            await Assert.That(instance.Equals(instance2)).IsTrue();
-        }
+        // Direct access via InternalsVisibleTo
+        BsonValue instance = new BsonDocumentValue(doc);
+        await Assert.That(instance).IsNotNull();
+        await Assert.That(instance.BsonType).IsEqualTo(BsonType.Document);
+        await Assert.That(instance.IsDocument).IsTrue();
+        await Assert.That(ReferenceEquals(instance.RawValue, doc)).IsTrue();
+        
+        // Test wrapper methods
+        await Assert.That(instance.ToString()).IsEqualTo(doc.ToString());
+        await Assert.That(instance.GetHashCode()).IsEqualTo(doc.GetHashCode());
+        
+        BsonValue instance2 = new BsonDocumentValue(doc);
+        await Assert.That(instance.Equals(instance2)).IsTrue();
     }
     
     [Test]
-    [SkipInAot("Uses reflection to instantiate internal type BsonArrayValue")]
     public async Task BsonArrayValue_Coverage()
     {
         var arr = new BsonArray().AddValue(1);
-        var type = typeof(BsonArray).Assembly.GetType("TinyDb.Bson.BsonArrayValue");
-        if (type != null)
-        {
-            var instance = Activator.CreateInstance(type, arr) as BsonValue;
-            await Assert.That(instance).IsNotNull();
-            await Assert.That(instance!.BsonType).IsEqualTo(BsonType.Array);
-            await Assert.That(instance.IsArray).IsTrue();
-            await Assert.That(ReferenceEquals(instance.RawValue, arr)).IsTrue();
-            
-            await Assert.That(instance.ToString()).IsEqualTo(arr.ToString());
-            await Assert.That(instance.GetHashCode()).IsEqualTo(arr.GetHashCode());
-            
-            var instance2 = Activator.CreateInstance(type, arr) as BsonValue;
-            await Assert.That(instance.Equals(instance2)).IsTrue();
-        }
+        // Direct access via InternalsVisibleTo
+        BsonValue instance = new BsonArrayValue(arr);
+        await Assert.That(instance).IsNotNull();
+        await Assert.That(instance.BsonType).IsEqualTo(BsonType.Array);
+        await Assert.That(instance.IsArray).IsTrue();
+        await Assert.That(ReferenceEquals(instance.RawValue, arr)).IsTrue();
+        
+        await Assert.That(instance.ToString()).IsEqualTo(arr.ToString());
+        await Assert.That(instance.GetHashCode()).IsEqualTo(arr.GetHashCode());
+        
+        BsonValue instance2 = new BsonArrayValue(arr);
+        await Assert.That(instance.Equals(instance2)).IsTrue();
     }
 
     [Test]
-    [SkipInAot("Uses reflection to instantiate internal type BsonDocumentValue")]
     public async Task BsonDocumentValue_IConvertible_Coverage()
     {
         var doc = new BsonDocument().Set("a", 1);
-        var type = typeof(BsonDocument).Assembly.GetType("TinyDb.Bson.BsonDocumentValue");
-        if (type != null)
-        {
-            var instance = Activator.CreateInstance(type, doc) as BsonValue;
-            // Test ToBoolean
-            await Assert.That(instance.ToBoolean(null)).IsTrue();
-            // Test ToInt32
-            await Assert.That(instance.ToInt32(null)).IsEqualTo(1);
-        }
+        // Direct access via InternalsVisibleTo
+        BsonValue instance = new BsonDocumentValue(doc);
+        // Test ToBoolean
+        await Assert.That(instance.ToBoolean(null)).IsTrue();
+        // Test ToInt32
+        await Assert.That(instance.ToInt32(null)).IsEqualTo(1);
     }
 
     [Test]
