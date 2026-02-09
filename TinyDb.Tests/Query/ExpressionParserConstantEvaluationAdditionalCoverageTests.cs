@@ -1,6 +1,7 @@
 using System;
 using System.Linq.Expressions;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using QueryBinaryExpression = TinyDb.Query.BinaryExpression;
@@ -222,7 +223,7 @@ public class ExpressionParserConstantEvaluationAdditionalCoverageTests
     [Test]
     public async Task ParseExpression_StaticMember_WhenEvaluationFails_ShouldThrowNotSupported()
     {
-        var member = Expression.Property(null, typeof(ThrowingStatics), nameof(ThrowingStatics.Boom));
+        var member = Expression.Property(null, ExpressionMemberInfo.Property(() => ThrowingStatics.Boom));
         var parser = new ExpressionParser();
 
         await Assert.That(() => parser.ParseExpression(member))

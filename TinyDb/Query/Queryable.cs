@@ -61,6 +61,31 @@ public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMem
     }
 }
 
+internal sealed class UntypedQueryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource> : IOrderedQueryable
+    where TSource : class, new()
+{
+    private readonly Type _elementType;
+
+    public UntypedQueryable(IQueryProvider provider, LinqExp.Expression expression, Type elementType)
+    {
+        Provider = provider ?? throw new ArgumentNullException(nameof(provider));
+        Expression = expression ?? throw new ArgumentNullException(nameof(expression));
+        _elementType = elementType ?? throw new ArgumentNullException(nameof(elementType));
+    }
+
+    public Type ElementType => _elementType;
+
+    public LinqExp.Expression Expression { get; }
+
+    public IQueryProvider Provider { get; }
+
+    public IEnumerator GetEnumerator()
+    {
+        var result = Provider.Execute(Expression);
+        return (result as IEnumerable ?? Enumerable.Empty<object>()).GetEnumerator();
+    }
+}
+
 internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource, TData> : IQueryProvider
     where TSource : class, new()
 {
@@ -69,29 +94,22 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
 
     public QueryProvider(QueryExecutor executor, string collectionName)
     {
-        _executor = executor;
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        if (string.IsNullOrWhiteSpace(collectionName)) throw new ArgumentNullException(nameof(collectionName));
+
         _collectionName = collectionName;
     }
 
-    [UnconditionalSuppressMessage("Trimming", "IL2055", Justification = "MakeGenericType guarded by DynamicallyAccessedMembers on TypeSystem or usage pattern.")]
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "MakeGenericType for Queryable<> might fail in AOT if not preserved, but standard usage preserves it.")]
     public IQueryable CreateQuery(LinqExp.Expression expression)
     {
-        var elementType = TypeSystem.GetElementType(expression.Type);
-        try
+        var elementType = expression.Type switch
         {
-            // Construct Queryable<TSource, NewElement>
-            var queryableType = typeof(Queryable<,>).MakeGenericType(typeof(TSource), elementType);
-            return (IQueryable)Activator.CreateInstance(
-                queryableType,
-                new object[] { _executor, _collectionName, expression }
-            )!;
-        }
-        catch (TargetInvocationException tie)
-        {
-            System.Diagnostics.Debug.Assert(tie.InnerException is not null);
-            throw tie.InnerException!;
-        }
+            var t when t.IsGenericType => t.GetGenericArguments()[0],
+            var t when t.IsArray => t.GetElementType() ?? typeof(object),
+            _ => typeof(object)
+        };
+
+        return new UntypedQueryable<TSource>(this, expression, elementType);
     }
 
     public IQueryable<TElement> CreateQuery<TElement>(LinqExp.Expression expression)
@@ -106,7 +124,15 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
 
     public TResult Execute<TResult>(LinqExp.Expression expression)
     {
-        return (TResult)QueryPipeline.Execute<TSource>(_executor, _collectionName, expression)!;
+        var result = QueryPipeline.Execute<TSource>(_executor, _collectionName, expression);
+
+        if (typeof(TResult) == typeof(IEnumerable<TData>))
+        {
+            var enumerable = result as IEnumerable;
+            return (TResult)(object)(enumerable == null ? Enumerable.Empty<TData>() : enumerable.Cast<TData>());
+        }
+
+        return (TResult)result!;
     }
 }
 
@@ -200,16 +226,31 @@ internal static class QueryPipeline
             else if (methodName == "Skip")
             {
                 if (m.Arguments[1] is LinqExp.ConstantExpression s)
-                    source = ExecuteSkip(source, (int)s.Value!);
+                {
+                    var count = (int)s.Value!;
+                    if (isTyped && currentType == typeof(TSource))
+                        source = ExecuteSkipGeneric<TSource>((IEnumerable<TSource>)source, count);
+                    else
+                        source = ExecuteSkip(source, count);
+                }
             }
             else if (methodName == "Take")
             {
                 if (m.Arguments[1] is LinqExp.ConstantExpression t)
-                    source = ExecuteTake(source, (int)t.Value!);
+                {
+                    var count = (int)t.Value!;
+                    if (isTyped && currentType == typeof(TSource))
+                        source = ExecuteTakeGeneric<TSource>((IEnumerable<TSource>)source, count);
+                    else
+                        source = ExecuteTake(source, count);
+                }
             }
             else if (methodName == "Distinct")
             {
-                source = ExecuteDistinct(source);
+                if (isTyped && currentType == typeof(TSource))
+                    source = ExecuteDistinctGeneric<TSource>((IEnumerable<TSource>)source);
+                else
+                    source = ExecuteDistinct(source);
             }
             else if (methodName == "OrderBy" || methodName == "OrderByDescending" || methodName == "ThenBy" || methodName == "ThenByDescending")
             {
@@ -246,7 +287,7 @@ internal static class QueryPipeline
             throw new NotSupportedException("GroupBy result enumeration requires dynamic code generation. Use Select after GroupBy for AOT compatibility.");
         }
 
-        return CreateTypedEnumerable(source, currentType);
+        return source;
     }
 
     internal static object? ExecuteAotForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
@@ -254,6 +295,19 @@ internal static class QueryPipeline
     {
         return ExecuteAot(expression, queryResult, extractedPredicate);
     }
+
+    internal static IEnumerable<T> ExecuteWhereGenericForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
+        where T : class, new()
+    {
+        return ExecuteWhereGeneric(source, m);
+    }
+
+    internal static IEnumerable ExecuteWhereLambdaForTests(IEnumerable source, LinqExp.LambdaExpression lambda)
+    {
+        return ExecuteWhereLambda(source, lambda);
+    }
+
+    internal static bool IsTerminalForTests(string name) => IsTerminal(name);
 
     // ... IsTerminal, ExecuteTerminal ...
 
@@ -296,6 +350,21 @@ internal static class QueryPipeline
         }
         
         return source.OrderBy(keySelector, comparer);
+    }
+
+    private static IEnumerable<T> ExecuteSkipGeneric<T>(IEnumerable<T> source, int count)
+    {
+        return source.Skip(count);
+    }
+
+    private static IEnumerable<T> ExecuteTakeGeneric<T>(IEnumerable<T> source, int count)
+    {
+        return source.Take(count);
+    }
+
+    private static IEnumerable<T> ExecuteDistinctGeneric<T>(IEnumerable<T> source)
+    {
+        return source.Distinct();
     }
 
     // ... existing ExecuteWhere, ExecuteOrderBy (non-generic), ExecuteSelect, etc. ...
@@ -620,19 +689,6 @@ internal static class QueryPipeline
         private static bool IsNumeric(object x) => x is int || x is long || x is double || x is float || x is decimal || x is short || x is byte;
     }
 
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "Creating generic List for known types.")]
-    private static object CreateTypedEnumerable(IEnumerable source, Type targetType)
-    {
-        // Try to create List<T> dynamically
-        var listType = typeof(List<>).MakeGenericType(targetType);
-        var list = (IList)Activator.CreateInstance(listType)!;
-        
-        foreach (var item in source)
-        {
-            list.Add(item);
-        }
-        return list;
-    }
 }
 
 internal static class PredicateExtractor

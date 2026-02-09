@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- 排除误生成的中间产物目录，避免默认 Glob 将其作为源码参与编译 -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj-aotcheck*/**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>
+

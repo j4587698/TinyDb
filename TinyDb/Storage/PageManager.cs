@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using TinyDb.Utils;
 
 namespace TinyDb.Storage;
@@ -334,16 +335,25 @@ public sealed class PageManager : IDisposable
             page.UpdateChecksum();
 
             var pageOffset = CalculatePageOffset(page.PageID);
-            byte[] pageData;
             try
             {
-                pageData = page.FullData.ToArray();
+                var memory = page.Memory;
+                if (MemoryMarshal.TryGetArray(memory, out var segment) &&
+                    segment.Array != null &&
+                    segment.Offset == 0 &&
+                    segment.Count == memory.Length)
+                {
+                    _diskStream.WritePage(pageOffset, segment.Array);
+                }
+                else
+                {
+                    _diskStream.WritePage(pageOffset, page.FullData.ToArray());
+                }
             }
             catch (ObjectDisposedException)
             {
                 return;
             }
-            _diskStream.WritePage(pageOffset, pageData);
 
             if (forceFlush)
             {
@@ -361,39 +371,14 @@ public sealed class PageManager : IDisposable
     /// <param name="page">要保存的页面</param>
     /// <param name="forceFlush">是否强制刷新到磁盘</param>
     /// <param name="cancellationToken">取消令牌</param>
-    public async Task SavePageAsync(Page page, bool forceFlush = false, CancellationToken cancellationToken = default)
+    public Task SavePageAsync(Page page, bool forceFlush = false, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
+        cancellationToken.ThrowIfCancellationRequested();
 
-        byte[] pageData;
-        uint pageID;
-        lock (_allocationLock)
-        {
-            // 更新页面校验和
-            page.UpdateChecksum();
-
-            pageID = page.PageID;
-            try
-            {
-                pageData = page.FullData.ToArray();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-        }
-
-        var pageOffset = CalculatePageOffset(pageID);
-        await _diskStream.WritePageAsync(pageOffset, pageData, cancellationToken);
-
-        if (forceFlush)
-        {
-            await _diskStream.FlushAsync(cancellationToken);
-        }
-
-        // 标记页面为干净
-        page.MarkClean();
+        SavePage(page, forceFlush);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -441,15 +426,18 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
+        List<Page> dirtyPages;
         lock (_allocationLock)
         {
-            var dirtyPages = _pageCache.Values.Where(p => p.IsDirty).ToList();
-
-            foreach (var page in dirtyPages)
-            {
-                SavePage(page);
-            }
+            dirtyPages = _pageCache.Values.Where(p => p.IsDirty).ToList();
         }
+
+        foreach (var page in dirtyPages)
+        {
+            SavePage(page);
+        }
+
+        _diskStream.Flush();
     }
 
     /// <summary>
@@ -466,11 +454,13 @@ public sealed class PageManager : IDisposable
             dirtyPages = _pageCache.Values.Where(p => p.IsDirty).ToList();
         }
 
-        var saveTasks = dirtyPages.Select(page => SavePageAsync(page, false, cancellationToken));
-        await Task.WhenAll(saveTasks);
+        foreach (var page in dirtyPages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SavePage(page);
+        }
 
-        // 最后刷新磁盘流
-        await _diskStream.FlushAsync(cancellationToken);
+        await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

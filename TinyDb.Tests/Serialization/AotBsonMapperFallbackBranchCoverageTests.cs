@@ -13,7 +13,8 @@ namespace TinyDb.Tests.Serialization;
 
 public class AotBsonMapperFallbackBranchCoverageTests
 {
-    private sealed class MetadataEdgeEntity
+    [Entity]
+    internal sealed class MetadataEdgeEntity
     {
         public int Id { get; set; }
 
@@ -50,7 +51,8 @@ public class AotBsonMapperFallbackBranchCoverageTests
         };
     }
 
-    private sealed class EntityWithIdAttribute
+    [Entity]
+    internal sealed class EntityWithIdAttribute
     {
         [Id]
         public Guid Key { get; set; }
@@ -58,18 +60,21 @@ public class AotBsonMapperFallbackBranchCoverageTests
         public int Id { get; set; }
     }
 
-    private sealed class EntityWithoutId
+    [Entity]
+    internal sealed class EntityWithoutId
     {
         public string Name { get; set; } = "";
     }
 
-    private sealed class CircularNode
+    [Entity]
+    internal sealed class CircularNode
     {
         public int Id { get; set; }
         public CircularNode? Next { get; set; }
     }
 
-    private sealed class ForeignKeyEntity
+    [Entity]
+    internal sealed class ForeignKeyEntity
     {
         public int Id { get; set; }
 
@@ -79,7 +84,8 @@ public class AotBsonMapperFallbackBranchCoverageTests
         public string Name { get; set; } = "";
     }
 
-    private sealed class HashtableKeyEntity
+    [Entity]
+    internal sealed class HashtableKeyEntity
     {
         public Hashtable Table { get; set; } = new();
     }
@@ -168,10 +174,11 @@ public class AotBsonMapperFallbackBranchCoverageTests
     [Test]
     public async Task GetMetadata_ShouldHonor_EntityAttribute_IdProperty()
     {
-        var idProperty = AotBsonMapper.GetIdPropertyForTests(typeof(EntityWithSpecifiedIdProperty));
+        var entity = new EntityWithSpecifiedIdProperty { UserId = 123, Name = "n" };
+        var doc = AotBsonMapper.ToDocument(entity);
 
-        await Assert.That(idProperty).IsNotNull();
-        await Assert.That(idProperty!.Name).IsEqualTo(nameof(EntityWithSpecifiedIdProperty.UserId));
+        await Assert.That(doc.ContainsKey("_id")).IsTrue();
+        await Assert.That(doc["_id"].ToInt32(null)).IsEqualTo(123);
     }
 
     [Test]
@@ -183,7 +190,16 @@ public class AotBsonMapperFallbackBranchCoverageTests
         var doc = AotBsonMapper.ToDocument(entity);
 
         await Assert.That(doc.ContainsKey("_id")).IsTrue();
-        await Assert.That(doc["_id"].ToString()).IsEqualTo(key.ToString());
+
+        var idValue = doc["_id"];
+        var actualKey = idValue switch
+        {
+            BsonBinary bin => new Guid(bin.Bytes),
+            BsonString str => Guid.Parse(str.Value),
+            _ => throw new InvalidOperationException($"Unexpected _id BSON type: {idValue.GetType().Name}")
+        };
+
+        await Assert.That(actualKey).IsEqualTo(key);
         await Assert.That(doc.ContainsKey("key")).IsFalse();
         await Assert.That(doc["id"].ToInt32(null)).IsEqualTo(9);
     }
@@ -289,11 +305,11 @@ public class AotBsonMapperFallbackBranchCoverageTests
     {
         var arr = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2) });
         var wrapped = (ListWrappingCollection<int>)AotBsonMapper.ConvertValue(arr, typeof(ListWrappingCollection<int>))!;
+        var list = wrapped.ToList();
 
-        var result = wrapped.ToArray();
-        await Assert.That(result.Length).IsEqualTo(2);
-        await Assert.That(result[0]).IsEqualTo(1);
-        await Assert.That(result[1]).IsEqualTo(2);
+        await Assert.That(list.Count).IsEqualTo(2);
+        await Assert.That(list[0]).IsEqualTo(1);
+        await Assert.That(list[1]).IsEqualTo(2);
     }
 
     [Test]

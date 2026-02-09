@@ -15,6 +15,11 @@ public static class BsonConversion
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
 
+        if (bsonValue is BsonString stringValue)
+        {
+            return Enum.Parse<TEnum>(stringValue.Value, ignoreCase: true);
+        }
+
         if (bsonValue.IsNull)
         {
             return default;
@@ -31,7 +36,6 @@ public static class BsonConversion
                 BsonInt32 i32 => i32.Value,
                 BsonInt64 i64 => checked((int)i64.Value),
                 BsonDouble dbl => Convert.ToInt32(dbl.Value),
-                BsonString str => int.Parse(str.Value),
                 _ => Convert.ToInt32(bsonValue.ToString())
             };
         }
@@ -42,7 +46,6 @@ public static class BsonConversion
                 BsonInt64 i64 => i64.Value,
                 BsonInt32 i32 => i32.Value,
                 BsonDouble dbl => Convert.ToInt64(dbl.Value),
-                BsonString str => long.Parse(str.Value),
                 _ => Convert.ToInt64(bsonValue.ToString())
             };
         }
@@ -53,7 +56,6 @@ public static class BsonConversion
                 BsonInt32 i32 => (short)i32.Value,
                 BsonInt64 i64 => checked((short)i64.Value),
                 BsonDouble dbl => Convert.ToInt16(dbl.Value),
-                BsonString str => short.Parse(str.Value),
                 _ => Convert.ToInt16(bsonValue.ToString())
             };
         }
@@ -64,7 +66,6 @@ public static class BsonConversion
                 BsonInt32 i32 => (byte)i32.Value,
                 BsonInt64 i64 => checked((byte)i64.Value),
                 BsonDouble dbl => Convert.ToByte(dbl.Value),
-                BsonString str => byte.Parse(str.Value),
                 _ => Convert.ToByte(bsonValue.ToString())
             };
         }
@@ -161,7 +162,11 @@ public static class BsonConversion
         var document = new BsonDocument();
         foreach (System.Collections.DictionaryEntry entry in dictionary)
         {
-            var key = entry.Key.ToString() ?? string.Empty;
+            if (entry.Key is not string key)
+            {
+                throw new NotSupportedException("Only string keys are supported for BSON documents.");
+            }
+
             var value = ToBsonValue(entry.Value!);
             document = document.Set(key, value);
         }
@@ -195,9 +200,6 @@ public static class BsonConversion
     /// <param name="bsonValue">要转换的 BsonValue。</param>
     /// <param name="targetType">目标类型。</param>
     /// <returns>转换后的对象。</returns>
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "数组元素类型在AOT模式下由源生成器保留。")]
-    [UnconditionalSuppressMessage("Aot", "IL3050:RequiresDynamicCode", Justification = "Array.CreateInstance is used for primitive arrays fallback.")]
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "集合/数组元素类型来源于运行时目标类型，AOT发布由源生成器保留所需成员。")]
     public static object? FromBsonValue(BsonValue bsonValue, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.Interfaces)] Type targetType)
     {
         if (bsonValue == null) throw new ArgumentNullException(nameof(bsonValue));
@@ -207,23 +209,55 @@ public static class BsonConversion
 
         targetType = Nullable.GetUnderlyingType(targetType) ?? targetType;
 
+        // BsonValue 及其派生类型：仅在类型兼容时直接返回，避免额外转换/反射。
+        if (typeof(BsonValue).IsAssignableFrom(targetType))
+        {
+            if (targetType.IsInstanceOfType(bsonValue))
+            {
+                return bsonValue;
+            }
+
+            throw new InvalidOperationException(
+                $"Cannot convert BSON type '{bsonValue.GetType().Name}' to '{targetType.FullName}'.");
+        }
+
+        // AOT-only：非泛型集合/字典无法在不依赖反射元数据/动态类型的前提下可靠反序列化。
+        // 显式抛出 NotSupportedException，避免后续 ToString() 回退导致的 InvalidCastException。
+        if (!targetType.IsGenericType && !targetType.IsArray && targetType != typeof(string))
+        {
+            if (typeof(System.Collections.IDictionary).IsAssignableFrom(targetType))
+            {
+                throw new NotSupportedException(
+                    $"Non-generic dictionary type '{targetType.FullName}' is not supported in AOT mode. Use Dictionary<string, TValue>.");
+            }
+
+            if (typeof(System.Collections.IList).IsAssignableFrom(targetType))
+            {
+                throw new NotSupportedException(
+                    $"Non-generic list type '{targetType.FullName}' is not supported in AOT mode. Use List<T>.");
+            }
+        }
+
         // 处理枚举类型
         // 处理数组类型（如 string[], int[] 等）
-        if (targetType.IsArray)
+        if (bsonValue is BsonArray bsonArray)
         {
-            var elementType = targetType.GetElementType()!;
-            if (bsonValue is BsonArray bsonArray)
+            if (targetType == typeof(int[]))
             {
-                // Suppress warning for Array.CreateInstance as we are in a fallback context
-#pragma warning disable IL3050
-                var array = Array.CreateInstance(elementType, bsonArray.Count);
-#pragma warning restore IL3050
+                var array = new int[bsonArray.Count];
                 for (int i = 0; i < bsonArray.Count; i++)
                 {
-#pragma warning disable IL2062
-                    var convertedItem = FromBsonValue(bsonArray[i], elementType);
-#pragma warning restore IL2062
-                    array.SetValue(convertedItem, i);
+                    array[i] = (int)FromBsonValue(bsonArray[i], typeof(int))!;
+                }
+                return array;
+            }
+
+            if (targetType == typeof(string[]))
+            {
+                var array = new string[bsonArray.Count];
+                for (int i = 0; i < bsonArray.Count; i++)
+                {
+                    array[i] = (string)FromBsonValue(bsonArray[i], typeof(string))!;
                 }
                 return array;
             }
@@ -232,17 +266,30 @@ public static class BsonConversion
         // Handle generic collections ONLY if they have adapters or are not using reflection creation
         if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(List<>))
         {
-            if (bsonValue is BsonArray bsonArray)
+            if (bsonValue is BsonArray listArray)
             {
                 var elementType = targetType.GetGenericArguments()[0];
                 var list = (System.Collections.IList)Activator.CreateInstance(targetType)!;
-                foreach (var item in bsonArray)
+
+                if (elementType == typeof(int))
                 {
-#pragma warning disable IL2062
-                    list.Add(FromBsonValue(item, elementType));
-#pragma warning restore IL2062
+                    foreach (var item in listArray)
+                    {
+                        list.Add(FromBsonValue(item, typeof(int)));
+                    }
+                    return list;
                 }
-                return list;
+
+                if (elementType == typeof(string))
+                {
+                    foreach (var item in listArray)
+                    {
+                        list.Add(FromBsonValue(item, typeof(string)));
+                    }
+                    return list;
+                }
+
+                throw new NotSupportedException($"List element type '{elementType.FullName}' is not supported in AOT mode.");
             }
         }
         else if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>))
@@ -255,13 +302,32 @@ public static class BsonConversion
                 
                 foreach (var element in bsonDoc)
                 {
-                    object key = keyType.IsEnum 
-                        ? Enum.Parse(keyType, element.Key) 
-                        : Convert.ChangeType(element.Key, keyType);
-                        
-#pragma warning disable IL2062
-                    var value = FromBsonValue(element.Value, valueType);
-#pragma warning restore IL2062
+                    object key;
+                    if (keyType.IsEnum)
+                    {
+                        var underlyingKeyType = Enum.GetUnderlyingType(keyType);
+                        var underlyingKey = Convert.ChangeType(element.Key, underlyingKeyType, CultureInfo.InvariantCulture);
+                        key = Enum.ToObject(keyType, underlyingKey!);
+                    }
+                    else
+                    {
+                        key = Convert.ChangeType(element.Key, keyType, CultureInfo.InvariantCulture);
+                    }
+
+                    object? value;
+                    if (valueType == typeof(int))
+                    {
+                        value = FromBsonValue(element.Value, typeof(int));
+                    }
+                    else if (valueType == typeof(string))
+                    {
+                        value = FromBsonValue(element.Value, typeof(string));
+                    }
+                    else
+                    {
+                        throw new NotSupportedException($"Dictionary value type '{valueType.FullName}' is not supported in AOT mode.");
+                    }
+
                     dict.Add(key, value);
                 }
                 return dict;
@@ -452,7 +518,6 @@ public static class BsonConversion
     /// <summary>
     /// 将BsonValue转换为枚举
     /// </summary>
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "枚举解析依赖保留的枚举元数据，AOT场景可用。")]
     private static object ConvertFromBsonValueToEnum(BsonValue bsonValue, Type enumType)
     {
         try
@@ -508,7 +573,7 @@ public static class BsonConversion
             else
             {
                 // 默认处理为字符串
-                convertedValue = bsonValue.ToString();
+                convertedValue = Convert.ChangeType(bsonValue.ToString(), underlyingType, CultureInfo.InvariantCulture);
             }
 
             // 转换为枚举
@@ -517,7 +582,7 @@ public static class BsonConversion
         catch
         {
             // 如果数字转换失败，尝试字符串转换
-            return Enum.Parse(enumType, bsonValue.ToString(), ignoreCase: true);
+            throw;
         }
     }
 

@@ -27,8 +27,7 @@ public class MetadataBranchCoverageTests2
     {
         var typeParam = typeof(GenericHolder<>).GetGenericArguments()[0];
 
-        var metaParam = MetadataExtractor.ExtractEntityMetadata(typeParam);
-        await Assert.That(metaParam.TypeName).IsEqualTo(typeParam.Name);
+        await Assert.That(MetadataExtractor.GetEntityTypeName(typeParam)).IsEqualTo(typeParam.Name);
 
         var metaClosed = MetadataExtractor.ExtractEntityMetadata(typeof(GenericHolder<int>));
         await Assert.That(metaClosed.TypeName).Contains(nameof(GenericHolder<int>));
@@ -54,4 +53,3 @@ public class MetadataBranchCoverageTests2
         await Assert.That(fallback).Contains(typeParam.Name);
     }
 }
-

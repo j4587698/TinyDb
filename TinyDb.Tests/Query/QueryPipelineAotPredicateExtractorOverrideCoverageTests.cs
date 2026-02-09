@@ -6,6 +6,7 @@ using TinyDb.Collections;
 using TinyDb.Core;
 using TinyDb.Query;
 using TinyDb.Tests.TestEntities;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -86,14 +87,14 @@ public class QueryPipelineAotPredicateExtractorOverrideCoverageTests : IDisposab
         var items = new List<TestProduct>();
 
         // Force non-generic GroupBy path: Select makes the pipeline untyped.
-        var expr = items.AsQueryable()
+        var expr = TestQueryables.InMemory(items)
             .Select(p => p.Category)
             .GroupBy(c => c)
             .Select(g => g.Key)
             .Expression;
 
         var obj = QueryPipeline.ExecuteAotForTests<TestProduct>(expr, items, extractedPredicate: null);
-        var keys = (IEnumerable<string?>)obj!;
+        var keys = ((System.Collections.IEnumerable)obj!).Cast<string?>();
 
         await Assert.That(keys).IsEmpty();
     }

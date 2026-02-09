@@ -209,7 +209,17 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 var propertySymbol = semanticModel.GetDeclaredSymbol(property) as IPropertySymbol;
 
                 // 跳过私有属性
-                if (propertySymbol?.DeclaredAccessibility != Accessibility.Public)
+                if (propertySymbol == null)
+                {
+                    continue;
+                }
+
+                // AOT æºç”Ÿæˆæ˜¯ç¡¬ç¼–ç è®¿é—®ï¼Œä¸åšåå°„å›žé€€ï¼Œå› æ­¤ä»…å¤„ç†å¯ç›´æŽ¥è®¿é—®çš„å±žæ€§ã€‚
+                if (propertySymbol.DeclaredAccessibility != Accessibility.Public ||
+                    propertySymbol.IsStatic ||
+                    propertySymbol.IsIndexer ||
+                    propertySymbol.GetMethod == null ||
+                    propertySymbol.SetMethod == null)
                 {
                     continue;
                 }
@@ -338,6 +348,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             else if (member is FieldDeclarationSyntax field)
             {
                 // 跳过静态字段
+                if (field.Modifiers.Any(m => m.IsKind(SyntaxKind.ConstKeyword)))
+                {
+                    continue;
+                }
+
                 if (field.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
                 {
                     continue;
@@ -470,25 +485,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 idProperty.IsId = true;
             }
         }
-        else
-        {
-            // 2. 自动查找标准ID属性名称
-            var standardIdNames = new[] { "Id", "_id", "ID", "Id" };
-            foreach (var idName in standardIdNames)
-            {
-                var foundIdProperty = properties.FirstOrDefault(p => p.Name == idName);
-                if (foundIdProperty != null)
-                {
-                    foundIdProperty.IsId = true;
-                    idProperty = foundIdProperty;
-                    break;
-                }
-            }
-        }
-
-        // 3. 如果还是没有找到，检查是否有[Id]属性标记
         if (idProperty == null)
         {
+            // 2. 自动查找标准ID属性名称
             foreach (var member in classDeclaration.Members)
             {
                 if (member is PropertyDeclarationSyntax property)
@@ -509,8 +508,24 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     }
                 }
             }
+
+            if (idProperty == null)
+            {
+                var standardIdNames = new[] { "Id", "_id", "ID" };
+                foreach (var idName in standardIdNames)
+                {
+                    var foundIdProperty = properties.FirstOrDefault(p => p.Name == idName);
+                    if (foundIdProperty != null)
+                    {
+                        foundIdProperty.IsId = true;
+                        idProperty = foundIdProperty;
+                        break;
+                    }
+                }
+            }
         }
 
+        // 3. 如果还是没有找到，检查是否有[Id]属性标记
         // 收集依赖的非Entity复杂类型
         var (dependentComplexTypes, circularReferences) = CollectDependentComplexTypes(properties, typeSymbolMap);
         
@@ -1499,6 +1514,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     /// <summary>
     /// 分析属性类型，判断是否是复杂类型、集合类型等
     /// </summary>
+    private static readonly SymbolDisplayFormat FullyQualifiedNullableDisplayFormat =
+        SymbolDisplayFormat.FullyQualifiedFormat.WithMiscellaneousOptions(
+            SymbolDisplayFormat.FullyQualifiedFormat.MiscellaneousOptions |
+            SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
+
     private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol)
     {
         if (typeSymbol == null)
@@ -1523,7 +1543,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         if (typeSymbol is IArrayTypeSymbol arrayType)
         {
             var elementType = arrayType.ElementType;
-            var elementTypeName = elementType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
             var isElementComplex = IsComplexObjectType(elementType);
             var isElementValueType = elementType.IsValueType;
             return new TypeAnalysisResult(false, true, false, true, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
@@ -1535,8 +1555,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             var typeArgs = GetDictionaryTypeArguments(dictType);
             if (typeArgs != null)
             {
-                var keyTypeName = typeArgs.Value.KeyType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-                var valueTypeName = typeArgs.Value.ValueType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                var keyTypeName = typeArgs.Value.KeyType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+                var valueTypeName = typeArgs.Value.ValueType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isValueComplex = IsComplexObjectType(typeArgs.Value.ValueType);
                 var isValueValueType = typeArgs.Value.ValueType.IsValueType;
                 return new TypeAnalysisResult(false, false, true, false, null, false, false, keyTypeName, valueTypeName, isValueComplex, isValueValueType);
@@ -1549,7 +1569,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             var elementType = GetCollectionElementType(collectionType);
             if (elementType != null)
             {
-                var elementTypeName = elementType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isElementComplex = IsComplexObjectType(elementType);
                 var isElementValueType = elementType.IsValueType;
                 return new TypeAnalysisResult(false, true, false, false, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
@@ -1594,7 +1614,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 检查已知类型名称
         var typeName = typeSymbol.ToDisplayString();
-        return typeName switch
+        var isWellKnown = typeName switch
         {
             "System.Object" or "object" => true,
             "System.Guid" or "Guid" => true,
@@ -1606,6 +1626,27 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             _ when typeSymbol.TypeKind == TypeKind.Enum => true,
             _ => false
         };
+
+        if (isWellKnown)
+        {
+            return true;
+        }
+
+        return IsBsonValueType(typeSymbol);
+    }
+
+    private static bool IsBsonValueType(ITypeSymbol typeSymbol)
+    {
+        for (var current = typeSymbol as INamedTypeSymbol; current != null; current = current.BaseType)
+        {
+            var fullName = current.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            if (fullName is "global::TinyDb.Bson.BsonValue" or "TinyDb.Bson.BsonValue")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1828,7 +1869,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 排除集合和字典
         if (typeSymbol is INamedTypeSymbol namedType)
         {
-            if (IsDictionaryType(namedType) || IsCollectionType(namedType))
+            if (IsDictionaryType(namedType) || IsCollectionType(namedType) || ImplementsNonGenericEnumerableOrDictionary(namedType))
             {
                 return false;
             }
@@ -1836,6 +1877,26 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 类或结构体
         return typeSymbol.TypeKind == TypeKind.Class || typeSymbol.TypeKind == TypeKind.Struct;
+    }
+
+    private static bool ImplementsNonGenericEnumerableOrDictionary(INamedTypeSymbol typeSymbol)
+    {
+        var selfName = typeSymbol.ToDisplayString();
+        if (selfName is "System.Collections.IDictionary" or "System.Collections.IEnumerable")
+        {
+            return true;
+        }
+
+        foreach (var iface in typeSymbol.AllInterfaces)
+        {
+            var ifaceName = iface.ToDisplayString();
+            if (ifaceName is "System.Collections.IDictionary" or "System.Collections.IEnumerable")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1923,6 +1984,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 if (member is IPropertySymbol propertySymbol &&
                     propertySymbol.DeclaredAccessibility == Accessibility.Public &&
                     !propertySymbol.IsStatic &&
+                    !propertySymbol.IsIndexer &&
                     propertySymbol.GetMethod != null)
                 {
                     // 检查是否有BsonIgnore
@@ -2130,6 +2192,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             if (member is IPropertySymbol propertySymbol && 
                 propertySymbol.DeclaredAccessibility == Accessibility.Public &&
                 !propertySymbol.IsStatic &&
+                !propertySymbol.IsIndexer &&
                 propertySymbol.GetMethod != null &&
                 propertySymbol.SetMethod != null)
             {
@@ -2657,8 +2720,7 @@ public static partial class SourceGeneratorHelpers
     /// </summary>
     private static bool IsIdProperty(PropertyInfo prop)
     {
-        return prop.IsId || prop.Name.Equals("Id", StringComparison.OrdinalIgnoreCase) ||
-               prop.Name.Equals("_id", StringComparison.OrdinalIgnoreCase);
+        return prop.IsId;
     }
 
     /// <summary>
@@ -2973,7 +3035,7 @@ public static partial class SourceGeneratorHelpers
             "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = new Guid(guid{propertyName}.Bytes);",
             "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value;",
             _ when propertyType.EndsWith("?") => GenerateNullablePropertyDeserialization(prop, bsonFieldName),
-            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyName} = ConvertFromBsonValue<{propertyType}>(bson{propertyName});"
+            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyName} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});"
         };
     }
 
@@ -3030,7 +3092,7 @@ public static partial class SourceGeneratorHelpers
             "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value; else entity.{propertyName} = null;",
             "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = new Guid(guid{propertyName}.Bytes); else entity.{propertyName} = null;",
             "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value; else entity.{propertyName} = null;",
-            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyName} = ConvertFromBsonValue<{underlyingType}>(bson{propertyName}); else entity.{propertyName} = null;"
+            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyName} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName}); else entity.{propertyName} = null;"
         };
     }
 

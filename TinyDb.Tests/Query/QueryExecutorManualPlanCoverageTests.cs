@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
@@ -38,11 +37,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
             IndexScanKeys = new()
         };
 
-        var method = typeof(QueryExecutor).GetMethod("ExecutePrimaryKeyLookup", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(method).IsNotNull();
-
-        var enumerable = (System.Collections.IEnumerable)method!.MakeGenericMethod(typeof(BsonDocument)).Invoke(_executor, new object[] { plan })!;
-        var enumerator = enumerable.GetEnumerator();
+        using var enumerator = _executor.ExecutePrimaryKeyLookupForTests<BsonDocument>(plan).GetEnumerator();
         await Assert.That(enumerator.MoveNext()).IsFalse();
     }
 
@@ -65,10 +60,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
             }
         };
 
-        var method = typeof(QueryExecutor).GetMethod("ExecutePrimaryKeyLookup", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(method).IsNotNull();
-
-        var enumerable = (System.Collections.IEnumerable)method!.MakeGenericMethod(typeof(BsonDocument)).Invoke(_executor, new object[] { plan })!;
+        var enumerable = _executor.ExecutePrimaryKeyLookupForTests<BsonDocument>(plan);
         int count = 0;
         foreach (var _ in enumerable) count++;
 
@@ -93,4 +85,3 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
         await Assert.That(count).IsEqualTo(1);
     }
 }
-

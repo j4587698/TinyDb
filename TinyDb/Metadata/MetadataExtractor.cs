@@ -24,7 +24,7 @@ public static class MetadataExtractor
 
         var metadata = new EntityMetadata
         {
-            TypeName = entityType.FullName ?? entityType.Name,
+            TypeName = GetEntityTypeName(entityType),
             CollectionName = collectionName,
             DisplayName = GetEntityDisplayName(entityType),
             Description = GetEntityDescription(entityType)
@@ -82,5 +82,10 @@ public static class MetadataExtractor
     {
         var entityAttrs = entityType.GetCustomAttributes<EntityMetadataAttribute>();
         return entityAttrs.FirstOrDefault(a => !string.IsNullOrEmpty(a.Description))?.Description;
+    }
+
+    internal static string GetEntityTypeName(Type entityType)
+    {
+        return entityType.FullName ?? entityType.Name;
     }
 }

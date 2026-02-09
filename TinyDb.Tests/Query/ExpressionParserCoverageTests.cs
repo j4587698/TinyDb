@@ -425,6 +425,16 @@ public class ExpressionParserCoverageTests
     /// </summary>
     public class ResultDto
     {
+        public ResultDto()
+        {
+        }
+
+        public ResultDto(int id, string name)
+        {
+            Id = id;
+            Name = name;
+        }
+
         public int Id { get; set; }
         public string Name { get; set; } = "";
     }
@@ -446,7 +456,7 @@ public class ExpressionParserCoverageTests
     [Test]
     public async Task Parse_New_Expression()
     {
-        Expression<Func<TestDoc, object>> selector = x => new { x.Id, x.Name };
+        Expression<Func<TestDoc, object>> selector = x => new ResultDto(x.Id, x.Name);
         var result = _parser.ParseExpression(selector.Body);
         await Assert.That(result).IsNotNull();
         await Assert.That(result).IsTypeOf<ConstructorExpression>();

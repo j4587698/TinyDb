@@ -261,7 +261,7 @@ public sealed class TinyDbEngine : IDisposable
         _header.FirstFreePage = _pageManager.FirstFreePageID;
         var p = _pageManager.GetPage(1);
         p.WriteData(0, _header.ToByteArray());
-        _pageManager.SavePage(p, true);
+        _pageManager.SavePage(p, false);
     }
 
     private void InitializeSystemPages()

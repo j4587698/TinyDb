@@ -75,7 +75,7 @@ public static class DbRefSerializer
 /// 支持 Include 的查询构建器
 /// </summary>
 /// <typeparam name="T">文档类型</typeparam>
-public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicConstructors)] T> where T : class, new()
+public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T> where T : class, new()
 {
     private readonly TinyDbEngine _engine;
     private readonly string _collectionName;

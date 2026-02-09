@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Reflection;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using Expression = System.Linq.Expressions.Expression;
@@ -40,16 +41,26 @@ public sealed class ExpressionParserCoverage100Tests
 
         QueryExpression Parse(Expression e) => parser.ParseExpression(e);
 
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Year)))).Value).IsEqualTo(dt.Year);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Month)))).Value).IsEqualTo(dt.Month);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Day)))).Value).IsEqualTo(dt.Day);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Hour)))).Value).IsEqualTo(dt.Hour);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Minute)))).Value).IsEqualTo(dt.Minute);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Second)))).Value).IsEqualTo(dt.Second);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Date)))).Value).IsEqualTo(dt.Date);
-        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.DayOfWeek)))).Value).IsEqualTo((int)dt.DayOfWeek);
+        var year = ExpressionMemberInfo.Property<DateTime, int>(x => x.Year);
+        var month = ExpressionMemberInfo.Property<DateTime, int>(x => x.Month);
+        var day = ExpressionMemberInfo.Property<DateTime, int>(x => x.Day);
+        var hour = ExpressionMemberInfo.Property<DateTime, int>(x => x.Hour);
+        var minute = ExpressionMemberInfo.Property<DateTime, int>(x => x.Minute);
+        var second = ExpressionMemberInfo.Property<DateTime, int>(x => x.Second);
+        var date = ExpressionMemberInfo.Property<DateTime, DateTime>(x => x.Date);
+        var dayOfWeek = ExpressionMemberInfo.Property<DateTime, DayOfWeek>(x => x.DayOfWeek);
+        var ticks = ExpressionMemberInfo.Property<DateTime, long>(x => x.Ticks);
 
-        await Assert.That(Parse(Expression.Property(Expression.Constant(dt), nameof(DateTime.Ticks)))).IsTypeOf<MemberExpression>();
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), year))).Value).IsEqualTo(dt.Year);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), month))).Value).IsEqualTo(dt.Month);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), day))).Value).IsEqualTo(dt.Day);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), hour))).Value).IsEqualTo(dt.Hour);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), minute))).Value).IsEqualTo(dt.Minute);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), second))).Value).IsEqualTo(dt.Second);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), date))).Value).IsEqualTo(dt.Date);
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), dayOfWeek))).Value).IsEqualTo((int)dt.DayOfWeek);
+
+        await Assert.That(Parse(Expression.Property(Expression.Constant(dt), ticks))).IsTypeOf<MemberExpression>();
     }
 
     [Test]
@@ -57,12 +68,18 @@ public sealed class ExpressionParserCoverage100Tests
     {
         var parser = new ExpressionParser();
 
-        await Assert.That(parser.ParseExpression(Expression.Property(null, typeof(DateTime), nameof(DateTime.Now)))).IsTypeOf<ConstantExpression>();
-        await Assert.That(parser.ParseExpression(Expression.Property(null, typeof(DateTime), nameof(DateTime.UtcNow)))).IsTypeOf<ConstantExpression>();
-        await Assert.That(parser.ParseExpression(Expression.Property(null, typeof(DateTime), nameof(DateTime.Today)))).IsTypeOf<ConstantExpression>();
-        await Assert.That(parser.ParseExpression(Expression.Property(null, typeof(Environment), nameof(Environment.NewLine)))).IsTypeOf<ConstantExpression>();
+        var now = ExpressionMemberInfo.Property(() => DateTime.Now);
+        var utcNow = ExpressionMemberInfo.Property(() => DateTime.UtcNow);
+        var today = ExpressionMemberInfo.Property(() => DateTime.Today);
+        var newLine = ExpressionMemberInfo.Property(() => Environment.NewLine);
+        var machineName = ExpressionMemberInfo.Property(() => Environment.MachineName);
 
-        await Assert.That(() => parser.ParseExpression(Expression.Property(null, typeof(Environment), nameof(Environment.MachineName))))
+        await Assert.That(parser.ParseExpression(Expression.Property(null, now))).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseExpression(Expression.Property(null, utcNow))).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseExpression(Expression.Property(null, today))).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseExpression(Expression.Property(null, newLine))).IsTypeOf<ConstantExpression>();
+
+        await Assert.That(() => parser.ParseExpression(Expression.Property(null, machineName)))
             .Throws<NotSupportedException>();
     }
 
@@ -94,17 +111,38 @@ public sealed class ExpressionParserCoverage100Tests
         var parser = new ExpressionParser();
         var s = Expression.Constant("Abc");
 
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.Contains), null, Expression.Constant("b")))).Value).IsEqualTo(true);
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.StartsWith), null, Expression.Constant("A")))).Value).IsEqualTo(true);
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.EndsWith), null, Expression.Constant("c")))).Value).IsEqualTo(true);
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.ToLower), null))).Value).IsEqualTo("abc");
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.ToUpper), null))).Value).IsEqualTo("ABC");
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(Expression.Constant("  a  "), nameof(string.Trim), null))).Value).IsEqualTo("a");
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.Substring), null, Expression.Constant(1)))).Value).IsEqualTo("bc");
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.Substring), null, Expression.Constant(0), Expression.Constant(2)))).Value).IsEqualTo("Ab");
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, nameof(string.Replace), null, Expression.Constant("A"), Expression.Constant("Z")))).Value).IsEqualTo("Zbc");
+        var containsMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string, bool>>)
+            ((value, needle) => value.Contains(needle))).Body).Method;
+        var startsWithMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string, bool>>)
+            ((value, prefix) => value.StartsWith(prefix))).Body).Method;
+        var endsWithMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string, bool>>)
+            ((value, suffix) => value.EndsWith(suffix))).Body).Method;
+        var toLowerMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string>>)
+            (value => value.ToLower())).Body).Method;
+        var toUpperMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string>>)
+            (value => value.ToUpper())).Body).Method;
+        var trimMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string>>)
+            (value => value.Trim())).Body).Method;
+        var substringMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, int, string>>)
+            ((value, startIndex) => value.Substring(startIndex))).Body).Method;
+        var substringStartLengthMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, int, int, string>>)
+            ((value, startIndex, length) => value.Substring(startIndex, length))).Body).Method;
+        var replaceMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string, string, string>>)
+            ((value, oldValue, newValue) => value.Replace(oldValue, newValue))).Body).Method;
+        var padLeftMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, int, string>>)
+            ((value, totalWidth) => value.PadLeft(totalWidth))).Body).Method;
 
-        await Assert.That(parser.ParseExpression(Expression.Call(s, nameof(string.PadLeft), null, Expression.Constant(5)))).IsTypeOf<FunctionExpression>();
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, containsMethod, Expression.Constant("b")))).Value).IsEqualTo(true);
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, startsWithMethod, Expression.Constant("A")))).Value).IsEqualTo(true);
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, endsWithMethod, Expression.Constant("c")))).Value).IsEqualTo(true);
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, toLowerMethod))).Value).IsEqualTo("abc");
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, toUpperMethod))).Value).IsEqualTo("ABC");
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(Expression.Constant("  a  "), trimMethod))).Value).IsEqualTo("a");
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, substringMethod, Expression.Constant(1)))).Value).IsEqualTo("bc");
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, substringStartLengthMethod, Expression.Constant(0), Expression.Constant(2)))).Value).IsEqualTo("Ab");
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(s, replaceMethod, Expression.Constant("A"), Expression.Constant("Z")))).Value).IsEqualTo("Zbc");
+
+        await Assert.That(parser.ParseExpression(Expression.Call(s, padLeftMethod, Expression.Constant(5)))).IsTypeOf<FunctionExpression>();
     }
 
     [Test]
@@ -114,14 +152,29 @@ public sealed class ExpressionParserCoverage100Tests
         var dt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var target = Expression.Constant(dt);
 
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddDays), null, Expression.Constant(1d)))).Value).IsEqualTo(dt.AddDays(1));
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddHours), null, Expression.Constant(2d)))).Value).IsEqualTo(dt.AddHours(2));
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddMinutes), null, Expression.Constant(3d)))).Value).IsEqualTo(dt.AddMinutes(3));
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddSeconds), null, Expression.Constant(4d)))).Value).IsEqualTo(dt.AddSeconds(4));
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddYears), null, Expression.Constant(5)))).Value).IsEqualTo(dt.AddYears(5));
-        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddMonths), null, Expression.Constant(6)))).Value).IsEqualTo(dt.AddMonths(6));
+        var addDaysMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, double, DateTime>>)
+            ((value, days) => value.AddDays(days))).Body).Method;
+        var addHoursMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, double, DateTime>>)
+            ((value, hours) => value.AddHours(hours))).Body).Method;
+        var addMinutesMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, double, DateTime>>)
+            ((value, minutes) => value.AddMinutes(minutes))).Body).Method;
+        var addSecondsMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, double, DateTime>>)
+            ((value, seconds) => value.AddSeconds(seconds))).Body).Method;
+        var addYearsMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, int, DateTime>>)
+            ((value, years) => value.AddYears(years))).Body).Method;
+        var addMonthsMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, int, DateTime>>)
+            ((value, months) => value.AddMonths(months))).Body).Method;
+        var addTicksMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<DateTime, long, DateTime>>)
+            ((value, ticks) => value.AddTicks(ticks))).Body).Method;
 
-        await Assert.That(parser.ParseExpression(Expression.Call(target, nameof(DateTime.AddTicks), null, Expression.Constant(1L)))).IsTypeOf<FunctionExpression>();
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, addDaysMethod, Expression.Constant(1d)))).Value).IsEqualTo(dt.AddDays(1));
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, addHoursMethod, Expression.Constant(2d)))).Value).IsEqualTo(dt.AddHours(2));
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, addMinutesMethod, Expression.Constant(3d)))).Value).IsEqualTo(dt.AddMinutes(3));
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, addSecondsMethod, Expression.Constant(4d)))).Value).IsEqualTo(dt.AddSeconds(4));
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, addYearsMethod, Expression.Constant(5)))).Value).IsEqualTo(dt.AddYears(5));
+        await Assert.That(((ConstantExpression)parser.ParseExpression(Expression.Call(target, addMonthsMethod, Expression.Constant(6)))).Value).IsEqualTo(dt.AddMonths(6));
+
+        await Assert.That(parser.ParseExpression(Expression.Call(target, addTicksMethod, Expression.Constant(1L)))).IsTypeOf<FunctionExpression>();
     }
 
     [Test]
@@ -132,18 +185,20 @@ public sealed class ExpressionParserCoverage100Tests
 
         // target not evaluatable
         var p = Expression.Parameter(typeof(string), "s");
-        var callOnParam = Expression.Call(p, nameof(string.ToLowerInvariant), null);
+        var toLowerInvariantMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string>>)(s => s.ToLowerInvariant())).Body).Method;
+        var callOnParam = Expression.Call(p, toLowerInvariantMethod);
         var result1 = method!.Invoke(null, new object[] { callOnParam });
         await Assert.That(result1).IsNull();
 
         // argument not evaluatable
         var arg = Expression.Parameter(typeof(string), "arg");
-        var callWithParamArg = Expression.Call(Expression.Constant("abc"), nameof(string.Contains), null, arg);
+        var containsMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string, bool>>)((s, value) => s.Contains(value))).Body).Method;
+        var callWithParamArg = Expression.Call(Expression.Constant("abc"), containsMethod, arg);
         var result2 = method!.Invoke(null, new object[] { callWithParamArg });
         await Assert.That(result2).IsNull();
 
         // constant null argument is allowed but patterns won't match => null
-        var callWithNullArg = Expression.Call(Expression.Constant("abc"), nameof(string.Contains), null, Expression.Constant(null, typeof(string)));
+        var callWithNullArg = Expression.Call(Expression.Constant("abc"), containsMethod, Expression.Constant(null, typeof(string)));
         var result3 = method!.Invoke(null, new object[] { callWithNullArg });
         await Assert.That(result3).IsNull();
 
@@ -320,16 +375,16 @@ public sealed class ExpressionParserCoverage100Tests
         var parser = new ExpressionParser();
         var parseMember = typeof(ExpressionParser).GetMethod("ParseMemberExpression", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-        var now = Expression.Property(null, typeof(DateTime), nameof(DateTime.Now));
+        var now = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.Now));
         await Assert.That(parseMember.Invoke(parser, new object[] { now })).IsTypeOf<ConstantExpression>();
 
-        var utcNow = Expression.Property(null, typeof(DateTime), nameof(DateTime.UtcNow));
+        var utcNow = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.UtcNow));
         await Assert.That(parseMember.Invoke(parser, new object[] { utcNow })).IsTypeOf<ConstantExpression>();
 
-        var today = Expression.Property(null, typeof(DateTime), nameof(DateTime.Today));
+        var today = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.Today));
         await Assert.That(parseMember.Invoke(parser, new object[] { today })).IsTypeOf<ConstantExpression>();
 
-        var machineName = Expression.Property(null, typeof(Environment), nameof(Environment.MachineName));
+        var machineName = Expression.Property(null, ExpressionMemberInfo.Property(() => Environment.MachineName));
 
         static object? InvokeUnwrap(MethodInfo method, object instance, object[] args)
         {

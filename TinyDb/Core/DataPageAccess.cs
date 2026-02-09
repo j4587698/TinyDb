@@ -239,11 +239,11 @@ internal sealed class DataPageAccess
             AppendDocumentToPage(p, docs[i].RawBytes);
             if (docs[i].Id != null) updIdx(docs[i].Id.ToString() ?? "", p.PageID, i);
         }
-        _pm.SavePage(p, true);
+        _pm.SavePage(p, false);
     }
 
     public void PersistPage(Page p)
     {
-        _pm.SavePage(p, true);
+        _pm.SavePage(p, false);
     }
 }

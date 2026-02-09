@@ -74,7 +74,7 @@ public class QueryProviderCoverageTests : IDisposable
         // CreateQuery (non-generic)
         var newQObj = provider.CreateQuery(expr);
         await Assert.That(newQObj).IsNotNull();
-        await Assert.That(newQObj).IsTypeOf<Queryable<TestEntity, TestEntity>>();
+        await Assert.That(newQObj).IsTypeOf<UntypedQueryable<TestEntity>>();
     }
 
     [Test]
@@ -82,10 +82,9 @@ public class QueryProviderCoverageTests : IDisposable
     {
         var executor = new QueryExecutor(_engine);
         var q = new Queryable<TestEntity>(executor, "test");
-        var provider = new QueryProvider<TestEntity, TestEntity>(executor, null!);
         var expr = Expression.Constant(q);
 
-        await Assert.That(() => provider.CreateQuery(expr)).Throws<ArgumentNullException>();
+        await Assert.That(() => new QueryProvider<TestEntity, TestEntity>(executor, null!)).Throws<ArgumentNullException>();
     }
     
     [Test]

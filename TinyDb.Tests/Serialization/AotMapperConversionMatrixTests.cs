@@ -28,7 +28,7 @@ public class AotMapperConversionMatrixTests
         await Assert.That(AotBsonMapper.ConvertValue(new BsonString(dateStr), typeof(DateTime))).IsEqualTo(date);
         
         var enumStr = new BsonString("A");
-        await Assert.That(AotBsonMapper.ConvertValue(enumStr, typeof(TestEnum))).IsEqualTo(TestEnum.A);
+        await Assert.That(AotBsonMapper.ConvertEnumValue<TestEnum>(enumStr)).IsEqualTo(TestEnum.A);
         
         var boolStr = new BsonString("true");
         await Assert.That(AotBsonMapper.ConvertValue(boolStr, typeof(bool))).IsEqualTo(true);

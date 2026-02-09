@@ -103,7 +103,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
                      .OrderBy(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable<ProjectedValueItem>)result!).ToList();
+        var list = ((IEnumerable)result!).Cast<ProjectedValueItem>().ToList();
         
         await Assert.That(list.Count).IsEqualTo(5);
         await Assert.That(list[0].Value).IsEqualTo(10);
@@ -122,7 +122,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
                      .OrderByDescending(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable<ProjectedValueItem>)result!).ToList();
+        var list = ((IEnumerable)result!).Cast<ProjectedValueItem>().ToList();
         
         await Assert.That(list[0].Value).IsEqualTo(50);
     }
@@ -141,7 +141,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
                      .ThenBy(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable<ProjectedCategoryValueItem>)result!).ToList();
+        var list = ((IEnumerable)result!).Cast<ProjectedCategoryValueItem>().ToList();
         
         await Assert.That(list.Count).IsEqualTo(5);
         await Assert.That(list[0].Category).IsEqualTo("A");
@@ -161,7 +161,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
                      .ThenByDescending(x => x.Value);
         
         var result = QueryPipeline.Execute<TestItem>(_executor, "test", query.Expression);
-        var list = ((IEnumerable<ProjectedCategoryValueItem>)result!).ToList();
+        var list = ((IEnumerable)result!).Cast<ProjectedCategoryValueItem>().ToList();
         
         // Category A should have values in descending order: 20, 10
         await Assert.That(list[0].Value).IsEqualTo(20);
@@ -181,8 +181,8 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        var query = q.Select(x => new { x.Id, x.Value, x.Category })
-                     .OrderBy(x => x.Value)
+        var query = q.Select(x => x.Value)
+                     .OrderBy(x => x)
                      .Skip(1)
                      .Take(2);
         
@@ -433,7 +433,7 @@ public class QueryPipelineEdgeCaseTests2 : IDisposable
         SeedData();
         var q = new TinyDb.Query.Queryable<TestItem>(_executor, "test");
         
-        var query = q.Select(x => new { x.Id, x.Name })
+        var query = q.Select(x => x.Id)
                      .Skip(2)
                      .Take(2);
         

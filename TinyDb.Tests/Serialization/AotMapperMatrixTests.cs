@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TUnit.Assertions;
@@ -12,16 +11,25 @@ public class AotMapperMatrixTests
 {
     private enum TestEnum { Zero = 0, One = 1 }
 
-    private static readonly Type[] ConversionTargets =
-    {
-        typeof(bool), typeof(byte), typeof(sbyte), typeof(char),
-        typeof(short), typeof(ushort), typeof(int), typeof(uint),
-        typeof(long), typeof(ulong), typeof(float), typeof(double),
-        typeof(decimal), typeof(string)
-    };
+    private static readonly (Type TargetType, Func<BsonValue, object?> Convert)[] ConversionTargets =
+    [
+        (typeof(bool), src => AotBsonMapper.ConvertValue(src, typeof(bool))),
+        (typeof(byte), src => AotBsonMapper.ConvertValue(src, typeof(byte))),
+        (typeof(sbyte), src => AotBsonMapper.ConvertValue(src, typeof(sbyte))),
+        (typeof(char), src => AotBsonMapper.ConvertValue(src, typeof(char))),
+        (typeof(short), src => AotBsonMapper.ConvertValue(src, typeof(short))),
+        (typeof(ushort), src => AotBsonMapper.ConvertValue(src, typeof(ushort))),
+        (typeof(int), src => AotBsonMapper.ConvertValue(src, typeof(int))),
+        (typeof(uint), src => AotBsonMapper.ConvertValue(src, typeof(uint))),
+        (typeof(long), src => AotBsonMapper.ConvertValue(src, typeof(long))),
+        (typeof(ulong), src => AotBsonMapper.ConvertValue(src, typeof(ulong))),
+        (typeof(float), src => AotBsonMapper.ConvertValue(src, typeof(float))),
+        (typeof(double), src => AotBsonMapper.ConvertValue(src, typeof(double))),
+        (typeof(decimal), src => AotBsonMapper.ConvertValue(src, typeof(decimal))),
+        (typeof(string), src => AotBsonMapper.ConvertValue(src, typeof(string)))
+    ];
 
     [Test]
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "Test-only conversion matrix uses fixed primitive types.")]
     public async Task ConvertPrimitiveValue_ExhaustiveMatrix()
     {
         var sources = new List<BsonValue>
@@ -38,13 +46,13 @@ public class AotMapperMatrixTests
 
         foreach (var src in sources)
         {
-            foreach (var target in ConversionTargets)
+            foreach (var (targetType, convert) in ConversionTargets)
             {
                 try
                 {
-                    var result = AotBsonMapper.ConvertValue(src, target);
+                    var result = convert(src);
                     await Assert.That(result).IsNotNull();
-                    await Assert.That(result!.GetType()).IsEqualTo(target);
+                    await Assert.That(result!.GetType()).IsEqualTo(targetType);
                 }
                 catch (Exception ex)
                 {
@@ -52,9 +60,9 @@ public class AotMapperMatrixTests
                     // We just want to ensure we HIT the code path.
                     // But we should verify success for numeric-to-numeric.
                     
-                    if (src.IsNumeric && IsNumericType(target))
+                    if (src.IsNumeric && IsNumericType(targetType))
                     {
-                         Assert.Fail($"Failed to convert {src.GetType().Name} to {target.Name}: {ex.Message}");
+                         Assert.Fail($"Failed to convert {src.GetType().Name} to {targetType.Name}: {ex.Message}");
                     }
                 }
             }
@@ -74,7 +82,8 @@ public class AotMapperMatrixTests
         // Enum from Int32, Int64, String
         await Assert.That(AotBsonMapper.ConvertValue(new BsonInt32(1), typeof(TestEnum))).IsEqualTo(TestEnum.One);
         await Assert.That(AotBsonMapper.ConvertValue(new BsonInt64(1), typeof(TestEnum))).IsEqualTo(TestEnum.One);
-        await Assert.That(AotBsonMapper.ConvertValue(new BsonString("One"), typeof(TestEnum))).IsEqualTo(TestEnum.One);
+        await Assert.That(AotBsonMapper.ConvertValue(new BsonString("1"), typeof(TestEnum))).IsEqualTo(TestEnum.One);
+        await Assert.That(AotBsonMapper.ConvertEnumValue<TestEnum>(new BsonString("One"))).IsEqualTo(TestEnum.One);
         
         // Fallback toString
         await Assert.That(AotBsonMapper.ConvertValue(new BsonDouble(1.0), typeof(TestEnum))).IsEqualTo(TestEnum.One);

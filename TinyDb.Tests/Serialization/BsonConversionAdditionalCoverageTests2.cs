@@ -73,7 +73,7 @@ public class BsonConversionAdditionalCoverageTests2
     [Test]
     public async Task FromBsonValue_Dictionary_WithEnumKey_ShouldParseKeys()
     {
-        var doc = new BsonDocument().Set("A", 1).Set("B", 2);
+        var doc = new BsonDocument().Set("1", 1).Set("2", 2);
         var dict = (Dictionary<KeyEnum, int>)BsonConversion.FromBsonValue(doc, typeof(Dictionary<KeyEnum, int>))!;
 
         await Assert.That(dict[KeyEnum.A]).IsEqualTo(1);

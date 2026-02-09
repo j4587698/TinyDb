@@ -67,8 +67,8 @@ public class AotBsonMapperAdditionalCoverageTests
     public async Task ConvertValue_ComplexType_WithoutAdapter_ShouldFallback()
     {
         var doc = new BsonDocument().Set("_id", 1).Set("id", 1);
-        var converted = (NonEntityComplex)AotBsonMapper.ConvertValue(doc, typeof(NonEntityComplex))!;
-        await Assert.That(converted.Id).IsEqualTo(1);
+        await Assert.That(() => AotBsonMapper.ConvertValue(doc, typeof(NonEntityComplex)))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]

@@ -15,7 +15,7 @@ namespace TinyDb.Collections;
 /// 文档集合实现
 /// </summary>
 /// <typeparam name="T">文档类型</typeparam>
-public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : ITinyCollection<T>, IDocumentCollection where T : class, new()
+public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T> : ITinyCollection<T>, IDocumentCollection where T : class, new()
 {
     private readonly TinyDbEngine _engine;
     private readonly string _name;

@@ -81,7 +81,7 @@ public class BsonConversionTests
     public async Task FromBsonValue_ShouldHandleEnums()
     {
         await Assert.That(BsonConversion.FromBsonValue(new BsonInt32(1), typeof(TestEnum))).IsEqualTo(TestEnum.Value1);
-        await Assert.That(BsonConversion.FromBsonValue(new BsonString("Value2"), typeof(TestEnum))).IsEqualTo(TestEnum.Value2);
+        await Assert.That(BsonConversion.FromBsonValueEnum<TestEnum>(new BsonString("Value2"))).IsEqualTo(TestEnum.Value2);
     }
 
     [Test]
@@ -238,8 +238,8 @@ public class BsonConversionTests
         await Assert.That(BsonConversion.FromBsonValue(new BsonInt32(4), typeof(ByteEnum))).IsEqualTo(ByteEnum.D);
         
         // String fallback
-        await Assert.That(BsonConversion.FromBsonValue(new BsonString("A"), typeof(IntEnum))).IsEqualTo(IntEnum.A);
-        await Assert.That(BsonConversion.FromBsonValue(new BsonString("B"), typeof(LongEnum))).IsEqualTo(LongEnum.B);
+        await Assert.That(BsonConversion.FromBsonValueEnum<IntEnum>(new BsonString("A"))).IsEqualTo(IntEnum.A);
+        await Assert.That(BsonConversion.FromBsonValueEnum<LongEnum>(new BsonString("B"))).IsEqualTo(LongEnum.B);
     }
 
     [Test]

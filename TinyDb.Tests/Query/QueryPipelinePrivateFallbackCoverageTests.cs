@@ -19,10 +19,11 @@ public class QueryPipelinePrivateFallbackCoverageTests
 
         Expression<Func<int, int>> keySelector = x => x;
 
+        var thenByMethod =
+            ((MethodCallExpression)((Expression<Func<IOrderedQueryable<int>, Expression<Func<int, int>>, IOrderedQueryable<int>>>)
+                ((q, key) => Queryable.ThenBy(q, key))).Body).Method;
         var thenByExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.ThenBy),
-            new[] { typeof(int), typeof(int) },
+            thenByMethod,
             Expression.Constant(null, typeof(IOrderedQueryable<int>)),
             Expression.Quote(keySelector));
 
@@ -44,11 +45,9 @@ public class QueryPipelinePrivateFallbackCoverageTests
     public async Task ExecuteAggregation_WhenUnsupportedName_ShouldThrow()
     {
         var source = new[] { 1, 2, 3 };
-        var expr = Expression.Call(
-            typeof(QueryPipelinePrivateFallbackCoverageTests),
-            nameof(Median),
-            Type.EmptyTypes,
-            Expression.Constant(source, typeof(IEnumerable<int>)));
+        var medianMethod =
+            ((MethodCallExpression)((Expression<Func<IEnumerable<int>, int>>)(items => Median(items))).Body).Method;
+        var expr = Expression.Call(medianMethod, Expression.Constant(source, typeof(IEnumerable<int>)));
 
         var executeAggregation = typeof(QueryPipeline).GetMethod(
             "ExecuteAggregation",

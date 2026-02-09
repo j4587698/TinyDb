@@ -85,6 +85,7 @@ public class AotBsonMapperBranchCoverageTests
             .Throws<NotSupportedException>();
     }
 
+    [Entity]
     internal sealed class WeirdEntity
     {
         public int Id { get; set; }
@@ -109,6 +110,7 @@ public class AotBsonMapperBranchCoverageTests
         public int PublicField;
     }
 
+    [Entity]
     internal struct SimpleStruct
     {
         public int Id { get; set; }

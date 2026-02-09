@@ -72,7 +72,8 @@ public class TinyDbOptionsCoverageTests
         
         var clone = options.Clone();
         await Assert.That(clone.DatabaseName).IsEqualTo(options.DatabaseName);
-        await Assert.That(clone.UserData.Length).IsEqualTo(3);
+        await Assert.That(clone.UserData).IsNotNull();
+        await Assert.That(clone.UserData!.Length).IsEqualTo(3);
         await Assert.That(clone.EnableJournaling).IsTrue();
         
         var str = options.ToString();

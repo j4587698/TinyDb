@@ -57,7 +57,8 @@ public class ExpressionParserAdditionalCoverageTests
     {
         var parser = new ExpressionParser();
 
-        var expr = Expression.Call(typeof(Guid), nameof(Guid.NewGuid), Type.EmptyTypes);
+        var newGuidMethod = ((MethodCallExpression)((Expression<Func<Guid>>)(() => Guid.NewGuid())).Body).Method;
+        var expr = Expression.Call(newGuidMethod);
         var parsed = parser.ParseExpression(expr);
 
         await Assert.That(parsed).IsTypeOf<ConstantExpression>();
@@ -69,7 +70,8 @@ public class ExpressionParserAdditionalCoverageTests
     {
         var parser = new ExpressionParser();
 
-        var expr = Expression.Call(typeof(ThrowingHelpers), nameof(ThrowingHelpers.ThrowingMethod), Type.EmptyTypes);
+        var throwingMethod = ((MethodCallExpression)((Expression<Func<int>>)(() => ThrowingHelpers.ThrowingMethod())).Body).Method;
+        var expr = Expression.Call(throwingMethod);
         var parsed = parser.ParseExpression(expr);
 
         await Assert.That(parsed).IsTypeOf<FunctionExpression>();
@@ -260,7 +262,8 @@ public class ExpressionParserAdditionalCoverageTests
     {
         var parser = new ExpressionParser();
         var ctor = typeof(CtorOk).GetConstructor(new[] { typeof(int) })!;
-        var arg = Expression.Call(typeof(ThrowingHelpers), nameof(ThrowingHelpers.ThrowingMethod), Type.EmptyTypes);
+        var throwingMethod = ((MethodCallExpression)((Expression<Func<int>>)(() => ThrowingHelpers.ThrowingMethod())).Body).Method;
+        var arg = Expression.Call(throwingMethod);
         var expr = Expression.New(ctor, arg);
 
         var parsed = parser.ParseExpression(expr);

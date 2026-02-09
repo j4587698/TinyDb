@@ -4,6 +4,10 @@
     <ProjectReference Include="..\TinyDb\TinyDb.csproj" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(PublishTrimmed)' != 'true'">
+    <ProjectReference Include="..\TinyDb.SourceGenerator\TinyDb.SourceGenerator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" GlobalPropertiesToRemove="PublishAot" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>

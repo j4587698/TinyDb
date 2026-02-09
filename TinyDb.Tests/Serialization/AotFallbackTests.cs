@@ -1,5 +1,6 @@
 using TinyDb.Serialization;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -17,7 +18,7 @@ public class AotFallbackTests
     }
 
     [Test]
-    public async Task Fallback_Mapping_Should_Work()
+    public async Task UnregisteredEntity_ShouldThrow_InAotMode()
     {
         var entity = new UnregisteredEntity
         {
@@ -27,19 +28,16 @@ public class AotFallbackTests
             Tags = new List<string> { "tag1", "tag2" }
         };
 
-        // Act
-        var doc = AotBsonMapper.ToDocument(entity);
-        var replayed = AotBsonMapper.FromDocument<UnregisteredEntity>(doc);
+        await Assert.That(() => AotBsonMapper.ToDocument(entity))
+            .Throws<InvalidOperationException>();
 
-        // Assert
-        await Assert.That(replayed.Name).IsEqualTo(entity.Name);
-        await Assert.That(replayed.Value).IsEqualTo(entity.Value);
-        await Assert.That(replayed.Scores["math"]).IsEqualTo(90);
-        await Assert.That(replayed.Tags.Count).IsEqualTo(2);
+        var doc = new BsonDocument().Set("name", "x");
+        await Assert.That(() => AotBsonMapper.FromDocument<UnregisteredEntity>(doc))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task Fallback_Circular_Reference_Should_Handle_Gracefully()
+    public async Task CircularReference_Should_Handle_Gracefully_ForRegisteredEntity()
     {
         var parent = new CircularEntity { Name = "Parent" };
         var child = new CircularEntity { Name = "Child", Parent = parent };
@@ -56,6 +54,7 @@ public class AotFallbackTests
         await Assert.That(((BsonDocument)childDoc["parent"]).Count).IsEqualTo(0);
     }
 
+    [Entity]
     public class CircularEntity
     {
         public string Name { get; set; } = "";

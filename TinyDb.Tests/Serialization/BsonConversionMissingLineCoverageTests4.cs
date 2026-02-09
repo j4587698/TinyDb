@@ -123,8 +123,7 @@ public sealed class BsonConversionMissingLineCoverageTests4
             [new NullToStringKey()] = 123
         };
 
-        var bson = (BsonDocument)BsonConversion.ToBsonValue(dict);
-        await Assert.That(bson.ContainsKey(string.Empty)).IsTrue();
-        await Assert.That(((BsonInt32)bson[string.Empty]).Value).IsEqualTo(123);
+        await Assert.That(() => BsonConversion.ToBsonValue(dict))
+            .ThrowsExactly<NotSupportedException>();
     }
 }

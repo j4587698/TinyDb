@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using TinyDb.Core;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -18,7 +19,7 @@ public sealed class QueryableGuardCoverageTests
     [Test]
     public async Task InternalCtor_WhenExecutorNull_ShouldThrow()
     {
-        var provider = Enumerable.Empty<DummyEntity>().AsQueryable().Provider;
+        var provider = TestQueryables.InMemory(Enumerable.Empty<DummyEntity>()).Provider;
 
         await Assert.That(() => new Queryable<DummyEntity, DummyEntity>(null!, "c", provider))
             .Throws<ArgumentNullException>();
@@ -32,7 +33,7 @@ public sealed class QueryableGuardCoverageTests
         {
             using var engine = new TinyDbEngine(dbPath);
             var executor = new QueryExecutor(engine);
-            var provider = Enumerable.Empty<DummyEntity>().AsQueryable().Provider;
+            var provider = TestQueryables.InMemory(Enumerable.Empty<DummyEntity>()).Provider;
 
             await Assert.That(() => new Queryable<DummyEntity, DummyEntity>(executor, " ", provider))
                 .Throws<ArgumentNullException>();

@@ -63,7 +63,8 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
         node.Save(pm);
         node.Save(pm); // second call should hit the !_isDirty early return
 
-        await Assert.That(true).IsTrue();
+        await Assert.That(node.Keys.Count).IsEqualTo(1);
+        await Assert.That(node.Values.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -135,8 +136,8 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
         node.Keys.Add(new IndexKey(new BsonValue[] { new BsonObjectId(ObjectId.NewObjectId()) }));
         node.Values.Add(new BsonObjectId(ObjectId.NewObjectId()));
 
-        var _ = node.IsFull((int)TestPageSize);
-        await Assert.That(true).IsTrue();
+        var isFull = node.IsFull((int)TestPageSize);
+        await Assert.That(isFull).IsFalse();
     }
 
     [Test]
@@ -151,8 +152,8 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
         node.Keys.Add(new IndexKey(new BsonValue[] { new BsonDecimal128(1.25m) }));
         node.Values.Add(new BsonDecimal128(1.25m));
 
-        var _ = node.IsFull((int)TestPageSize);
-        await Assert.That(true).IsTrue();
+        var isFull = node.IsFull((int)TestPageSize);
+        await Assert.That(isFull).IsFalse();
     }
 
     [Test]

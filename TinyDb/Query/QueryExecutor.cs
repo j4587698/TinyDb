@@ -62,6 +62,12 @@ public sealed class QueryExecutor
         return ExecuteIndexScan<BsonDocument>(executionPlan);
     }
 
+    internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
+        where T : class, new()
+    {
+        return ExecutePrimaryKeyLookup<T>(executionPlan);
+    }
+
     internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
         where T : class, new()
     {

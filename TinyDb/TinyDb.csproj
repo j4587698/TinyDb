@@ -36,7 +36,7 @@
 
         <!-- 兼容性配置 -->
         <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-        <NoWarn>$(NoWarn);CS8602;IL2091</NoWarn>
+        <NoWarn>$(NoWarn);CS8602</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>

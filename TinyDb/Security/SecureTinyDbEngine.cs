@@ -124,7 +124,7 @@ public sealed class SecureTinyDbEngine : IDisposable
         /// <summary>
         /// 获取集合（带权限检查）
         /// </summary>
-        public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>() 
+        public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>() 
             where T : class, new()
         {
             ThrowIfDisposed();

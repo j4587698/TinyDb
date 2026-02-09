@@ -71,7 +71,7 @@ public sealed class TinyDbOptions
     /// <summary>
     /// 用户自定义数据（64字节）
     /// </summary>
-    public byte[] UserData { get; set; } = Array.Empty<byte>();
+    public byte[]? UserData { get; set; } = Array.Empty<byte>();
 
     /// <summary>
     /// 是否启用压缩

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -33,7 +34,7 @@ public class QueryPipelineNullEdgeCoverageTests
             new() { Id = 2, Category = "B" }
         };
 
-        var query = items.AsQueryable().Where(x => x.Id > 1);
+        var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
         var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
 
         var ids = result.Cast<Item>().Select(x => x.Id).ToList();
@@ -49,7 +50,7 @@ public class QueryPipelineNullEdgeCoverageTests
             new() { Id = 2, Category = "A" }
         };
 
-        var query = items.AsQueryable()
+        var query = TestQueryables.InMemory(items)
             .GroupBy(x => x.Category)
             .Select(g => g.Key);
 
@@ -69,7 +70,7 @@ public class QueryPipelineNullEdgeCoverageTests
             new() { Id = 2, Category = "A" }
         };
 
-        var query = items.AsQueryable()
+        var query = TestQueryables.InMemory(items)
             .Select(x => new Projection { Category = x.Category })
             .GroupBy(x => x.Category)
             .Select(g => g.Key);
@@ -104,4 +105,3 @@ public class QueryPipelineNullEdgeCoverageTests
         await Assert.That(mixed).IsNotEqualTo(0);
     }
 }
-

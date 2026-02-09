@@ -15,8 +15,8 @@ public class TransactionOperationCloneBranchCoverageTests
         var op = new TransactionOperation(TransactionOperationType.Insert, "c", documentId: new BsonInt32(1));
         var clone = op.Clone();
 
-        await Assert.That(clone.OriginalDocument).IsNull();
-        await Assert.That(clone.NewDocument).IsNull();
+        await Assert.That((object?)clone.OriginalDocument).IsNull();
+        await Assert.That((object?)clone.NewDocument).IsNull();
     }
 
     [Test]
@@ -34,10 +34,9 @@ public class TransactionOperationCloneBranchCoverageTests
 
         var clone = op.Clone();
 
-        await Assert.That(clone.OriginalDocument).IsNotNull();
-        await Assert.That(clone.NewDocument).IsNotNull();
+        await Assert.That((object?)clone.OriginalDocument).IsNotNull();
+        await Assert.That((object?)clone.NewDocument).IsNotNull();
         await Assert.That(ReferenceEquals(clone.OriginalDocument, original)).IsFalse();
         await Assert.That(ReferenceEquals(clone.NewDocument, updated)).IsFalse();
     }
 }
-

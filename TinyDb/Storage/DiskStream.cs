@@ -352,7 +352,7 @@ public sealed class DiskStream : IDiskStream
         await _semaphore.WaitAsync(cancellationToken);
         try
         {
-            await _fileStream.FlushAsync(cancellationToken);
+            _fileStream.Flush(true);
         }
         finally
         {

@@ -23,6 +23,18 @@ public class QueryableCoverageTests
     private QueryExecutor _executor = null!;
     private int _testCounter;
 
+    private sealed class NamePriceProjection
+    {
+        public NamePriceProjection(string? name, decimal price)
+        {
+            Name = name ?? string.Empty;
+            Price = price;
+        }
+
+        public string Name { get; }
+        public decimal Price { get; }
+    }
+
     [Before(Test)]
     public void Setup()
     {
@@ -129,7 +141,7 @@ public class QueryableCoverageTests
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
 
         // Act
-        var results = queryable.Select(p => new { p.Name, p.Price }).ToList();
+        var results = queryable.Select(p => new NamePriceProjection(p.Name, p.Price)).ToList();
 
         // Assert
         await Assert.That(results.Count).IsEqualTo(2);

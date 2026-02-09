@@ -40,9 +40,9 @@ public class QueryableAdditionalBranchCoverageTests
         var items = new[] { new Entity { Id = 1 } };
         Expression<Func<Entity, int>> nonBoolPredicate = x => x.Id;
 
-        var allMethod = typeof(FakeTerminalMethods)
-            .GetMethod(nameof(FakeTerminalMethods.All), BindingFlags.Public | BindingFlags.Static)!
-            .MakeGenericMethod(typeof(Entity));
+        var allMethod =
+            ((MethodCallExpression)((Expression<Func<IEnumerable<Entity>, Expression<Func<Entity, int>>, bool>>)
+                ((source, predicate) => FakeTerminalMethods.All(source, predicate))).Body).Method;
 
         var call = Expression.Call(allMethod, Expression.Constant(items), Expression.Quote(nonBoolPredicate));
         var result = executeTerminal!.Invoke(null, new object[] { items, call });

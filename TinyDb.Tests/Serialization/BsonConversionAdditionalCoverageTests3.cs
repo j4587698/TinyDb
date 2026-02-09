@@ -85,8 +85,7 @@ public class BsonConversionAdditionalCoverageTests3
         await Assert.That(((string)value!).Length).IsGreaterThan(0);
 
         var value2 = BsonConversion.FromBsonValue(new BsonInt32(5), typeof(BsonInt32));
-        await Assert.That(value2).IsTypeOf<string>();
-        await Assert.That((string)value2!).IsEqualTo("5");
+        await Assert.That(value2).IsTypeOf<BsonInt32>();
+        await Assert.That(((BsonInt32)value2!).Value).IsEqualTo(5);
     }
 }
-

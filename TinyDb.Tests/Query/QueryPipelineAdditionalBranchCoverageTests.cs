@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Query;
 using TinyDb.Tests.Utils;
 using TUnit.Assertions;
@@ -15,7 +14,7 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
     public async Task ExecuteAot_WhenExtractedPredicateProvided_ShouldSkipInMemoryWhere()
     {
         var data = Seed();
-        var source = data.AsQueryable();
+        var source = TestQueryables.InMemory(data);
 
         var expression = source.Where(x => x.Category.PadLeft(2) == "ZZ").Expression;
 
@@ -31,7 +30,7 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
     public async Task ExecuteAot_WhenExtractedPredicateNull_ShouldApplyInMemoryWhere()
     {
         var data = Seed();
-        var source = data.AsQueryable();
+        var source = TestQueryables.InMemory(data);
 
         var expression = source.Where(x => x.InStock).Expression;
 
@@ -47,12 +46,19 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
     public async Task ExecuteAot_SkipTake_WithNonConstant_ShouldNoOp()
     {
         var data = Seed();
-        var source = data.AsQueryable();
+        var source = TestQueryables.InMemory(data);
         var holder = new Holder { Count = 2 };
         var countExpr = Expression.Property(Expression.Constant(holder), ExpressionMemberInfo.Property<Holder, int>(x => x.Count));
 
-        var skip = Expression.Call(GetQueryableMethod(nameof(System.Linq.Queryable.Skip), typeof(int)).MakeGenericMethod(typeof(Item)), source.Expression, countExpr);
-        var take = Expression.Call(GetQueryableMethod(nameof(System.Linq.Queryable.Take), typeof(int)).MakeGenericMethod(typeof(Item)), skip, countExpr);
+        var skipMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, IQueryable<Item>>>)
+                ((q, count) => Queryable.Skip(q, count))).Body).Method;
+        var takeMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, IQueryable<Item>>>)
+                ((q, count) => Queryable.Take(q, count))).Body).Method;
+
+        var skip = Expression.Call(skipMethod, source.Expression, countExpr);
+        var take = Expression.Call(takeMethod, skip, countExpr);
 
         var result = (IEnumerable<Item>)QueryPipeline.ExecuteAotForTests<Item>(
             take,
@@ -60,18 +66,6 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
             extractedPredicate: null)!;
 
         await Assert.That(result.Select(x => x.Id).SequenceEqual(new[] { 1, 2, 3, 4, 5 })).IsTrue();
-    }
-
-    private static MethodInfo GetQueryableMethod(string name, Type secondParameterType)
-    {
-        return typeof(System.Linq.Queryable)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(m =>
-                m.Name == name &&
-                m.DeclaringType == typeof(System.Linq.Queryable) &&
-                m.GetParameters().Length == 2 &&
-                m.GetParameters()[1].ParameterType == secondParameterType &&
-                m.IsGenericMethodDefinition);
     }
 
     private static List<Item> Seed()

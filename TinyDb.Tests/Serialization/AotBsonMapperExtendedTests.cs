@@ -89,7 +89,7 @@ public class AotBsonMapperExtendedTests
     [Test]
     public async Task ConvertPrimitiveValue_Enum_ShouldWork()
     {
-        await Assert.That(AotBsonMapper.ConvertValue((BsonValue)"A", typeof(TestEnum))).IsEqualTo(TestEnum.A);
+        await Assert.That(AotBsonMapper.ConvertEnumValue<TestEnum>((BsonValue)"A")).IsEqualTo(TestEnum.A);
         await Assert.That(AotBsonMapper.ConvertValue((BsonValue)1, typeof(TestEnum))).IsEqualTo(TestEnum.B);
         await Assert.That(AotBsonMapper.ConvertValue((BsonValue)0L, typeof(TestEnum))).IsEqualTo(TestEnum.A);
     }

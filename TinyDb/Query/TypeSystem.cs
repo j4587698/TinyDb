@@ -6,50 +6,37 @@ namespace TinyDb.Query;
 
 internal static class TypeSystem
 {
-    public static Type GetElementType(Type seqType)
+    public static Type GetElementType([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type seqType)
     {
-        var ienum = FindIEnumerable(seqType);
-        if (ienum == null) return seqType;
-        return ienum.GetGenericArguments()[0];
-    }
-
-    [UnconditionalSuppressMessage("Aot", "IL3050", Justification = "Standard IEnumerable generic types.")]
-    [UnconditionalSuppressMessage("TrimAnalysis", "IL2070", Justification = "Reflection on Type to find interfaces.")]
-    private static Type? FindIEnumerable(Type? seqType)
-    {
-        if (seqType == null || seqType == typeof(string))
-            return null;
+        if (seqType == typeof(string))
+        {
+            return seqType;
+        }
 
         if (seqType.IsArray)
-            return typeof(IEnumerable<>).MakeGenericType(seqType.GetElementType()!);
-
-        if (seqType.IsGenericType)
         {
-            foreach (var arg in seqType.GetGenericArguments())
+            return seqType.GetElementType() ?? seqType;
+        }
+
+        var current = seqType;
+        while (current != null && current != typeof(object))
+        {
+            if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(IEnumerable<>))
             {
-                var ienum = typeof(IEnumerable<>).MakeGenericType(arg);
-                if (ienum.IsAssignableFrom(seqType))
+                return current.GetGenericArguments()[0];
+            }
+
+            foreach (var iface in current.GetInterfaces())
+            {
+                if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IEnumerable<>))
                 {
-                    return ienum;
+                    return iface.GetGenericArguments()[0];
                 }
             }
+
+            current = current.BaseType;
         }
 
-        var ifaces = seqType.GetInterfaces();
-        if (ifaces != null && ifaces.Length > 0)
-        {
-            foreach (var iface in ifaces)
-            {
-                var ienum = FindIEnumerable(iface);
-                if (ienum != null) return ienum;
-            }
-        }
-
-        if (seqType.BaseType != null && seqType.BaseType != typeof(object))
-        {
-            return FindIEnumerable(seqType.BaseType);
-        }
-
-        return null;
+        return seqType;
     }
 }

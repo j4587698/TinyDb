@@ -1,5 +1,6 @@
 using TinyDb.Serialization;
 using TinyDb.Bson;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using System.Collections;
@@ -8,6 +9,7 @@ namespace TinyDb.Tests.Serialization;
 
 public class AotMapperComplexTests
 {
+    [Entity]
     public class ComplexTypes
     {
         public Hashtable NonGenericTable { get; set; } = new();

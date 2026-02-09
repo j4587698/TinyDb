@@ -6,6 +6,15 @@ namespace TinyDb.Tests.Utils;
 
 internal static class ExpressionMemberInfo
 {
+    public static PropertyInfo Property<TProperty>(Expression<Func<TProperty>> expression)
+    {
+        if (expression == null) throw new ArgumentNullException(nameof(expression));
+
+        var memberExpression = GetMemberExpression(expression);
+        return memberExpression.Member as PropertyInfo
+               ?? throw new ArgumentException("è¡¨è¾¾å¼å¿…é¡»æ˜¯å±žæ€§è®¿é—®ã€‚", nameof(expression));
+    }
+
     public static PropertyInfo Property<T, TProperty>(Expression<Func<T, TProperty>> expression)
     {
         if (expression == null) throw new ArgumentNullException(nameof(expression));
@@ -34,4 +43,3 @@ internal static class ExpressionMemberInfo
         };
     }
 }
-

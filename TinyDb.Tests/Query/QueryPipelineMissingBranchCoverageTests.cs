@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Query;
 using TinyDb.Tests.Utils;
 using TUnit.Assertions;
@@ -28,7 +27,7 @@ public class QueryPipelineMissingBranchCoverageTests
             new() { Id = 2, Category = "B" }
         };
 
-        var query = items.AsQueryable().Where(x => x.Id > 1);
+        var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
 
         var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: Expression.Constant(true))!;
         var list = result.Cast<Item>().Select(x => x.Id).OrderBy(x => x).ToList();
@@ -45,14 +44,21 @@ public class QueryPipelineMissingBranchCoverageTests
             new() { Id = 2, Category = "B" }
         };
 
-        var orderedQuery = items.AsQueryable().OrderBy(x => x.Id);
+        var orderedQuery = TestQueryables.InMemory(items).OrderBy(x => x.Id);
         var sourceExpr = orderedQuery.Expression;
 
         var holder = new Holder { Value = 1 };
         var countExpr = Expression.Property(Expression.Constant(holder), ExpressionMemberInfo.Property<Holder, int>(x => x.Value));
 
-        var skipExpr = Expression.Call(typeof(Queryable), nameof(Queryable.Skip), new[] { typeof(Item) }, sourceExpr, countExpr);
-        var takeExpr = Expression.Call(typeof(Queryable), nameof(Queryable.Take), new[] { typeof(Item) }, skipExpr, countExpr);
+        var skipMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, IQueryable<Item>>>)
+                ((q, count) => Queryable.Skip(q, count))).Body).Method;
+        var takeMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, IQueryable<Item>>>)
+                ((q, count) => Queryable.Take(q, count))).Body).Method;
+
+        var skipExpr = Expression.Call(skipMethod, sourceExpr, countExpr);
+        var takeExpr = Expression.Call(takeMethod, skipExpr, countExpr);
 
         var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(takeExpr, items, extractedPredicate: null)!;
         var ids = result.Cast<Item>().Select(x => x.Id).ToList();
@@ -71,7 +77,7 @@ public class QueryPipelineMissingBranchCoverageTests
             new Item { Id = 2, Category = "B" }
         };
 
-        var query = items.AsQueryable().Where(x => x.Id > 1);
+        var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
 
         var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
         var list = result.Cast<Item>().Where(x => x != null).Select(x => x.Id).ToList();
@@ -89,7 +95,7 @@ public class QueryPipelineMissingBranchCoverageTests
             new() { Id = 3, Category = null! }
         };
 
-        var query = items.AsQueryable()
+        var query = TestQueryables.InMemory(items)
             .Select(x => x.Category)
             .Where(x => x == "A");
 
@@ -103,9 +109,11 @@ public class QueryPipelineMissingBranchCoverageTests
     public async Task ExecuteAot_UnsupportedOperation_ShouldThrow()
     {
         var items = new List<Item> { new() { Id = 1, Category = "A" } };
-        var sourceExpr = items.AsQueryable().Expression;
+        var sourceExpr = TestQueryables.InMemory(items).Expression;
 
-        var reverseExpr = Expression.Call(typeof(Queryable), nameof(Queryable.Reverse), new[] { typeof(Item) }, sourceExpr);
+        var reverseMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, IQueryable<Item>>>)(q => Queryable.Reverse(q))).Body).Method;
+        var reverseExpr = Expression.Call(reverseMethod, sourceExpr);
         await Assert.That(() => QueryPipeline.ExecuteAotForTests<Item>(reverseExpr, items, extractedPredicate: null))
             .ThrowsExactly<NotSupportedException>();
     }
@@ -120,7 +128,7 @@ public class QueryPipelineMissingBranchCoverageTests
             new() { Id = 2, Category = "C" }
         };
 
-        var query = items.AsQueryable()
+        var query = TestQueryables.InMemory(items)
             .OrderBy(x => x.Id)
             .ThenByDescending(x => x.Category);
 
@@ -140,127 +148,106 @@ public class QueryPipelineMissingBranchCoverageTests
             new() { Id = 3, Category = "B" }
         };
 
-        var sourceExpr = items.AsQueryable().Expression;
+        var sourceExpr = TestQueryables.InMemory(items).Expression;
 
         object Execute(Expression expr) =>
             QueryPipeline.ExecuteAotForTests<Item>(expr, items, extractedPredicate: null)!;
 
-        var countExpr = Expression.Call(typeof(Queryable), nameof(Queryable.Count), new[] { typeof(Item) }, sourceExpr);
+        var countMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int>>)(q => Queryable.Count(q))).Body).Method;
+        var countPredicateMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, int>>)
+                ((q, predicate) => Queryable.Count(q, predicate))).Body).Method;
+        var longCountMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, long>>)(q => Queryable.LongCount(q))).Body).Method;
+        var anyMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, bool>>)(q => Queryable.Any(q))).Body).Method;
+        var anyPredicateMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, bool>>)
+                ((q, predicate) => Queryable.Any(q, predicate))).Body).Method;
+        var allMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, bool>>)
+                ((q, predicate) => Queryable.All(q, predicate))).Body).Method;
+        var firstMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Item>>)(q => Queryable.First(q))).Body).Method;
+        var firstOrDefaultPredicateMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, Item?>>)
+                ((q, predicate) => Queryable.FirstOrDefault(q, predicate))).Body).Method;
+        var singlePredicateMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, Item>>)
+                ((q, predicate) => Queryable.Single(q, predicate))).Body).Method;
+        var singleOrDefaultPredicateMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, Item?>>)
+                ((q, predicate) => Queryable.SingleOrDefault(q, predicate))).Body).Method;
+        var lastMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Item>>)(q => Queryable.Last(q))).Body).Method;
+        var lastOrDefaultPredicateMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, Item?>>)
+                ((q, predicate) => Queryable.LastOrDefault(q, predicate))).Body).Method;
+        var elementAtMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, Item>>)
+                ((q, index) => Queryable.ElementAt(q, index))).Body).Method;
+        var elementAtOrDefaultMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, Item?>>)
+                ((q, index) => Queryable.ElementAtOrDefault(q, index))).Body).Method;
+
+        var countExpr = Expression.Call(countMethod, sourceExpr);
         await Assert.That((int)Execute(countExpr)).IsEqualTo(3);
 
         Expression<Func<Item, bool>> isCategoryB = x => x.Category == "B";
-        var countWhereExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.Count),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote(isCategoryB));
+        var countWhereExpr = Expression.Call(countPredicateMethod, sourceExpr, Expression.Quote(isCategoryB));
         await Assert.That((int)Execute(countWhereExpr)).IsEqualTo(2);
 
-        var longCountExpr = Expression.Call(typeof(Queryable), nameof(Queryable.LongCount), new[] { typeof(Item) }, sourceExpr);
+        var longCountExpr = Expression.Call(longCountMethod, sourceExpr);
         await Assert.That((long)Execute(longCountExpr)).IsEqualTo(3L);
 
-        var anyExpr = Expression.Call(typeof(Queryable), nameof(Queryable.Any), new[] { typeof(Item) }, sourceExpr);
+        var anyExpr = Expression.Call(anyMethod, sourceExpr);
         await Assert.That((bool)Execute(anyExpr)).IsTrue();
 
-        var anyWhereExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.Any),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote(isCategoryB));
+        var anyWhereExpr = Expression.Call(anyPredicateMethod, sourceExpr, Expression.Quote(isCategoryB));
         await Assert.That((bool)Execute(anyWhereExpr)).IsTrue();
 
         Expression<Func<Item, bool>> allIdsPositive = x => x.Id > 0;
-        var allExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.All),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote(allIdsPositive));
+        var allExpr = Expression.Call(allMethod, sourceExpr, Expression.Quote(allIdsPositive));
         await Assert.That((bool)Execute(allExpr)).IsTrue();
 
         Expression<Func<Item, bool>> allCategoryA = x => x.Category == "A";
-        var allFalseExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.All),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote(allCategoryA));
+        var allFalseExpr = Expression.Call(allMethod, sourceExpr, Expression.Quote(allCategoryA));
         await Assert.That((bool)Execute(allFalseExpr)).IsFalse();
 
-        var firstExpr = Expression.Call(typeof(Queryable), nameof(Queryable.First), new[] { typeof(Item) }, sourceExpr);
+        var firstExpr = Expression.Call(firstMethod, sourceExpr);
         await Assert.That(((Item)Execute(firstExpr)).Id).IsEqualTo(1);
 
-        var firstOrDefaultExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.FirstOrDefault),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 999)));
+        var firstOrDefaultExpr = Expression.Call(firstOrDefaultPredicateMethod, sourceExpr, Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 999)));
         await Assert.That(Execute(firstOrDefaultExpr)).IsNull();
 
-        var singleExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.Single),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 1)));
+        var singleExpr = Expression.Call(singlePredicateMethod, sourceExpr, Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 1)));
         await Assert.That(((Item)Execute(singleExpr)).Id).IsEqualTo(1);
 
-        var singleOrDefaultExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.SingleOrDefault),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 999)));
+        var singleOrDefaultExpr = Expression.Call(singleOrDefaultPredicateMethod, sourceExpr, Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 999)));
         await Assert.That(Execute(singleOrDefaultExpr)).IsNull();
 
-        var lastExpr = Expression.Call(typeof(Queryable), nameof(Queryable.Last), new[] { typeof(Item) }, sourceExpr);
+        var lastExpr = Expression.Call(lastMethod, sourceExpr);
         await Assert.That(((Item)Execute(lastExpr)).Id).IsEqualTo(3);
 
-        var lastOrDefaultExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.LastOrDefault),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 999)));
+        var lastOrDefaultExpr = Expression.Call(lastOrDefaultPredicateMethod, sourceExpr, Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id == 999)));
         await Assert.That(Execute(lastOrDefaultExpr)).IsNull();
 
-        var elementAtExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.ElementAt),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Constant(1));
+        var elementAtExpr = Expression.Call(elementAtMethod, sourceExpr, Expression.Constant(1));
         await Assert.That(((Item)Execute(elementAtExpr)).Id).IsEqualTo(2);
 
-        var elementAtOrDefaultExpr = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.ElementAtOrDefault),
-            new[] { typeof(Item) },
-            sourceExpr,
-            Expression.Constant(99));
+        var elementAtOrDefaultExpr = Expression.Call(elementAtOrDefaultMethod, sourceExpr, Expression.Constant(99));
         await Assert.That(Execute(elementAtOrDefaultExpr)).IsNull();
     }
 
     [Test]
     public async Task IsTerminal_ShouldRecognizeAllKnownTerminalOperations()
     {
-        var method = typeof(QueryPipeline).GetMethod("IsTerminal", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         foreach (var name in new[]
                  {
                      "Count", "LongCount", "Any", "All", "First", "FirstOrDefault", "Single", "SingleOrDefault",
                      "Last", "LastOrDefault", "ElementAt", "ElementAtOrDefault"
                  })
         {
-            var isTerminal = (bool)method!.Invoke(null, new object[] { name })!;
-            await Assert.That(isTerminal).IsTrue();
+            await Assert.That(QueryPipeline.IsTerminalForTests(name)).IsTrue();
         }
 
-        await Assert.That((bool)method!.Invoke(null, new object[] { "Where" })!).IsFalse();
+        await Assert.That(QueryPipeline.IsTerminalForTests("Where")).IsFalse();
     }
 
     [Test]
@@ -273,28 +260,19 @@ public class QueryPipelineMissingBranchCoverageTests
         };
 
         // ExecuteWhereGeneric<T>: provide a LambdaExpression that returns a non-bool value (Id)
-        var queryable = items.AsQueryable();
+        var queryable = TestQueryables.InMemory(items);
         Expression<Func<Item, int>> selector = x => x.Id;
-        var dummyCall = Expression.Call(
-            typeof(Queryable),
-            nameof(Queryable.Select),
-            new[] { typeof(Item), typeof(int) },
-            queryable.Expression,
-            Expression.Quote(selector));
+        var selectMethod =
+            ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, int>>, IQueryable<int>>>)
+                ((q, sel) => Queryable.Select(q, sel))).Body).Method;
+        var dummyCall = Expression.Call(selectMethod, queryable.Expression, Expression.Quote(selector));
 
-        var whereGeneric = typeof(QueryPipeline).GetMethod("ExecuteWhereGeneric", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(whereGeneric).IsNotNull();
-
-        var filteredGeneric = (IEnumerable<Item>)whereGeneric!.MakeGenericMethod(typeof(Item))
-            .Invoke(null, new object[] { items, dummyCall })!;
+        var filteredGeneric = QueryPipeline.ExecuteWhereGenericForTests(items, dummyCall);
         await Assert.That(filteredGeneric.Any()).IsFalse();
 
         // ExecuteWhereLambda: same idea for the non-generic path
-        var whereLambda = typeof(QueryPipeline).GetMethod("ExecuteWhereLambda", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(whereLambda).IsNotNull();
-
         var source = new object?[] { items[0], null, items[1] };
-        var filtered = (IEnumerable)whereLambda!.Invoke(null, new object[] { source, selector })!;
+        var filtered = QueryPipeline.ExecuteWhereLambdaForTests(source, selector);
         await Assert.That(filtered.Cast<object>().Any()).IsFalse();
     }
 
