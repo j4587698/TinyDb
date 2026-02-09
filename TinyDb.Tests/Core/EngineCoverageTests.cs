@@ -132,6 +132,14 @@ public class EngineCoverageTests
 
         using var lockStream = new FileStream(_dbFile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
 
+        // Windows: an open handle without FileShare.Delete prevents rename/replace, so we expect CompactDatabase to fail.
+        // Linux/macOS: renaming over an open file is allowed, so CompactDatabase may succeed even if another handle exists.
+        if (!OperatingSystem.IsWindows())
+        {
+            await Assert.That(() => engine.CompactDatabase()).ThrowsNothing();
+            return;
+        }
+
         Exception? caught = null;
         try { engine.CompactDatabase(); } catch (Exception ex) { caught = ex; }
 
