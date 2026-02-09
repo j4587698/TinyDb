@@ -10,21 +10,22 @@ namespace TinyDb.Index;
 /// <summary>
 /// 磁盘 B+ 树节点
 /// </summary>
-public sealed class DiskBTreeNode
+public sealed class DiskBTreeNode : IDisposable
 {
     private readonly Page _page;
     private readonly PageManager _pm;
     private bool _isDirty;
-    
+    private bool _disposed;
+
     public bool IsLeaf { get; private set; }
     public uint ParentId { get; private set; }
     public uint NextSiblingId { get; private set; }
     public uint PrevSiblingId { get; private set; }
     public long TreeEntryCount { get; set; }
-    
+
     public List<IndexKey> Keys { get; private set; }
     public List<uint> ChildrenIds { get; private set; } 
-    public List<BsonValue> Values { get; private set; } 
+    public List<BsonValue> Values { get; private set; }
 
     public uint PageId => _page.PageID;
     public int KeyCount => Keys.Count;
@@ -33,10 +34,14 @@ public sealed class DiskBTreeNode
     {
         _page = page ?? throw new ArgumentNullException(nameof(page));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
+        
+        // 锁定页面，防止被 LRU 置换
+        _page.Pin();
+
         Keys = new List<IndexKey>();
         ChildrenIds = new List<uint>();
         Values = new List<BsonValue>();
-        
+
         if (_page.PageType == PageType.Index && _page.Header.ItemCount > 0)
         {
             LoadFromPage();
@@ -48,6 +53,14 @@ public sealed class DiskBTreeNode
         }
     }
 
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        
+        // 释放页面锁定
+        _page.Unpin();
+    }
     public void InitAsRoot()
     {
         IsLeaf = true;

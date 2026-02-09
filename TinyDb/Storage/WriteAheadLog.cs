@@ -20,11 +20,17 @@ public sealed class WriteAheadLog : IDisposable
     private readonly int _maxRecordSize;
     private bool _disposed;
     private bool _hasPendingEntries;
+    private long _flushedLSN;
 
     /// <summary>
     /// 是否启用 WAL
     /// </summary>
     public bool IsEnabled { get; }
+    
+    /// <summary>
+    /// 当前已刷盘的 LSN
+    /// </summary>
+    public long FlushedLSN => _flushedLSN;
 
     /// <summary>
     /// 是否有未提交的日志记录
@@ -115,11 +121,18 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled) return;
 
-        var data = page.Snapshot(includeUnusedTail: false);
-
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var stream = _stream!;
+            long lsn = stream.Position;
+            
+            // 更新页面头部的 LSN
+            var header = page.Header;
+            header.LSN = lsn;
+            page.UpdateHeader(header);
+            
+            var data = page.Snapshot(includeUnusedTail: true);
             await WriteEntryAsync(page.PageID, data, cancellationToken).ConfigureAwait(false);
             _hasPendingEntries = true;
         }
@@ -132,11 +145,19 @@ public sealed class WriteAheadLog : IDisposable
     public void AppendPage(Page page)
     {
         if (!IsEnabled) return;
-        var data = page.Snapshot(includeUnusedTail: true);
 
         _mutex.Wait();
         try
         {
+            var stream = _stream!;
+            long lsn = stream.Position;
+            
+            // 更新页面头部的 LSN
+            var header = page.Header;
+            header.LSN = lsn;
+            page.UpdateHeader(header);
+
+            var data = page.Snapshot(includeUnusedTail: true);
             WriteEntry(page.PageID, data);
             _hasPendingEntries = true;
         }
@@ -181,6 +202,25 @@ public sealed class WriteAheadLog : IDisposable
         await stream.WriteAsync(data, 0, data.Length, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task FlushToLSNAsync(long targetLSN, CancellationToken cancellationToken = default)
+    {
+        if (!IsEnabled || targetLSN <= _flushedLSN) return;
+
+        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (targetLSN > _flushedLSN)
+            {
+                _stream!.Flush(true);
+                _flushedLSN = _stream.Position;
+            }
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
     public async Task FlushLogAsync(CancellationToken cancellationToken = default)
     {
         if (!IsEnabled || !_hasPendingEntries) return;
@@ -191,6 +231,7 @@ public sealed class WriteAheadLog : IDisposable
             if (_hasPendingEntries)
             {
                 _stream!.Flush(true);
+                _flushedLSN = _stream.Position;
             }
         }
         finally

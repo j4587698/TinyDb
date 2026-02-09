@@ -11,12 +11,25 @@ public sealed class PageManager : IDisposable
     private readonly IDiskStream _diskStream;
     private readonly uint _pageSize;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
-    private readonly object _allocationLock = new();
+    private readonly object _allocationLock = new(); // 用于分配新页面的锁
+    private readonly object[] _pageLocks; // 分段锁，用于页面级别的同步
     private readonly LRUCache<uint, Page> _lruCache;
+    private const int LockStripes = 64; // 分段锁的数量
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private long _fileSize;
     private bool _disposed;
+
+    private Func<long, Task>? _flushLogToLsn;
+
+    /// <summary>
+    /// 注册 WAL 刷新回调
+    /// </summary>
+    /// <param name="flushLogToLsn">根据 LSN 刷新日志的异步函数</param>
+    public void RegisterWAL(Func<long, Task> flushLogToLsn)
+    {
+        _flushLogToLsn = flushLogToLsn;
+    }
 
     /// <summary>
     /// 页面大小
@@ -59,6 +72,8 @@ public sealed class PageManager : IDisposable
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
         _lruCache = new LRUCache<uint, Page>(maxCacheSize);
+        _pageLocks = new object[LockStripes];
+        for (int i = 0; i < LockStripes; i++) _pageLocks[i] = new object();
         _fileSize = _diskStream.Size;
         _nextPageID = 0;
         _firstFreePageID = 0;
@@ -328,6 +343,12 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
 
+        // WAL 检查：日志必须先于数据落盘
+        if (_flushLogToLsn != null && page.Header.LSN > 0)
+        {
+            _flushLogToLsn(page.Header.LSN).GetAwaiter().GetResult();
+        }
+
         lock (_allocationLock)
         {
             // 更新页面校验和
@@ -582,17 +603,30 @@ public sealed class PageManager : IDisposable
     /// </summary>
     private void EvictLeastRecentlyUsed()
     {
-        if (_lruCache.TryGetLeastRecentlyUsed(out var pageID, out var page))
+        // 尝试从 LRU 获取多个候选者，以防第一个被 Pin 住
+        var candidates = _lruCache.GetLeastRecentlyUsed(10);
+        foreach (var pageID in candidates)
         {
-            if (_pageCache.TryRemove(pageID, out var removedPage))
+            var lockObj = _pageLocks[pageID % LockStripes];
+            lock (lockObj)
             {
-                if (removedPage.IsDirty)
+                if (_pageCache.TryGetValue(pageID, out var page))
                 {
-                    SavePage(removedPage);
+                    // 如果页面被锁定（PinCount > 0），不能驱逐
+                    if (page.PinCount > 0) continue;
+
+                    if (_pageCache.TryRemove(pageID, out var removedPage))
+                    {
+                        if (removedPage.IsDirty)
+                        {
+                            SavePage(removedPage);
+                        }
+                        removedPage.Dispose();
+                        _lruCache.Remove(pageID);
+                        return; // 成功驱逐一个，退出
+                    }
                 }
-                removedPage.Dispose();
             }
-            _lruCache.Remove(pageID);
         }
     }
 

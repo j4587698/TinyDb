@@ -407,23 +407,41 @@ public sealed class LockManager : IDisposable
     /// <returns>是否会导致死锁</returns>
     private bool WouldCauseDeadlock(Guid transactionId, string resourceKey, LockType lockType)
     {
-        // 简化的死锁检测：检查事务是否持有其他资源的锁
-        if (!_transactionLocks.TryGetValue(transactionId, out var heldLocks))
+        var visited = new HashSet<Guid>();
+        return CheckDeadlockRecursive(transactionId, transactionId, resourceKey, lockType, visited);
+    }
+
+    private bool CheckDeadlockRecursive(Guid targetTransactionId, Guid currentTransactionId, string resourceKey, LockType lockType, HashSet<Guid> visited)
+    {
+        if (visited.Contains(currentTransactionId)) return false;
+        visited.Add(currentTransactionId);
+
+        // 查找谁持有 resourceKey，并且持有者是否在等待 targetTransactionId 持有的资源
+        if (!_lockBuckets.TryGetValue(resourceKey, out var bucket))
             return false;
 
-        foreach (var heldLock in heldLocks)
+        lock (bucket)
         {
-            if (heldLock.ResourceKey != resourceKey && heldLock.IsGranted)
+            // 找出所有与当前请求冲突的持有者
+            var conflictingHolders = bucket.ActiveLocks.Values
+                .Where(l => l.TransactionId != currentTransactionId && AreLocksConflicting(l.LockType, lockType))
+                .Select(l => l.TransactionId)
+                .Distinct();
+
+            foreach (var holderId in conflictingHolders)
             {
-                // 检查其他事务是否在等待当前事务持有的资源
-                if (_lockBuckets.TryGetValue(heldLock.ResourceKey, out var bucket))
+                if (holderId == targetTransactionId) return true; // 发现环路
+
+                // 检查持有者 holderId 是否在等待任何资源
+                if (_transactionLocks.TryGetValue(holderId, out var holderRequests))
                 {
-                    foreach (var waitingRequest in bucket.PendingRequests)
+                    var pendingRequest = holderRequests.FirstOrDefault(r => !r.IsGranted);
+                    if (pendingRequest != null)
                     {
-                        if (waitingRequest.TransactionId != transactionId &&
-                            AreLocksConflicting(waitingRequest.LockType, lockType))
+                        // 递归检查持有者正在等待的资源
+                        if (CheckDeadlockRecursive(targetTransactionId, holderId, pendingRequest.ResourceKey, pendingRequest.LockType, visited))
                         {
-                            return true; // 可能的死锁
+                            return true;
                         }
                     }
                 }

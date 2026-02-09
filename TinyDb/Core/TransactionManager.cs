@@ -106,6 +106,9 @@ public sealed class TransactionManager : IDisposable
                 // 应用所有更改到数据库
                 ApplyOperationsToDatabase(transaction);
 
+                // 关键：在标记为 Committed 之前，确保所有变更已持久化到磁盘/WAL
+                _engine.CommitTransactionDurability();
+
                 transaction.State = TransactionState.Committed;
             }
             catch (Exception ex)
@@ -399,9 +402,30 @@ public sealed class TransactionManager : IDisposable
     /// <param name="transaction">事务</param>
     private void ApplyOperationsToDatabase(Transaction transaction)
     {
-        foreach (var operation in transaction.Operations)
+        int appliedCount = 0;
+        try
         {
-            ApplySingleOperation(operation);
+            foreach (var operation in transaction.Operations)
+            {
+                ApplySingleOperation(operation);
+                appliedCount++;
+            }
+        }
+        catch (Exception)
+        {
+            // 如果应用过程中出错，回滚已经成功的操作
+            for (int i = appliedCount - 1; i >= 0; i--)
+            {
+                try
+                {
+                    RollbackSingleOperation(transaction.Operations[i]);
+                }
+                catch
+                {
+                    // 记录但忽略回滚过程中的二次异常，优先抛出原始异常
+                }
+            }
+            throw;
         }
     }
 
@@ -478,12 +502,10 @@ public sealed class TransactionManager : IDisposable
     /// <param name="transaction">事务</param>
     private void RollbackOperations(Transaction transaction)
     {
-        // 按相反顺序回滚操作
-        var operations = transaction.Operations.ToList();
-        operations.Reverse();
-        foreach (var operation in operations)
+        // 按相反顺序回滚操作（后进先出）
+        for (int i = transaction.Operations.Count - 1; i >= 0; i--)
         {
-            RollbackSingleOperation(operation);
+            RollbackSingleOperation(transaction.Operations[i]);
         }
     }
 
@@ -493,35 +515,43 @@ public sealed class TransactionManager : IDisposable
     /// <param name="operation">操作</param>
     private void RollbackSingleOperation(TransactionOperation operation)
     {
-        // 关键修复：TinyDb 使用延迟写入（Deferred Write）事务模型。
-        // 数据操作（Insert/Update/Delete）仅记录在内存中，只有在 Commit 时才应用到数据库。
-        // 因此，Rollback 时数据库中并没有这些变更，不需要执行反向操作。
-        // 反向操作（如 Insert 对应的 Delete）实际上是有害的，因为它们会尝试删除之前可能存在的数据，
-        // 或者像本例中那样，Insert 撤销 Delete 操作时会错误地重新插入数据。
-        // 所以，对于数据操作，我们什么都不做。内存状态（Operations 列表）会在 RollbackTransaction 结束时被清除。
-
-        switch (operation.OperationType)
+        // 如果在 Commit 过程中部分应用了操作后发生失败，需要对已经物理生效的操作进行补偿（撤销）。
+        try
         {
-            case TransactionOperationType.Insert:
-            case TransactionOperationType.Update:
-            case TransactionOperationType.Delete:
-                // Do nothing. The operations were deferred and never applied.
-                break;
+            switch (operation.OperationType)
+            {
+                case TransactionOperationType.Insert:
+                    if (operation.DocumentId != null)
+                        _engine.DeleteDocument(operation.CollectionName, operation.DocumentId);
+                    break;
 
-            case TransactionOperationType.CreateIndex:
-                // 索引操作也是延迟的吗？如果是，则也不需要撤销。
-                // 如果它们是立即生效的（通常 DDL 是立即的），则需要撤销。
-                // 假设 RecordCreateIndex 没有立即调用 _engine.EnsureIndex。
-                // 检查 TransactionImpl.RecordCreateIndex -> 确实没有调用 EnsureIndex。
-                // 所以这里也应该什么都不做。
-                break;
+                case TransactionOperationType.Update:
+                    if (operation.OriginalDocument != null)
+                        _engine.UpdateDocument(operation.CollectionName, operation.OriginalDocument);
+                    break;
 
-            case TransactionOperationType.DropIndex:
-                // 同上。
-                break;
+                case TransactionOperationType.Delete:
+                    if (operation.OriginalDocument != null)
+                        _engine.InsertDocument(operation.CollectionName, operation.OriginalDocument);
+                    break;
 
-            default:
-                throw new NotSupportedException($"Operation type {operation.OperationType} rollback is not supported");
+                case TransactionOperationType.CreateIndex:
+                    if (!string.IsNullOrEmpty(operation.IndexName))
+                        _engine.GetIndexManager(operation.CollectionName).DropIndex(operation.IndexName);
+                    break;
+
+                case TransactionOperationType.DropIndex:
+                    if (!string.IsNullOrEmpty(operation.IndexName) && operation.IndexFields != null)
+                        _engine.GetIndexManager(operation.CollectionName).CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique);
+                    break;
+
+                default:
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"FATAL: Transaction compensation failed for {operation.OperationType}: {ex.Message}");
         }
     }
 

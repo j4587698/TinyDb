@@ -4,6 +4,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using TinyDb.Bson;
 using LinqExp = System.Linq.Expressions;
 
 namespace TinyDb.Query;
@@ -669,11 +670,17 @@ internal static class QueryPipeline
             if (ReferenceEquals(x, y)) return 0;
             if (x is null) return -1;
             if (y is null) return 1;
+
+            // 处理 BsonValue 的特殊比较
+            if (x is BsonValue bx && y is BsonValue by)
+            {
+                return bx.CompareTo(by);
+            }
             
-            // Try numeric
+            // 快速路径：数值比较
             if (IsNumeric(x) && IsNumeric(y))
             {
-                try { return Convert.ToDouble(x).CompareTo(Convert.ToDouble(y)); } catch { }
+                return ToDouble(x).CompareTo(ToDouble(y));
             }
 
             if (x is string xs && y is string ys)
@@ -681,12 +688,32 @@ internal static class QueryPipeline
                 return string.Compare(xs, ys, StringComparison.Ordinal);
             }
 
+            // 日期比较
+            if (x is DateTime d1 && y is DateTime d2) return d1.CompareTo(d2);
+
             if (x is IComparable cx && x.GetType() == y.GetType()) return cx.CompareTo(y);
             
             return string.Compare(x.ToString(), y.ToString(), StringComparison.Ordinal);
         }
         
-        private static bool IsNumeric(object x) => x is int || x is long || x is double || x is float || x is decimal || x is short || x is byte;
+        private static bool IsNumeric(object x) => 
+            x is int || x is long || x is double || x is float || x is decimal || 
+            x is short || x is byte || x is BsonDouble || x is BsonInt32 || x is BsonInt64;
+
+        private static double ToDouble(object val)
+        {
+            if (val is double d) return d;
+            if (val is int i) return i;
+            if (val is long l) return l;
+            if (val is float f) return f;
+            if (val is decimal dec) return (double)dec;
+            if (val is BsonDouble bd) return bd.Value;
+            if (val is BsonInt32 bi) return bi.Value;
+            if (val is BsonInt64 bl) return bl.Value;
+            
+            try { return Convert.ToDouble(val, System.Globalization.CultureInfo.InvariantCulture); }
+            catch { return 0.0; }
+        }
     }
 
 }

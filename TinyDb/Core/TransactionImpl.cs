@@ -277,28 +277,25 @@ internal sealed class Transaction : ITransaction
         }
 
         // 为了回滚删除索引操作，我们需要知道被删除的索引的定义
-        // 但这里我们简化处理，假设回滚时可以从元数据或其他地方恢复，
-        // 或者在 Apply 时如果失败才回滚。
-        // 对于已提交的 DropIndex，回滚意味着重新创建。
-        // 在 Record 阶段，我们可能需要查询现有索引信息并保存到 OriginalDocument 或专门的字段中
-        // 以便回滚。
+        // 在 Record 阶段，我们查询现有索引信息并保存到 TransactionOperation 中
         
         string[]? indexFields = null;
         bool unique = false;
         
-        // 尝试获取现有索引信息用于回滚
+        // 尝试从元数据获取现有索引信息用于回滚
         try
         {
-            var indexManager = _manager._engine.GetIndexManager(collectionName);
-            var index = indexManager.GetIndex(indexName);
-            if (index != null)
+            var meta = _manager._engine.GetCollectionMetadata(collectionName);
+            if (meta != null && meta.TryGetValue("indexes", out var indexesVal) && indexesVal is BsonDocument indexesDoc)
             {
-                // 注意：这里我们无法直接获取 Fields 和 Unique 属性，因为 GetIndex 返回的是 Index 类
-                // 而我们需要 IndexStatistics 或直接访问 internal 属性。
-                // 假设 IndexStatistics 包含这些信息。
-                var stats = index.GetStatistics();
-                indexFields = stats.Fields;
-                unique = stats.IsUnique;
+                if (indexesDoc.TryGetValue(indexName, out var indexInfo) && indexInfo is BsonDocument indexMeta)
+                {
+                    if (indexMeta.TryGetValue("fields", out var fieldsVal) && fieldsVal is BsonArray fieldsArray)
+                    {
+                        indexFields = fieldsArray.Select(v => v.ToString()).ToArray();
+                    }
+                    unique = indexMeta.TryGetValue("unique", out var u) && u.ToBoolean();
+                }
             }
         }
         catch

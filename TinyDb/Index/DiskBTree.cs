@@ -12,7 +12,13 @@ public sealed class DiskBTree : IDisposable
     private readonly PageManager _pm;
     private readonly uint _rootPageId;
     private readonly int _maxKeys;
+    private readonly ReaderWriterLockSlim _lock = new();
     private bool _disposed;
+
+    public void EnterReadLock() => _lock.EnterReadLock();
+    public void ExitReadLock() => _lock.ExitReadLock();
+    public void EnterWriteLock() => _lock.EnterWriteLock();
+    public void ExitWriteLock() => _lock.ExitWriteLock();
     
     /// <summary>
     /// 获取根节点的页面 ID。

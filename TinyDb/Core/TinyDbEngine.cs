@@ -22,6 +22,19 @@ using Microsoft.IO;
 
 namespace TinyDb.Core;
 
+/// <summary>
+/// TinyDb 核心存储引擎。
+/// 该引擎管理数据库的完整生命周期，包括文件 I/O、页面管理、写前日志 (WAL)、
+/// 事务协调、索引管理以及文档的 CRUD 操作。
+/// </summary>
+/// <remarks>
+/// 架构层次：
+/// 1. 存储层：IDiskStream -> PageManager -> WriteAheadLog (WAL)
+/// 2. 逻辑层：CollectionMetaStore -> CollectionState -> IDocumentCollection
+/// 3. 操作层：TransactionManager -> IndexManager -> QueryExecutor
+/// 
+/// 引擎确保在崩溃后通过 WAL 自动恢复数据一致性。
+/// </remarks>
 public sealed class TinyDbEngine : IDisposable
 {
     private readonly string _filePath;
@@ -108,6 +121,10 @@ public sealed class TinyDbEngine : IDisposable
 
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
+        
+        // 关键：将 WAL 注册到页面管理器，启用 Write-Ahead 强制刷新逻辑
+        _pageManager.RegisterWAL(lsn => _writeAheadLog.FlushToLSNAsync(lsn));
+
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), NormalizeInterval(_options.JournalFlushDelay));
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
         _dataPageAccess = new DataPageAccess(_pageManager, _largeDocumentStorage, _writeAheadLog);
@@ -193,6 +210,14 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// 初始化数据库。
+    /// 此方法是引擎启动的核心，负责：
+    /// 1. 执行 WAL 重放以实现崩溃恢复。
+    /// 2. 检查数据库文件完整性或初始化新文件。
+    /// 3. 同步内存中的页面管理器状态与磁盘 Header。
+    /// 4. 加载系统页和集合元数据。
+    /// </summary>
     private void InitializeDatabase()
     {
         lock (_lock)
@@ -200,18 +225,34 @@ public sealed class TinyDbEngine : IDisposable
             if (_isInitialized) return;
             try
             {
-                // 崩溃恢复：重放 WAL 日志
+                // 步骤 1: 崩溃恢复。
+                // 只有当 WAL 中的 LSN 大于磁盘页面的 LSN 时，才应用恢复逻辑（幂等恢复）。
                 if (_writeAheadLog.IsEnabled)
                 {
-                    _writeAheadLog.ReplayAsync((id, data) =>
+                    _writeAheadLog.ReplayAsync(async (id, data) =>
                     {
+                        var pageOffset = (id - 1) * _options.PageSize;
+                        if (_diskStream.Size >= pageOffset + _options.PageSize)
+                        {
+                            var diskData = await _diskStream.ReadPageAsync(pageOffset, (int)_options.PageSize).ConfigureAwait(false);
+                            var diskHeader = PageHeader.FromByteArray(diskData);
+                            var walHeader = PageHeader.FromByteArray(data);
+
+                            if (walHeader.LSN <= diskHeader.LSN)
+                            {
+                                // 磁盘版本已经是最新的，跳过此条日志
+                                return;
+                            }
+                        }
+                        
                         _pageManager.RestorePage(id, data);
-                        return Task.CompletedTask;
                     }).GetAwaiter().GetResult();
                 }
 
+                // 步骤 2: 文件结构初始化。
                 if (_diskStream.Size == 0)
                 {
+                    // 空文件：初始化 Header 页。
                     _header = new DatabaseHeader();
                     _header.Initialize(_options.PageSize, _options.DatabaseName, _options.EnableJournaling);
                     var p1 = _pageManager.NewPage(PageType.Header);
@@ -221,11 +262,14 @@ public sealed class TinyDbEngine : IDisposable
                 }
                 else
                 {
+                    // 已有文件：加载 Header 并验证。
                     ReadHeader();
-                    if (!_header.IsValid()) throw new InvalidOperationException();
+                    if (!_header.IsValid()) throw new InvalidOperationException("Invalid database header");
+                    
                     // 初始化 PageManager (现有数据库)
                     _pageManager.Initialize(_header.TotalPages, _header.FirstFreePage);
                     
+                    // 步骤 3: 状态一致性同步。
                     // 关键修复：如果在崩溃前分配了页面但 Header 未更新，
                     // WAL 重放后 PageManager 知道最新状态，需反向同步回 Header
                     if (_pageManager.TotalPages > _header.TotalPages || _pageManager.FirstFreePageID != _header.FirstFreePage)
@@ -233,11 +277,15 @@ public sealed class TinyDbEngine : IDisposable
                         WriteHeader();
                     }
                 }
+
+                // 步骤 4: 加载核心系统组件。
                 _header.EnableJournaling = _options.EnableJournaling;
                 InitializeSystemPages();
                 _collectionMetaStore = new CollectionMetaStore(_pageManager, () => _header.CollectionInfoPage, id => _header.CollectionInfoPage = id);
                 _collectionMetaStore.LoadCollections();
                 _isInitialized = true;
+                
+                // 步骤 5: 安全检查。
                 EnsureDatabaseSecurity();
             }
             catch
@@ -278,6 +326,23 @@ public sealed class TinyDbEngine : IDisposable
     }
 
     /// <summary>
+    /// 执行检查点。
+    /// 将所有脏页面刷新到磁盘，并截断 WAL 日志。
+    /// </summary>
+    public async Task CheckpointAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+
+        // 1. 刷新所有脏页面
+        // 由于 SavePage 已包含 WAL 检查，这一步会确保相关日志先刷新
+        await _pageManager.FlushDirtyPagesAsync(cancellationToken).ConfigureAwait(false);
+
+        // 2. 截断 WAL
+        await _writeAheadLog.TruncateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// 开始一个新事务。
     /// </summary>
     /// <returns>新创建的事务。</returns>
@@ -288,6 +353,24 @@ public sealed class TinyDbEngine : IDisposable
         var t = _transactionManager.BeginTransaction();
         _currentTransaction.Value = t;
         return t;
+    }
+
+    /// <summary>
+    /// 获取指定集合的元数据。
+    /// </summary>
+    internal BsonDocument GetCollectionMetadata(string collectionName)
+    {
+        return _collectionMetaStore.GetMetadata(collectionName);
+    }
+
+    /// <summary>
+    /// 确保当前事务的所有变更已持久化。
+    /// </summary>
+    internal void CommitTransactionDurability()
+    {
+        // 强制刷新 WAL 缓冲区到磁盘。
+        // 对于最高安全级别 (WriteConcern.Journaled)，这将等待磁盘确认。
+        _writeAheadLog.FlushLogAsync().GetAwaiter().GetResult();
     }
 
     internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;

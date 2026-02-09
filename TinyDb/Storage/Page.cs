@@ -11,9 +11,31 @@ public sealed class Page : IDisposable
 {
     private readonly byte[] _data;
     private readonly object _lock = new();
+    private int _pinCount;
     private bool _isDirty;
     private bool _disposed;
     private object? _cachedParsedData;
+
+    /// <summary>
+    /// 获取当前的锁定计数（Pin Count）。
+    /// </summary>
+    public int PinCount => _pinCount;
+
+    /// <summary>
+    /// 锁定页面，增加引用计数。
+    /// </summary>
+    public void Pin() => Interlocked.Increment(ref _pinCount);
+
+    /// <summary>
+    /// 解锁页面，减少引用计数。
+    /// </summary>
+    public void Unpin()
+    {
+        if (Interlocked.Decrement(ref _pinCount) < 0)
+        {
+            Interlocked.Exchange(ref _pinCount, 0);
+        }
+    }
 
     /// <summary>
     /// 获取页面头部信息。

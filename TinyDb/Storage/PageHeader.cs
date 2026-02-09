@@ -11,7 +11,7 @@ public class PageHeader
     /// <summary>
     /// 页面头部大小（字节）
     /// </summary>
-    public const int Size = 41; // 1 + 4 + 4 + 4 + 2 + 2 + 4 + 4 + 8 + 8 = 41
+    public const int Size = 49; // 1 + 4 + 4 + 4 + 2 + 2 + 4 + 4 + 8 + 8 + 8 = 49
 
     /// <summary>
     /// 页面类型
@@ -64,6 +64,11 @@ public class PageHeader
     public long ModifiedAt { get; set; }
 
     /// <summary>
+    /// 最后修改此页面的日志序列号 (LSN)
+    /// </summary>
+    public long LSN { get; set; }
+
+    /// <summary>
     /// 初始化页面头部
     /// </summary>
     public void Initialize(PageType pageType, uint pageID)
@@ -76,6 +81,7 @@ public class PageHeader
         ItemCount = 0;
         Version = 0; // 按照测试期望
         Checksum = 0;
+        LSN = 0;
         var now = DateTime.UtcNow.Ticks;
         CreatedAt = now;
         ModifiedAt = now;
@@ -101,6 +107,7 @@ public class PageHeader
                ModifiedAt >= CreatedAt &&
                Version >= 0; // Allow version 0
     }
+
 
     /// <summary>
     /// 获取页面数据区域大小
@@ -158,6 +165,7 @@ public class PageHeader
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(21), Checksum);
         System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(25), CreatedAt);
         System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(33), ModifiedAt);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(41), LSN);
     }
 
     /// <summary>
@@ -192,7 +200,8 @@ public class PageHeader
             Version = reader.ReadUInt32(),
             Checksum = reader.ReadUInt32(),
             CreatedAt = reader.ReadInt64(),
-            ModifiedAt = reader.ReadInt64()
+            ModifiedAt = reader.ReadInt64(),
+            LSN = reader.ReadInt64()
         };
 
         return header;
@@ -214,7 +223,8 @@ public class PageHeader
             Version = this.Version,
             Checksum = this.Checksum,
             CreatedAt = this.CreatedAt,
-            ModifiedAt = this.ModifiedAt
+            ModifiedAt = this.ModifiedAt,
+            LSN = this.LSN
         };
     }
 

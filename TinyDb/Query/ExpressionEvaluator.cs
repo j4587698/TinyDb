@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Globalization;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 
@@ -319,9 +320,33 @@ public static class ExpressionEvaluator
         return Convert.ToDecimal(val);
     }
 
-    private static double ToDouble(object val)
+    private static double ToDouble(object? val)
     {
-        return Convert.ToDouble(val);
+        if (val == null) return 0.0;
+        
+        // 快速路径：直接匹配常见数值类型
+        if (val is double d) return d;
+        if (val is int i) return i;
+        if (val is long l) return l;
+        if (val is float f) return f;
+        if (val is decimal dec) return (double)dec;
+        if (val is byte b) return b;
+        if (val is short s) return s;
+        
+        // BsonValue 转换
+        if (val is BsonDouble bd) return bd.Value;
+        if (val is BsonInt32 bi) return bi.Value;
+        if (val is BsonInt64 bl) return bl.Value;
+
+        // 备选路径：字符串或其它类型
+        try
+        {
+            return Convert.ToDouble(val, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return 0.0;
+        }
     }
 
     private static object? GetMemberValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
