@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
 using TinyDb.Utils;
 
 namespace TinyDb.Storage;
@@ -337,18 +336,7 @@ public sealed class PageManager : IDisposable
             var pageOffset = CalculatePageOffset(page.PageID);
             try
             {
-                var memory = page.Memory;
-                if (MemoryMarshal.TryGetArray(memory, out var segment) &&
-                    segment.Array != null &&
-                    segment.Offset == 0 &&
-                    segment.Count == memory.Length)
-                {
-                    _diskStream.WritePage(pageOffset, segment.Array);
-                }
-                else
-                {
-                    _diskStream.WritePage(pageOffset, page.FullData.ToArray());
-                }
+                _diskStream.WritePage(pageOffset, page.Buffer);
             }
             catch (ObjectDisposedException)
             {

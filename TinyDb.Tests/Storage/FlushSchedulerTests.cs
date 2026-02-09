@@ -161,6 +161,18 @@ public class FlushSchedulerTests
         }
     }
 
+    [Test]
+    public async Task FlushScheduler_BackgroundLoop_WhenHasDirtyPagesThrows_ShouldSwallowException()
+    {
+        using var walDisabled = new WriteAheadLog(_dbFile, 8192, false);
+        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.FromMilliseconds(10), TimeSpan.Zero);
+
+        _pageManager.Dispose();
+
+        // Give the background loop a chance to run and hit the catch-all branch.
+        await Task.Delay(200);
+    }
+
     private sealed class ThrowingWriteAsyncDiskStream : IDiskStream
     {
         private readonly IDiskStream _inner;

@@ -105,7 +105,7 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
         var elementType = expression.Type switch
         {
             var t when t.IsGenericType => t.GetGenericArguments()[0],
-            var t when t.IsArray => t.GetElementType() ?? typeof(object),
+            var t when t.IsArray => t.GetElementType()!,
             _ => typeof(object)
         };
 

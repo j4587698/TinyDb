@@ -105,6 +105,15 @@ public sealed class Page : IDisposable
         }
     }
 
+    internal byte[] Buffer
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _data;
+        }
+    }
+
     /// <summary>
     /// 初始化一个新的空页面。
     /// </summary>

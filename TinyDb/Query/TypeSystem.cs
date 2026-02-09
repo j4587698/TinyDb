@@ -15,7 +15,7 @@ internal static class TypeSystem
 
         if (seqType.IsArray)
         {
-            return seqType.GetElementType() ?? seqType;
+            return seqType.GetElementType()!;
         }
 
         var current = seqType;

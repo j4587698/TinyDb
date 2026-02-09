@@ -399,7 +399,7 @@ public static class AotBsonMapper
         }
 
         // 处理复杂对象类型（class 和 struct）
-        return type.IsClass || (type.IsValueType && !type.IsEnum && !type.IsPrimitive);
+        return type.IsClass || type.IsValueType;
     }
 
     /// <summary>
@@ -500,8 +500,7 @@ public static class AotBsonMapper
             throw new NotSupportedException($"AOT 回退模式仅支持字符串键的字典，但实际键类型为 {keyType.FullName}。");
         }
 
-        var instance = Activator.CreateInstance(dictionaryType)
-            ?? throw new InvalidOperationException($"无法创建字典类型 {dictionaryType.FullName} 的实例。");
+        var instance = Activator.CreateInstance(dictionaryType)!;
 
         if (instance is not IDictionary dictionary)
         {
@@ -633,8 +632,7 @@ public static class AotBsonMapper
 
         if (collectionType.IsArray)
         {
-            var arrayElementType = collectionType.GetElementType()
-                ?? throw new InvalidOperationException($"无法获取数组元素类型: {collectionType.FullName}");
+            var arrayElementType = collectionType.GetElementType()!;
 
             if (arrayElementType == typeof(int))
             {
@@ -676,8 +674,7 @@ public static class AotBsonMapper
                 $"AOT fallback does not support collection type '{collectionType.FullName}' without a public parameterless constructor or List<T> constructor.");
         }
 
-        var instance = Activator.CreateInstance(collectionType)
-            ?? throw new InvalidOperationException($"无法创建集合类型 {collectionType.FullName} 的实例。");
+        var instance = Activator.CreateInstance(collectionType)!;
 
         if (instance is not IList list)
         {
