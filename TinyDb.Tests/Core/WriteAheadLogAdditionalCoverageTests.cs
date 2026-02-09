@@ -73,18 +73,54 @@ public class WriteAheadLogAdditionalCoverageTests : IDisposable
     [Test]
     public async Task WhenDisabled_DeleteFailure_ShouldBeSwallowed()
     {
-        File.WriteAllText(_defaultWalPath, "x");
-        await Assert.That(File.Exists(_defaultWalPath)).IsTrue();
-
-        using (new FileStream(_defaultWalPath, FileMode.Open, FileAccess.Read, FileShare.None))
+        // Windows: an exclusive handle prevents deletion, so this reliably triggers the swallow path.
+        if (OperatingSystem.IsWindows())
         {
-            using (var wal = new WriteAheadLog(_dbPath, 8192, enabled: false))
+            File.WriteAllText(_defaultWalPath, "x");
+            await Assert.That(File.Exists(_defaultWalPath)).IsTrue();
+
+            using (new FileStream(_defaultWalPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                using (var wal = new WriteAheadLog(_dbPath, 8192, enabled: false))
+                {
+                    await Assert.That(wal.IsEnabled).IsFalse();
+                }
+            }
+
+            await Assert.That(File.Exists(_defaultWalPath)).IsTrue();
+            return;
+        }
+
+        // Linux/macOS: deleting an open file is allowed (unlink), so simulate a delete failure via directory permissions.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"wal_delete_fail_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        var dbPath = Path.Combine(tempDir, "db.db");
+        var walPath = GetWalPath(dbPath, "{name}-wal.{ext}");
+
+        var originalMode = File.GetUnixFileMode(tempDir);
+        try
+        {
+            File.WriteAllText(walPath, "x");
+            await Assert.That(File.Exists(walPath)).IsTrue();
+
+            File.SetUnixFileMode(
+                tempDir,
+                originalMode & ~(UnixFileMode.UserWrite | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite));
+
+            using (var wal = new WriteAheadLog(dbPath, 8192, enabled: false))
             {
                 await Assert.That(wal.IsEnabled).IsFalse();
             }
-        }
 
-        await Assert.That(File.Exists(_defaultWalPath)).IsTrue();
+            await Assert.That(File.Exists(walPath)).IsTrue();
+        }
+        finally
+        {
+            try { File.SetUnixFileMode(tempDir, originalMode); } catch { }
+            try { if (File.Exists(walPath)) File.Delete(walPath); } catch { }
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir); } catch { }
+        }
     }
 
     [Test]
