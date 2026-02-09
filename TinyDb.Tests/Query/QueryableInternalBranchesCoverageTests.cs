@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Core;
 using TinyDb.Query;
 using TinyDb.Tests.TestEntities;
@@ -41,13 +40,6 @@ public sealed class QueryableInternalBranchesCoverageTests
         }
     }
 
-    private static Type GetInternalGenericType(string metadataName, int arity, params Type[] genericArgs)
-    {
-        var type = typeof(Queryable<TestProduct>).Assembly.GetType($"{metadataName}`{arity}");
-        if (type == null) throw new InvalidOperationException($"Type '{metadataName}`{arity}' not found.");
-        return type.MakeGenericType(genericArgs);
-    }
-
     private sealed class StubProvider : IQueryProvider
     {
         private readonly object? _result;
@@ -63,47 +55,25 @@ public sealed class QueryableInternalBranchesCoverageTests
     [Test]
     public async Task UntypedQueryable_Ctor_WithNullArguments_ShouldThrow()
     {
-        var untypedQueryableType = GetInternalGenericType("TinyDb.Query.UntypedQueryable", 1, typeof(TestProduct));
-        var ctor = untypedQueryableType.GetConstructor(new[] { typeof(IQueryProvider), typeof(Expression), typeof(Type) });
-        if (ctor == null) throw new InvalidOperationException("UntypedQueryable ctor not found");
-
         var provider = new StubProvider(Array.Empty<object>());
         var expr = Expression.Constant(0);
 
-        await Assert.That(() =>
-        {
-            try { ctor.Invoke(new object?[] { null, expr, typeof(object) }); }
-            catch (TargetInvocationException tie) { throw tie.InnerException!; }
-        }).Throws<ArgumentNullException>();
-
-        await Assert.That(() =>
-        {
-            try { ctor.Invoke(new object?[] { provider, null, typeof(object) }); }
-            catch (TargetInvocationException tie) { throw tie.InnerException!; }
-        }).Throws<ArgumentNullException>();
-
-        await Assert.That(() =>
-        {
-            try { ctor.Invoke(new object?[] { provider, expr, null }); }
-            catch (TargetInvocationException tie) { throw tie.InnerException!; }
-        }).Throws<ArgumentNullException>();
+        await Assert.That(() => new UntypedQueryable<TestProduct>(null!, expr, typeof(object))).Throws<ArgumentNullException>();
+        await Assert.That(() => new UntypedQueryable<TestProduct>(provider, null!, typeof(object))).Throws<ArgumentNullException>();
+        await Assert.That(() => new UntypedQueryable<TestProduct>(provider, expr, null!)).Throws<ArgumentNullException>();
     }
 
     [Test]
     public async Task UntypedQueryable_GetEnumerator_ShouldHandleNullAndEnumerableResults()
     {
-        var untypedQueryableType = GetInternalGenericType("TinyDb.Query.UntypedQueryable", 1, typeof(TestProduct));
-        var ctor = untypedQueryableType.GetConstructor(new[] { typeof(IQueryProvider), typeof(Expression), typeof(Type) });
-        if (ctor == null) throw new InvalidOperationException("UntypedQueryable ctor not found");
-
         var expr = Expression.Constant(0);
 
-        var withNull = (IEnumerable)ctor.Invoke(new object?[] { new StubProvider(null), expr, typeof(object) })!;
+        var withNull = (IEnumerable)new UntypedQueryable<TestProduct>(new StubProvider(null), expr, typeof(object));
         var count1 = 0;
         foreach (var _ in withNull) count1++;
         await Assert.That(count1).IsEqualTo(0);
 
-        var withEnumerable = (IEnumerable)ctor.Invoke(new object?[] { new StubProvider(new object[] { 1, 2 }), expr, typeof(object) })!;
+        var withEnumerable = (IEnumerable)new UntypedQueryable<TestProduct>(new StubProvider(new object[] { 1, 2 }), expr, typeof(object));
         var count2 = 0;
         foreach (var _ in withEnumerable) count2++;
         await Assert.That(count2).IsEqualTo(2);
@@ -112,21 +82,8 @@ public sealed class QueryableInternalBranchesCoverageTests
     [Test]
     public async Task QueryProvider_Ctor_WithInvalidArgs_ShouldThrow()
     {
-        var providerType = GetInternalGenericType("TinyDb.Query.QueryProvider", 2, typeof(TestProduct), typeof(TestProduct));
-        var ctor = providerType.GetConstructor(new[] { typeof(QueryExecutor), typeof(string) });
-        if (ctor == null) throw new InvalidOperationException("QueryProvider ctor not found");
-
-        await Assert.That(() =>
-        {
-            try { ctor.Invoke(new object?[] { null, "c" }); }
-            catch (TargetInvocationException tie) { throw tie.InnerException!; }
-        }).Throws<ArgumentNullException>();
-
-        await Assert.That(() =>
-        {
-            try { ctor.Invoke(new object?[] { _executor, " " }); }
-            catch (TargetInvocationException tie) { throw tie.InnerException!; }
-        }).Throws<ArgumentNullException>();
+        await Assert.That(() => new QueryProvider<TestProduct, TestProduct>(null!, "c")).Throws<ArgumentNullException>();
+        await Assert.That(() => new QueryProvider<TestProduct, TestProduct>(_executor, " ")).Throws<ArgumentNullException>();
     }
 
     [Test]
@@ -184,4 +141,3 @@ public sealed class QueryableInternalBranchesCoverageTests
         await Assert.That(skipTooMuch.Count).IsEqualTo(0);
     }
 }
-
