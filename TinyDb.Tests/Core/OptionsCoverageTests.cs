@@ -102,10 +102,6 @@ public class OptionsCoverageTests
 
         options.BackgroundFlushInterval = System.Threading.Timeout.InfiniteTimeSpan;
         options.Validate();
-
-        options.BackgroundFlushInterval = TimeSpan.FromSeconds(1);
-        options.JournalFlushDelay = TimeSpan.FromSeconds(-1);
-        await Assert.ThrowsAsync<ArgumentException>(() => { options.Validate(); return Task.CompletedTask; });
     }
 
     [Test]
@@ -131,8 +127,7 @@ public class OptionsCoverageTests
             MaxTransactions = 50,
             TransactionTimeout = TimeSpan.FromMinutes(1),
             WriteConcern = WriteConcern.Journaled,
-            BackgroundFlushInterval = TimeSpan.FromSeconds(5),
-            JournalFlushDelay = TimeSpan.Zero
+            BackgroundFlushInterval = TimeSpan.FromSeconds(5)
         };
 
         var cloned = original.Clone();
@@ -157,7 +152,6 @@ public class OptionsCoverageTests
         await Assert.That(cloned.TransactionTimeout).IsEqualTo(original.TransactionTimeout);
         await Assert.That(cloned.WriteConcern).IsEqualTo(original.WriteConcern);
         await Assert.That(cloned.BackgroundFlushInterval).IsEqualTo(original.BackgroundFlushInterval);
-        await Assert.That(cloned.JournalFlushDelay).IsEqualTo(original.JournalFlushDelay);
     }
 
     [Test]

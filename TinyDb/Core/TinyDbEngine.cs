@@ -122,10 +122,9 @@ public sealed class TinyDbEngine : IDisposable
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
         
-        // 关键：将 WAL 注册到页面管理器，启用 Write-Ahead 强制刷新逻辑
         _pageManager.RegisterWAL(lsn => _writeAheadLog.FlushToLSNAsync(lsn));
 
-        _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), NormalizeInterval(_options.JournalFlushDelay));
+        _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval));
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
         _dataPageAccess = new DataPageAccess(_pageManager, _largeDocumentStorage, _writeAheadLog);
 
@@ -794,6 +793,8 @@ public sealed class TinyDbEngine : IDisposable
 
         var exceptions = new List<Exception>();
 
+        var pagesToPersist = new HashSet<Page>();
+
         lock (st.PageState.SyncRoot)
         {
             Page? currentPage = null;
@@ -804,11 +805,10 @@ public sealed class TinyDbEngine : IDisposable
 
             if (currentPage == null || currentPage.Header.PageType != PageType.Data)
             {
-                // Initial guess for size, will resize if needed
                  var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024); 
                  currentPage = p;
                  st.OwnedPages.TryAdd(p.PageID, 0);
-                 if (isN) lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                 if (isN) lock (_lock) { _header.UsedPages++; }
              }
 
             foreach (var d in docs)
@@ -817,18 +817,14 @@ public sealed class TinyDbEngine : IDisposable
 
                 try
                 {
-                    // Prepare document (Id, Collection)
-                    // Note: This still creates new BsonDocuments due to immutability. 
-                    // Future optim: Mutable builder or deferred property setting.
                     var doc = PrepareDocumentForInsert(col, d, out var id);
 
                     stream.SetLength(0);
                     BsonSerializer.SerializeDocument(doc, stream);
 
-                    // Handle Large Documents
                     if (LargeDocumentStorage.RequiresLargeDocumentStorage((int)stream.Length, _dataPageAccess.GetMaxDocumentSize()))
                     {
-                        var bytes = stream.ToArray(); // Allocates, but rare for large docs
+                        var bytes = stream.ToArray();
                         var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
                         doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
                         
@@ -841,11 +837,11 @@ public sealed class TinyDbEngine : IDisposable
 
                     if (currentPage!.Header.FreeBytes < reqSize)
                     {
-                         _dataPageAccess.PersistPage(currentPage);
+                         pagesToPersist.Add(currentPage);
                          var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
                          currentPage = p;
                          st.OwnedPages.TryAdd(p.PageID, 0);
-                         if (isN) lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                         if (isN) lock (_lock) { _header.UsedPages++; }
                      }
 
                     ushort i = currentPage.Header.ItemCount;
@@ -864,12 +860,16 @@ public sealed class TinyDbEngine : IDisposable
 
             if (currentPage != null)
             {
-                _dataPageAccess.PersistPage(currentPage);
+                pagesToPersist.Add(currentPage);
             }
 
-            // 批量插入完成后同步一次 Header，确保 TotalPages 和 FirstFreePage 状态正确
-            // 优化：从循环内移到循环外，减少内存分配和 IO 操作
             lock (_lock) { WriteHeader(); }
+        }
+
+        // 在锁外执行持久化
+        foreach (var page in pagesToPersist)
+        {
+            _dataPageAccess.PersistPage(page);
         }
 
         foreach (var (doc, id) in docsToUpdateIndex)
@@ -917,6 +917,8 @@ public sealed class TinyDbEngine : IDisposable
 
         var exceptions = new List<Exception>();
 
+        var pagesToPersist = new HashSet<Page>();
+
         lock (st.PageState.SyncRoot)
         {
             Page? currentPage = null;
@@ -930,7 +932,7 @@ public sealed class TinyDbEngine : IDisposable
                  var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024); 
                  currentPage = p;
                  st.OwnedPages.TryAdd(p.PageID, 0);
-                 if (isN) lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                 if (isN) lock (_lock) { _header.UsedPages++; }
              }
 
             foreach (var d in docs)
@@ -960,11 +962,11 @@ public sealed class TinyDbEngine : IDisposable
 
                     if (currentPage!.Header.FreeBytes < reqSize)
                     {
-                         _dataPageAccess.PersistPage(currentPage);
+                         pagesToPersist.Add(currentPage);
                          var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
                          currentPage = p;
                          st.OwnedPages.TryAdd(p.PageID, 0);
-                         if (isN) lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                         if (isN) lock (_lock) { _header.UsedPages++; }
                      }
 
                     ushort i = currentPage.Header.ItemCount;
@@ -983,10 +985,16 @@ public sealed class TinyDbEngine : IDisposable
 
             if (currentPage != null)
             {
-                _dataPageAccess.PersistPage(currentPage);
+                pagesToPersist.Add(currentPage);
             }
 
             lock (_lock) { WriteHeader(); }
+        }
+
+        // 持久化页面
+        foreach (var page in pagesToPersist)
+        {
+            _dataPageAccess.PersistPage(page);
         }
 
         foreach (var (doc, id) in docsToUpdateIndex)
@@ -1178,21 +1186,31 @@ public sealed class TinyDbEngine : IDisposable
             stream.SetLength(0);
             BsonSerializer.SerializeDocument(doc, stream);
         }
+
+        Page p;
+        bool isNewPage = false;
+        ushort entryIndex;
+
         lock (st.PageState.SyncRoot)
         {
-             var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, DataPageAccess.GetEntrySize((int)stream.Length));
-             st.OwnedPages.TryAdd(p.PageID, 0); // Ensure tracked
-             ushort i = p.Header.ItemCount;
+             var (page, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, DataPageAccess.GetEntrySize((int)stream.Length));
+             p = page;
+             isNewPage = isN;
+             st.OwnedPages.TryAdd(p.PageID, 0); 
+             entryIndex = p.Header.ItemCount;
              var span = new ReadOnlySpan<byte>(stream.GetBuffer(), 0, (int)stream.Length);
              _dataPageAccess.AppendDocumentToPage(p, span);
-            st.Index.Set(id.ToString(), new DocumentLocation(p.PageID, i));
-            if (isN) lock (_lock) { _header.UsedPages++; }
-            
-            // 无论是否是新页面，同步 PageManager 状态到 Header
-            lock(_lock) { WriteHeader(); }
-
-            _dataPageAccess.PersistPage(p);
+             st.Index.Set(id.ToString(), new DocumentLocation(p.PageID, entryIndex));
         }
+
+        // 在锁外处理全局状态和持久化
+        if (isNewPage) 
+        {
+            lock (_lock) { _header.UsedPages++; WriteHeader(); }
+        }
+        
+        _dataPageAccess.PersistPage(p);
+
         if (u) idx.InsertDocument(doc, id);
         return id;
     }

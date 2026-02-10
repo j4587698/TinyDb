@@ -31,8 +31,7 @@ public class TinyDbOptionsFullTests
             MaxTransactions = 50,
             TransactionTimeout = TimeSpan.FromMinutes(1),
             WriteConcern = WriteConcern.Journaled,
-            BackgroundFlushInterval = TimeSpan.FromMilliseconds(200),
-            JournalFlushDelay = TimeSpan.FromMilliseconds(50)
+            BackgroundFlushInterval = TimeSpan.FromMilliseconds(200)
         };
 
         await Assert.That(options.PageSize).IsEqualTo(4096u);

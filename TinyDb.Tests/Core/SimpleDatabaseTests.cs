@@ -72,8 +72,7 @@ public class SimpleDatabaseTests
                 CacheSize = 32,
                 EnableJournaling = false,
                 WriteConcern = WriteConcern.None,
-                BackgroundFlushInterval = TimeSpan.FromMilliseconds(20),
-                JournalFlushDelay = TimeSpan.Zero
+                BackgroundFlushInterval = TimeSpan.FromMilliseconds(20)
             };
 
             using var engine = new TinyDbEngine(tempPath, options);

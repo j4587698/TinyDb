@@ -119,11 +119,6 @@ public sealed class TinyDbOptions
     public TimeSpan BackgroundFlushInterval { get; set; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// 日志聚合刷写延迟（Journaled 模式组提交窗口）；&lt;= 0 表示立即刷写。
-    /// </summary>
-    public TimeSpan JournalFlushDelay { get; set; } = TimeSpan.FromMilliseconds(10);
-
-    /// <summary>
     /// 是否启用同步写入（兼容旧配置）。
     /// </summary>
     public bool SynchronousWrites
@@ -186,9 +181,6 @@ public sealed class TinyDbOptions
 
         if (BackgroundFlushInterval < TimeSpan.Zero && BackgroundFlushInterval != System.Threading.Timeout.InfiniteTimeSpan)
             throw new ArgumentException("Background flush interval must be non-negative or Infinite", nameof(BackgroundFlushInterval));
-
-        if (JournalFlushDelay < TimeSpan.Zero && JournalFlushDelay != System.Threading.Timeout.InfiniteTimeSpan)
-            throw new ArgumentException("Journal flush delay must be non-negative or Infinite", nameof(JournalFlushDelay));
     }
 
     /// <summary>
@@ -227,8 +219,7 @@ public sealed class TinyDbOptions
             MaxTransactions = MaxTransactions,
             TransactionTimeout = TransactionTimeout,
             WriteConcern = WriteConcern,
-            BackgroundFlushInterval = BackgroundFlushInterval,
-            JournalFlushDelay = JournalFlushDelay
+            BackgroundFlushInterval = BackgroundFlushInterval
         };
     }
 

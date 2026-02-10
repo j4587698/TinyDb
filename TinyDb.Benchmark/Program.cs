@@ -16,6 +16,9 @@ public class Program
         Console.WriteLine("=== TinyDb 快速索引性能测试 ===");
         Console.WriteLine();
 
+        // 运行 WriteConcern 对比测试
+        ComparisonTest.Run();
+
         // 先运行快速批量测试
         QuickBatchTest.RunTest();
 

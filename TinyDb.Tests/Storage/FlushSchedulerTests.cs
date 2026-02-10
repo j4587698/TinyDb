@@ -41,7 +41,7 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_EnsureDurability_ShouldWork()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(10));
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromMilliseconds(50));
         
         var page = _pageManager.GetPage(1);
         page.WriteData(0, new byte[] { 1 });
@@ -60,14 +60,14 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_Ctor_WithNullArgs_ShouldThrow()
     {
-        await Assert.That(() => new FlushScheduler(null!, _wal, TimeSpan.Zero, TimeSpan.Zero)).Throws<ArgumentNullException>();
-        await Assert.That(() => new FlushScheduler(_pageManager, null!, TimeSpan.Zero, TimeSpan.Zero)).Throws<ArgumentNullException>();
+        await Assert.That(() => new FlushScheduler(null!, _wal, TimeSpan.Zero)).Throws<ArgumentNullException>();
+        await Assert.That(() => new FlushScheduler(_pageManager, null!, TimeSpan.Zero)).Throws<ArgumentNullException>();
     }
 
     [Test]
     public async Task FlushScheduler_EnsureDurability_None_And_Invalid_ShouldCoverBranches()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero, TimeSpan.Zero);
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
 
         await fs.EnsureDurabilityAsync(WriteConcern.None, CancellationToken.None);
 
@@ -79,7 +79,7 @@ public class FlushSchedulerTests
     public async Task FlushScheduler_Journaled_WhenWalDisabled_ShouldFallbackToPageFlush()
     {
         using var walDisabled = new WriteAheadLog(_dbFile, 8192, false);
-        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero, TimeSpan.Zero);
+        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero);
 
         await fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
     }
@@ -89,7 +89,7 @@ public class FlushSchedulerTests
     {
         await Assert.That(_wal.HasPendingEntries).IsFalse();
 
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -99,7 +99,7 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_Dispose_Twice_ShouldReturnEarly()
     {
-        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero, TimeSpan.Zero);
+        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
         fs.Dispose();
 
         await Assert.That(() => fs.Dispose()).ThrowsNothing();
@@ -108,7 +108,7 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_BackgroundLoop_ShouldWork()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(10));
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromMilliseconds(100));
         
         var page = _pageManager.GetPage(1);
         page.WriteData(0, new byte[] { 1 });
@@ -126,7 +126,7 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_FlushAsync_ShouldWork()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero, TimeSpan.Zero);
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
         var page = _pageManager.GetPage(1);
         page.WriteData(0, new byte[] { 1 });
         _pageManager.SavePage(page);
@@ -146,7 +146,7 @@ public class FlushSchedulerTests
             using var pageManager = new PageManager(throwingStream);
             using var walDisabled = new WriteAheadLog(dbFile, 8192, false);
 
-            using var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.FromMilliseconds(25), TimeSpan.Zero);
+            using var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.FromMilliseconds(25));
 
             var page = pageManager.GetPage(1);
             page.WriteData(0, new byte[] { 1 }); // Mark dirty; don't save, let background loop try
@@ -165,7 +165,7 @@ public class FlushSchedulerTests
     public async Task FlushScheduler_BackgroundLoop_WhenHasDirtyPagesThrows_ShouldSwallowException()
     {
         using var walDisabled = new WriteAheadLog(_dbFile, 8192, false);
-        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.FromMilliseconds(10), TimeSpan.Zero);
+        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.FromMilliseconds(10));
 
         _pageManager.Dispose();
 

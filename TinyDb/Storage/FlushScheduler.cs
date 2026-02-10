@@ -16,9 +16,12 @@ public sealed class FlushScheduler : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Task? _backgroundTask;
     private readonly object _flushLock = new();
-    private Task _journalFlushTask = Task.CompletedTask;
-    private readonly TimeSpan _journalCoalesceDelay;
     private bool _disposed;
+    
+    private TaskCompletionSource _journalBatchTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _journalRequests = 0;
+    private bool _journalWorkerRunning = false;
+    private Task? _journalWorkerTask;
 
     /// <summary>
     /// 初始化 FlushScheduler 类的新实例。
@@ -26,23 +29,18 @@ public sealed class FlushScheduler : IDisposable
     /// <param name="pageManager">页面管理器。</param>
     /// <param name="wal">写前日志。</param>
     /// <param name="backgroundInterval">后台刷新间隔。</param>
-    /// <param name="journalDelay">日志合并延迟。</param>
-    public FlushScheduler(PageManager pageManager, WriteAheadLog wal, TimeSpan backgroundInterval, TimeSpan journalDelay)
+    public FlushScheduler(PageManager pageManager, WriteAheadLog wal, TimeSpan backgroundInterval)
     {
         _pageManager = pageManager ?? throw new ArgumentNullException(nameof(pageManager));
         _wal = wal ?? throw new ArgumentNullException(nameof(wal));
         _backgroundInterval = backgroundInterval;
-        _journalCoalesceDelay = journalDelay;
 
-        if ((_backgroundInterval > TimeSpan.Zero) || _wal.IsEnabled)
+        if (_backgroundInterval > TimeSpan.Zero || _wal.IsEnabled)
         {
             _backgroundTask = Task.Run(BackgroundLoopAsync);
         }
     }
 
-    /// <summary>
-    /// 后台循环，定期执行刷新操作。
-    /// </summary>
     private async Task BackgroundLoopAsync()
     {
         var effectiveInterval = _backgroundInterval > TimeSpan.Zero
@@ -56,21 +54,11 @@ public sealed class FlushScheduler : IDisposable
                 await Task.Delay(effectiveInterval, _cts.Token).ConfigureAwait(false);
                 await FlushPendingAsync(_cts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-                // 正常退出
-            }
-            catch
-            {
-            }
+            catch (OperationCanceledException) { }
+            catch { }
         }
     }
 
-    /// <summary>
-    /// 确保数据持久化。
-    /// </summary>
-    /// <param name="concern">写入关注级别。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
     public async Task EnsureDurabilityAsync(WriteConcern concern, CancellationToken cancellationToken = default)
     {
         switch (concern)
@@ -88,19 +76,11 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
-    /// <summary>
-    /// 异步刷新所有挂起的数据和日志。
-    /// </summary>
-    /// <param name="cancellationToken">取消令牌。</param>
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         return _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken);
     }
 
-    /// <summary>
-    /// 确保日志已刷新。
-    /// </summary>
-    /// <param name="cancellationToken">取消令牌。</param>
     private Task EnsureJournalFlushAsync(CancellationToken cancellationToken)
     {
         if (!_wal.IsEnabled)
@@ -108,80 +88,103 @@ public sealed class FlushScheduler : IDisposable
             return _pageManager.FlushDirtyPagesAsync(cancellationToken);
         }
 
+        if (!_wal.HasPendingEntries)
+        {
+            return Task.CompletedTask;
+        }
+
+        Task batchTask;
+
         lock (_flushLock)
         {
-            if (_journalFlushTask.IsCompleted)
+            if (_disposed)
             {
-                _journalFlushTask = FlushJournalBatchAsync(cancellationToken);
+                throw new ObjectDisposedException(nameof(FlushScheduler));
             }
-            return _journalFlushTask;
+
+            if (_journalBatchTcs.Task.IsCompleted)
+            {
+                _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            _journalRequests++;
+            batchTask = _journalBatchTcs.Task;
+
+            if (!_journalWorkerRunning)
+            {
+                _journalWorkerRunning = true;
+                _journalWorkerTask = Task.Run(RunJournalWorkerAsync);
+            }
         }
+
+        return cancellationToken.CanBeCanceled ? batchTask.WaitAsync(cancellationToken) : batchTask;
     }
 
-    /// <summary>
-    /// 批量刷新日志。
-    /// </summary>
-    /// <param name="cancellationToken">取消令牌。</param>
-    private async Task FlushJournalBatchAsync(CancellationToken cancellationToken)
+    private async Task RunJournalWorkerAsync()
     {
-        try
+        while (true)
         {
-            if (_journalCoalesceDelay > TimeSpan.Zero && _journalCoalesceDelay != Timeout.InfiniteTimeSpan)
-            {
-                await Task.Delay(_journalCoalesceDelay, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // ignore cancellation during delay
-        }
+            TaskCompletionSource tcsToComplete;
 
-        try
-        {
-            await _wal.FlushLogAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
             lock (_flushLock)
             {
-                _journalFlushTask = Task.CompletedTask;
+                if (_journalRequests <= 0)
+                {
+                    _journalWorkerRunning = false;
+                    return;
+                }
+
+                tcsToComplete = _journalBatchTcs;
+                _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _journalRequests = 0;
+            }
+
+            try
+            {
+                await _wal.FlushLogAsync(_cts.Token).ConfigureAwait(false);
+                tcsToComplete.TrySetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                tcsToComplete.TrySetCanceled();
+
+                TaskCompletionSource? pendingToCancel = null;
+                lock (_flushLock)
+                {
+                    if (_journalRequests > 0)
+                    {
+                        pendingToCancel = _journalBatchTcs;
+                        _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        _journalRequests = 0;
+                    }
+
+                    _journalWorkerRunning = false;
+                }
+
+                pendingToCancel?.TrySetCanceled();
+                return;
+            }
+            catch (Exception ex)
+            {
+                tcsToComplete.TrySetException(ex);
             }
         }
     }
 
-    /// <summary>
-    /// 刷新挂起的条目（如果存在）。
-    /// </summary>
-    /// <param name="cancellationToken">取消令牌。</param>
     public async Task FlushPendingAsync(CancellationToken cancellationToken = default)
     {
-        if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages())
-        {
-            return;
-        }
-
+        if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// 释放资源。
-    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-
         _cts.Cancel();
+        try { _journalWorkerTask?.Wait(); } catch { }
         _backgroundTask?.Wait();
-
-        try
-        {
-            FlushAsync().GetAwaiter().GetResult();
-        }
-        catch
-        {
-        }
-
+        try { FlushAsync().GetAwaiter().GetResult(); } catch { }
         _cts.Dispose();
     }
 }
