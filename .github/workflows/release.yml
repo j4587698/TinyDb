@@ -16,7 +16,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 2  # 获取最近2个提交来比较版本
+        fetch-depth: 0  # 获取所有历史记录和 tag
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -29,15 +29,20 @@ jobs:
     - name: Get previous version
       id: get_previous_version
       run: |
-        # 获取最新的Git tag版本号
-        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        # 确保获取了所有 tags
+        git fetch --tags --force
+        
+        # 获取最近的标签，不包括当前提交可能已经存在的标签
+        # 使用 HEAD~1 查找上一个标签，避免当前提交就是打标提交的情况
+        LATEST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || echo "")
+        
         if [ -n "$LATEST_TAG" ]; then
           # 移除 'v' 前缀（如果存在）
           PREVIOUS_VERSION=$(echo "$LATEST_TAG" | sed 's/^v//')
         else
           PREVIOUS_VERSION="0.0.0"
         fi
-        echo "Latest tag: $LATEST_TAG"
+        echo "Latest tag found: $LATEST_TAG"
         echo "Previous version: $PREVIOUS_VERSION"
         echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_ENV
 
