@@ -143,6 +143,16 @@ public static class BsonSerializer
     }
 
     /// <summary>
+    /// 序列化 BsonDocument 到 IBufferWriter
+    /// </summary>
+    public static void SerializeDocumentToBuffer(BsonDocument document, IBufferWriter<byte> writer)
+    {
+        if (document == null) throw new ArgumentNullException(nameof(document));
+        using var bsonWriter = new BsonWriter(writer);
+        bsonWriter.WriteDocument(document);
+    }
+
+    /// <summary>
     /// 序列化 BsonDocument 到流
     /// </summary>
     /// <param name="document">BSON 文档</param>
@@ -261,25 +271,116 @@ public static class BsonSerializer
 }
 
 /// <summary>
-/// BSON 写入器，负责将 BSON 数据写入流
+/// BSON 写入器，负责将 BSON 数据写入流或 IBufferWriter
 /// </summary>
 public sealed class BsonWriter : IDisposable
 {
-    private readonly Stream _stream;
-    private readonly BinaryWriter _writer;
+    private readonly Stream? _stream;
+    private readonly IBufferWriter<byte>? _bufferWriter;
+    private readonly BinaryWriter? _writer;
     private readonly bool _leaveOpen;
     private bool _disposed;
 
     /// <summary>
-    /// 初始化 BSON 写入器
+    /// 使用流初始化 BSON 写入器
     /// </summary>
-    /// <param name="stream">输出流</param>
-    /// <param name="leaveOpen">是否保持流打开</param>
     public BsonWriter(Stream stream, bool leaveOpen = false)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+        _bufferWriter = null;
         _leaveOpen = leaveOpen;
-        _writer = new BinaryWriter(stream, Encoding.UTF8, true); // BinaryWriter always leaves open because we manage stream disposal
+        _writer = new BinaryWriter(stream, Encoding.UTF8, true);
+    }
+
+    /// <summary>
+    /// 使用 IBufferWriter 初始化 BSON 写入器
+    /// </summary>
+    public BsonWriter(IBufferWriter<byte> bufferWriter)
+    {
+        _bufferWriter = bufferWriter ?? throw new ArgumentNullException(nameof(bufferWriter));
+        _stream = null;
+        _writer = null;
+        _leaveOpen = true;
+    }
+
+    private void InternalWrite(ReadOnlySpan<byte> data)
+    {
+        if (_stream != null)
+        {
+            _writer!.Write(data);
+        }
+        else
+        {
+            _bufferWriter!.Write(data);
+        }
+    }
+
+    private void InternalWrite(byte value)
+    {
+        if (_stream != null)
+        {
+            _writer!.Write(value);
+        }
+        else
+        {
+            var span = _bufferWriter!.GetSpan(1);
+            span[0] = value;
+            _bufferWriter.Advance(1);
+        }
+    }
+
+    private void InternalWrite(int value)
+    {
+        if (_stream != null)
+        {
+            _writer!.Write(value);
+        }
+        else
+        {
+            var span = _bufferWriter!.GetSpan(4);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(span, value);
+            _bufferWriter.Advance(4);
+        }
+    }
+
+    private void InternalWrite(long value)
+    {
+        if (_stream != null)
+        {
+            _writer!.Write(value);
+        }
+        else
+        {
+            var span = _bufferWriter!.GetSpan(8);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(span, value);
+            _bufferWriter.Advance(8);
+        }
+    }
+
+    private void InternalWrite(double value)
+    {
+        if (_stream != null)
+        {
+            _writer!.Write(value);
+        }
+        else
+        {
+            var span = _bufferWriter!.GetSpan(8);
+            System.Buffers.Binary.BinaryPrimitives.WriteDoubleLittleEndian(span, value);
+            _bufferWriter.Advance(8);
+        }
+    }
+
+    private long CurrentPosition
+    {
+        get
+        {
+            if (_stream != null) return _stream.Position;
+            // 对于 IBufferWriter，由于它不直接暴露位置，我们需要通过其它方式记录
+            // 但目前的 BsonWriter 实现依赖于 Seek 重新写入长度
+            // 改进：使用一个临时的字节缓冲区或预先计算大小
+            throw new NotSupportedException("CurrentPosition is only supported for Streams. Use a specialized pooled buffer instead.");
+        }
     }
 
     /// <summary>
@@ -361,28 +462,33 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        // 记录文档开始位置，稍后写入大小
-        _writer.Flush();
-        var sizePosition = _stream.Position;
-        _writer.Write(0); // 占位符，稍后更新
-
-        // 写入文档元素
-        foreach (var kvp in document)
+        if (_stream != null)
         {
-            WriteElement(kvp.Key, kvp.Value);
+            // 旧的 Stream 逻辑：使用 Seek 更新长度
+            _writer!.Flush();
+            var sizePosition = _stream.Position;
+            _writer.Write(0); // 占位符
+
+            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+            _writer.Write((byte)BsonType.End);
+
+            _writer.Flush();
+            var endPosition = _stream.Position;
+            var documentSize = (int)(endPosition - sizePosition);
+            _stream.Seek(sizePosition, SeekOrigin.Begin);
+            _writer.Write(documentSize);
+            _writer.Flush();
+            _stream.Seek(endPosition, SeekOrigin.Begin);
         }
-
-        // 写入结束标记
-        _writer.Write((byte)BsonType.End);
-
-        // 计算并写入文档大小
-        _writer.Flush();
-        var endPosition = _stream.Position;
-        var documentSize = (int)(endPosition - sizePosition);
-        _stream.Seek(sizePosition, SeekOrigin.Begin);
-        _writer.Write(documentSize);
-        _writer.Flush();
-        _stream.Seek(endPosition, SeekOrigin.Begin);
+        else
+        {
+            // 新的 IBufferWriter 逻辑：先计算大小，再写入
+            // 这种方式虽然多了一次计算，但避免了分配新数组和 Seek
+            var size = BsonSerializer.CalculateDocumentSize(document);
+            InternalWrite(size);
+            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+            InternalWrite((byte)BsonType.End);
+        }
     }
 
     /// <summary>
@@ -394,28 +500,30 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (array == null) throw new ArgumentNullException(nameof(array));
 
-        // 记录数组开始位置，稍后写入大小
-        _writer.Flush();
-        var sizePosition = _stream.Position;
-        _writer.Write(0); // 占位符，稍后更新
-
-        // 写入数组元素
-        for (int i = 0; i < array.Count; i++)
+        if (_stream != null)
         {
-            WriteElement(i.ToString(), array[i]);
+            _writer!.Flush();
+            var sizePosition = _stream.Position;
+            _writer.Write(0); // 占位符
+
+            for (int i = 0; i < array.Count; i++) WriteElement(i.ToString(), array[i]);
+            _writer.Write((byte)BsonType.End);
+
+            _writer.Flush();
+            var endPosition = _stream.Position;
+            var arraySize = (int)(endPosition - sizePosition);
+            _stream.Seek(sizePosition, SeekOrigin.Begin);
+            _writer.Write(arraySize);
+            _writer.Flush();
+            _stream.Seek(endPosition, SeekOrigin.Begin);
         }
-
-        // 写入结束标记
-        _writer.Write((byte)BsonType.End);
-
-        // 计算并写入数组大小
-        _writer.Flush();
-        var endPosition = _stream.Position;
-        var arraySize = (int)(endPosition - sizePosition);
-        _stream.Seek(sizePosition, SeekOrigin.Begin);
-        _writer.Write(arraySize);
-        _writer.Flush();
-        _stream.Seek(endPosition, SeekOrigin.Begin);
+        else
+        {
+            var size = BsonSerializer.CalculateArraySize(array);
+            InternalWrite(size);
+            for (int i = 0; i < array.Count; i++) WriteElement(i.ToString(), array[i]);
+            InternalWrite((byte)BsonType.End);
+        }
     }
 
     /// <summary>
@@ -425,13 +533,8 @@ public sealed class BsonWriter : IDisposable
     /// <param name="value">值</param>
     private void WriteElement(string key, BsonValue value)
     {
-        // 写入类型字节
-        _writer.Write((byte)value.BsonType);
-
-        // 写入键名（以 null 结尾）
+        InternalWrite((byte)value.BsonType);
         WriteCString(key);
-
-        // 写入值
         WriteValue(value);
     }
 
@@ -444,17 +547,16 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (value == null) throw new ArgumentNullException(nameof(value));
 
-        // 优化：使用缓存的常用键名编码
         if (BsonSerializer.CommonKeyCache.TryGetValue(value, out var cachedBytes))
         {
-            _writer.Write(cachedBytes);
+            InternalWrite(cachedBytes);
         }
         else
         {
             var bytes = Encoding.UTF8.GetBytes(value);
-            _writer.Write(bytes);
+            InternalWrite(bytes);
         }
-        _writer.Write((byte)0); // null 终止符
+        InternalWrite((byte)0);
     }
 
     /// <summary>
@@ -467,119 +569,85 @@ public sealed class BsonWriter : IDisposable
         if (value == null) throw new ArgumentNullException(nameof(value));
 
         var bytes = Encoding.UTF8.GetBytes(value);
-        _writer.Write(bytes.Length + 1); // 长度（包含 null 终止符）
-        _writer.Write(bytes);
-        _writer.Write((byte)0); // null 终止符
+        InternalWrite(bytes.Length + 1);
+        InternalWrite(bytes);
+        InternalWrite((byte)0);
     }
 
     /// <summary>
     /// 写入 32 位整数
     /// </summary>
-    /// <param name="value">整数值</param>
-    public void WriteInt32(int value)
-    {
-        ThrowIfDisposed();
-        _writer.Write(value);
-    }
+    public void WriteInt32(int value) => InternalWrite(value);
 
     /// <summary>
     /// 写入 64 位整数
     /// </summary>
-    /// <param name="value">整数值</param>
-    public void WriteInt64(long value)
-    {
-        ThrowIfDisposed();
-        _writer.Write(value);
-    }
+    public void WriteInt64(long value) => InternalWrite(value);
 
     /// <summary>
     /// 写入双精度浮点数
     /// </summary>
-    /// <param name="value">浮点数值</param>
-    public void WriteDouble(double value)
-    {
-        ThrowIfDisposed();
-        _writer.Write(value);
-    }
+    public void WriteDouble(double value) => InternalWrite(value);
 
     /// <summary>
     /// 写入布尔值
     /// </summary>
-    /// <param name="value">布尔值</param>
-    public void WriteBoolean(bool value)
-    {
-        ThrowIfDisposed();
-        _writer.Write(value ? (byte)1 : (byte)0);
-    }
+    public void WriteBoolean(bool value) => InternalWrite(value ? (byte)1 : (byte)0);
 
     /// <summary>
     /// 写入 ObjectId
     /// </summary>
-    /// <param name="value">ObjectId 值</param>
-    public void WriteObjectId(ObjectId value)
-    {
-        ThrowIfDisposed();
-        var bytes = value.ToByteArray();
-        _writer.Write(bytes);
-    }
+    public void WriteObjectId(ObjectId value) => InternalWrite(value.ToByteArray());
 
     /// <summary>
     /// 写入 DateTime
     /// </summary>
-    /// <param name="value">DateTime 值</param>
     public void WriteDateTime(DateTime value)
     {
-        ThrowIfDisposed();
-        // BSON DateTime 存储为从 Unix 纪元开始的毫秒数
         var unixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var milliseconds = (long)(value - unixEpoch).TotalMilliseconds;
-        _writer.Write(milliseconds);
+        InternalWrite(milliseconds);
     }
 
     /// <summary>
     /// 写入 null 值
     /// </summary>
-    public void WriteNull()
-    {
-        ThrowIfDisposed();
-        // null 值没有数据部分
-    }
+    public void WriteNull() { ThrowIfDisposed(); }
+
+    /// <summary>
+    /// 写入 Undefined 值
+    /// </summary>
+    public void WriteUndefined() { ThrowIfDisposed(); }
+
+    /// <summary>
+    /// 写入 MinKey
+    /// </summary>
+    public void WriteMinKey() { ThrowIfDisposed(); }
+
+    /// <summary>
+    /// 写入 MaxKey
+    /// </summary>
+    public void WriteMaxKey() { ThrowIfDisposed(); }
 
     /// <summary>
     /// 写入二进制数据
     /// </summary>
-    /// <param name="bytes">二进制数据</param>
-    /// <param name="subType">子类型</param>
     public void WriteBinary(byte[] bytes, BsonBinary.BinarySubType subType = BsonBinary.BinarySubType.Generic)
     {
         ThrowIfDisposed();
         if (bytes == null) throw new ArgumentNullException(nameof(bytes));
 
-        _writer.Write(bytes.Length);
-        _writer.Write((byte)subType);
-        _writer.Write(bytes);
-    }
-
-    /// <summary>
-    /// 写入未定义值
-    /// </summary>
-    public void WriteUndefined()
-    {
-        ThrowIfDisposed();
-        // Undefined 没有数据部分
+        InternalWrite(bytes.Length);
+        InternalWrite((byte)subType);
+        InternalWrite(bytes);
     }
 
     /// <summary>
     /// 写入正则表达式
     /// </summary>
-    /// <param name="pattern">正则表达式模式</param>
-    /// <param name="options">正则表达式选项</param>
     public void WriteRegularExpression(string pattern, string options)
     {
         ThrowIfDisposed();
-        if (pattern == null) throw new ArgumentNullException(nameof(pattern));
-        if (options == null) throw new ArgumentNullException(nameof(options));
-
         WriteCString(pattern);
         WriteCString(options);
     }
@@ -587,118 +655,63 @@ public sealed class BsonWriter : IDisposable
     /// <summary>
     /// 写入 JavaScript 代码
     /// </summary>
-    /// <param name="code">JavaScript 代码</param>
-    public void WriteJavaScript(string code)
-    {
-        ThrowIfDisposed();
-        WriteString(code);
-    }
+    public void WriteJavaScript(string code) => WriteString(code);
 
     /// <summary>
     /// 写入带有作用域的 JavaScript 代码
     /// </summary>
-    /// <param name="code">JavaScript 代码</param>
-    /// <param name="scope">作用域文档</param>
     public void WriteJavaScriptWithScope(string code, BsonDocument scope)
     {
         ThrowIfDisposed();
-        if (code == null) throw new ArgumentNullException(nameof(code));
-        if (scope == null) throw new ArgumentNullException(nameof(scope));
-
-        _writer.Flush();
-        var sizePosition = _stream.Position;
-        _writer.Write(0); // 占位符
-
-        WriteString(code);
-        WriteDocument(scope);
-
-        _writer.Flush();
-        var endPosition = _stream.Position;
-        var totalSize = (int)(endPosition - sizePosition);
-        _stream.Seek(sizePosition, SeekOrigin.Begin);
-        _writer.Write(totalSize);
-        _writer.Flush();
-        _stream.Seek(endPosition, SeekOrigin.Begin);
+        if (_stream != null)
+        {
+            _writer!.Flush();
+            var sizePosition = _stream.Position;
+            _writer.Write(0);
+            WriteString(code);
+            WriteDocument(scope);
+            _writer.Flush();
+            var endPosition = _stream.Position;
+            _stream.Seek(sizePosition, SeekOrigin.Begin);
+            _writer.Write((int)(endPosition - sizePosition));
+            _stream.Seek(endPosition, SeekOrigin.Begin);
+        }
+        else
+        {
+            var size = 4 + BsonSerializer.CalculateSize(new BsonString(code)) + BsonSerializer.CalculateDocumentSize(scope);
+            InternalWrite(size);
+            WriteString(code);
+            WriteDocument(scope);
+        }
     }
 
     /// <summary>
     /// 写入符号
     /// </summary>
-    /// <param name="name">符号名称</param>
-    public void WriteSymbol(string name)
-    {
-        ThrowIfDisposed();
-        WriteString(name);
-    }
+    public void WriteSymbol(string name) => WriteString(name);
 
     /// <summary>
     /// 写入 Decimal128 值
     /// </summary>
-    /// <param name="value">Decimal128 值</param>
     public void WriteDecimal128(Decimal128 value)
     {
-        ThrowIfDisposed();
-        _writer.Write(value.LowBits);
-        _writer.Write(value.HighBits);
-    }
-
-    /// <summary>
-    /// 写入 Decimal128 值 (兼容重载)
-    /// </summary>
-    public void WriteDecimal128(decimal value)
-    {
-        WriteDecimal128(new Decimal128(value));
+        InternalWrite((long)value.LowBits); // 这需要更严谨的处理，但目前先保持兼容
+        InternalWrite((long)value.HighBits);
     }
 
     /// <summary>
     /// 写入时间戳
     /// </summary>
-    /// <param name="value">时间戳值</param>
-    public void WriteTimestamp(long value)
-    {
-        ThrowIfDisposed();
-        _writer.Write(value);
-    }
+    public void WriteTimestamp(long value) => InternalWrite(value);
 
-    /// <summary>
-    /// 写入最小键
-    /// </summary>
-    public void WriteMinKey()
-    {
-        ThrowIfDisposed();
-        // MinKey 没有数据部分
-    }
+    private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(BsonWriter)); }
 
-    /// <summary>
-    /// 写入最大键
-    /// </summary>
-    public void WriteMaxKey()
-    {
-        ThrowIfDisposed();
-        // MaxKey 没有数据部分
-    }
-
-    /// <summary>
-    /// 检查是否已释放
-    /// </summary>
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(BsonWriter));
-    }
-
-    /// <summary>
-    /// 释放资源
-    /// </summary>
     public void Dispose()
     {
         if (!_disposed)
         {
-            _writer.Dispose();
-            if (!_leaveOpen)
-            {
-                _stream.Dispose();
-            }
+            _writer?.Dispose();
+            if (!_leaveOpen) _stream?.Dispose();
             _disposed = true;
         }
     }

@@ -285,16 +285,15 @@ internal sealed class Transaction : ITransaction
         // 尝试从元数据获取现有索引信息用于回滚
         try
         {
-            var meta = _manager._engine.GetCollectionMetadata(collectionName);
-            if (meta != null && meta.TryGetValue("indexes", out var indexesVal) && indexesVal is BsonDocument indexesDoc)
+            if (!string.IsNullOrEmpty(indexName))
             {
-                if (indexesDoc.TryGetValue(indexName, out var indexInfo) && indexInfo is BsonDocument indexMeta)
+                var indexManager = _manager._engine.GetIndexManager(collectionName);
+                var index = indexManager.GetIndex(indexName);
+                if (index != null)
                 {
-                    if (indexMeta.TryGetValue("fields", out var fieldsVal) && fieldsVal is BsonArray fieldsArray)
-                    {
-                        indexFields = fieldsArray.Select(v => v.ToString()).ToArray();
-                    }
-                    unique = indexMeta.TryGetValue("unique", out var u) && u.ToBoolean();
+                    var stats = index.GetStatistics();
+                    indexFields = stats.Fields;
+                    unique = stats.IsUnique;
                 }
             }
         }

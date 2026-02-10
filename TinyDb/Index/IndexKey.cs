@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using TinyDb.Bson;
 
 namespace TinyDb.Index;
@@ -112,6 +115,20 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
 
         if (leftType != rightType)
         {
+            // 特殊处理数值类型之间的比较：如果数值不相等，按数值排序
+            if (IsNumeric(left) && IsNumeric(right))
+            {
+                try
+                {
+                    var lVal = left.ToDecimal(null);
+                    var rVal = right.ToDecimal(null);
+                    var numComp = lVal.CompareTo(rVal);
+                    if (numComp != 0) return numComp;
+                    // 如果数值相等但类型不同，降级到按类型顺序排序
+                }
+                catch { }
+            }
+            
             return GetTypeOrder(leftType).CompareTo(GetTypeOrder(rightType));
         }
 
@@ -123,12 +140,20 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
             BsonType.Int64 => ((BsonInt64)left).Value.CompareTo(((BsonInt64)right).Value),
             BsonType.Double => ((BsonDouble)left).Value.CompareTo(((BsonDouble)right).Value),
             BsonType.Boolean => ((BsonBoolean)left).Value.CompareTo(((BsonBoolean)right).Value),
-            BsonType.DateTime => ((BsonDateTime)left).Value.CompareTo(((BsonDateTime)right).Value),
-            BsonType.ObjectId => ((BsonObjectId)left).Value.CompareTo(((BsonObjectId)right).Value),
+            BsonType.DateTime => ((BsonDateTime)left).Value.CompareTo(((BsonDateTime)right).Value),       
+            BsonType.ObjectId => ((BsonObjectId)left).Value.CompareTo(((BsonObjectId)right).Value),       
             BsonType.Binary => ((BsonBinary)left).CompareTo((BsonBinary)right),
-            BsonType.Decimal128 => ((BsonDecimal128)left).Value.CompareTo(((BsonDecimal128)right).Value),
+            BsonType.Decimal128 => ((BsonDecimal128)left).Value.CompareTo(((BsonDecimal128)right).Value), 
             _ => string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal)
         };
+    }
+
+    private static bool IsNumeric(BsonValue val)
+    {
+        return val.BsonType == BsonType.Int32 ||
+               val.BsonType == BsonType.Int64 ||
+               val.BsonType == BsonType.Double ||
+               val.BsonType == BsonType.Decimal128;
     }
 
     /// <summary>

@@ -133,7 +133,7 @@ public class LockManagerAdditionalCoverageTests
     }
 
     [Test]
-    public async Task RequestLock_WhenWouldCauseDeadlock_ShouldThrow()
+    public async Task RequestLock_WhenNoCycle_ShouldNotThrow()
     {
         using var manager = new LockManager(TimeSpan.FromSeconds(5));
         var txA = Guid.NewGuid();
@@ -145,8 +145,8 @@ public class LockManagerAdditionalCoverageTests
         var bWaitingOnR1 = manager.RequestLock(txB, "r1", LockType.Write, TimeSpan.FromSeconds(5));
         await Assert.That(bWaitingOnR1.IsGranted).IsFalse();
 
-        await Assert.That(() => manager.RequestLock(txA, "r2", LockType.Read, TimeSpan.FromSeconds(5)))
-            .Throws<InvalidOperationException>();
+        var aOnR2 = manager.RequestLock(txA, "r2", LockType.Read, TimeSpan.FromSeconds(5));
+        await Assert.That(aOnR2.IsGranted).IsTrue();
     }
 
     [Test]

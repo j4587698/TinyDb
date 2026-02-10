@@ -52,7 +52,7 @@ public class PageHeaderTests
     {
         // Act & Assert
         var size = PageHeader.Size;
-        await Assert.That(size).IsEqualTo(41);
+        await Assert.That(size).IsEqualTo(49);
     }
 
     [Test]
@@ -79,9 +79,9 @@ public class PageHeaderTests
         var size512 = header.GetDataSize(512);
         var size1024 = header.GetDataSize(1024);
         var size8192 = header.GetDataSize(8192);
-        await Assert.That(size512).IsEqualTo(471);
-        await Assert.That(size1024).IsEqualTo(983);
-        await Assert.That(size8192).IsEqualTo(8151);
+        await Assert.That(size512).IsEqualTo(463);
+        await Assert.That(size1024).IsEqualTo(975);
+        await Assert.That(size8192).IsEqualTo(8143);
     }
 
     [Test]

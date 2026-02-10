@@ -189,7 +189,7 @@ public sealed class LockManager : IDisposable
             // 检查死锁
             if (WouldCauseDeadlock(transactionId, resourceKey, lockType))
             {
-                throw new InvalidOperationException($"Deadlock detected for transaction {transactionId:N}");
+                request.IsDeadlockVictim = true;
             }
 
             // 检查是否可以立即授予

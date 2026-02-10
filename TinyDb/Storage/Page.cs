@@ -69,7 +69,7 @@ public sealed class Page : IDisposable
     /// <summary>
     /// 数据开始的偏移量（紧跟在页面头部之后）。
     /// </summary>
-    public const int DataStartOffset = PageHeader.Size; // 41
+    public const int DataStartOffset = PageHeader.Size; // 49
 
     /// <summary>
     /// 获取页面的数据容量。

@@ -546,12 +546,13 @@ public sealed class TransactionManager : IDisposable
                     break;
 
                 default:
-                    break;
+                    throw new NotSupportedException($"Operation type {operation.OperationType} is not supported during rollback compensation");
             }
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"FATAL: Transaction compensation failed for {operation.OperationType}: {ex.Message}");
+            if (ex is NotSupportedException) throw;
         }
     }
 

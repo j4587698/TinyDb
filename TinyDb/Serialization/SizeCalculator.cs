@@ -18,6 +18,8 @@ internal sealed class SizeCalculator
         return value switch
         {
             BsonNull => 0,
+            BsonMinKey => 0,
+            BsonMaxKey => 0,
             BsonString str => CalculateStringSize(str.Value),
             BsonInt32 => 4,
             BsonInt64 => 8,
