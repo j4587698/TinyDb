@@ -405,14 +405,28 @@ public sealed class TransactionManager : IDisposable
         int appliedCount = 0;
         try
         {
-            foreach (var operation in transaction.Operations)
+            for (int i = 0; i < transaction.Operations.Count; i++)
             {
-                ApplySingleOperation(operation);
+                ApplySingleOperation(transaction.Operations[i]);
                 appliedCount++;
             }
         }
         catch (Exception)
         {
+            // 关键：当前操作可能已部分生效（例如写入页面后索引插入失败）。
+            // 先尝试对“失败的那一条”进行补偿，避免残留半应用状态。
+            try
+            {
+                if (appliedCount >= 0 && appliedCount < transaction.Operations.Count)
+                {
+                    RollbackSingleOperation(transaction.Operations[appliedCount]);
+                }
+            }
+            catch
+            {
+                // 忽略补偿过程中的二次异常，优先抛出原始异常
+            }
+
             // 如果应用过程中出错，回滚已经成功的操作
             for (int i = appliedCount - 1; i >= 0; i--)
             {
