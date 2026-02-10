@@ -117,7 +117,7 @@ public static class AsyncOperationsDemo
     private static async Task AsyncUpdateDemo(ITinyCollection<TodoTask> tasks)
     {
         // 查找要更新的任务
-        var taskToUpdate = tasks.FindOne(t => t.Title == "代码审查");
+        var taskToUpdate = await tasks.FindOneAsync(t => t.Title == "代码审查");
         if (taskToUpdate != null)
         {
             Console.WriteLine($"📝 更新前: {taskToUpdate.Title}, 状态: {taskToUpdate.Status}, 优先级: {taskToUpdate.Priority}");
@@ -248,7 +248,7 @@ public static class AsyncOperationsDemo
         Console.WriteLine($"   耗时: {sw.ElapsedMilliseconds}ms");
 
         // 验证更新
-        var verifyTask = tasks.FindById(newTask.Id);
+        var verifyTask = await tasks.FindByIdAsync(newTask.Id);
         Console.WriteLine($"📝 验证: {verifyTask?.Title}, 状态: {verifyTask?.Status}");
     }
 

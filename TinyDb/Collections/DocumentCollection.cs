@@ -778,7 +778,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
         {
-            var originalDocument = _engine.FindById(_name, id);
+            var originalDocument = await _engine.FindByIdAsync(_name, id, cancellationToken).ConfigureAwait(false);
             if (originalDocument == null)
             {
                 ((Transaction)currentTransaction).RecordInsert(_name, document);
@@ -834,7 +834,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
         {
-            var documentToDelete = _engine.FindById(_name, id);
+            var documentToDelete = await _engine.FindByIdAsync(_name, id, cancellationToken).ConfigureAwait(false);
             if (documentToDelete == null)
             {
                 return 0;
@@ -880,12 +880,151 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// </summary>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>删除的文档数量</returns>
+    public async Task<T?> FindByIdAsync(BsonValue id, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (id == null || id.IsNull) return null;
+
+        var document = await _engine.FindByIdAsync(_name, id, cancellationToken).ConfigureAwait(false);
+        return document != null ? AotBsonMapper.FromDocument<T>(document) : default(T);
+    }
+
+    public async Task<List<T>> FindAllAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
+        var results = new List<T>(documents.Count);
+
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entity = AotBsonMapper.FromDocument<T>(document);
+            if (entity != null)
+            {
+                results.Add(entity);
+            }
+        }
+
+        return results;
+    }
+
+    public async Task<List<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var queryExpression = new ExpressionParser().Parse(predicate);
+        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
+        var results = new List<T>();
+
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!ExpressionEvaluator.Evaluate(queryExpression, document))
+            {
+                continue;
+            }
+
+            var entity = AotBsonMapper.FromDocument<T>(document);
+            if (entity != null)
+            {
+                results.Add(entity);
+            }
+        }
+
+        return results;
+    }
+
+    public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var queryExpression = new ExpressionParser().Parse(predicate);
+        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
+
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!ExpressionEvaluator.Evaluate(queryExpression, document))
+            {
+                continue;
+            }
+
+            var entity = AotBsonMapper.FromDocument<T>(document);
+            if (entity != null)
+            {
+                return entity;
+            }
+        }
+
+        return null;
+    }
+
+    public async Task<long> CountAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        // 关键修复：如果在事务中，必须使用 FindAllAsync().Count 以包含挂起的操作
+        if (_engine.GetCurrentTransaction() != null)
+        {
+            var all = await FindAllAsync(cancellationToken).ConfigureAwait(false);
+            return all.Count;
+        }
+
+        return _engine.GetCachedDocumentCount(_name);
+    }
+
+    public async Task<long> CountAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var queryExpression = new ExpressionParser().Parse(predicate);
+        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
+
+        long count = 0;
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ExpressionEvaluator.Evaluate(queryExpression, document))
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    public async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        var queryExpression = new ExpressionParser().Parse(predicate);
+        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
+
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (ExpressionEvaluator.Evaluate(queryExpression, document))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public async Task<int> DeleteAllAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
         var deletedCount = 0;
-        var allDocuments = FindAll().ToList();
+        var allDocuments = await FindAllAsync(cancellationToken).ConfigureAwait(false);
 
         foreach (var entity in allDocuments)
         {
@@ -912,7 +1051,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
         var deletedCount = 0;
-        var documentsToDelete = Find(predicate).ToList();
+        var documentsToDelete = await FindAsync(predicate, cancellationToken).ConfigureAwait(false);
 
         foreach (var entity in documentsToDelete)
         {
@@ -947,7 +1086,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         }
         else
         {
-            var existingDocument = FindById(id);
+            var existingDocument = await FindByIdAsync(id, cancellationToken).ConfigureAwait(false);
             if (existingDocument == null)
             {
                 await InsertAsync(entity, cancellationToken).ConfigureAwait(false);

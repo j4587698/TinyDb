@@ -195,6 +195,41 @@ public interface ITinyCollection<T> where T : class
     Task<int> DeleteAsync(IEnumerable<BsonValue> ids, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// 异步根据ID查找文档
+    /// </summary>
+    Task<T?> FindByIdAsync(BsonValue id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步查找所有文档
+    /// </summary>
+    Task<List<T>> FindAllAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步根据查询条件查找文档
+    /// </summary>
+    Task<List<T>> FindAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步查找单个文档
+    /// </summary>
+    Task<T?> FindOneAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步统计文档数量
+    /// </summary>
+    Task<long> CountAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步根据条件统计文档数量
+    /// </summary>
+    Task<long> CountAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步检查是否存在匹配的文档
+    /// </summary>
+    Task<bool> ExistsAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// 异步删除所有文档
     /// </summary>
     /// <param name="cancellationToken">取消令牌</param>

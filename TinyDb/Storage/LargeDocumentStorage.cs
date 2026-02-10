@@ -121,6 +121,39 @@ public class LargeDocumentStorage
         return result;
     }
 
+    public async Task<byte[]> ReadLargeDocumentAsync(uint indexPageId, CancellationToken cancellationToken = default)
+    {
+        var indexPage = await _pageManager.GetPageAsync(indexPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (indexPage.PageType != PageType.LargeDocumentIndex)
+            throw new InvalidOperationException($"Page {indexPageId} is not a large document index page");
+
+        var header = ReadIndexPageHeader(indexPage);
+        var result = new byte[header.TotalLength];
+        var offset = 0;
+
+        var currentPageId = header.FirstDataPageId;
+        for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var dataPage = await _pageManager.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var dataHeader = ReadDataPageHeader(dataPage);
+
+            if (dataHeader.PageNumber != i)
+                throw new InvalidOperationException("Data page number mismatch");
+
+            var dataToRead = Math.Min(_dataPayloadSize, header.TotalLength - offset);
+            var dataBytes = dataPage.ReadBytes(DataPageHeaderSize, dataToRead);
+
+            Buffer.BlockCopy(dataBytes, 0, result, offset, dataToRead);
+            offset += dataToRead;
+
+            currentPageId = dataHeader.NextPageId;
+        }
+
+        return result;
+    }
+
     /// <summary>
     /// 删除大文档及其关联的数据页。
     /// </summary>

@@ -1043,6 +1043,37 @@ public sealed class TinyDbEngine : IDisposable
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
     }
 
+    internal async Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
+    {
+        var st = GetCollectionState(col);
+        var ds = new List<BsonDocument>();
+
+        var pages = st.OwnedPages.Keys.ToList();
+        pages.Sort();
+
+        foreach (var pageId in pages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var p = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
+
+                foreach (var doc in _dataPageAccess.ScanDocumentsFromPage(p))
+                {
+                    if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
+                    ds.Add(await ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false));
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var tx = GetCurrentTransaction();
+        return tx != null ? MergeTransactionOperations(col, ds, tx).ToList() : ds;
+    }
+
     /// <summary>
     /// 获取集合中所有文档的原始数据（零拷贝）
     /// 用于高性能查询引擎，支持并行解析
@@ -1082,12 +1113,42 @@ public sealed class TinyDbEngine : IDisposable
         return FindByIdFullScan(col, id, st);
     }
 
+    internal async Task<BsonDocument?> FindByIdAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
+    {
+        var st = GetCollectionState(col);
+        if (st.Index.TryGet(id.ToString(), out var loc))
+        {
+            var p = await _pageManager.GetPageAsync(loc.PageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
+            if (entry != null) return await ResolveLargeDocumentAsync(entry.Value.Document, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await FindByIdFullScanAsync(col, id, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<BsonDocument?> FindByIdFullScanAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
+    {
+        var all = await FindAllAsync(col, cancellationToken).ConfigureAwait(false);
+        return all.FirstOrDefault(d => d["_id"].Equals(id));
+    }
+
     internal BsonDocument ResolveLargeDocument(BsonDocument doc)
     {
         if (doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null))
         {
             uint lId = (uint)doc["_largeDocumentIndex"].ToInt64(null);
             var data = _largeDocumentStorage.ReadLargeDocument(lId);
+            return BsonSerializer.DeserializeDocument(data);
+        }
+        return doc;
+    }
+
+    internal async Task<BsonDocument> ResolveLargeDocumentAsync(BsonDocument doc, CancellationToken cancellationToken = default)
+    {
+        if (doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null))
+        {
+            uint lId = (uint)doc["_largeDocumentIndex"].ToInt64(null);
+            var data = await _largeDocumentStorage.ReadLargeDocumentAsync(lId, cancellationToken).ConfigureAwait(false);
             return BsonSerializer.DeserializeDocument(data);
         }
         return doc;

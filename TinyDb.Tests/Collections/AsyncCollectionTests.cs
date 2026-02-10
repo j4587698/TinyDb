@@ -139,6 +139,127 @@ public class AsyncCollectionTests : IDisposable
 
     #endregion
 
+    #region ReadAsync Tests
+
+    [Test]
+    public async Task FindByIdAsync_Should_Return_Document_When_Exists()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var entity = new AsyncTestEntity { Name = "Test" };
+        var id = collection.Insert(entity);
+
+        var loaded = await collection.FindByIdAsync(id);
+
+        await Assert.That(loaded).IsNotNull();
+        await Assert.That(loaded!.Name).IsEqualTo("Test");
+    }
+
+    [Test]
+    public async Task FindAllAsync_Should_Return_All_Documents()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "One" });
+        collection.Insert(new AsyncTestEntity { Name = "Two" });
+        collection.Insert(new AsyncTestEntity { Name = "Three" });
+
+        var all = await collection.FindAllAsync();
+
+        await Assert.That(all.Count).IsEqualTo(3);
+        var names = all.Select(x => x.Name).OrderBy(x => x).ToArray();
+        await Assert.That(names.SequenceEqual(new[] { "One", "Three", "Two" })).IsTrue();
+    }
+
+    [Test]
+    public async Task FindAsync_Should_Filter_Documents()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "Keep" });
+        collection.Insert(new AsyncTestEntity { Name = "Match" });
+        collection.Insert(new AsyncTestEntity { Name = "Match" });
+
+        var matched = await collection.FindAsync(x => x.Name == "Match");
+
+        await Assert.That(matched.Count).IsEqualTo(2);
+        await Assert.That(matched.All(x => x.Name == "Match")).IsTrue();
+    }
+
+    [Test]
+    public async Task FindOneAsync_Should_Return_First_Match()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A" });
+        collection.Insert(new AsyncTestEntity { Name = "B" });
+
+        var found = await collection.FindOneAsync(x => x.Name == "B");
+
+        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Name).IsEqualTo("B");
+    }
+
+    [Test]
+    public async Task CountAsync_Should_Return_Count()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A" });
+        collection.Insert(new AsyncTestEntity { Name = "B" });
+
+        var count = await collection.CountAsync();
+
+        await Assert.That(count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task CountAsync_WithPredicate_Should_Return_Matching_Count()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A" });
+        collection.Insert(new AsyncTestEntity { Name = "A" });
+        collection.Insert(new AsyncTestEntity { Name = "B" });
+
+        var count = await collection.CountAsync(x => x.Name == "A");
+
+        await Assert.That(count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ExistsAsync_Should_Return_True_When_Found()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A" });
+
+        var exists = await collection.ExistsAsync(x => x.Name == "A");
+
+        await Assert.That(exists).IsTrue();
+    }
+
+    [Test]
+    public async Task ExistsAsync_Should_Return_False_When_NotFound()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A" });
+
+        var exists = await collection.ExistsAsync(x => x.Name == "B");
+
+        await Assert.That(exists).IsFalse();
+    }
+
+    [Test]
+    public async Task FindAllAsync_Should_Support_Cancellation()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(Enumerable.Range(1, 10).Select(i => new AsyncTestEntity { Name = $"Entity_{i}" }));
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await collection.FindAllAsync(cts.Token);
+        });
+    }
+
+    #endregion
+
     #region UpdateAsync Tests
 
     [Test]
