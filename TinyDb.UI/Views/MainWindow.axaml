@@ -1,284 +1,161 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="using:TinyDb.UI.ViewModels"
-        xmlns:models="using:TinyDb.UI.Models"
-        xmlns:dg="clr-namespace:Avalonia.Controls;assembly=Avalonia.Controls.DataGrid"
-        xmlns:converters="using:TinyDb.UI.Converters"
-        xmlns:material="http://avaloniaex.github.io/material"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:system="clr-namespace:System;assembly=System.Runtime"
-    xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Runtime"
-        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
-        x:Class="TinyDb.UI.Views.MainWindow"
-        x:DataType="vm:MainWindowViewModel"
-        Icon="/Assets/avalonia-logo.ico"
-        Title="TinyDb 管理器">
+<suki:SukiWindow xmlns="https://github.com/avaloniaui"
+            xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+            xmlns:vm="using:TinyDb.UI.ViewModels"
+            xmlns:models="using:TinyDb.UI.Models"
+            xmlns:suki="clr-namespace:SukiUI.Controls;assembly=SukiUI"
+            xmlns:material="clr-namespace:Material.Icons.Avalonia;assembly=Material.Icons.Avalonia"
+            xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="800"
+            x:Class="TinyDb.UI.Views.MainWindow"
+            x:DataType="vm:MainWindowViewModel"
+            Title="TinyDb 专业管理工具"
+            Icon="/Assets/avalonia-logo.ico">
 
-    
-    <Design.DataContext>
-        <vm:MainWindowViewModel/>
-    </Design.DataContext>
+    <suki:SukiWindow.Hosts>
+        <suki:SukiDialogHost />
+        <suki:SukiToastHost />
+    </suki:SukiWindow.Hosts>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
+    <Grid RowDefinitions="Auto, *">
         <!-- 顶部工具栏 -->
-        <Border Grid.Row="0" Background="#F5F5F5" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1">
-            <StackPanel Margin="10" Spacing="10">
-                <!-- 数据库连接区域 -->
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto">
-                    <TextBlock Grid.Column="0" Text="数据库文件:" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <TextBox Grid.Column="1" Text="{Binding DatabasePath}" Watermark="输入数据库文件路径"
-                             IsEnabled="{Binding !IsConnected}" MinWidth="300"/>
-                    <Button Grid.Column="2" Content="浏览..." Command="{Binding SelectDatabaseFileCommand}"
-                            IsEnabled="True" Margin="5,0"/>
-                    <Button Grid.Column="3" Content="连接" Command="{Binding ConnectCommand}"
-                            IsEnabled="{Binding CanConnect}" Margin="5,0"/>
-                    <Button Grid.Column="4" Content="断开" Command="{Binding DisconnectCommand}"
-                            IsEnabled="{Binding CanDisconnect}" Margin="5,0"/>
-                    <Button Grid.Column="5" Content="重新创建" Command="{Binding RecreateDatabaseCommand}"
-                            IsEnabled="{Binding !IsConnected}" Margin="5,0" Background="#FF9800" Foreground="White"/>
-                    <Button Grid.Column="6" Content="设置" Command="{Binding OpenDatabaseSettingsCommand}"
-                            IsEnabled="{Binding !IsConnected}" Margin="5,0" Background="#9C27B0" Foreground="White"/>
-                </Grid>
+        <suki:GlassCard Grid.Row="0" Margin="10,10,10,5" Padding="10">
+            <Grid ColumnDefinitions="Auto, *, Auto, Auto, Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0">
+                    <material:MaterialIcon Kind="Database" Width="24" Height="24" Foreground="{DynamicResource SukiPrimaryColor}" Margin="0,0,10,0"/>
+                    <TextBlock Text="TinyDb Manager" FontWeight="Bold" FontSize="18" VerticalAlignment="Center"/>
+                </StackPanel>
+                
+                <TextBox Grid.Column="1" Text="{Binding DatabasePath}" Watermark="数据库文件路径..." IsEnabled="{Binding !IsConnected}"/>
+                
+                <Button Grid.Column="2" Classes="Flat" Command="{Binding SelectDatabaseFileCommand}" IsEnabled="{Binding !IsConnected}" Margin="5,0">浏览</Button>
+                <Button Grid.Column="3" Classes="Accent" Command="{Binding ConnectCommand}" IsEnabled="{Binding CanConnect}">连接</Button>
+                <Button Grid.Column="4" Classes="Basic" Command="{Binding DisconnectCommand}" IsEnabled="{Binding CanDisconnect}" Margin="5,0">断开</Button>
+                <Button Grid.Column="5" Classes="Basic" Command="{Binding RecreateDatabaseCommand}" IsVisible="{Binding !IsConnected}">重置</Button>
+            </Grid>
+        </suki:GlassCard>
 
-                <!-- 密码输入区域 -->
-                <Grid ColumnDefinitions="Auto,*,Auto" IsVisible="{Binding !IsConnected}">
-                    <TextBlock Grid.Column="0" Text="密码 (可选):" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <TextBox Grid.Column="1" Text="{Binding Password}" Watermark="数据库密码"
-                             PasswordChar="*" MinWidth="200"/>
-                    <TextBlock Grid.Column="2" Text="留空表示无密码保护" VerticalAlignment="Center"
-                               Opacity="0.6" Margin="10,0,0,0"/>
-                </Grid>
-
-                <!-- 数据库信息显示 -->
-                <Border Background="#E8F5E8" BorderBrush="#4CAF50" BorderThickness="1"
-                        CornerRadius="4" Padding="10" IsVisible="{Binding IsConnected}">
-                    <Grid ColumnDefinitions="*,*,*,*">
-                        <StackPanel Grid.Column="0" Spacing="2">
-                            <TextBlock Text="数据库信息" FontWeight="Bold"/>
-                            <TextBlock Text="{Binding DatabaseInfo.DatabaseName}" FontSize="14"/>
-                            <TextBlock Text="{Binding DatabaseInfo.FormattedFileSize}" FontSize="12" Opacity="0.8"/>
+        <Grid Grid.Row="1" ColumnDefinitions="240, * " Margin="10,5,10,10">
+            <!-- 左侧导航 -->
+            <suki:GlassCard Grid.Column="0" Margin="0,0,5,0">
+                <Grid RowDefinitions="Auto, *">
+                    <Button Grid.Row="0" Classes="Flat" Command="{Binding OpenDesignWindowCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,10">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <material:MaterialIcon Kind="TablePlus"/>
+                            <TextBlock Text="设计新表"/>
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="2">
-                            <TextBlock Text="页面使用情况" FontWeight="Bold"/>
-                            <TextBlock Text="{Binding DatabaseInfo.PageUsageInfo}" FontSize="14"/>
-                            <TextBlock Text="{Binding DatabaseInfo.CacheInfo}" FontSize="12" Opacity="0.8"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Spacing="2">
-                            <TextBlock Text="集合数量" FontWeight="Bold"/>
-                            <TextBlock Text="{Binding DatabaseInfo.CollectionCount}" FontSize="14"/>
-                            <TextBlock Text="{Binding DatabaseInfo.FormulatedCreatedDate}" FontSize="12" Opacity="0.8"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="3" Spacing="2">
-                            <TextBlock Text="管理操作" FontWeight="Bold"/>
-                            <Button Content="表结构管理" Command="{Binding OpenTableStructureWindowCommand}"
-                                    Background="#2196F3" Foreground="White"
-                                    Padding="8,4" FontSize="12"/>
-                            <TextBlock Text="{Binding DatabaseInfo.FormulatedModifiedDate}" FontSize="12" Opacity="0.8"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-            </StackPanel>
-        </Border>
-
-        <!-- 主要内容区域 -->
-        <Grid Grid.Row="1" ColumnDefinitions="250,*,400">
-
-            <!-- 左侧：表列表 -->
-            <Border Grid.Column="0" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="0,0,1,0">
-                <Grid RowDefinitions="Auto,*,Auto">
-                    <!-- 表列表标题栏 -->
-                    <Border Grid.Row="0" Background="#F0F0F0" Padding="10">
-                        <Grid ColumnDefinitions="*,Auto,Auto">
-                            <TextBlock Grid.Column="0" Text="表列表" FontWeight="Bold" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" Content="刷新" Command="{Binding RefreshCollectionsCommand}"
-                                    IsEnabled="{Binding CanDisconnect}" Padding="8,4" Margin="5,0"/>
-                            <Button Grid.Column="2" Content="新建表" Command="{Binding CreateCollectionCommand}"
-                                    IsEnabled="{Binding CanDisconnect}" Padding="8,4" Margin="5,0"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- 表列表 -->
-                    <ListBox Grid.Row="1" ItemsSource="{Binding Collections}"
-                             SelectedItem="{Binding SelectedCollection}"
-                             IsEnabled="{Binding CanDisconnect}">
+                    </Button>
+                    
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Collections}" SelectedItem="{Binding SelectedCollection}" Background="Transparent">
                         <ListBox.ItemTemplate>
                             <DataTemplate DataType="models:CollectionInfo">
-                                <Border Padding="10" Margin="2">
-                                    <StackPanel Spacing="4">
-                                        <TextBlock Text="{Binding Name}" FontWeight="Bold"/>
-                                        <TextBlock Text="{Binding DocumentCountInfo}" FontSize="12" Opacity="0.7"/>
-                                        <TextBlock Text="{Binding IndexInfo}" FontSize="11" Opacity="0.6"/>
-                                    </StackPanel>
-                                </Border>
+                                <StackPanel Orientation="Horizontal" Spacing="10" Margin="5">
+                                    <material:MaterialIcon Kind="Table" Width="16" Opacity="0.6"/>
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                </StackPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-
-                    <!-- 集合操作按钮 -->
-                    <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="5">
-                        <Button Content="删除集合" Command="{Binding DeleteCollectionCommand}"
-                                IsEnabled="{Binding CanDeleteCollection}"
-                                Background="#F44336" Foreground="White"/>
-                    </StackPanel>
                 </Grid>
-            </Border>
+            </suki:GlassCard>
 
-            <!-- 中间：文档列表 -->
-            <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto">
-                <!-- 文档列表标题栏 -->
-                <Border Grid.Row="0" Background="#F0F0F0" Padding="10">
-                    <Grid ColumnDefinitions="*,Auto,Auto">
-                        <TextBlock Grid.Column="0" Text="{Binding SelectedCollection.Name, FallbackValue='文档列表'}"
-                                  FontWeight="Bold" VerticalAlignment="Center"/>
-                        <Button Grid.Column="1" Content="刷新" Command="{Binding RefreshDocumentsCommand}"
-                                IsEnabled="{Binding CanDeleteCollection}"
-                                Padding="8,4" Margin="5,0"/>
-                        <Button Grid.Column="2" Content="新建文档" Command="{Binding CreateDocumentCommand}"
-                                IsEnabled="{Binding CanDeleteCollection}"
-                                Padding="8,4" Margin="5,0"/>
-                    </Grid>
-                </Border>
-
-                <!-- 文档列表 - 简化的动态表格布局 -->
-                <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#D0D0D0" BorderThickness="1"
-                        MinHeight="300" Margin="5">
-                    <Grid RowDefinitions="Auto,*">
-                        <!-- 表格标题行 -->
-                        <Border Grid.Row="0" Background="#F0F0F0" BorderBrush="#D0D0D0" BorderThickness="0,0,0,1"
-                                Padding="0">
-                            <ItemsControl ItemsSource="{Binding DocumentFields}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal" Spacing="0"/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="system:String">
-                                        <Border BorderBrush="#D0D0D0" BorderThickness="0,0,1,0" Padding="8" MinWidth="120">
-                                            <TextBlock Text="{Binding}" FontWeight="Bold" FontSize="12"
-                                                       Foreground="#333333" VerticalAlignment="Center"/>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </Border>
-
-                        <!-- 表格内容 -->
-                        <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto"
-                                     VerticalScrollBarVisibility="Auto" Padding="0">
-                            <ItemsControl ItemsSource="{Binding DocumentRows}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Spacing="0"/>
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate DataType="models:DocumentRow">
-                                        <Border Background="#FFFFFF" BorderBrush="#E0E0E0" BorderThickness="0,0,0,1"
-                                                Padding="0" MinHeight="40">
-                                            <ItemsControl ItemsSource="{Binding FieldValues}">
+            <!-- 主内容 (多标签页) -->
+            <suki:GlassCard Grid.Column="1" Margin="5,0,0,0" Padding="0">
+                <TabControl ItemsSource="{Binding OpenTabs}" SelectedItem="{Binding SelectedTab}" Name="MainTabControl">
+                    <TabControl.ItemTemplate>
+                        <DataTemplate DataType="vm:TableTabViewModel">
+                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                <TextBlock Text="{Binding TableName}" VerticalAlignment="Center"/>
+                                <Button Classes="Flat" Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CloseTabCommand}" 
+                                        CommandParameter="{Binding}" Padding="2" BorderThickness="0">
+                                    <material:MaterialIcon Kind="Close" Width="12"/>
+                                </Button>
+                            </StackPanel>
+                        </DataTemplate>
+                    </TabControl.ItemTemplate>
+                    <TabControl.ContentTemplate>
+                        <DataTemplate DataType="vm:TableTabViewModel">
+                            <Grid RowDefinitions="Auto, *">
+                                <!-- 表操作工具栏 -->
+                                <Border Grid.Row="0" BorderBrush="{DynamicResource SukiBorderBrush}" BorderThickness="0,0,0,1" Padding="10">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <Button Classes="Flat" Command="{Binding LoadDataCommand}">刷新</Button>
+                                        <Button Classes="Flat" Command="{Binding AddRowCommand}">添加行</Button>
+                                        <Button Classes="Flat" Command="{Binding DeleteRowCommand}" IsEnabled="{Binding SelectedRow, Converter={x:Static ObjectConverters.IsNotNull}}">删除行</Button>
+                                        <Separator Classes="Vertical" Height="20"/>
+                                        <Button Classes="Accent" Command="{Binding SaveChangesCommand}">应用更改</Button>
+                                        <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" Margin="20,0" FontSize="12" Opacity="0.6"/>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <!-- 自定义稳定表格 -->
+                                <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                                    <StackPanel>
+                                        <!-- 动态表头 -->
+                                        <Border Background="{DynamicResource SukiBackground}" BorderBrush="{DynamicResource SukiBorderBrush}" BorderThickness="0,0,0,1">
+                                            <ItemsControl ItemsSource="{Binding Fields}">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
-                                                        <StackPanel Orientation="Horizontal" Spacing="0"/>
+                                                        <StackPanel Orientation="Horizontal"/>
                                                     </ItemsPanelTemplate>
                                                 </ItemsControl.ItemsPanel>
                                                 <ItemsControl.ItemTemplate>
-                                                    <DataTemplate DataType="system:String">
-                                                        <Border BorderBrush="#F0F0F0" BorderThickness="0,0,1,0"
-                                                               Padding="8" MinWidth="120">
-                                                            <TextBlock FontSize="11"
-                                                                       Foreground="#333333" VerticalAlignment="Center"
-                                                                       Text="{Binding}"/>
+                                                    <DataTemplate>
+                                                        <Border Width="150" Padding="10,12" BorderBrush="{DynamicResource SukiBorderBrush}" BorderThickness="0,0,1,0">
+                                                            <TextBlock Text="{Binding FieldName}" FontWeight="Bold" Opacity="0.7"/>
                                                         </Border>
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
                                         </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </Grid>
-                </Border>
 
-                <!-- 文档操作按钮 -->
-                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="10" Spacing="5">
-                    <Button Content="删除文档" Command="{Binding DeleteDocumentCommand}"
-                            IsEnabled="{Binding CanDeleteDocument}"
-                            Background="#F44336" Foreground="White" Margin="0,0,10,0"/>
-                    <Button Content="测试绑定" Click="TestBinding_Click"
-                            Background="#2196F3" Foreground="White"/>
+                                        <!-- 数据行 -->
+                                        <ListBox ItemsSource="{Binding Rows}" SelectedItem="{Binding SelectedRow}" Background="Transparent" Padding="0">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate DataType="vm:RowViewModel">
+                                                    <ItemsControl ItemsSource="{Binding Cells}">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <StackPanel Orientation="Horizontal"/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate DataType="vm:CellViewModel">
+                                                                <Border Width="150" Height="40" BorderBrush="{DynamicResource SukiBorderBrush}" BorderThickness="0,0,1,1">
+                                                                    <TextBox Text="{Binding Value, Mode=TwoWay}" 
+                                                                             BorderThickness="0" 
+                                                                             Background="Transparent" 
+                                                                             VerticalAlignment="Stretch" 
+                                                                             VerticalContentAlignment="Center"
+                                                                             Padding="8,0"
+                                                                             FontSize="13"/>
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                    </StackPanel>
+                                </ScrollViewer>
+                                
+                                <suki:Loading IsVisible="{Binding IsLoading}" HorizontalAlignment="Center" VerticalAlignment="Center" Width="40" Height="40"/>
+                            </Grid>
+                        </DataTemplate>
+                    </TabControl.ContentTemplate>
+                </TabControl>
+            </suki:GlassCard>
+        </Grid>
+
+        <!-- 状态栏 -->
+        <Border Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Height="32" Background="{DynamicResource SukiBackground}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource SukiBorderBrush}" Margin="10,0,10,0">
+            <Grid ColumnDefinitions="*, Auto" Margin="15,0">
+                <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" FontSize="11" Opacity="0.7"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Spacing="20">
+                    <TextBlock Text="{Binding OpenTabs.Count, StringFormat='{}标签页: {0}'}" FontSize="11" Opacity="0.5"/>
+                    <suki:Loading IsVisible="{Binding IsLoading}" Width="16" Height="16"/>
                 </StackPanel>
             </Grid>
-
-            <!-- 右侧：文档编辑器 -->
-            <Border Grid.Column="2" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="1,0,0,0">
-                <Grid RowDefinitions="Auto,*,Auto">
-                    <!-- 编辑器标题栏 -->
-                    <Border Grid.Row="0" Background="#F0F0F0" Padding="10">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Grid.Column="0" Text="文档编辑器" FontWeight="Bold" VerticalAlignment="Center"/>
-                            <Button Grid.Column="1" Content="保存" Command="{Binding UpdateDocumentCommand}"
-                                    IsEnabled="{Binding CanDeleteDocument}"
-                                    Padding="8,4"/>
-                        </Grid>
-                    </Border>
-
-                    <!-- JSON编辑器 -->
-                    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto"
-                                 VerticalScrollBarVisibility="Auto">
-                        <TextBox Text="{Binding DocumentContent}"
-                                IsEnabled="{Binding CanEditDocument}"
-                                FontFamily="Consolas,monospace" FontSize="12"
-                                AcceptsReturn="True" TextWrapping="NoWrap"
-                                Margin="10" MinHeight="200"/>
-                    </ScrollViewer>
-
-                    <!-- 文档信息 -->
-                    <Border Grid.Row="2" Background="#F5F5F5" Padding="10"
-                           IsVisible="{Binding SelectedDocument}">
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="文档信息" FontWeight="Bold"/>
-                            <Grid ColumnDefinitions="Auto,Auto">
-                                <TextBlock Grid.Column="0" Text="ID:" FontWeight="SemiBold" Margin="0,0,10,0"/>
-                                <TextBlock Grid.Column="1" Text="{Binding SelectedDocument.Id}"/>
-                            </Grid>
-                            <Grid ColumnDefinitions="Auto,Auto">
-                                <TextBlock Grid.Column="0" Text="大小:" FontWeight="SemiBold" Margin="0,0,10,0"/>
-                                <TextBlock Grid.Column="1" Text="{Binding SelectedDocument.FormattedSize}"/>
-                            </Grid>
-                            <Grid ColumnDefinitions="Auto,Auto">
-                                <TextBlock Grid.Column="0" Text="创建时间:" FontWeight="SemiBold" Margin="0,0,10,0"/>
-                                <TextBlock Grid.Column="1" Text="{Binding SelectedDocument.FormulatedCreatedDate}"/>
-                            </Grid>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-            </Border>
-        </Grid>
-
-        <!-- 底部状态栏 -->
-        <Border Grid.Row="2" Background="#F0F0F0" BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
-            <Grid ColumnDefinitions="*,Auto" Margin="10,5">
-                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" VerticalAlignment="Center"/>
-                <ProgressBar Grid.Column="1" Width="100" Height="16" IsIndeterminate="{Binding IsLoading}"
-                            IsVisible="{Binding IsLoading}" Margin="10,0,0,0"/>
-            </Grid>
         </Border>
-
-        <!-- 加载遮罩 -->
-        <Grid Grid.Row="1" Background="#80000000" IsVisible="{Binding IsLoading}">
-            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
-                <ProgressBar Width="200" Height="20" IsIndeterminate="True"/>
-                <TextBlock Text="加载中..." Foreground="White" HorizontalAlignment="Center"/>
-            </StackPanel>
-        </Grid>
     </Grid>
-</Window>
+</suki:SukiWindow>

@@ -233,19 +233,18 @@ public class DynamicEntityGenerator
     /// </summary>
     private string GetValidTypeName(string tableName)
     {
-        // 清理表名，使其符合C#类型命名规范
+        // 移除计数器，使同一张表的元数据集合名称固定
         var typeName = tableName
             .Replace(" ", "_")
             .Replace("-", "_")
             .Replace(".", "_");
 
-        // 确保以字母开头
         if (char.IsDigit(typeName[0]))
         {
             typeName = "Table_" + typeName;
         }
 
-        return $"DynamicEntity_{typeName}_{_typeCounter++}";
+        return $"DynamicEntity_{typeName}";
     }
 
     /// <summary>

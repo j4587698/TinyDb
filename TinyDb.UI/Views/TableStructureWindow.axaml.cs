@@ -1,186 +1,30 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Interactivity;
-using Avalonia.Input;
+using SukiUI.Controls;
 using TinyDb.UI.ViewModels;
 using TinyDb.UI.Services;
 using TinyDb.Core;
 
 namespace TinyDb.UI.Views;
 
-/// <summary>
-/// 表结构管理窗口
-/// </summary>
-public partial class TableStructureWindow : Window
+public partial class TableStructureWindow : SukiWindow
 {
-    private TableStructureViewModel? ViewModel { get; set; }
-
     public TableStructureWindow()
     {
         InitializeComponent();
-
-        // 设置窗口属性
-        CanResize = true;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
     }
 
-    /// <summary>
-    /// 构造函数，接收数据库服务和引擎
-    /// </summary>
     public TableStructureWindow(DatabaseService databaseService, TinyDbEngine engine) : this()
     {
-        ViewModel = new TableStructureViewModel(databaseService);
-        DataContext = ViewModel;
-        ViewModel.SetEngine(engine);
-    }
-
-    /// <summary>
-    /// 窗口加载事件
-    /// </summary>
-    protected override async void OnOpened(EventArgs e)
-    {
-        base.OnOpened(e);
-
-        // 自动加载表列表
-        if (ViewModel != null)
-        {
-            await ViewModel.LoadTables();
-        }
-    }
-
-    /// <summary>
-    /// 窗口关闭事件
-    /// </summary>
-    protected override void OnClosing(WindowClosingEventArgs e)
-    {
-        // 如果正在编辑，提示用户保存
-        if (ViewModel?.IsEditing == true)
-        {
-            // 简化处理，直接关闭
-            // 在实际应用中可以添加更复杂的对话框
-        }
-
-        base.OnClosing(e);
-    }
-
-    /// <summary>
-    /// 刷新按钮点击事件
-    /// </summary>
-    private async void RefreshButton_Click(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel != null) await ViewModel.LoadTables();
-    }
-
-    /// <summary>
-    /// 新建表按钮点击事件
-    /// </summary>
-    private void CreateNewTableButton_Click(object? sender, RoutedEventArgs e)
-    {
-        // 触发ViewModel的命令
-        ViewModel?.CreateNewTableCommand.Execute(null);
-    }
-
-    /// <summary>
-    /// 保存按钮点击事件
-    /// </summary>
-    private async void SaveTableButton_Click(object? sender, RoutedEventArgs e)
-    {
-        if (ViewModel != null) await ViewModel.SaveTableCommand.ExecuteAsync(null);
-    }
-
-    /// <summary>
-    /// 取消按钮点击事件
-    /// </summary>
-    private void CancelEditButton_Click(object? sender, RoutedEventArgs e)
-    {
-        ViewModel?.CancelEditCommand.Execute(null);
-    }
-
-    /// <summary>
-    /// 删除表按钮点击事件
-    /// </summary>
-    private async void DeleteTableButton_Click(object? sender, RoutedEventArgs e)
-    {
-        // 确认删除
-        if (ViewModel != null && ViewModel.SelectedTable != null)
-        {
-            // 简化处理，直接删除
-            await ViewModel.DeleteTableCommand.ExecuteAsync(null);
-        }
-    }
-
-    /// <summary>
-    /// 添加字段按钮点击事件
-    /// </summary>
-    private void AddFieldButton_Click(object? sender, RoutedEventArgs e)
-    {
-        ViewModel?.AddFieldCommand.Execute(null);
-    }
-
-    /// <summary>
-    /// 删除字段按钮点击事件
-    /// </summary>
-    private void OnDeleteFieldClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is Button button && button.Tag is Models.TableField field && ViewModel != null)
-        {
-            ViewModel.RemoveFieldCommand.Execute(field);
-        }
-    }
-
-    /// <summary>
-    /// 字段DataGrid的双击事件 - 用于选中字段进行编辑
-    /// </summary>
-    private void FieldsDataGrid_DoubleTapped(object? sender, RoutedEventArgs e)
-    {
-        // 这里可以实现字段选中逻辑
-        // 当前UI已经通过绑定自动处理字段选择
-    }
-
-    /// <summary>
-    /// 表名输入框的回车键事件
-    /// </summary>
-    private void NewTableName_KeyDown(object? sender, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter)
-        {
-            e.Handled = true;
-            ViewModel?.CreateNewTableCommand.Execute(null);
-        }
-    }
-
-    /// <summary>
-    /// 窗口键事件处理
-    /// </summary>
-    protected override void OnKeyDown(KeyEventArgs e)
-    {
-        base.OnKeyDown(e);
-
-        if (ViewModel == null) return;
-
-        // Ctrl+S 保存
-        if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.S)
-        {
-            e.Handled = true;
-            if (ViewModel.CanSaveTable)
-            {
-                ViewModel.SaveTableCommand.ExecuteAsync(null);
-            }
-        }
-
-        // Escape 取消编辑
-        if (e.Key == Key.Escape && ViewModel.CanCancelEdit)
-        {
-            e.Handled = true;
-            ViewModel.CancelEditCommand.Execute(null);
-        }
-
-        // F5 刷新
-        if (e.Key == Key.F5 && !ViewModel.IsEditing)
-        {
-            e.Handled = true;
-            ViewModel.LoadTablesCommand.ExecuteAsync(null);
-        }
+        var vm = new TableStructureViewModel(databaseService);
+        vm.SetEngine(engine);
+        
+        // 订阅保存成功事件
+        vm.SaveSuccess += () => {
+            Avalonia.Threading.Dispatcher.UIThread.Post(this.Close);
+        };
+        
+        DataContext = vm;
     }
 }

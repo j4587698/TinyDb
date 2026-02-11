@@ -716,102 +716,49 @@ public class TableStructureService
         return priority[type1] >= priority[type2] ? type1 : type2;
     }
 
-    /// <summary>
-    /// 创建集合（基于TinyDb原生机制 + 自动元数据生成）
-    /// </summary>
     public async Task<bool> CreateTableAsync(TableStructure table)
     {
-        if (_engine == null)
-            throw new InvalidOperationException("数据库未连接");
+        if (_engine == null) throw new InvalidOperationException("引擎未连接");
 
         try
         {
-            // 验证集合名
-            if (string.IsNullOrWhiteSpace(table.TableName))
-                throw new ArgumentException("集合名不能为空");
+            // 1. 物理创建表
+            await Task.Run(() => _engine.GetCollection<BsonDocument>(table.TableName));
 
-            Console.WriteLine($"[DEBUG] 创建集合: {table.TableName}");
-
-            // 检查集合是否已存在
-            if (_engine.CollectionExists(table.TableName))
-            {
-                throw new InvalidOperationException($"集合 '{table.TableName}' 已存在");
-            }
-
-            // 使用EntityFactory为集合名称创建对应的实体类型
-            var entityType = EntityFactory.GetOrCreateEntityType(table.TableName);
-            Console.WriteLine($"[EntityFactory] 为集合 '{table.TableName}' 创建实体类型: {entityType.Name}");
-
-            // 使用反射获取集合，类型安全
-            var getCollectionMethod = _engine.GetType()
-                .GetMethods()
-                .FirstOrDefault(m => m.Name == "GetCollection" && m.IsGenericMethod);
-
-            if (getCollectionMethod == null)
-            {
-                throw new InvalidOperationException("无法找到GetCollection方法");
-            }
-
-            var genericMethod = getCollectionMethod.MakeGenericMethod(entityType);
-            dynamic collection = genericMethod.Invoke(_engine, new object[] { table.TableName })!;
-            Console.WriteLine($"[DEBUG] 创建类型化空集合: {table.TableName}, 类型: {entityType.Name}");
-
-            // 创建一个类型化的实体来初始化集合
-            dynamic tempEntity = Activator.CreateInstance(entityType)!;
-
-            // 使用反射设置Id属性
-            var idProperty = entityType.GetProperty("Id");
-            if (idProperty != null)
-            {
-                idProperty.SetValue(tempEntity, "_temp_init_" + Guid.NewGuid().ToString("N")[..8]);
-            }
-
-            // 使用反射访问Data字典来设置初始数据
-            var dataProperty = entityType.GetProperty("Data");
-            if (dataProperty != null && dataProperty.PropertyType == typeof(Dictionary<string, object?>))
-            {
-                var data = (Dictionary<string, object?>)dataProperty.GetValue(tempEntity)!;
-                data["_created"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                data["_is_temp"] = true;
-                data["_entity_type"] = entityType.Name;
-                data["_table_structure"] = true;
-            }
-
-            // 插入临时实体
-            var tempId = await Task.Run(() => collection.Insert(tempEntity));
-            Console.WriteLine($"[DEBUG] 类型化临时实体插入成功，ID: {tempId}, 类型: {entityType.Name}");
-
-            // 立即删除临时实体，但集合会保留
-            await Task.Run(() => collection.Delete(tempId));
-            Console.WriteLine($"[DEBUG] 类型化临时实体已删除，集合保留");
-
-            // 自动生成并保存元数据
-            if (_dynamicGenerator != null && table.Fields.Count > 0)
-            {
-                Console.WriteLine($"[DEBUG] 开始自动生成元数据...");
-                var metadataSuccess = _dynamicGenerator.CreateEntityAndSaveMetadata(table);
-                if (metadataSuccess)
+            // 2. 使用官方 MetadataDocument 格式存储元数据
+            await Task.Run(() => {
+                var metaCollectionName = "__metadata_" + table.TableName;
+                var metaCol = _engine.GetCollection<MetadataDocument>(metaCollectionName);
+                
+                // 构造官方标准的 EntityMetadata
+                var metadata = new EntityMetadata
                 {
-                    Console.WriteLine($"[INFO] ✅ 已为表 '{table.TableName}' 自动生成元数据");
-                    Console.WriteLine($"[INFO] 🎯 包含 {table.Fields.Count} 个字段的完整定义");
-                }
-                else
-                {
-                    Console.WriteLine($"[WARNING] ⚠️ 元数据生成失败，将使用纯数据驱动模式");
-                }
-            }
-            else
-            {
-                Console.WriteLine($"[INFO] 📝 表 '{table.TableName}' 无字段定义，跳过元数据生成");
-            }
+                    TypeName = "Dynamic." + table.TableName,
+                    CollectionName = table.TableName,
+                    DisplayName = table.DisplayName ?? table.TableName,
+                    Description = table.Description
+                };
 
-            Console.WriteLine($"[DEBUG] 集合创建成功: {table.TableName}");
+                foreach(var f in table.Fields) {
+                    metadata.Properties.Add(new PropertyMetadata {
+                        PropertyName = f.FieldName,
+                        PropertyType = ConvertFromTableFieldType(f.FieldType),
+                        DisplayName = f.FieldName,
+                        Order = f.Order,
+                        Required = f.IsRequired
+                    });
+                }
+
+                // 转换为官方文档模型并持久化
+                var doc = MetadataDocument.FromEntityMetadata(metadata);
+                metaCol.Insert(doc);
+            });
+
             return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[ERROR] 创建集合失败: {ex.Message}");
-            throw new InvalidOperationException($"创建集合失败: {ex.Message}", ex);
+            throw new Exception($"官方标准创建失败: {ex.Message}");
         }
     }
 

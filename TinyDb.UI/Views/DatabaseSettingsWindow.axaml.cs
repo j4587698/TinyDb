@@ -1,8 +1,9 @@
 using Avalonia.Controls;
+using SukiUI.Controls;
 
 namespace TinyDb.UI.Views;
 
-public partial class DatabaseSettingsWindow : Window
+public partial class DatabaseSettingsWindow : SukiWindow
 {
     public DatabaseSettingsWindow()
     {

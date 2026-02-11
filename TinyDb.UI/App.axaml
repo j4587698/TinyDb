@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="TinyDb.UI.App"
              xmlns:local="using:TinyDb.UI"
+             xmlns:sukiUi="clr-namespace:SukiUI;assembly=SukiUI"
              RequestedThemeVariant="Default">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
@@ -10,6 +11,8 @@
     </Application.DataTemplates>
   
     <Application.Styles>
-        <FluentTheme />
+        <sukiUi:SukiTheme ThemeColor="Blue" />
+        <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml"/>
+        <StyleInclude Source="avares://Material.Icons.Avalonia/MaterialIconStyles.xaml" />
     </Application.Styles>
 </Application>
