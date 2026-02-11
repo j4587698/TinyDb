@@ -171,8 +171,7 @@ public sealed class DiskBTree : IDisposable
     {
         if (node.IsLeaf)
         {
-            int pos = 0;
-            while(pos < node.Keys.Count && node.Keys[pos].CompareTo(key) < 0) pos++;
+            int pos = LowerBound(node.Keys, key);
             node.Keys.Insert(pos, key);
             node.Values.Insert(pos, value);
             node.MarkDirty();
@@ -180,9 +179,7 @@ public sealed class DiskBTree : IDisposable
         }
         else
         {
-            int i = node.Keys.Count - 1;
-            while (i >= 0 && node.Keys[i].CompareTo(key) > 0) i--;
-            i++;
+            int i = UpperBound(node.Keys, key);
             var child = LoadNode(node.ChildrenIds[i]);
             if (child.IsFull((int)_pm.PageSize) || child.KeyCount >= _maxKeys)
             {
@@ -192,6 +189,48 @@ public sealed class DiskBTree : IDisposable
             }
             InsertNonFull(child, key, value);
         }
+    }
+
+    private static int LowerBound(List<IndexKey> keys, IndexKey key)
+    {
+        int low = 0;
+        int high = keys.Count;
+
+        while (low < high)
+        {
+            int mid = low + ((high - low) >> 1);
+            if (keys[mid].CompareTo(key) < 0)
+            {
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+
+        return low;
+    }
+
+    private static int UpperBound(List<IndexKey> keys, IndexKey key)
+    {
+        int low = 0;
+        int high = keys.Count;
+
+        while (low < high)
+        {
+            int mid = low + ((high - low) >> 1);
+            if (keys[mid].CompareTo(key) <= 0)
+            {
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid;
+            }
+        }
+
+        return low;
     }
 
     private void SplitChild(DiskBTreeNode parent, int index, DiskBTreeNode child)
@@ -443,18 +482,7 @@ public sealed class DiskBTree : IDisposable
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf)
         {
-            int i = 0;
-            while(i < node.KeyCount && key.CompareTo(node.Keys[i]) >= 0) i++;
-            
-            int childIdx = node.KeyCount; 
-            for(int k=0; k<node.KeyCount; k++)
-            {
-                if (key.CompareTo(node.Keys[k]) < 0) 
-                {
-                    childIdx = k;
-                    break;
-                }
-            }
+            int childIdx = UpperBound(node.Keys, key);
             node = LoadNode(node.ChildrenIds[childIdx]);
         }
         return node;

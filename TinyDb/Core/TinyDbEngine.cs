@@ -602,12 +602,11 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         var st = GetCollectionState(col);
-        var k = id.ToString();
         PageDocumentEntry old = default; // Declare outside lock
 
         lock (st.PageState.SyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, k, out var p, out var e, out var i)) return 0;
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
             if (i >= e.Count) return 0; // Guard against index mismatch
             old = e[i];
 
@@ -629,7 +628,7 @@ public sealed class TinyDbEngine : IDisposable
                 e[i] = old; // Revert in memory list to old state to delete cleanly
                 // Delete logic inline
                 e.RemoveAt(i);
-                st.Index.Remove(k);
+                st.Index.Remove(id);
 
                 _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
 
@@ -668,12 +667,11 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         var st = GetCollectionState(col);
-        var k = id.ToString();
         PageDocumentEntry old = default;
 
         lock (st.PageState.SyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, k, out var p, out var e, out var i)) return 0;
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
             if (i >= e.Count) return 0;
             old = e[i];
 
@@ -691,7 +689,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 e[i] = old;
                 e.RemoveAt(i);
-                st.Index.Remove(k);
+                st.Index.Remove(id);
 
                 _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
 
@@ -714,14 +712,13 @@ public sealed class TinyDbEngine : IDisposable
     internal int DeleteDocument(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
-        var k = id.ToString();
         lock (st.PageState.SyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, k, out var p, out var e, out var i)) return 0;
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
             if (i >= e.Count) return 0; // Guard against index mismatch
             var entry = e[i];
             e.RemoveAt(i);
-            st.Index.Remove(k);
+            st.Index.Remove(id);
             if (e.Count == 0)
             {
                 st.OwnedPages.TryRemove(p.PageID, out _); // Remove from OwnedPages
@@ -752,14 +749,13 @@ public sealed class TinyDbEngine : IDisposable
     internal async Task<int> DeleteDocumentAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
         var st = GetCollectionState(col);
-        var k = id.ToString();
         lock (st.PageState.SyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, k, out var p, out var e, out var i)) return 0;
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
             if (i >= e.Count) return 0;
             var entry = e[i];
             e.RemoveAt(i);
-            st.Index.Remove(k);
+            st.Index.Remove(id);
             if (e.Count == 0)
             {
                 st.OwnedPages.TryRemove(p.PageID, out _);
@@ -847,7 +843,7 @@ public sealed class TinyDbEngine : IDisposable
 
                     ushort i = currentPage.Header.ItemCount;
                     _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
-                    st.Index.Set(id.ToString(), new DocumentLocation(currentPage.PageID, i));
+                    st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
                     
                     docsToUpdateIndex.Add((doc, id));
                     insertedCount++;
@@ -971,8 +967,8 @@ public sealed class TinyDbEngine : IDisposable
 
                     ushort i = currentPage.Header.ItemCount;
                     _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
-                    st.Index.Set(id.ToString(), new DocumentLocation(currentPage.PageID, i));
-
+                    st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
+                    
                     docsToUpdateIndex.Add((doc, id));
                     insertedCount++;
                 }
@@ -1111,7 +1107,7 @@ public sealed class TinyDbEngine : IDisposable
     internal BsonDocument? FindById(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
-        if (st.Index.TryGet(id.ToString(), out var loc))
+        if (st.Index.TryGet(id, out var loc))
         {
             var p = _pageManager.GetPage(loc.PageId);
             var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
@@ -1123,7 +1119,7 @@ public sealed class TinyDbEngine : IDisposable
     internal async Task<BsonDocument?> FindByIdAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
         var st = GetCollectionState(col);
-        if (st.Index.TryGet(id.ToString(), out var loc))
+        if (st.Index.TryGet(id, out var loc))
         {
             var p = await _pageManager.GetPageAsync(loc.PageId, cancellationToken: cancellationToken).ConfigureAwait(false);
             var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
@@ -1202,7 +1198,7 @@ public sealed class TinyDbEngine : IDisposable
                 st.OwnedPages.TryAdd(p.PageID, 0);
                 entryIndex = p.Header.ItemCount;
                 _dataPageAccess.AppendDocumentToPage(p, span);
-                st.Index.Set(id.ToString(), new DocumentLocation(p.PageID, entryIndex));
+                st.Index.Set(id, new DocumentLocation(p.PageID, entryIndex));
             }
 
             // 在锁外处理全局状态和持久化
@@ -1239,7 +1235,7 @@ public sealed class TinyDbEngine : IDisposable
         var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
 
         // 复制原文档的所有字段
-        foreach (var kvp in doc)
+        foreach (var kvp in doc._elements)
         {
             builder[kvp.Key] = kvp.Value;
         }
@@ -1276,10 +1272,10 @@ public sealed class TinyDbEngine : IDisposable
 
     private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st) => FindAll(col).FirstOrDefault(d => d["_id"].Equals(id));
 
-    private bool TryResolveDocumentLocation(string col, CollectionState st, BsonValue id, string key, out Page p, out List<PageDocumentEntry> e, out ushort i)
+    private bool TryResolveDocumentLocation(string col, CollectionState st, BsonValue id, out Page p, out List<PageDocumentEntry> e, out ushort i)
     {
         p = null!; e = null!; i = 0;
-        if (!st.Index.TryGet(key, out var loc)) return false;
+        if (!st.Index.TryGet(id, out var loc)) return false;
         p = _pageManager.GetPage(loc.PageId);
         e = _dataPageAccess.ReadDocumentsFromPage(p);
         i = loc.EntryIndex;
@@ -1319,7 +1315,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     if (doc.TryGetValue("_id", out var id))
                     {
-                        st.Index.Set(id.ToString(), new DocumentLocation(p.PageID, idx));
+                        st.Index.Set(id, new DocumentLocation(p.PageID, idx));
                     }
                 }
                 idx++;

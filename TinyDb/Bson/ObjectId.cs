@@ -107,6 +107,20 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     }
 
     /// <summary>
+    /// 使用字节 Span 初始化 ObjectId
+    /// </summary>
+    /// <param name="bytes">12字节的 Span</param>
+    /// <exception cref="ArgumentException">字节长度必须为12</exception>
+    public ObjectId(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != ObjectIdSize)
+            throw new ArgumentException("ObjectId bytes must be 12 bytes long", nameof(bytes));
+
+        _bytes = new byte[ObjectIdSize];
+        bytes.CopyTo(_bytes);
+    }
+
+    /// <summary>
     /// 使用字符串表示初始化 ObjectId
     /// </summary>
     /// <param name="value">24字符的十六进制字符串</param>

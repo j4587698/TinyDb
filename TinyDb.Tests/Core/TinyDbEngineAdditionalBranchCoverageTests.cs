@@ -163,12 +163,11 @@ public class TinyDbEngineAdditionalBranchCoverageTests
 
             var collection = engine.GetCollection<BsonDocument>("c");
             var id = collection.Insert(new BsonDocument().Set("x", 1));
-            var key = id.ToString() ?? string.Empty;
 
             var state = GetCollectionState(engine, "c");
-            await Assert.That(state.Index.TryGet(key, out var location)).IsTrue();
+            await Assert.That(state.Index.TryGet(id, out var location)).IsTrue();
 
-            state.Index.Set(key, new DocumentLocation(location.PageId, (ushort)(location.EntryIndex + 100)));
+            state.Index.Set(id, new DocumentLocation(location.PageId, (ushort)(location.EntryIndex + 100)));
 
             var updateDoc = new BsonDocument().Set("_id", id).Set("x", 2);
             await Assert.That(engine.UpdateDocumentInternal("c", updateDoc)).IsEqualTo(0);

@@ -196,12 +196,7 @@ public ref struct BsonSpanReader
     public ObjectId ReadObjectId()
     {
         if (_position + 12 > _data.Length) throw new EndOfStreamException();
-        // 直接从切片创建 ObjectId，避免数组分配
-        // ObjectId 构造函数接受 byte[]，这里我们需要切片
-        // 现有的 ObjectId(byte[]) 会复制。
-        // 为了极致性能，ObjectId 应该支持 Span 构造函数。
-        // 目前先分配数组：
-        var bytes = _data.Slice(_position, 12).ToArray();
+        var bytes = _data.Slice(_position, 12);
         _position += 12;
         return new ObjectId(bytes);
     }

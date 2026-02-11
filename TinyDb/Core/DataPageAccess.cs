@@ -226,7 +226,7 @@ internal sealed class DataPageAccess
         return (n, true);
     }
 
-    public void RewritePageWithDocuments(string col, CollectionState st, Page p, List<PageDocumentEntry> docs, Action<string, uint, ushort> updIdx)
+    public void RewritePageWithDocuments(string col, CollectionState st, Page p, List<PageDocumentEntry> docs, Action<BsonValue, uint, ushort> updIdx)
     {
         // Preserve Links: Read -> Reset -> Set
         uint prev = p.Header.PrevPageID;
@@ -237,7 +237,8 @@ internal sealed class DataPageAccess
         for (ushort i = 0; i < docs.Count; i++)
         {
             AppendDocumentToPage(p, docs[i].RawBytes);
-            if (docs[i].Id != null) updIdx(docs[i].Id.ToString() ?? "", p.PageID, i);
+            var id = docs[i].Id;
+            if (id != null) updIdx(id, p.PageID, i);
         }
         _pm.SavePage(p, false);
     }

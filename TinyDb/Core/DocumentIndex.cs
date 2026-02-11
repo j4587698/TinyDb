@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using TinyDb.Bson;
 
 namespace TinyDb.Core;
 
@@ -10,11 +11,11 @@ namespace TinyDb.Core;
 internal interface IDocumentIndex
 {
     int Count { get; }
-    bool TryGet(string key, out DocumentLocation location);
-    void Set(string key, DocumentLocation location);
-    bool Remove(string key);
+    bool TryGet(BsonValue key, out DocumentLocation location);
+    void Set(BsonValue key, DocumentLocation location);
+    bool Remove(BsonValue key);
     void Clear();
-    IEnumerable<KeyValuePair<string, DocumentLocation>> GetAll();
+    IEnumerable<KeyValuePair<BsonValue, DocumentLocation>> GetAll();
 }
 
 /// <summary>
@@ -22,26 +23,26 @@ internal interface IDocumentIndex
 /// </summary>
 internal sealed class MemoryDocumentIndex : IDocumentIndex
 {
-    private readonly ConcurrentDictionary<string, DocumentLocation> _index;
+    private readonly ConcurrentDictionary<BsonValue, DocumentLocation> _index;
 
     public MemoryDocumentIndex()
     {
-        _index = new ConcurrentDictionary<string, DocumentLocation>(StringComparer.Ordinal);
+        _index = new ConcurrentDictionary<BsonValue, DocumentLocation>();
     }
 
     public int Count => _index.Count;
 
-    public bool TryGet(string key, out DocumentLocation location)
+    public bool TryGet(BsonValue key, out DocumentLocation location)
     {
         return _index.TryGetValue(key, out location);
     }
 
-    public void Set(string key, DocumentLocation location)
+    public void Set(BsonValue key, DocumentLocation location)
     {
         _index[key] = location;
     }
 
-    public bool Remove(string key)
+    public bool Remove(BsonValue key)
     {
         return _index.TryRemove(key, out _);
     }
@@ -51,7 +52,7 @@ internal sealed class MemoryDocumentIndex : IDocumentIndex
         _index.Clear();
     }
 
-    public IEnumerable<KeyValuePair<string, DocumentLocation>> GetAll()
+    public IEnumerable<KeyValuePair<BsonValue, DocumentLocation>> GetAll()
     {
         return _index;
     }

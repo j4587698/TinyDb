@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Buffers;
+using System.Buffers.Binary;
 
 namespace TinyDb.Utils;
 
@@ -23,6 +24,16 @@ internal sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
     public void Reset()
     {
         _index = 0;
+    }
+
+    internal void WriteInt32LittleEndianAt(int offset, int value)
+    {
+        if ((uint)offset > (uint)(_index - 4))
+        {
+            throw new ArgumentOutOfRangeException(nameof(offset));
+        }
+
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.AsSpan(offset, 4), value);
     }
 
     public void Advance(int count)

@@ -147,7 +147,7 @@ public static class BsonScanner
             case BsonType.Null:
                 return BsonNull.Value;
             case BsonType.ObjectId:
-                var oidBytes = data.Slice(offset, 12).ToArray();
+                var oidBytes = data.Slice(offset, 12);
                 offset += 12;
                 return new BsonObjectId(new ObjectId(oidBytes));
             default:

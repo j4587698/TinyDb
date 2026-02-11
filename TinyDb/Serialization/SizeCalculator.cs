@@ -53,7 +53,7 @@ internal sealed class SizeCalculator
 
         var size = 4; // 文档大小（4字节）
 
-        foreach (var kvp in document)
+        foreach (var kvp in document._elements)
         {
             size += 1; // 类型字节
             size += CalculateCStringSize(kvp.Key); // 键名
@@ -79,7 +79,7 @@ internal sealed class SizeCalculator
         for (int i = 0; i < array.Count; i++)
         {
             size += 1; // 类型字节
-            size += CalculateCStringSize(i.ToString()); // 索引作为键名
+            size += CalculateInt32CStringSize(i); // 索引作为键名
             size += CalculateSize(array[i]); // 值
         }
 
@@ -110,7 +110,28 @@ internal sealed class SizeCalculator
     {
         if (value == null) return 0;
 
+        if (BsonSerializer.CommonKeyCache.TryGetValue(value, out var cachedBytes))
+        {
+            return cachedBytes.Length + 1; // 字节 + null 终止符
+        }
+
         var byteCount = Encoding.UTF8.GetByteCount(value);
         return byteCount + 1; // 字节 + null 终止符
+    }
+
+    private static int CalculateInt32CStringSize(int value)
+    {
+        if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));
+
+        uint v = (uint)value;
+        int digits = 1;
+
+        while (v >= 10)
+        {
+            v /= 10;
+            digits++;
+        }
+
+        return digits + 1; // digits + null 终止符
     }
 }

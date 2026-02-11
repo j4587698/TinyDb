@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Collections.Frozen;
 using TinyDb.Bson;
 using Microsoft.IO;
+using TinyDb.Utils;
 
 namespace TinyDb.Serialization;
 
@@ -57,6 +58,8 @@ public static class BsonSerializer
         ["Updated"] = DefaultEncoding.GetBytes("Updated"),
         ["Deleted"] = DefaultEncoding.GetBytes("Deleted"),
     }.ToFrozenDictionary();
+
+    private static readonly SizeCalculator Calculator = new();
 
     /// <summary>
     /// 序列化 BsonValue
@@ -243,8 +246,7 @@ public static class BsonSerializer
     /// <returns>大小（字节）</returns>
     public static int CalculateSize(BsonValue value)
     {
-        var calculator = new SizeCalculator();
-        return calculator.CalculateSize(value);
+        return Calculator.CalculateSize(value);
     }
 
     /// <summary>
@@ -254,8 +256,7 @@ public static class BsonSerializer
     /// <returns>大小（字节）</returns>
     public static int CalculateDocumentSize(BsonDocument document)
     {
-        var calculator = new SizeCalculator();
-        return calculator.CalculateDocumentSize(document);
+        return Calculator.CalculateDocumentSize(document);
     }
 
     /// <summary>
@@ -265,8 +266,7 @@ public static class BsonSerializer
     /// <returns>大小（字节）</returns>
     public static int CalculateArraySize(BsonArray array)
     {
-        var calculator = new SizeCalculator();
-        return calculator.CalculateArraySize(array);
+        return Calculator.CalculateArraySize(array);
     }
 }
 
@@ -469,7 +469,7 @@ public sealed class BsonWriter : IDisposable
             var sizePosition = _stream.Position;
             _writer.Write(0); // 占位符
 
-            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+            foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
             _writer.Write((byte)BsonType.End);
 
             _writer.Flush();
@@ -482,11 +482,23 @@ public sealed class BsonWriter : IDisposable
         }
         else
         {
-            // 新的 IBufferWriter 逻辑：先计算大小，再写入
-            // 这种方式虽然多了一次计算，但避免了分配新数组和 Seek
+            if (_bufferWriter is PooledBufferWriter pooled)
+            {
+                int sizePosition = pooled.WrittenCount;
+                InternalWrite(0); // 占位符
+
+                foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
+                InternalWrite((byte)BsonType.End);
+
+                int endPosition = pooled.WrittenCount;
+                pooled.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
+                return;
+            }
+
+            // 通用 IBufferWriter：先计算大小，再写入（避免依赖随机访问能力）
             var size = BsonSerializer.CalculateDocumentSize(document);
             InternalWrite(size);
-            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+            foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
             InternalWrite((byte)BsonType.End);
         }
     }
@@ -506,7 +518,7 @@ public sealed class BsonWriter : IDisposable
             var sizePosition = _stream.Position;
             _writer.Write(0); // 占位符
 
-            for (int i = 0; i < array.Count; i++) WriteElement(i.ToString(), array[i]);
+            for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
             _writer.Write((byte)BsonType.End);
 
             _writer.Flush();
@@ -519,9 +531,22 @@ public sealed class BsonWriter : IDisposable
         }
         else
         {
+            if (_bufferWriter is PooledBufferWriter pooled)
+            {
+                int sizePosition = pooled.WrittenCount;
+                InternalWrite(0); // 占位符
+
+                for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
+                InternalWrite((byte)BsonType.End);
+
+                int endPosition = pooled.WrittenCount;
+                pooled.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
+                return;
+            }
+
             var size = BsonSerializer.CalculateArraySize(array);
             InternalWrite(size);
-            for (int i = 0; i < array.Count; i++) WriteElement(i.ToString(), array[i]);
+            for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
             InternalWrite((byte)BsonType.End);
         }
     }
@@ -535,6 +560,13 @@ public sealed class BsonWriter : IDisposable
     {
         InternalWrite((byte)value.BsonType);
         WriteCString(key);
+        WriteValue(value);
+    }
+
+    private void WriteArrayElement(int index, BsonValue value)
+    {
+        InternalWrite((byte)value.BsonType);
+        WriteCString(index);
         WriteValue(value);
     }
 
@@ -582,6 +614,26 @@ public sealed class BsonWriter : IDisposable
             var byteCount = Encoding.UTF8.GetByteCount(value);
             WriteUtf8Bytes(value, byteCount);
         }
+        InternalWrite((byte)0);
+    }
+
+    private void WriteCString(int value)
+    {
+        ThrowIfDisposed();
+        if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));
+
+        Span<byte> buffer = stackalloc byte[11]; // int.MaxValue=2147483647 (10 digits) + safety
+        int pos = buffer.Length;
+
+        uint v = (uint)value;
+        do
+        {
+            uint q = v / 10;
+            buffer[--pos] = (byte)('0' + (v - (q * 10)));
+            v = q;
+        } while (v != 0);
+
+        InternalWrite(buffer.Slice(pos));
         InternalWrite((byte)0);
     }
 

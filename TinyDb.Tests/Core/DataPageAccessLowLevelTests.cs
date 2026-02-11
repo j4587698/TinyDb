@@ -428,7 +428,7 @@ public class DataPageAccessLowLevelTests : IDisposable
             new CollectionState(),
             page,
             docs,
-            (id, pageId, idx) => updatedIds[id] = (pageId, idx)
+            (id, pageId, idx) => updatedIds[id.ToString() ?? string.Empty] = (pageId, idx)
         );
         
         // Verify page was saved and links preserved
@@ -460,7 +460,7 @@ public class DataPageAccessLowLevelTests : IDisposable
             new CollectionState(),
             page,
             docs,
-            (id, pageId, idx) => updatedIds[id] = (pageId, idx)
+            (id, pageId, idx) => updatedIds[id.ToString() ?? string.Empty] = (pageId, idx)
         );
         
         await Assert.That(updatedIds.Count).IsEqualTo(5);
@@ -769,7 +769,7 @@ public class DataPageAccessLowLevelTests : IDisposable
     }
 
     [Test]
-    public async Task RewritePageWithDocuments_WhenIdToStringReturnsNull_UsesEmptyString()
+    public async Task RewritePageWithDocuments_PassesIdThroughWithoutToString()
     {
         var page = _pm.NewPage(PageType.Data);
         page.ResetBytes(0);
@@ -782,7 +782,7 @@ public class DataPageAccessLowLevelTests : IDisposable
             new PageDocumentEntry(docWithNullToStringId, rawBytes, false, 0, 0)
         };
 
-        string? captured = null;
+        BsonValue? captured = null;
         _dpa.RewritePageWithDocuments(
             "test_col",
             new CollectionState(),
@@ -790,7 +790,7 @@ public class DataPageAccessLowLevelTests : IDisposable
             docs,
             (id, _, _) => captured = id);
 
-        await Assert.That(captured).IsEqualTo(string.Empty);
+        await Assert.That(ReferenceEquals(captured, docWithNullToStringId["_id"])).IsTrue();
     }
 
     private sealed class NullToStringBsonValue : BsonValue
