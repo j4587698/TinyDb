@@ -191,4 +191,13 @@ public class ObjectIdTests
         // Act & Assert
         await Assert.That(() => new ObjectId(invalidBytes)).Throws<ArgumentException>();
     }
+
+    [Test]
+    public async Task ObjectId_SpanConstructor_Should_Throw_On_Invalid_Length()
+    {
+        var invalidBytes = new byte[11];
+
+        await Assert.That(() => new ObjectId(new ReadOnlySpan<byte>(invalidBytes)))
+            .Throws<ArgumentException>();
+    }
 }

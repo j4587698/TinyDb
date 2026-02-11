@@ -181,4 +181,162 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
         var node = new DiskBTreeNode(page, pm);
         await Assert.That(node.TreeEntryCount).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task Dispose_Twice_ShouldUnpinAndReturnEarly()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+        var node = new DiskBTreeNode(page, pm);
+
+        await Assert.That(page.PinCount).IsGreaterThan(0);
+
+        node.Dispose();
+        node.Dispose();
+
+        await Assert.That(page.PinCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task LoadFromPage_WhenContentIsInvalid_ShouldThrowInvalidDataException()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+        page.SetContent(new byte[] { 1 }); // insufficient payload -> parse must fail
+        pm.SavePage(page);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task LoadFromPage_WhenKeyCountNegative_ShouldThrowInvalidDataException()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+
+        using var ms = new MemoryStream();
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8, true))
+        {
+            writer.Write(true);  // IsLeaf
+            writer.Write(-1);    // keyCount
+        }
+
+        page.SetContent(ms.ToArray());
+        pm.SavePage(page);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task LoadFromPage_WhenKeyValueCountTooLarge_ShouldThrowInvalidDataException()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+
+        using var ms = new MemoryStream();
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8, true))
+        {
+            writer.Write(true);     // IsLeaf
+            writer.Write(1);        // keyCount
+            writer.Write(0);        // ParentId
+            writer.Write(0);        // NextSiblingId
+            writer.Write(0);        // PrevSiblingId
+            writer.Write(0L);       // TreeEntryCount
+            writer.Write(33);       // valCount (> max)
+        }
+
+        page.SetContent(ms.ToArray());
+        pm.SavePage(page);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task LoadFromPage_WhenExtraBytesRemain_ShouldThrowInvalidDataException()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+
+        using var ms = new MemoryStream();
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8, true))
+        {
+            writer.Write(true); // IsLeaf
+            writer.Write(0);    // keyCount
+            writer.Write(0);    // ParentId
+            writer.Write(0);    // NextSiblingId
+            writer.Write(0);    // PrevSiblingId
+            writer.Write(0L);   // TreeEntryCount
+            writer.Write((byte)0xFF); // extra
+        }
+
+        page.SetContent(ms.ToArray());
+        pm.SavePage(page);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task LoadFromPage_WhenUnsupportedBsonType_ShouldThrowInvalidDataException()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+
+        using var ms = new MemoryStream();
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8, true))
+        {
+            writer.Write(true);     // IsLeaf
+            writer.Write(1);        // keyCount
+            writer.Write(0);        // ParentId
+            writer.Write(0);        // NextSiblingId
+            writer.Write(0);        // PrevSiblingId
+            writer.Write(0L);       // TreeEntryCount
+            writer.Write(1);        // valCount
+            writer.Write((byte)BsonType.Undefined);
+        }
+
+        page.SetContent(ms.ToArray());
+        pm.SavePage(page);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task LoadFromPage_WhenStringLengthInvalid_ShouldThrowInvalidDataException()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var page = pm.NewPage(PageType.Index);
+
+        using var ms = new MemoryStream();
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8, true))
+        {
+            writer.Write(true);     // IsLeaf
+            writer.Write(1);        // keyCount
+            writer.Write(0);        // ParentId
+            writer.Write(0);        // NextSiblingId
+            writer.Write(0);        // PrevSiblingId
+            writer.Write(0L);       // TreeEntryCount
+            writer.Write(1);        // valCount
+            writer.Write((byte)BsonType.String);
+            writer.Write(0);        // invalid string length
+        }
+
+        page.SetContent(ms.ToArray());
+        pm.SavePage(page);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+    }
 }

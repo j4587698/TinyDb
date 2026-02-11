@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using TinyDb.Core;
 using TUnit.Assertions;
@@ -230,5 +231,35 @@ public class LockManagerAdditionalCoverageTests
         lockBucketsField.SetValue(manager, null);
 
         manager.Dispose();
+    }
+
+    [Test]
+    public async Task CheckDeadlockRecursive_WhenVisitedAlreadyContainsNode_ShouldReturnFalse()
+    {
+        using var manager = new LockManager();
+
+        var method = typeof(LockManager).GetMethod("CheckDeadlockRecursive", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(method).IsNotNull();
+
+        var tx = Guid.NewGuid();
+        var visited = new HashSet<Guid> { tx };
+
+        var result = (bool)method!.Invoke(manager, new object[] { tx, tx, "missing", LockType.Read, visited })!;
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CheckDeadlockRecursive_WhenResourceBucketMissing_ShouldReturnFalse()
+    {
+        using var manager = new LockManager();
+
+        var method = typeof(LockManager).GetMethod("CheckDeadlockRecursive", BindingFlags.NonPublic | BindingFlags.Instance);
+        await Assert.That(method).IsNotNull();
+
+        var tx = Guid.NewGuid();
+        var visited = new HashSet<Guid>();
+
+        var result = (bool)method!.Invoke(manager, new object[] { tx, tx, "missing", LockType.Read, visited })!;
+        await Assert.That(result).IsFalse();
     }
 }

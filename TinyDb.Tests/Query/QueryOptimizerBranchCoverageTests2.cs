@@ -32,5 +32,16 @@ public class QueryOptimizerBranchCoverageTests2
         await Assert.That(bson).IsTypeOf<BsonString>();
         await Assert.That(((BsonString)bson).Value).IsEqualTo(string.Empty);
     }
-}
 
+    [Test]
+    public async Task ConvertToBsonValue_WhenValueIsBsonValue_ShouldReturnSameInstance()
+    {
+        var method = typeof(QueryOptimizer).GetMethod("ConvertToBsonValue", BindingFlags.NonPublic | BindingFlags.Static);
+        await Assert.That(method).IsNotNull();
+
+        var input = new BsonInt32(123);
+        var result = (BsonValue)method!.Invoke(null, new object[] { input })!;
+
+        await Assert.That(ReferenceEquals(result, input)).IsTrue();
+    }
+}

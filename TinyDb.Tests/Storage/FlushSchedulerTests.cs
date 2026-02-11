@@ -173,6 +173,118 @@ public class FlushSchedulerTests
         await Task.Delay(200);
     }
 
+    [Test]
+    public async Task FlushScheduler_Journaled_AfterDispose_WithPendingEntries_ShouldThrowObjectDisposedException()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 1 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        _pageManager.Dispose(); // Make FlushAsync during Dispose fail, keep WAL pending entries
+        fs.Dispose();
+
+        await Assert.That(() => fs.EnsureDurabilityAsync(WriteConcern.Journaled))
+            .Throws<ObjectDisposedException>();
+    }
+
+    [Test]
+    public async Task FlushScheduler_EnsureJournalFlush_WhenBatchTcsCompleted_ShouldRecreate()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 1 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        completed.TrySetResult();
+        SetPrivateField(fs, "_journalBatchTcs", completed);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await fs.EnsureDurabilityAsync(WriteConcern.Journaled, cts.Token);
+    }
+
+    [Test]
+    public async Task FlushScheduler_JournalWorker_WhenCanceled_ShouldCancelActiveAndPendingBatches()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromHours(1));
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 1 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        var walMutex = GetPrivateField<SemaphoreSlim>(_wal, "_mutex");
+        walMutex.Wait();
+
+        try
+        {
+            var first = fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
+            if (!SpinWait.SpinUntil(() => GetPrivateField<int>(fs, "_journalRequests") == 0, TimeSpan.FromSeconds(2)))
+            {
+                throw new TimeoutException("Journal worker did not start within timeout.");
+            }
+
+            var second = fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
+
+            GetPrivateField<CancellationTokenSource>(fs, "_cts").Cancel();
+
+            await Assert.That(async () => await first.WaitAsync(TimeSpan.FromSeconds(2))).Throws<OperationCanceledException>();
+            await Assert.That(async () => await second.WaitAsync(TimeSpan.FromSeconds(2))).Throws<OperationCanceledException>();
+        }
+        finally
+        {
+            walMutex.Release();
+        }
+    }
+
+    [Test]
+    public async Task FlushScheduler_JournalWorker_WhenCanceledWithoutPendingRequests_ShouldCancelCurrentBatchOnly()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromHours(1));
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 1 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        var walMutex = GetPrivateField<SemaphoreSlim>(_wal, "_mutex");
+        walMutex.Wait();
+
+        try
+        {
+            var first = fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
+
+            GetPrivateField<CancellationTokenSource>(fs, "_cts").Cancel();
+
+            await Assert.That(async () => await first.WaitAsync(TimeSpan.FromSeconds(2))).Throws<OperationCanceledException>();
+        }
+        finally
+        {
+            walMutex.Release();
+        }
+    }
+
+    [Test]
+    public async Task FlushScheduler_JournalWorker_WhenWalFlushThrows_ShouldFaultBatchTask()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 1 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        _wal.Dispose();
+
+        await Assert.That(async () => await fs.EnsureDurabilityAsync(WriteConcern.Journaled))
+            .Throws<ObjectDisposedException>();
+    }
+
     private sealed class ThrowingWriteAsyncDiskStream : IDiskStream
     {
         private readonly IDiskStream _inner;
@@ -202,5 +314,19 @@ public class FlushSchedulerTests
         public DiskStreamStatistics GetStatistics() => _inner.GetStatistics();
 
         public void Dispose() => _inner.Dispose();
+    }
+
+    private static T GetPrivateField<T>(object instance, string fieldName)
+    {
+        var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (field == null) throw new InvalidOperationException($"Field '{fieldName}' not found.");
+        return (T)field.GetValue(instance)!;
+    }
+
+    private static void SetPrivateField<T>(object instance, string fieldName, T value)
+    {
+        var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        if (field == null) throw new InvalidOperationException($"Field '{fieldName}' not found.");
+        field.SetValue(instance, value);
     }
 }

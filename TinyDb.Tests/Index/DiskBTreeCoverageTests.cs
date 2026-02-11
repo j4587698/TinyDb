@@ -114,4 +114,126 @@ public sealed class DiskBTreeCoverageTests
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
     }
+
+    [Test]
+    public async Task LockWrapperMethods_ShouldWork()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_cov_lock_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            using var tree = DiskBTree.Create(pm, maxKeys: 3);
+
+            tree.EnterReadLock();
+            tree.ExitReadLock();
+
+            tree.EnterWriteLock();
+            tree.ExitWriteLock();
+
+            await Assert.That(tree.RootPageId).IsGreaterThan(0u);
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Contains_DuplicateKeyAcrossSiblings_ShouldTraversePrevSiblings()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_cov_contains_dup_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            using var tree = DiskBTree.Create(pm, maxKeys: 2);
+
+            var key = new IndexKey(new BsonString("k"));
+            for (int i = 0; i < 40; i++)
+            {
+                tree.Insert(key, new BsonInt32(i));
+            }
+
+            await Assert.That(tree.Contains(key)).IsTrue();
+            await Assert.That(tree.Contains(key, new BsonInt32(25))).IsTrue();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Contains_KeyValue_ShouldTraverseNextSibling_WhenKeyBetweenNodes()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_cov_contains_next_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            using var tree = DiskBTree.Create(pm, maxKeys: 2);
+
+            foreach (var k in new[] { "a", "c", "e", "g" })
+            {
+                tree.Insert(new IndexKey(new BsonString(k)), new BsonInt32(1));
+            }
+
+            var missingBetween = new IndexKey(new BsonString("b"));
+            await Assert.That(tree.Contains(missingBetween, new BsonInt32(1))).IsFalse();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Contains_KeyOnly_ShouldTraverseNextSibling_WhenKeyBetweenNodes()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_cov_contains_next_key_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            using var tree = DiskBTree.Create(pm, maxKeys: 2);
+
+            foreach (var k in new[] { "a", "c", "e", "g" })
+            {
+                tree.Insert(new IndexKey(new BsonString(k)), new BsonInt32(1));
+            }
+
+            var missingBetween = new IndexKey(new BsonString("b"));
+            await Assert.That(tree.Contains(missingBetween)).IsFalse();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task Insert_AfterDispose_ShouldThrowObjectDisposedException()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_cov_disposed_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            var tree = DiskBTree.Create(pm, maxKeys: 3);
+            tree.Dispose();
+
+            await Assert.That(() => tree.Insert(new IndexKey(new BsonString("k")), new BsonInt32(1)))
+                .Throws<ObjectDisposedException>();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
 }

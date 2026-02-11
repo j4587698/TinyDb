@@ -160,4 +160,78 @@ public class LargeDocumentStorageTests : IDisposable
 
         await Assert.That(storage.ValidateLargeDocument(indexPageId)).IsFalse();
     }
+
+    [Test]
+    public async Task ReadLargeDocumentAsync_RoundTrip_Should_Work()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+
+        var largeData = new byte[10000];
+        new Random(42).NextBytes(largeData);
+        var doc = new BsonDocument().Set("data", new BsonBinary(largeData));
+
+        var indexPageId = storage.StoreLargeDocument(doc, "c");
+        var replayedData = await storage.ReadLargeDocumentAsync(indexPageId);
+        var replayedDoc = BsonSerializer.DeserializeDocument(replayedData);
+
+        var replayedBinary = (BsonBinary)replayedDoc["data"];
+        await Assert.That(replayedBinary.Bytes.SequenceEqual(largeData)).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadLargeDocumentAsync_With_Wrong_PageType_Should_Throw()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var regularPage = _pageManager.NewPage(PageType.Data);
+        _pageManager.SavePage(regularPage);
+
+        await Assert.That(() => storage.ReadLargeDocumentAsync(regularPage.PageID))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task ReadLargeDocumentAsync_WhenCancellationRequested_ShouldThrow()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var indexPageId = storage.StoreLargeDocument(new byte[10000], "c");
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.That(() => storage.ReadLargeDocumentAsync(indexPageId, cts.Token))
+            .Throws<OperationCanceledException>();
+    }
+
+    [Test]
+    public async Task ReadLargeDocumentAsync_WhenPageCountTooLarge_ShouldStopOnNullNextPage()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+
+        var largeData = new byte[10000];
+        new Random(42).NextBytes(largeData);
+        var indexPageId = storage.StoreLargeDocument(largeData, "c");
+
+        var stats = storage.GetStatistics(indexPageId);
+        var indexPage = _pageManager.GetPage(indexPageId);
+        indexPage.WriteData(8, BitConverter.GetBytes(stats.PageCount + 1));
+        _pageManager.SavePage(indexPage);
+
+        var replayed = await storage.ReadLargeDocumentAsync(indexPageId);
+        await Assert.That(replayed.SequenceEqual(largeData)).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadLargeDocumentAsync_With_PageNumberMismatch_Should_Throw()
+    {
+        var storage = new LargeDocumentStorage(_pageManager, PageSize);
+        var indexPageId = storage.StoreLargeDocument(new byte[10000], "c");
+
+        var stats = storage.GetStatistics(indexPageId);
+        var firstDataPage = _pageManager.GetPage(stats.FirstDataPageId);
+        firstDataPage.WriteData(0, BitConverter.GetBytes(123));
+        _pageManager.SavePage(firstDataPage);
+
+        await Assert.That(() => storage.ReadLargeDocumentAsync(indexPageId))
+            .Throws<InvalidOperationException>();
+    }
 }
