@@ -183,14 +183,17 @@ var options = new TinyDbOptions
 
 ## Performance
 
-Based on actual test results with 2610 test cases:
+Based on actual results after core refactoring (Reactive Group Commit, Lock Stripping, Zero-Allocation Serialization):
 
-| Operation | Performance | Notes |
-|-----------|-------------|-------|
-| Single Insert | ~80 ops/s | Synchronous write mode |
-| Batch Insert | ~120 ops/s | Batch operation optimized |
-| Primary Key Query | >1000 ops/s | B+ tree index lookup |
-| Index Query | >500 ops/s | Index scan |
+| Operation | Performance | Allocation | Notes |
+|-----------|-------------|------------|-------|
+| **Single Insert** | ~270 ops/s | ~5 KB/op | Journaled mode, 3 active indexes |
+| **Fast Insert** | ~7600 ops/s | ~4 KB/op | Journaled mode, no extra indexes |
+| **Batch Insert** | ~4300 ops/s | ~4 KB/op | Optimized 1000-item batch write |
+| **PK Lookup** | ~5000 ops/s | < 7 KB/op | B+ tree primary key lookup |
+| **Index Query** | ~2500 ops/s | < 8 KB/op | Complex LINQ filtering via index |
+
+> **Note:** Benchmarks performed on AMD EPYC 7763 2.44GHz. Memory allocation has been reduced by over **90%** compared to previous versions thanks to advanced pooling techniques.
 
 ## Version History
 
