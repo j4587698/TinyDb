@@ -1,9 +1,11 @@
 using System;
+using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.IO;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TinyDb.Storage;
+using TinyDb.Utils;
 
 namespace TinyDb.Index;
 
@@ -126,24 +128,54 @@ public sealed class DiskBTreeNode : IDisposable
     {
         if (!_isDirty) return;
 
-        using var ms = BsonSerializer.GetRecyclableStream();
-        using var writer = new BinaryWriter(ms, System.Text.Encoding.UTF8, true);
-        using var bsonWriter = new BsonWriter(ms, true);
+        static void WriteByte(IBufferWriter<byte> writer, byte value)
+        {
+            var span = writer.GetSpan(1);
+            span[0] = value;
+            writer.Advance(1);
+        }
 
-        writer.Write(IsLeaf);
-        writer.Write(Keys.Count);
-        writer.Write(ParentId);
-        writer.Write(NextSiblingId);
-        writer.Write(PrevSiblingId);
-        writer.Write(TreeEntryCount);
+        static void WriteBoolean(IBufferWriter<byte> writer, bool value) => WriteByte(writer, value ? (byte)1 : (byte)0);
+
+        static void WriteInt32(IBufferWriter<byte> writer, int value)
+        {
+            var span = writer.GetSpan(4);
+            BinaryPrimitives.WriteInt32LittleEndian(span, value);
+            writer.Advance(4);
+        }
+
+        static void WriteUInt32(IBufferWriter<byte> writer, uint value)
+        {
+            var span = writer.GetSpan(4);
+            BinaryPrimitives.WriteUInt32LittleEndian(span, value);
+            writer.Advance(4);
+        }
+
+        static void WriteInt64(IBufferWriter<byte> writer, long value)
+        {
+            var span = writer.GetSpan(8);
+            BinaryPrimitives.WriteInt64LittleEndian(span, value);
+            writer.Advance(8);
+        }
+
+        using var buffer = new PooledBufferWriter(Math.Max(CalculateSize(), 256));
+        using var bsonWriter = new BsonWriter(buffer);
+
+        WriteBoolean(buffer, IsLeaf);
+        WriteInt32(buffer, Keys.Count);
+        WriteUInt32(buffer, ParentId);
+        WriteUInt32(buffer, NextSiblingId);
+        WriteUInt32(buffer, PrevSiblingId);
+        WriteInt64(buffer, TreeEntryCount);
 
         foreach (var key in Keys)
         {
-            writer.Write(key.Values.Count);
-            foreach(var val in key.Values)
+            var keyValues = key.ValuesSpan;
+            WriteInt32(buffer, keyValues.Length);
+            for (int i = 0; i < keyValues.Length; i++)
             {
-                writer.Write((byte)val.BsonType);
-                writer.Flush(); // Ensure binary writer buffer is flushed before switching to bson writer
+                var val = keyValues[i];
+                WriteByte(buffer, (byte)val.BsonType);
                 bsonWriter.WriteValue(val);
             }
         }
@@ -152,8 +184,7 @@ public sealed class DiskBTreeNode : IDisposable
         {
             foreach (var val in Values)
             {
-                writer.Write((byte)val.BsonType);
-                writer.Flush();
+                WriteByte(buffer, (byte)val.BsonType);
                 bsonWriter.WriteValue(val);
             }
         }
@@ -161,97 +192,86 @@ public sealed class DiskBTreeNode : IDisposable
         {
             foreach (var childId in ChildrenIds)
             {
-                writer.Write(childId);
+                WriteUInt32(buffer, childId);
             }
         }
-        writer.Flush(); // Flush final data
 
-        // Use GetBuffer + SetContent(Span) optimization
-        // WARNING: GetBuffer returns a buffer that might be larger than Length. We must use Slice(0, Length).
-        var buffer = ms.GetBuffer();
-                var fullDataSpan = new ReadOnlySpan<byte>(buffer, 0, (int)ms.Length);
-                
-                // Multi-page logic
-                int capacity = _page.DataCapacity - 4;
-                
-                if (fullDataSpan.Length <= capacity)
-                {
-                    if (_page.Header.NextPageID != 0)
-                    {
-                        FreeChain(_pm, _page.Header.NextPageID);
-                        _page.SetLinks(_page.Header.PrevPageID, 0); 
-                    }
-                                _page.SetContent(fullDataSpan);
-                                // Restore cache because SetContent cleared it, and we are the valid representation
-                                _page.CachedParsedData = this;
-                                _pm.SavePage(_page);
-                            }
-                            else
-                            {
-                                // For large nodes exceeding page size (rare for index pages if _maxKeys is tuned right)
-                                // But we must handle it. We can't pass Span to overflow pages easily without copy if we iterate.
-                                // Actually SetContent takes Span, so we can Slice fullDataSpan!
-                                
-                                int offset = 0;
-                                int remaining = fullDataSpan.Length;
-                                
-                                var chunkSpan = fullDataSpan.Slice(offset, capacity);
-                                
-                                uint nextPageId = _page.Header.NextPageID;
-                                if (nextPageId == 0)
-                                {
-                                    var overflowPage = _pm.NewPage(PageType.Index);
-                                    nextPageId = overflowPage.PageID;
-                                    _page.SetLinks(_page.Header.PrevPageID, nextPageId);
-                                    _pm.SavePage(overflowPage);
-                                }
-                                
-                                _page.SetContent(chunkSpan);
-                                // Restore cache
-                                _page.CachedParsedData = this;
-                                _pm.SavePage(_page);
-                                
-                                offset += capacity;
-                                remaining -= capacity;
-                                var currentPageId = nextPageId;
-                                
-                                while (remaining > 0)
-                                {
-                                    var page = _pm.GetPage(currentPageId);
-                                    if (page.PageType != PageType.Index) page.UpdatePageType(PageType.Index);
-                                    
-                                    int chunkLen = Math.Min(remaining, page.DataCapacity - 4);
-                                    var subChunkSpan = fullDataSpan.Slice(offset, chunkLen);
-                                    
-                                    uint nextOverflowId = page.Header.NextPageID;
-                                    if (remaining > chunkLen)
-                                    {
-                                        if (nextOverflowId == 0)
-                                        {
-                                            var newPage = _pm.NewPage(PageType.Index);
-                                            nextOverflowId = newPage.PageID;
-                                            page.SetLinks(page.Header.PrevPageID, nextOverflowId);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        if (nextOverflowId != 0)
-                                        {
-                                            FreeChain(_pm, nextOverflowId);
-                                            page.SetLinks(page.Header.PrevPageID, 0);
-                                        }
-                                    }
-                                    
-                                    page.SetContent(subChunkSpan);
-                                    _pm.SavePage(page);
-                                    
-                                    offset += chunkLen;
-                                    remaining -= chunkLen;
-                                    currentPageId = nextOverflowId;
-                                }
-                            }                
-                _isDirty = false;
+        var fullDataSpan = buffer.WrittenSpan;
+        int capacity = _page.DataCapacity - 4;
+
+        if (fullDataSpan.Length <= capacity)
+        {
+            if (_page.Header.NextPageID != 0)
+            {
+                FreeChain(pm, _page.Header.NextPageID);
+                _page.SetLinks(_page.Header.PrevPageID, 0);
             }
+
+            _page.SetContent(fullDataSpan);
+            _page.CachedParsedData = this;
+            pm.SavePage(_page);
+        }
+        else
+        {
+            int offset = 0;
+            int remaining = fullDataSpan.Length;
+
+            uint nextPageId = _page.Header.NextPageID;
+            if (nextPageId == 0)
+            {
+                var overflowPage = pm.NewPage(PageType.Index);
+                nextPageId = overflowPage.PageID;
+                _page.SetLinks(_page.Header.PrevPageID, nextPageId);
+                pm.SavePage(overflowPage);
+            }
+
+            _page.SetContent(fullDataSpan.Slice(offset, capacity));
+            _page.CachedParsedData = this;
+            pm.SavePage(_page);
+
+            offset += capacity;
+            remaining -= capacity;
+            var currentPageId = nextPageId;
+
+            while (remaining > 0)
+            {
+                var page = pm.GetPage(currentPageId);
+                if (page.PageType != PageType.Index) page.UpdatePageType(PageType.Index);
+
+                int chunkLen = Math.Min(remaining, page.DataCapacity - 4);
+                var subChunkSpan = fullDataSpan.Slice(offset, chunkLen);
+
+                uint nextOverflowId = page.Header.NextPageID;
+                if (remaining > chunkLen)
+                {
+                    if (nextOverflowId == 0)
+                    {
+                        var newPage = pm.NewPage(PageType.Index);
+                        nextOverflowId = newPage.PageID;
+                        page.SetLinks(page.Header.PrevPageID, nextOverflowId);
+                    }
+                }
+                else
+                {
+                    if (nextOverflowId != 0)
+                    {
+                        FreeChain(pm, nextOverflowId);
+                        page.SetLinks(page.Header.PrevPageID, 0);
+                    }
+                }
+
+                page.SetContent(subChunkSpan);
+                pm.SavePage(page);
+
+                offset += chunkLen;
+                remaining -= chunkLen;
+                currentPageId = nextOverflowId;
+            }
+        }
+
+        _isDirty = false;
+    }
+
     private void FreeChain(PageManager pm, uint startPageId)
     {
         uint current = startPageId;
@@ -272,10 +292,11 @@ public sealed class DiskBTreeNode : IDisposable
         foreach (var key in Keys)
         {
             size += 4; // Values count in key
-            foreach(var val in key.Values)
+            var keyValues = key.ValuesSpan;
+            for (int i = 0; i < keyValues.Length; i++)
             {
                 size += 1; // Type byte
-                size += GetBsonValueSize(val);
+                size += GetBsonValueSize(keyValues[i]);
             }
         }
 
@@ -317,79 +338,131 @@ public sealed class DiskBTreeNode : IDisposable
 
     private void LoadFromPage()
     {
-        using var ms = new MemoryStream();
-        
-        var span = _page.ValidDataSpan;
-        if (span.Length >= 4)
+        int totalLength = 0;
+
+        uint currentPageId = _page.PageID;
+        while (true)
         {
-            int len = BitConverter.ToInt32(span.Slice(0, 4));
-            var chunk = span.Slice(4, len).ToArray();
-            ms.Write(chunk, 0, chunk.Length);
+            var page = currentPageId == _page.PageID ? _page : _pm.GetPage(currentPageId);
+            var span = page.ValidDataSpan;
+            if (span.Length < 4) break;
+
+            int len = BinaryPrimitives.ReadInt32LittleEndian(span);
+            if (len <= 0 || len > span.Length - 4) break;
+
+            totalLength += len;
+            currentPageId = page.Header.NextPageID;
+            if (currentPageId == 0) break;
         }
-        
-        uint nextId = _page.Header.NextPageID;
-        while (nextId != 0)
+
+        if (totalLength <= 0) return;
+
+        var rented = ArrayPool<byte>.Shared.Rent(totalLength);
+        try
         {
-            var page = _pm.GetPage(nextId);
-            var pSpan = page.ValidDataSpan;
-            if (pSpan.Length >= 4)
+            int offset = 0;
+            currentPageId = _page.PageID;
+
+            while (true)
             {
-                int pLen = BitConverter.ToInt32(pSpan.Slice(0, 4));
-                var pChunk = pSpan.Slice(4, pLen).ToArray();
-                ms.Write(pChunk, 0, pChunk.Length);
+                var page = currentPageId == _page.PageID ? _page : _pm.GetPage(currentPageId);
+                var span = page.ValidDataSpan;
+                if (span.Length < 4) break;
+
+                int len = BinaryPrimitives.ReadInt32LittleEndian(span);
+                if (len <= 0 || len > span.Length - 4) break;
+
+                span.Slice(4, len).CopyTo(rented.AsSpan(offset, len));
+                offset += len;
+
+                currentPageId = page.Header.NextPageID;
+                if (currentPageId == 0) break;
             }
-            nextId = page.Header.NextPageID;
-        }
-        
-        ms.Position = 0;
-        if (ms.Length == 0) return;
 
-        using var reader = new BinaryReader(ms, System.Text.Encoding.UTF8, true);
-        using var bsonReader = new BsonReader(ms, true);
+            var data = rented.AsSpan(0, offset);
 
-        IsLeaf = reader.ReadBoolean();
-        int keyCount = reader.ReadInt32();
-        ParentId = reader.ReadUInt32();
-        NextSiblingId = reader.ReadUInt32();
-        PrevSiblingId = reader.ReadUInt32();
-        
-        if (ms.Length - ms.Position >= 8)
-            TreeEntryCount = reader.ReadInt64();
-        else
-            TreeEntryCount = 0;
-
-        Keys.Clear();
-        for (int i = 0; i < keyCount; i++)
-        {
-            int valCount = reader.ReadInt32();
-            var keyVals = new BsonValue[valCount];
-            for(int j=0; j<valCount; j++)
+            if (!TryParseNodeData(data, hasTreeEntryCount: true) &&
+                !TryParseNodeData(data, hasTreeEntryCount: false))
             {
-                var type = (BsonType)reader.ReadByte();
-                keyVals[j] = bsonReader.ReadValue(type);
+                throw new InvalidDataException("Invalid index node data.");
             }
-            Keys.Add(new IndexKey(keyVals));
-        }
 
-        if (IsLeaf)
+            _isDirty = false;
+        }
+        finally
         {
-            Values.Clear();
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private bool TryParseNodeData(ReadOnlySpan<byte> data, bool hasTreeEntryCount)
+    {
+        const int maxKeyValueCount = 32;
+
+        var reader = new BsonSpanReader(data);
+
+        try
+        {
+            IsLeaf = reader.ReadBoolean();
+            int keyCount = reader.ReadInt32();
+            if (keyCount < 0) throw new InvalidDataException($"Invalid key count: {keyCount}");
+
+            ParentId = unchecked((uint)reader.ReadInt32());
+            NextSiblingId = unchecked((uint)reader.ReadInt32());
+            PrevSiblingId = unchecked((uint)reader.ReadInt32());
+            TreeEntryCount = hasTreeEntryCount ? reader.ReadInt64() : 0;
+
+            Keys.Clear();
+            if (Keys.Capacity < keyCount) Keys.Capacity = keyCount;
+
             for (int i = 0; i < keyCount; i++)
             {
-                var type = (BsonType)reader.ReadByte();
-                Values.Add(bsonReader.ReadValue(type));
+                int valCount = reader.ReadInt32();
+                if ((uint)valCount > maxKeyValueCount) throw new InvalidDataException($"Invalid key value count: {valCount}");
+
+                var keyVals = new BsonValue[valCount];
+                for (int j = 0; j < valCount; j++)
+                {
+                    var type = (BsonType)reader.ReadByte();
+                    keyVals[j] = reader.ReadValue(type);
+                }
+
+                Keys.Add(new IndexKey(keyVals));
             }
-        }
-        else
-        {
-            ChildrenIds.Clear();
-            for (int i = 0; i < keyCount + 1; i++)
+
+            if (IsLeaf)
             {
-                ChildrenIds.Add(reader.ReadUInt32());
+                Values.Clear();
+                if (Values.Capacity < keyCount) Values.Capacity = keyCount;
+
+                for (int i = 0; i < keyCount; i++)
+                {
+                    var type = (BsonType)reader.ReadByte();
+                    Values.Add(reader.ReadValue(type));
+                }
             }
+            else
+            {
+                ChildrenIds.Clear();
+                if (ChildrenIds.Capacity < keyCount + 1) ChildrenIds.Capacity = keyCount + 1;
+
+                for (int i = 0; i < keyCount + 1; i++)
+                {
+                    ChildrenIds.Add(unchecked((uint)reader.ReadInt32()));
+                }
+            }
+
+            if (reader.Remaining != 0) throw new InvalidDataException("Index node data has extra bytes.");
+            return true;
         }
-        
-        _isDirty = false;
+        catch (Exception ex) when (
+            ex is EndOfStreamException ||
+            ex is InvalidDataException ||
+            ex is InvalidOperationException ||
+            ex is NotSupportedException)
+        {
+            return false;
+        }
     }
     
     public bool IsFull(int pageSize)

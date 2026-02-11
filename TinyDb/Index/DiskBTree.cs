@@ -463,12 +463,74 @@ public sealed class DiskBTree : IDisposable
     /// <summary>
     /// 检查树是否包含某个键。
     /// </summary>
-    public bool Contains(IndexKey key) => Find(key).Count > 0;
+    public bool Contains(IndexKey key)
+    {
+        var node = FindLeafNode(key);
+
+        while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
+        {
+            var prev = LoadNode(node.PrevSiblingId);
+            if (prev.KeyCount > 0 && prev.Keys[prev.KeyCount - 1].CompareTo(key) == 0)
+            {
+                node = prev;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        while (node != null)
+        {
+            for (int i = 0; i < node.KeyCount; i++)
+            {
+                int cmp = node.Keys[i].CompareTo(key);
+                if (cmp == 0) return true;
+                if (cmp > 0) return false;
+            }
+
+            if (node.NextSiblingId == 0) break;
+            node = LoadNode(node.NextSiblingId);
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// 检查树是否包含特定的键值对。
     /// </summary>
-    public bool Contains(IndexKey key, BsonValue value) => Find(key).Contains(value);
+    public bool Contains(IndexKey key, BsonValue value)
+    {
+        var node = FindLeafNode(key);
+
+        while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
+        {
+            var prev = LoadNode(node.PrevSiblingId);
+            if (prev.KeyCount > 0 && prev.Keys[prev.KeyCount - 1].CompareTo(key) == 0)
+            {
+                node = prev;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        while (node != null)
+        {
+            for (int i = 0; i < node.KeyCount; i++)
+            {
+                int cmp = node.Keys[i].CompareTo(key);
+                if (cmp == 0 && node.Values[i].Equals(value)) return true;
+                if (cmp > 0) return false;
+            }
+
+            if (node.NextSiblingId == 0) break;
+            node = LoadNode(node.NextSiblingId);
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// 获取树中的所有值。

@@ -18,6 +18,7 @@ using TinyDb.Index;
 using TinyDb.Serialization;
 using TinyDb.Storage;
 using TinyDb.Attributes;
+using TinyDb.Utils;
 using Microsoft.IO;
 
 namespace TinyDb.Core;
@@ -789,7 +790,7 @@ public sealed class TinyDbEngine : IDisposable
         var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(docs.Length);
         int insertedCount = 0;
 
-        using var stream = BsonSerializer.GetRecyclableStream();
+        using var buffer = new PooledBufferWriter(1024);
 
         var exceptions = new List<Exception>();
 
@@ -819,20 +820,20 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     var doc = PrepareDocumentForInsert(col, d, out var id);
 
-                    stream.SetLength(0);
-                    BsonSerializer.SerializeDocument(doc, stream);
+                    buffer.Reset();
+                    BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
 
-                    if (LargeDocumentStorage.RequiresLargeDocumentStorage((int)stream.Length, _dataPageAccess.GetMaxDocumentSize()))
+                    if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
                     {
-                        var bytes = stream.ToArray();
+                        var bytes = buffer.WrittenSpan.ToArray();
                         var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
                         doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
                         
-                        stream.SetLength(0);
-                        BsonSerializer.SerializeDocument(doc, stream);
+                        buffer.Reset();
+                        BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
                     }
 
-                    int len = (int)stream.Length;
+                    int len = buffer.WrittenCount;
                     int reqSize = DataPageAccess.GetEntrySize(len);
 
                     if (currentPage!.Header.FreeBytes < reqSize)
@@ -845,8 +846,7 @@ public sealed class TinyDbEngine : IDisposable
                      }
 
                     ushort i = currentPage.Header.ItemCount;
-                    var span = new ReadOnlySpan<byte>(stream.GetBuffer(), 0, len);
-                    _dataPageAccess.AppendDocumentToPage(currentPage, span);
+                    _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
                     st.Index.Set(id.ToString(), new DocumentLocation(currentPage.PageID, i));
                     
                     docsToUpdateIndex.Add((doc, id));
@@ -913,7 +913,7 @@ public sealed class TinyDbEngine : IDisposable
         var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(docs.Length);
         int insertedCount = 0;
 
-        using var stream = BsonSerializer.GetRecyclableStream();
+        using var buffer = new PooledBufferWriter(1024);
 
         var exceptions = new List<Exception>();
 
@@ -944,20 +944,20 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     var doc = PrepareDocumentForInsert(col, d, out var id);
 
-                    stream.SetLength(0);
-                    BsonSerializer.SerializeDocument(doc, stream);
+                    buffer.Reset();
+                    BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
 
-                    if (LargeDocumentStorage.RequiresLargeDocumentStorage((int)stream.Length, _dataPageAccess.GetMaxDocumentSize()))
+                    if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
                     {
-                        var bytes = stream.ToArray();
+                        var bytes = buffer.WrittenSpan.ToArray();
                         var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
                         doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
-                        
-                        stream.SetLength(0);
-                        BsonSerializer.SerializeDocument(doc, stream);
+
+                        buffer.Reset();
+                        BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
                     }
 
-                    int len = (int)stream.Length;
+                    int len = buffer.WrittenCount;
                     int reqSize = DataPageAccess.GetEntrySize(len);
 
                     if (currentPage!.Header.FreeBytes < reqSize)
@@ -970,10 +970,9 @@ public sealed class TinyDbEngine : IDisposable
                      }
 
                     ushort i = currentPage.Header.ItemCount;
-                    var span = new ReadOnlySpan<byte>(stream.GetBuffer(), 0, len);
-                    _dataPageAccess.AppendDocumentToPage(currentPage, span);
+                    _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
                     st.Index.Set(id.ToString(), new DocumentLocation(currentPage.PageID, i));
-                    
+
                     docsToUpdateIndex.Add((doc, id));
                     insertedCount++;
                 }
@@ -1174,45 +1173,53 @@ public sealed class TinyDbEngine : IDisposable
 
     private BsonValue InsertPreparedDocument(string col, BsonDocument doc, BsonValue id, CollectionState st, IndexManager idx, bool u)
     {
-        using var stream = BsonSerializer.GetRecyclableStream();
-        BsonSerializer.SerializeDocument(doc, stream);
-
-        if (LargeDocumentStorage.RequiresLargeDocumentStorage((int)stream.Length, _dataPageAccess.GetMaxDocumentSize()))
+        var buffer = new PooledBufferWriter(BsonSerializer.CalculateDocumentSize(doc));
+        try
         {
-            var bytes = stream.ToArray();
-            var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
-            doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
-            
-            stream.SetLength(0);
-            BsonSerializer.SerializeDocument(doc, stream);
-        }
+            BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
 
-        Page p;
-        bool isNewPage = false;
-        ushort entryIndex;
+            if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
+            {
+                var bytes = buffer.WrittenSpan.ToArray();
+                var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
+                doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
 
-        lock (st.PageState.SyncRoot)
-        {
-             var (page, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, DataPageAccess.GetEntrySize((int)stream.Length));
-             p = page;
-             isNewPage = isN;
-             st.OwnedPages.TryAdd(p.PageID, 0); 
-             entryIndex = p.Header.ItemCount;
-             var span = new ReadOnlySpan<byte>(stream.GetBuffer(), 0, (int)stream.Length);
-             _dataPageAccess.AppendDocumentToPage(p, span);
-             st.Index.Set(id.ToString(), new DocumentLocation(p.PageID, entryIndex));
-        }
+                buffer.Reset();
+                BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+            }
 
-        // 在锁外处理全局状态和持久化
-        if (isNewPage) 
-        {
-            lock (_lock) { _header.UsedPages++; WriteHeader(); }
-        }
+            var span = buffer.WrittenSpan;
+
+            Page p;
+            bool isNewPage = false;
+            ushort entryIndex;
+
+            lock (st.PageState.SyncRoot)
+            {
+                var (page, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, DataPageAccess.GetEntrySize(span.Length));
+                p = page;
+                isNewPage = isN;
+                st.OwnedPages.TryAdd(p.PageID, 0);
+                entryIndex = p.Header.ItemCount;
+                _dataPageAccess.AppendDocumentToPage(p, span);
+                st.Index.Set(id.ToString(), new DocumentLocation(p.PageID, entryIndex));
+            }
+
+            // 在锁外处理全局状态和持久化
+            if (isNewPage)
+            {
+                lock (_lock) { _header.UsedPages++; WriteHeader(); }
+            }
         
-        _dataPageAccess.PersistPage(p);
+            _dataPageAccess.PersistPage(p);
 
-        if (u) idx.InsertDocument(doc, id);
-        return id;
+            if (u) idx.InsertDocument(doc, id);
+            return id;
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
     }
 
     private BsonDocument PrepareDocumentForInsert(string col, BsonDocument doc, out BsonValue id)

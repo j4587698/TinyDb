@@ -14,6 +14,8 @@ public ref struct BsonSpanReader
     private ReadOnlySpan<byte> _data;
     private int _position;
 
+    public int Remaining => _data.Length - _position;
+
     public BsonSpanReader(ReadOnlySpan<byte> data)
     {
         _data = data;

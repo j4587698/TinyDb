@@ -20,6 +20,11 @@ internal sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
     public ReadOnlyMemory<byte> WrittenMemory => _buffer.AsMemory(0, _index);
     public int WrittenCount => _index;
 
+    public void Reset()
+    {
+        _index = 0;
+    }
+
     public void Advance(int count)
     {
         if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));

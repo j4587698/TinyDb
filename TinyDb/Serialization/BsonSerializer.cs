@@ -538,6 +538,32 @@ public sealed class BsonWriter : IDisposable
         WriteValue(value);
     }
 
+    private const int Utf8StackAllocThreshold = 256;
+
+    private void WriteUtf8Bytes(string value, int byteCount)
+    {
+        if (byteCount <= 0) return;
+
+        if (byteCount <= Utf8StackAllocThreshold)
+        {
+            Span<byte> buffer = stackalloc byte[byteCount];
+            int written = Encoding.UTF8.GetBytes(value.AsSpan(), buffer);
+            InternalWrite(buffer.Slice(0, written));
+            return;
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(byteCount);
+        try
+        {
+            int written = Encoding.UTF8.GetBytes(value.AsSpan(), rented.AsSpan(0, byteCount));
+            InternalWrite(rented.AsSpan(0, written));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
     /// <summary>
     /// 写入 C 字符串（以 null 结尾的字符串）
     /// </summary>
@@ -553,8 +579,8 @@ public sealed class BsonWriter : IDisposable
         }
         else
         {
-            var bytes = Encoding.UTF8.GetBytes(value);
-            InternalWrite(bytes);
+            var byteCount = Encoding.UTF8.GetByteCount(value);
+            WriteUtf8Bytes(value, byteCount);
         }
         InternalWrite((byte)0);
     }
@@ -568,9 +594,9 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (value == null) throw new ArgumentNullException(nameof(value));
 
-        var bytes = Encoding.UTF8.GetBytes(value);
-        InternalWrite(bytes.Length + 1);
-        InternalWrite(bytes);
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        InternalWrite(byteCount + 1);
+        WriteUtf8Bytes(value, byteCount);
         InternalWrite((byte)0);
     }
 

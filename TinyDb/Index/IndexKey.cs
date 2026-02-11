@@ -17,6 +17,7 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// 索引键值数组
     /// </summary>
     public IReadOnlyList<BsonValue> Values => _values;
+    internal ReadOnlySpan<BsonValue> ValuesSpan => _values;
 
     /// <summary>
     /// 索引键长度（字段数量）

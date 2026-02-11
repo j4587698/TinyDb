@@ -13,6 +13,17 @@ public class Program
 {
     public static void Main(string[] args)
     {
+        var runAllocProbe = string.Equals(
+            Environment.GetEnvironmentVariable("TINYDB_ALLOC_PROBE"),
+            "1",
+            StringComparison.OrdinalIgnoreCase);
+
+        if (runAllocProbe)
+        {
+            AllocationProbe.Run();
+            return;
+        }
+
         Console.WriteLine("=== TinyDb 快速索引性能测试 ===");
         Console.WriteLine();
 
