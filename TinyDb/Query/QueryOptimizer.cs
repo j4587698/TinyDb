@@ -387,6 +387,8 @@ public sealed class QueryOptimizer
 
         return value switch
         {
+            BsonValue bson => bson,
+            ObjectId oid => oid,
             string str => new BsonString(str),
             int i => new BsonInt32(i),
             long l => new BsonInt64(l),
