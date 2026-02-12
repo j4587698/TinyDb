@@ -64,6 +64,11 @@ public sealed class TinyDbOptions
     public bool StrictMode { get; set; } = true;
 
     /// <summary>
+    /// å†™å…¥æ—¶çš„ Schema éªŒè¯æ¨¡å¼ï¼ˆé»˜è®¤å…³é—­ï¼Œä»¥ä¿æŒæœ€é«˜æ€§èƒ½ä¸Žå…¼å®¹æ€§ï¼‰ã€‚
+    /// </summary>
+    public SchemaValidationMode SchemaValidationMode { get; set; } = SchemaValidationMode.None;
+
+    /// <summary>
     /// 数据库名称
     /// </summary>
     public string DatabaseName { get; set; } = "TinyDb";
@@ -209,6 +214,7 @@ public sealed class TinyDbOptions
             Timeout = Timeout,
             ReadOnly = ReadOnly,
             StrictMode = StrictMode,
+            SchemaValidationMode = SchemaValidationMode,
             DatabaseName = DatabaseName,
             UserData = UserData?.ToArray() ?? Array.Empty<byte>(),
             EnableCompression = EnableCompression,
@@ -229,6 +235,7 @@ public sealed class TinyDbOptions
     public override string ToString()
     {
         return $"TinyDbOptions: PageSize={PageSize}, CacheSize={CacheSize}, " +
-               $"Journaling={EnableJournaling}, ReadOnly={ReadOnly}, Timeout={Timeout.TotalSeconds}s";
+               $"Journaling={EnableJournaling}, ReadOnly={ReadOnly}, Timeout={Timeout.TotalSeconds}s, " +
+               $"SchemaValidation={SchemaValidationMode}";
     }
 }

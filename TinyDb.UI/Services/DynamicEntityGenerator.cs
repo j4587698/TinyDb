@@ -17,7 +17,6 @@ namespace TinyDb.UI.Services;
 public class DynamicEntityGenerator
 {
     private readonly TinyDbEngine _engine;
-    private readonly MetadataManager _metadataManager;
     private readonly AssemblyBuilder _assemblyBuilder;
     private readonly ModuleBuilder _moduleBuilder;
     private int _typeCounter = 0;
@@ -25,7 +24,6 @@ public class DynamicEntityGenerator
     public DynamicEntityGenerator(TinyDbEngine engine)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
-        _metadataManager = new MetadataManager(_engine);
 
         // 创建动态程序集
         var assemblyName = new AssemblyName($"DynamicEntities_{Guid.NewGuid():N}");
@@ -80,7 +78,7 @@ public class DynamicEntityGenerator
         var entityAttributeConstructor = typeof(EntityAttribute).GetConstructor(new[] { typeof(string) });
         var entityAttributeBuilder = new CustomAttributeBuilder(
             entityAttributeConstructor!,
-            new object[] { table.DisplayName });
+            new object[] { table.TableName });
         typeBuilder.SetCustomAttribute(entityAttributeBuilder);
 
         // 为每个字段创建属性
@@ -171,6 +169,7 @@ public class DynamicEntityGenerator
         var metadata = new EntityMetadata
         {
             TypeName = GetValidTypeName(table.TableName),
+            CollectionName = table.TableName,
             DisplayName = table.DisplayName,
             Description = table.Description
         };
@@ -184,7 +183,8 @@ public class DynamicEntityGenerator
                 DisplayName = field.DisplayName ?? field.FieldName,
                 Description = field.Description,
                 Order = field.Order,
-                Required = field.IsRequired
+                Required = field.IsRequired,
+                IsPrimaryKey = field.IsPrimaryKey
             };
 
             metadata.Properties.Add(propertyMetadata);
@@ -200,24 +200,29 @@ public class DynamicEntityGenerator
     {
         try
         {
-            var collectionName = $"__metadata_{GetValidTypeName(tableName)}";
+            var collectionName = "__sys_catalog";
             var collection = _engine.GetCollection<MetadataDocument>(collectionName);
 
             // 转换为MetadataDocument并保存
             var metadataDoc = MetadataDocument.FromEntityMetadata(metadata);
-            var existing = collection.FindOne(doc => doc.TypeName == metadata.TypeName);
+            var existing = collection.FindById(tableName);
+
+            metadataDoc.TableName = tableName;
 
             if (existing != null)
             {
-                metadataDoc.Id = existing.Id;
                 metadataDoc.CreatedAt = existing.CreatedAt;
                 metadataDoc.UpdatedAt = DateTime.Now;
                 collection.Update(metadataDoc);
             }
             else
             {
+                metadataDoc.CreatedAt = DateTime.Now;
+                metadataDoc.UpdatedAt = DateTime.Now;
                 collection.Insert(metadataDoc);
             }
+
+            _engine.GetCollection<TinyDb.Bson.BsonDocument>(tableName);
 
             Console.WriteLine($"[DEBUG] 元数据已保存到集合: {collectionName}");
         }

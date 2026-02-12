@@ -31,7 +31,7 @@ public class EngineWalReplayCallbackCoverageTests : IDisposable
         // Ensure a valid database file exists
         using (var engine = new TinyDbEngine(_dbPath, new TinyDbOptions { EnableJournaling = false }))
         {
-            var col = engine.GetCollection<BsonDocument>("wal_col");
+            var col = engine.GetBsonCollection("wal_col");
             col.Insert(new BsonDocument().Set("_id", 1).Set("val", 1));
         }
 
@@ -81,4 +81,3 @@ public class EngineWalReplayCallbackCoverageTests : IDisposable
         return Path.Combine(directory, $"{fileNameNoExt}-wal.{ext}");
     }
 }
-

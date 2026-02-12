@@ -44,7 +44,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
     [Test]
     public async Task ExecutePrimaryKeyLookup_WhenQueryExpressionMissing_ShouldHitOriginalExpressionBranch()
     {
-        var col = _engine.GetCollection<BsonDocument>("col");
+        var col = _engine.GetBsonCollection("col");
         col.Insert(new BsonDocument().Set("_id", new BsonInt32(1)).Set("x", 1));
 
         Expression<Func<BsonDocument, bool>> original = d => d != null;
@@ -70,7 +70,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
     [Test]
     public async Task ExecuteIndexScan_WhenUseIndexMissing_ShouldFallbackToFullScan()
     {
-        var col = _engine.GetCollection<BsonDocument>("col");
+        var col = _engine.GetBsonCollection("col");
         col.Insert(new BsonDocument().Set("_id", new BsonInt32(1)).Set("x", 1));
 
         var plan = new QueryExecutionPlan

@@ -133,12 +133,10 @@ public class AotBsonMapperMissingLinesCoverageTests
     {
         var entity = new MetadataDocument
         {
-            Id = ObjectId.NewObjectId(),
+            TableName = "C",
             TypeName = "T",
-            CollectionName = "C",
             DisplayName = "D",
             Description = "Desc",
-            PropertiesJson = "[]",
             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             UpdatedAt = new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc)
         };
@@ -147,7 +145,7 @@ public class AotBsonMapperMissingLinesCoverageTests
         var converted = (MetadataDocument)AotBsonMapper.ConvertValue(doc, typeof(MetadataDocument))!;
 
         await Assert.That(converted.TypeName).IsEqualTo("T");
-        await Assert.That(converted.CollectionName).IsEqualTo("C");
+        await Assert.That(converted.TableName).IsEqualTo("C");
     }
 
     [Test]

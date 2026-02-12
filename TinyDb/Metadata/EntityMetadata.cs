@@ -67,6 +67,11 @@ public class PropertyMetadata
     public bool Required { get; set; } = false;
 
     /// <summary>
+    /// 是否主键
+    /// </summary>
+    public bool IsPrimaryKey { get; set; } = false;
+
+    /// <summary>
     /// 密码相关配置（当属性是密码类型时使用）
     /// </summary>
     public PasswordMetadata? Password { get; set; }

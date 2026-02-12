@@ -15,12 +15,10 @@ public class MetadataDocumentAotAdapterConversionBranchCoverageTests
     {
         var entity = new MetadataDocument
         {
-            Id = ObjectId.NewObjectId(),
+            TableName = "C",
             TypeName = "T",
-            CollectionName = "C",
             DisplayName = "D",
             Description = "Desc",
-            PropertiesJson = "[]",
             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             UpdatedAt = new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc)
         };
@@ -39,7 +37,7 @@ public class MetadataDocumentAotAdapterConversionBranchCoverageTests
         }
 
         var roundtrip = AotBsonMapper.FromDocument<MetadataDocument>(modified);
-        await Assert.That(roundtrip.Id).IsEqualTo(entity.Id);
+        await Assert.That(roundtrip.TableName).IsEqualTo(entity.TableName);
 
         // 当前 AOT 适配器仅处理 BsonDateTime；当收到字符串时应回退到属性默认值（DateTime.Now）
         await Assert.That(roundtrip.CreatedAt).IsNotEqualTo(entity.CreatedAt);
@@ -55,12 +53,10 @@ public class MetadataDocumentAotAdapterConversionBranchCoverageTests
     {
         var entity = new MetadataDocument
         {
-            Id = ObjectId.NewObjectId(),
+            TableName = "C",
             TypeName = "T",
-            CollectionName = "C",
             DisplayName = "D",
             Description = "Desc",
-            PropertiesJson = "[]",
             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             UpdatedAt = new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc)
         };

@@ -20,7 +20,7 @@ public class TransactionAtomicityAndReinsertTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"txn_atomic_{Guid.NewGuid():N}.db");
         _engine = new TinyDbEngine(_dbPath, new TinyDbOptions { EnableJournaling = false });
         _collectionName = $"col_{Guid.NewGuid():N}";
-        _collection = _engine.GetCollection<BsonDocument>(_collectionName);
+        _collection = _engine.GetBsonCollection(_collectionName);
         _engine.EnsureIndex(_collectionName, "Code", "idx_code_unique", unique: true);
     }
 

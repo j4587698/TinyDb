@@ -16,22 +16,18 @@ public class MetadataDocumentAotAdapterAdditionalCoverageTests
 
         var entity = new MetadataDocument
         {
-            Id = ObjectId.NewObjectId(),
+            TableName = "C",
             TypeName = "T",
-            CollectionName = "C",
             DisplayName = "D",
             Description = "Desc",
-            PropertiesJson = "[]",
             CreatedAt = createdAt,
             UpdatedAt = updatedAt
         };
 
-        await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.Id))).IsNotNull();
+        await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.TableName))).IsEqualTo("C");
         await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.TypeName))).IsEqualTo("T");
-        await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.CollectionName))).IsEqualTo("C");
         await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.DisplayName))).IsEqualTo("D");
         await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.Description))).IsEqualTo("Desc");
-        await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.PropertiesJson))).IsEqualTo("[]");
         await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.CreatedAt))).IsEqualTo(createdAt);
         await Assert.That(AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.UpdatedAt))).IsEqualTo(updatedAt);
     }
@@ -42,9 +38,9 @@ public class MetadataDocumentAotAdapterAdditionalCoverageTests
         await Assert.That(AotIdAccessor<MetadataDocument>.HasValidId(null!)).IsFalse();
 
         var entity = new MetadataDocument();
-        await Assert.That(AotIdAccessor<MetadataDocument>.HasValidId(entity)).IsTrue();
+        await Assert.That(AotIdAccessor<MetadataDocument>.HasValidId(entity)).IsFalse();
 
-        var id = new BsonObjectId(ObjectId.NewObjectId());
+        var id = new BsonString("t");
         AotBsonMapper.SetId(entity, id);
 
         await Assert.That(AotIdAccessor<MetadataDocument>.HasValidId(entity)).IsTrue();

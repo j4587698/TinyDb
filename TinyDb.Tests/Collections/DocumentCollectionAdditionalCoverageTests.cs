@@ -66,7 +66,7 @@ public class DocumentCollectionAdditionalCoverageTests
         try
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = (DocumentCollection<BsonDocument>)engine.GetCollection<BsonDocument>("misc");
+            var col = (DocumentCollection<BsonDocument>)engine.GetBsonCollection("misc");
 
             await Assert.That(ReferenceEquals(col.Database, engine)).IsTrue();
 
@@ -139,7 +139,7 @@ public class DocumentCollectionAdditionalCoverageTests
         try
         {
             var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = (DocumentCollection<BsonDocument>)engine.GetCollection<BsonDocument>("misc");
+            var col = (DocumentCollection<BsonDocument>)engine.GetBsonCollection("misc");
 
             engine.Dispose();
 

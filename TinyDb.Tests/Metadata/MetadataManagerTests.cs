@@ -60,22 +60,22 @@ public class MetadataManagerTests
     public async Task Save_Metadata_Should_Update_Existing_Record()
     {
         var manager = new MetadataManager(_engine);
-        var collectionName = $"__metadata_{typeof(SpecialMetadataEntity).FullName}";
-        var collection = _engine.GetCollection<MetadataDocument>(collectionName);
+        var collection = _engine.GetCollection<MetadataDocument>("__sys_catalog");
+        var tableName = typeof(SpecialMetadataEntity).Name;
 
         manager.SaveEntityMetadata(typeof(SpecialMetadataEntity));
-        var initialDoc = collection.FindAll().Single();
+        var initialDoc = collection.FindById(tableName);
+        await Assert.That(initialDoc).IsNotNull();
+
         var initialUpdatedAt = initialDoc.UpdatedAt;
         var initialCreatedAt = initialDoc.CreatedAt;
 
         await Task.Delay(50);
 
         manager.SaveEntityMetadata(typeof(SpecialMetadataEntity));
-        var documents = collection.FindAll().ToList();
+        var updatedDoc = collection.FindById(tableName);
+        await Assert.That(updatedDoc).IsNotNull();
 
-        await Assert.That(documents.Count).IsEqualTo(1);
-
-        var updatedDoc = documents.Single();
         await Assert.That(updatedDoc.CreatedAt).IsEqualTo(initialCreatedAt);
         await Assert.That(updatedDoc.UpdatedAt).IsGreaterThan(initialUpdatedAt);
     }

@@ -57,7 +57,7 @@ public sealed class EngineInsertDocumentsAsyncAggregateExceptionCoverageTests : 
     [Test]
     public async Task InsertAsync_WhenSerializationFails_ShouldThrowAggregateException()
     {
-        var collection = _engine.GetCollection<BsonDocument>("col_async_serialization");
+        var collection = _engine.GetBsonCollection("col_async_serialization");
         var docs = new[]
         {
             new BsonDocument().Set("bad", new UnsupportedBsonValue()),
@@ -72,7 +72,7 @@ public sealed class EngineInsertDocumentsAsyncAggregateExceptionCoverageTests : 
     public async Task InsertAsync_WhenUniqueIndexViolationOccurs_ShouldThrowAggregateException()
     {
         _engine.EnsureIndex("col_async_unique", "Code", "idx_code_unique", unique: true);
-        var collection = _engine.GetCollection<BsonDocument>("col_async_unique");
+        var collection = _engine.GetBsonCollection("col_async_unique");
         var docs = new[]
         {
             new BsonDocument().Set("Code", "dup"),
@@ -83,4 +83,3 @@ public sealed class EngineInsertDocumentsAsyncAggregateExceptionCoverageTests : 
             .Throws<AggregateException>();
     }
 }
-

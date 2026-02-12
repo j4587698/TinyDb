@@ -118,8 +118,8 @@ public class QueryExecutorCoverageTests
         var colA = $"col_a_{Guid.NewGuid():N}";
         var colB = $"col_b_{Guid.NewGuid():N}";
 
-        var a = _engine.GetCollection<BsonDocument>(colA);
-        var b = _engine.GetCollection<BsonDocument>(colB);
+        var a = _engine.GetBsonCollection(colA);
+        var b = _engine.GetBsonCollection(colB);
 
         _ = a.Insert(new BsonDocument().Set("n", 1));
         _ = b.Insert(new BsonDocument().Set("n", 2));

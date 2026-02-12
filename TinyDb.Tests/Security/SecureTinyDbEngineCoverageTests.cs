@@ -117,7 +117,7 @@ public class SecureTinyDbEngineCoverageTests : IDisposable
         var path = GetDbPath();
         using var secureEngine = new SecureTinyDbEngine(path, "password123", createIfNotExists: true);
 
-        var col = secureEngine.Engine.GetCollection<BsonDocument>("test");
+        var col = secureEngine.Engine.GetBsonCollection("test");
         col.Insert(new BsonDocument().Set("_id", 1).Set("x", 1));
 
         await Assert.That(secureEngine.CollectionExists("test")).IsTrue();

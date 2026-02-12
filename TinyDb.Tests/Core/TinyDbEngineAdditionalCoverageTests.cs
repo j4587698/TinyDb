@@ -54,7 +54,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
                 BackgroundFlushInterval = Timeout.InfiniteTimeSpan
             });
 
-            var col = engine.GetCollection<BsonDocument>("c");
+            var col = engine.GetBsonCollection("c");
             col.Insert(new BsonDocument().Set("x", 1));
 
             await engine.CheckpointAsync();
@@ -73,7 +73,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
         try
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = engine.GetCollection<BsonDocument>("c");
+            var col = engine.GetBsonCollection("c");
             col.Insert(new BsonDocument().Set("x", 1));
 
             var collectionStatesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
@@ -256,7 +256,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
         try
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = engine.GetCollection<BsonDocument>("c");
+            var col = engine.GetBsonCollection("c");
 
             var inserted = new BsonDocument().Set("x", 1);
             col.Insert(inserted);
@@ -307,7 +307,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
         try
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = engine.GetCollection<BsonDocument>("c");
+            var col = engine.GetBsonCollection("c");
 
             col.Insert(new BsonDocument().Set("x", 1).Set("_isLargeDocument", false));
 
@@ -337,7 +337,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
                 BackgroundFlushInterval = Timeout.InfiniteTimeSpan
             }))
             {
-                var col = engine.GetCollection<BsonDocument>("c");
+                var col = engine.GetBsonCollection("c");
                 col.Insert(new BsonDocument().Set("x", 1));
             }
 

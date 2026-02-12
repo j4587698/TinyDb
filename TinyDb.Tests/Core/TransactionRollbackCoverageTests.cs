@@ -108,25 +108,45 @@ public sealed class TransactionRollbackCoverageTests
                 indexFields: new[] { "x" },
                 indexUnique: false));
 
-            Task? commitTask;
+            var commitTcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var commitThread = new Thread(() =>
+            {
+                try
+                {
+                    tx.Commit();
+                    commitTcs.SetResult(null);
+                }
+                catch (Exception ex)
+                {
+                    commitTcs.SetException(ex);
+                }
+            })
+            {
+                IsBackground = true
+            };
+
+            bool commitReachedCreateIndex;
             rwLock.EnterWriteLock();
             try
             {
-                commitTask = Task.Run(() => tx.Commit());
+                commitThread.Start();
 
-                if (!SpinWait.SpinUntil(() => rwLock.WaitingWriteCount > 0, TimeSpan.FromSeconds(5)))
+                commitReachedCreateIndex = SpinWait.SpinUntil(
+                    () => rwLock.WaitingWriteCount > 0,
+                    TimeSpan.FromSeconds(30));
+
+                if (commitReachedCreateIndex)
                 {
-                    throw new TimeoutException("Commit did not reach CreateIndex within timeout.");
+                    tx.Operations[0] = new TransactionOperation((TransactionOperationType)123, appliedCollection);
                 }
-
-                tx.Operations[0] = new TransactionOperation((TransactionOperationType)123, appliedCollection);
             }
             finally
             {
                 rwLock.ExitWriteLock();
             }
 
-            await Assert.That(async () => await commitTask).Throws<InvalidOperationException>();
+            await Assert.That(async () => await commitTcs.Task).Throws<InvalidOperationException>();
+            await Assert.That(commitReachedCreateIndex).IsTrue();
 
             tx.Dispose();
         }

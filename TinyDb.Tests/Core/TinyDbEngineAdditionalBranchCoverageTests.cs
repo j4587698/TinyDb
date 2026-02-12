@@ -53,6 +53,9 @@ public class TinyDbEngineAdditionalBranchCoverageTests
 
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
 
+            engine.EnsureBsonSchema(nameof(BsonDocument));
+            engine.EnsureBsonSchema("explicit");
+
             engine.GetCollection<BsonDocument>((string?)null).Insert(new BsonDocument().Set("x", 1));
             await Assert.That(engine.CollectionExists(nameof(BsonDocument))).IsTrue();
 
@@ -79,7 +82,7 @@ public class TinyDbEngineAdditionalBranchCoverageTests
             Directory.CreateDirectory(dir);
 
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            engine.GetCollection<BsonDocument>("c").Insert(new BsonDocument().Set("x", 1));
+            engine.GetBsonCollection("c").Insert(new BsonDocument().Set("x", 1));
 
             File.WriteAllText(dbPath + ".compact", "stale");
             await Assert.That(File.Exists(dbPath + ".compact")).IsTrue();
@@ -161,7 +164,7 @@ public class TinyDbEngineAdditionalBranchCoverageTests
             Directory.CreateDirectory(dir);
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
 
-            var collection = engine.GetCollection<BsonDocument>("c");
+            var collection = engine.GetBsonCollection("c");
             var id = collection.Insert(new BsonDocument().Set("x", 1));
 
             var state = GetCollectionState(engine, "c");
@@ -195,12 +198,12 @@ public class TinyDbEngineAdditionalBranchCoverageTests
 
             var big = new string('x', 6000);
 
-            var colSync = engine.GetCollection<BsonDocument>("large_sync");
+            var colSync = engine.GetBsonCollection("large_sync");
             var idSync = colSync.Insert(new BsonDocument().Set("payload", big));
             var updatedSync = engine.UpdateDocumentInternal("large_sync", new BsonDocument().Set("_id", idSync).Set("payload", "small"));
             await Assert.That(updatedSync).IsEqualTo(1);
 
-            var colAsync = engine.GetCollection<BsonDocument>("large_async");
+            var colAsync = engine.GetBsonCollection("large_async");
             var idAsync = colAsync.Insert(new BsonDocument().Set("payload", big));
             var updatedAsync = await engine.UpdateDocumentAsync("large_async", new BsonDocument().Set("_id", idAsync).Set("payload", "small"));
             await Assert.That(updatedAsync).IsEqualTo(1);
@@ -226,7 +229,7 @@ public class TinyDbEngineAdditionalBranchCoverageTests
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false, PageSize = 4096 });
 
             var big = new string('x', 6000);
-            var col = engine.GetCollection<BsonDocument>("large_delete_async");
+            var col = engine.GetBsonCollection("large_delete_async");
             var id = col.Insert(new BsonDocument().Set("payload", big));
 
             var deleted = await engine.DeleteDocumentAsync("large_delete_async", id);

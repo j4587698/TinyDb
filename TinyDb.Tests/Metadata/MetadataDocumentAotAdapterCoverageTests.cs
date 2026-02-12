@@ -11,25 +11,23 @@ public class MetadataDocumentAotAdapterCoverageTests
     [Test]
     public async Task AotAdapter_MetadataDocument_RoundTrip_And_PropertyAccess_ShouldWork()
     {
-        var id = ObjectId.NewObjectId();
         var entity = new MetadataDocument
         {
-            Id = id,
+            TableName = "C",
             TypeName = "T",
-            CollectionName = "C",
             DisplayName = "D",
             Description = "Desc",
-            PropertiesJson = "[]",
             CreatedAt = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             UpdatedAt = new DateTime(2024, 1, 2, 0, 0, 0, DateTimeKind.Utc)
         };
 
         var bson = AotBsonMapper.ToDocument(entity);
         await Assert.That(bson.ContainsKey("_id")).IsTrue();
+        await Assert.That(bson["_id"].ToString()).IsEqualTo("C");
 
         var roundtrip = AotBsonMapper.FromDocument<MetadataDocument>(bson);
         await Assert.That(roundtrip.TypeName).IsEqualTo("T");
-        await Assert.That(roundtrip.CollectionName).IsEqualTo("C");
+        await Assert.That(roundtrip.TableName).IsEqualTo("C");
 
         var typeName = AotBsonMapper.GetPropertyValue(entity, nameof(MetadataDocument.TypeName));
         await Assert.That(typeName).IsEqualTo("T");
@@ -37,9 +35,9 @@ public class MetadataDocumentAotAdapterCoverageTests
         var missing = AotBsonMapper.GetPropertyValue(entity, "__missing__");
         await Assert.That(missing).IsNull();
 
-        var newId = new BsonObjectId(ObjectId.NewObjectId());
+        var newId = new BsonString("NewTable");
         AotBsonMapper.SetId(entity, newId);
-        await Assert.That(entity.Id).IsEqualTo((ObjectId)newId);
+        await Assert.That(entity.TableName).IsEqualTo("NewTable");
 
         var idValue = AotBsonMapper.GetId(entity);
         await Assert.That(idValue.IsNull).IsFalse();
@@ -49,7 +47,7 @@ public class MetadataDocumentAotAdapterCoverageTests
     public async Task FromDocument_WithMissingFields_ShouldStillReturnInstance()
     {
         var bson = new BsonDocument()
-            .Set("_id", new BsonObjectId(ObjectId.NewObjectId()))
+            .Set("_id", "C")
             .Set("UnknownField", 1);
 
         var entity = AotBsonMapper.FromDocument<MetadataDocument>(bson);
@@ -57,4 +55,3 @@ public class MetadataDocumentAotAdapterCoverageTests
         await Assert.That(entity.TypeName).IsNotNull();
     }
 }
-

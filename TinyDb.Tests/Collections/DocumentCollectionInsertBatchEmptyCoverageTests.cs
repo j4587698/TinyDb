@@ -25,7 +25,7 @@ public class DocumentCollectionInsertBatchEmptyCoverageTests
             Directory.CreateDirectory(dir);
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
 
-            var collection = (DocumentCollection<BsonDocument>)engine.GetCollection<BsonDocument>("c");
+            var collection = (DocumentCollection<BsonDocument>)engine.GetBsonCollection("c");
             var method = typeof(DocumentCollection<BsonDocument>).GetMethod("InsertBatchAsync", BindingFlags.NonPublic | BindingFlags.Instance);
             await Assert.That(method).IsNotNull();
 
@@ -42,4 +42,3 @@ public class DocumentCollectionInsertBatchEmptyCoverageTests
         }
     }
 }
-

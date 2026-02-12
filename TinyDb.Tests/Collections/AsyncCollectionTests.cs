@@ -109,7 +109,7 @@ public class AsyncCollectionTests : IDisposable
     [Test]
     public async Task InsertAsync_BsonDocument_ShouldAssignId()
     {
-        var collection = _engine.GetCollection<BsonDocument>("bson_insert");
+        var collection = _engine.GetBsonCollection("bson_insert");
         var doc = new BsonDocument().Set("name", "doc");
 
         var id = await collection.InsertAsync(doc);
@@ -123,7 +123,7 @@ public class AsyncCollectionTests : IDisposable
     [Test]
     public async Task InsertAsync_Multiple_WithNullEntries_ShouldSkipNulls()
     {
-        var collection = _engine.GetCollection<BsonDocument>("bson_insert_many");
+        var collection = _engine.GetBsonCollection("bson_insert_many");
         var docs = new BsonDocument?[]
         {
             new BsonDocument().Set("name", "a"),

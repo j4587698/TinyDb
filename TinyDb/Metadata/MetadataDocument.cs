@@ -1,111 +1,119 @@
-using System.Collections.Generic;
-using System.Text.Json;
+using System;
+using System.Linq;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 
 namespace TinyDb.Metadata;
 
 /// <summary>
-/// 元数据文档包装类，用于正确序列化到数据库
+/// 原生元数据文档 - 100% BSON 存储，无 JSON，支持 AOT
 /// </summary>
-[Entity("metadata_document")]
+[Entity("__sys_catalog")]
 public class MetadataDocument
 {
-    /// <summary>
-    /// 文档ID
-    /// </summary>
     [Id]
-    public ObjectId Id { get; set; }
-
-    /// <summary>
-    /// 实体类型名称
-    /// </summary>
+    public string TableName { get; set; } = string.Empty;
     public string TypeName { get; set; } = string.Empty;
-
-    /// <summary>
-    /// 实体集合名称
-    /// </summary>
-    public string CollectionName { get; set; } = string.Empty;
-
-    /// <summary>
-    /// 实体显示名称
-    /// </summary>
     public string DisplayName { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    
+    // 核心：直接存储 BsonArray 格式的字段定义
+    public BsonArray Columns { get; set; } = new BsonArray();
 
-    /// <summary>
-    /// 实体描述
-    /// </summary>
-    public string Description { get; set; } = string.Empty;
-
-    /// <summary>
-    /// 属性元数据JSON字符串
-    /// </summary>
-    public string PropertiesJson { get; set; } = string.Empty;
-
-    /// <summary>
-    /// 创建时间
-    /// </summary>
     public DateTime CreatedAt { get; set; } = DateTime.Now;
-
-    /// <summary>
-    /// 更新时间
-    /// </summary>
     public DateTime UpdatedAt { get; set; } = DateTime.Now;
 
-    /// <summary>
-    /// 从EntityMetadata创建MetadataDocument
-    /// </summary>
-    /// <param name="metadata">实体元数据</param>
-    /// <returns>元数据文档</returns>
+    // 静态工厂：从 EntityMetadata 转换 (用于 Code-First)
     public static MetadataDocument FromEntityMetadata(EntityMetadata metadata)
     {
-        var document = new MetadataDocument
+        if (metadata == null) throw new ArgumentNullException(nameof(metadata));
+
+        var doc = new MetadataDocument
         {
-            Id = ObjectId.NewObjectId(),
+            TableName = metadata.CollectionName,
             TypeName = metadata.TypeName,
-            CollectionName = metadata.CollectionName,
             DisplayName = metadata.DisplayName,
-            Description = metadata.Description ?? "",
+            Description = metadata.Description,
             CreatedAt = DateTime.Now,
             UpdatedAt = DateTime.Now
         };
 
-        document.PropertiesJson = JsonSerializer.Serialize(metadata.Properties, MetadataJsonContext.Default.ListPropertyMetadata);
+        var cols = new BsonArray();
+        foreach (var p in metadata.Properties)
+        {
+            var fieldName = p.IsPrimaryKey ? "_id" : ToCamelCase(p.PropertyName);
+            var col = new BsonDocument()
+                .Set("n", fieldName)
+                .Set("pn", p.PropertyName)
+                .Set("t", p.PropertyType)
+                .Set("o", p.Order)
+                .Set("r", p.Required)
+                .Set("pk", p.IsPrimaryKey);
 
-        return document;
+            if (!string.IsNullOrEmpty(p.DisplayName) && p.DisplayName != p.PropertyName)
+                col = col.Set("dn", p.DisplayName);
+
+            if (!string.IsNullOrEmpty(p.Description))
+                col = col.Set("desc", p.Description);
+
+            if (!string.IsNullOrEmpty(p.ForeignKeyCollection))
+                col = col.Set("fk", p.ForeignKeyCollection);
+
+            cols = cols.AddValue(col);
+        }
+        doc.Columns = cols;
+        return doc;
     }
 
-    /// <summary>
-    /// 转换为EntityMetadata
-    /// </summary>
-    /// <returns>实体元数据</returns>
     public EntityMetadata ToEntityMetadata()
     {
-        var metadata = new EntityMetadata
-        {
-            TypeName = TypeName,
-            CollectionName = CollectionName,
-            DisplayName = DisplayName,
-            Description = string.IsNullOrEmpty(Description) ? null : Description
-        };
+        var properties = new List<PropertyMetadata>();
 
-        // 从字符串解析属性列表
-        if (!string.IsNullOrEmpty(PropertiesJson))
+        foreach (var col in Columns)
         {
-            try
+            if (col is not BsonDocument colDoc) continue;
+
+            var propertyName = colDoc.ContainsKey("pn") ? colDoc["pn"].ToString() : colDoc["n"].ToString();
+            if (string.IsNullOrWhiteSpace(propertyName)) continue;
+
+            var propertyType = colDoc.ContainsKey("t") ? colDoc["t"].ToString() : string.Empty;
+            var displayName = colDoc.ContainsKey("dn") ? colDoc["dn"].ToString() : propertyName;
+            var description = colDoc.ContainsKey("desc") ? colDoc["desc"].ToString() : null;
+            var order = colDoc.ContainsKey("o") ? colDoc["o"].ToInt32() : 0;
+            var required = colDoc.ContainsKey("r") && colDoc["r"].ToBoolean();
+            var isPrimaryKey = colDoc.ContainsKey("pk") && colDoc["pk"].ToBoolean();
+            var foreignKeyCollection = colDoc.ContainsKey("fk") ? colDoc["fk"].ToString() : null;
+
+            if (string.IsNullOrWhiteSpace(description)) description = null;
+            if (string.IsNullOrWhiteSpace(foreignKeyCollection)) foreignKeyCollection = null;
+
+            properties.Add(new PropertyMetadata
             {
-                var properties = JsonSerializer.Deserialize<List<PropertyMetadata>>(PropertiesJson, MetadataJsonContext.Default.ListPropertyMetadata);
-                if (properties != null)
-                {
-                    metadata.Properties.AddRange(properties);
-                }
-            }
-            catch (JsonException)
-            {
-                metadata.Properties = new List<PropertyMetadata>();
-            }
+                PropertyName = propertyName,
+                PropertyType = propertyType,
+                DisplayName = displayName,
+                Description = description,
+                Order = order,
+                Required = required,
+                IsPrimaryKey = isPrimaryKey,
+                ForeignKeyCollection = foreignKeyCollection
+            });
         }
 
-        return metadata;
+        return new EntityMetadata
+        {
+            TypeName = TypeName,
+            CollectionName = TableName,
+            DisplayName = DisplayName,
+            Description = string.IsNullOrWhiteSpace(Description) ? null : Description,
+            Properties = properties.OrderBy(p => p.Order).ToList()
+        };
+    }
+
+    private static string ToCamelCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
     }
 }

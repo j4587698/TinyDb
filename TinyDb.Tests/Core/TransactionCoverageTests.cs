@@ -136,7 +136,7 @@ public class TransactionCoverageTests : IDisposable
     public async Task Dispose_ShouldAutoRollback_IfActive()
     {
         using var engine = CreateTestEngine();
-        var col = engine.GetCollection<BsonDocument>("users");
+        var col = engine.GetBsonCollection("users");
         
         var trans = engine.BeginTransaction();
         col.Insert(new BsonDocument().Set("_id", 1).Set("name", "active"));
@@ -184,7 +184,7 @@ public class TransactionCoverageTests : IDisposable
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
         
-        var col = engine.GetCollection<BsonDocument>("users");
+        var col = engine.GetBsonCollection("users");
         col.Insert(new BsonDocument().Set("a", 1));
         trans.CreateSavepoint("sp1");
         
@@ -218,7 +218,7 @@ public class TransactionCoverageTests : IDisposable
     public async Task RecordDropIndex_ShouldAttemptToGetIndexInfo()
     {
         using var engine = CreateTestEngine();
-        var col = engine.GetCollection<BsonDocument>("users");
+        var col = engine.GetBsonCollection("users");
         engine.EnsureIndex("users", "name", "idx_name");
         
         using var trans = engine.BeginTransaction();
@@ -244,7 +244,7 @@ public class TransactionCoverageTests : IDisposable
     public async Task RecordDropIndex_WhenIndexLookupThrows_ShouldStillRecordOperation()
     {
         using var engine = CreateTestEngine();
-        engine.GetCollection<BsonDocument>("users");
+        engine.GetBsonCollection("users");
 
         using var trans = engine.BeginTransaction();
         var t = (Transaction)trans;

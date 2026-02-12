@@ -359,31 +359,26 @@ public sealed class TransactionManager : IDisposable
             var definitions = new List<ForeignKeyDefinition>();
             
             // 扫描所有元数据集合以找到匹配的集合名称
-            var metadataCollectionNames = _engine.GetCollectionNames()
-                .Where(n => n.StartsWith("__metadata_"))
-                .ToList();
+            var metadataCollectionNames = new List<string> { "__sys_catalog" };
 
             foreach (var metaColName in metadataCollectionNames)
             {
                 try
                 {
                     var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
-                    var metaDoc = metaCol.FindAll().OrderByDescending(d => d.UpdatedAt).FirstOrDefault();
+                    var metaDoc = metaCol.FindById(name);
                     
                     if (metaDoc != null)
                     {
-                        if (metaDoc.CollectionName == name)
+                        var entityMeta = metaDoc.ToEntityMetadata();
+                        foreach (var prop in entityMeta.Properties)
                         {
-                            var entityMeta = metaDoc.ToEntityMetadata();
-                            foreach (var prop in entityMeta.Properties)
+                            if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
                             {
-                                if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
-                                {
-                                    definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
-                                }
+                                definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
                             }
-                            break;
                         }
+                        break;
                     }
                 }
                 catch

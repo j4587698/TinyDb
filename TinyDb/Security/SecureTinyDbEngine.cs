@@ -133,6 +133,15 @@ public sealed class SecureTinyDbEngine : IDisposable
             return _engine.GetCollection<T>();
         }
 
+        public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name)
+            where T : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.GetCollection<T>(name);
+        }
+
     
     /// <summary>
     /// 获取集合名称列表（需要身份验证）

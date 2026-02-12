@@ -37,7 +37,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ScanDocuments_EmptyCollection_ReturnsEmptyList()
     {
-        var col = _engine.GetCollection<BsonDocument>("empty_col");
+        var col = _engine.GetBsonCollection("empty_col");
         var docs = col.FindAll().ToList();
         await Assert.That(docs.Count).IsEqualTo(0);
     }
@@ -45,7 +45,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ScanDocuments_MultiplePages_ReturnsAllDocuments()
     {
-        var col = _engine.GetCollection<BsonDocument>("multi_page");
+        var col = _engine.GetBsonCollection("multi_page");
         
         // Insert enough documents to span multiple pages
         for (int i = 0; i < 100; i++)
@@ -63,7 +63,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ReadDocuments_AfterMultipleUpdates_ReturnsCachedCorrectly()
     {
-        var col = _engine.GetCollection<BsonDocument>("cache_test");
+        var col = _engine.GetBsonCollection("cache_test");
         
         // Insert document
         col.Insert(new BsonDocument().Set("_id", 1).Set("value", 100));
@@ -89,7 +89,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ReadDocumentAt_ValidIndex_ReturnsDocument()
     {
-        var col = _engine.GetCollection<BsonDocument>("read_at_test");
+        var col = _engine.GetBsonCollection("read_at_test");
         
         for (int i = 0; i < 5; i++)
         {
@@ -105,7 +105,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ReadDocumentAt_InvalidIndex_ReturnsNull()
     {
-        var col = _engine.GetCollection<BsonDocument>("invalid_idx");
+        var col = _engine.GetBsonCollection("invalid_idx");
         col.Insert(new BsonDocument().Set("_id", 1));
         
         // Try to find non-existent document
@@ -116,7 +116,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ReadDocumentAt_WithFieldProjection()
     {
-        var col = _engine.GetCollection<BsonDocument>("projection_test");
+        var col = _engine.GetBsonCollection("projection_test");
         col.Insert(new BsonDocument()
             .Set("_id", 1)
             .Set("field1", "value1")
@@ -138,7 +138,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task LargeDocument_InsertAndRetrieve_Works()
     {
-        var col = _engine.GetCollection<BsonDocument>("large_doc_test");
+        var col = _engine.GetBsonCollection("large_doc_test");
         
         // Create a large document (> 4KB to trigger large document storage)
         var largeData = new string('L', 5000);
@@ -156,7 +156,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task MultipleLargeDocuments_InsertAndRetrieve_Works()
     {
-        var col = _engine.GetCollection<BsonDocument>("multi_large");
+        var col = _engine.GetBsonCollection("multi_large");
         
         // Insert multiple large documents
         for (int i = 0; i < 5; i++)
@@ -183,7 +183,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task DeleteAndCompact_TriggersPageRewrite()
     {
-        var col = _engine.GetCollection<BsonDocument>("compact_test");
+        var col = _engine.GetBsonCollection("compact_test");
         
         // Insert documents
         for (int i = 0; i < 10; i++)
@@ -205,7 +205,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task UpdateDocument_TriggersPageRewrite()
     {
-        var col = _engine.GetCollection<BsonDocument>("update_rewrite");
+        var col = _engine.GetBsonCollection("update_rewrite");
         
         col.Insert(new BsonDocument().Set("_id", 1).Set("value", 100));
         
@@ -227,7 +227,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task InsertEmptyDocument_Works()
     {
-        var col = _engine.GetCollection<BsonDocument>("empty_doc");
+        var col = _engine.GetBsonCollection("empty_doc");
         
         col.Insert(new BsonDocument().Set("_id", 1));
         
@@ -239,7 +239,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task InsertDocumentWithComplexTypes_Works()
     {
-        var col = _engine.GetCollection<BsonDocument>("complex_types");
+        var col = _engine.GetBsonCollection("complex_types");
         
         var doc = new BsonDocument()
             .Set("_id", 1)
@@ -265,7 +265,7 @@ public class DataPageAccessExtendedTests : IDisposable
     [Test]
     public async Task ManySmallDocuments_FillMultiplePages()
     {
-        var col = _engine.GetCollection<BsonDocument>("many_small");
+        var col = _engine.GetBsonCollection("many_small");
         
         // Insert many small documents
         for (int i = 0; i < 500; i++)
@@ -298,7 +298,7 @@ public class DataPageAccessExtendedTests : IDisposable
             // Create and populate
             using (var engine = new TinyDbEngine(path))
             {
-                var col = engine.GetCollection<BsonDocument>("persist_col");
+                var col = engine.GetBsonCollection("persist_col");
                 for (int i = 0; i < 10; i++)
                 {
                     col.Insert(new BsonDocument().Set("_id", i).Set("name", $"doc_{i}"));
@@ -309,7 +309,7 @@ public class DataPageAccessExtendedTests : IDisposable
             // Reopen and verify
             using (var engine = new TinyDbEngine(path))
             {
-                var col = engine.GetCollection<BsonDocument>("persist_col");
+                var col = engine.GetBsonCollection("persist_col");
                 var count = col.Count();
                 await Assert.That(count).IsEqualTo(10);
                 
@@ -350,7 +350,7 @@ public class DataPageAccessBoundaryTests : IDisposable
     [Test]
     public async Task FindNonExistent_ReturnsNull()
     {
-        var col = _engine.GetCollection<BsonDocument>("boundary_test");
+        var col = _engine.GetBsonCollection("boundary_test");
         col.Insert(new BsonDocument().Set("_id", 1));
         
         var notFound = col.FindById(9999);
@@ -360,7 +360,7 @@ public class DataPageAccessBoundaryTests : IDisposable
     [Test]
     public async Task DeleteNonExistent_ReturnsFalse()
     {
-        var col = _engine.GetCollection<BsonDocument>("del_boundary");
+        var col = _engine.GetBsonCollection("del_boundary");
         col.Insert(new BsonDocument().Set("_id", 1));
         
         var deleted = col.Delete(9999);
@@ -370,7 +370,7 @@ public class DataPageAccessBoundaryTests : IDisposable
     [Test]
     public async Task UpdateNonExistent_ReturnsFalse()
     {
-        var col = _engine.GetCollection<BsonDocument>("upd_boundary");
+        var col = _engine.GetBsonCollection("upd_boundary");
         col.Insert(new BsonDocument().Set("_id", 1));
         
         var updated = _engine.UpdateDocumentInternal("upd_boundary", new BsonDocument().Set("_id", 9999).Set("value", 100));
@@ -380,7 +380,7 @@ public class DataPageAccessBoundaryTests : IDisposable
     [Test]
     public async Task InsertDuplicate_ThrowsException()
     {
-        var col = _engine.GetCollection<BsonDocument>("dup_test");
+        var col = _engine.GetBsonCollection("dup_test");
         col.Insert(new BsonDocument().Set("_id", 1));
         
         await Assert.That(() => col.Insert(new BsonDocument().Set("_id", 1)))
@@ -390,7 +390,7 @@ public class DataPageAccessBoundaryTests : IDisposable
     [Test]
     public async Task InsertMany_ThenDeleteAll_Works()
     {
-        var col = _engine.GetCollection<BsonDocument>("ins_del_all");
+        var col = _engine.GetBsonCollection("ins_del_all");
         
         for (int i = 0; i < 20; i++)
         {
@@ -410,7 +410,7 @@ public class DataPageAccessBoundaryTests : IDisposable
     [Test]
     public async Task InsertUpdateDelete_Sequence_Works()
     {
-        var col = _engine.GetCollection<BsonDocument>("iud_sequence");
+        var col = _engine.GetBsonCollection("iud_sequence");
         
         // Insert
         col.Insert(new BsonDocument().Set("_id", 1).Set("state", "inserted"));

@@ -148,7 +148,7 @@ public class TransactionManagerAdditionalCoverageTests
             using var manager = new TransactionManager(engine, maxTransactions: 10, transactionTimeout: TimeSpan.FromMinutes(1));
 
             var refId = ObjectId.NewObjectId();
-            engine.GetCollection<BsonDocument>("Ref").Insert(new BsonDocument().Set("_id", refId));
+            engine.GetBsonCollection("Ref").Insert(new BsonDocument().Set("_id", refId));
 
             var meta = new EntityMetadata
             {

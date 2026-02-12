@@ -79,7 +79,7 @@ public class SecurityTests
         // Create unprotected DB
         using (var engine = new TinyDbEngine(_testFile))
         {
-            engine.GetCollection<BsonDocument>("test").Insert(new BsonDocument().Set("a", 1));
+            engine.GetBsonCollection("test").Insert(new BsonDocument().Set("a", 1));
         }
 
         // Open with SecureTinyDbEngine without password
@@ -87,7 +87,7 @@ public class SecurityTests
         {
             await Assert.That(secureEngine.IsAuthenticated).IsTrue();
             await Assert.That(secureEngine.IsPasswordProtected()).IsFalse();
-            var col = secureEngine.GetCollection<BsonDocument>();
+            var col = secureEngine.GetCollection<BsonDocument>("test");
             await Assert.That(col).IsNotNull();
         }
     }

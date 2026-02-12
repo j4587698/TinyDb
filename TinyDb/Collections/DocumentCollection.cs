@@ -323,7 +323,15 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (id == null || id.IsNull) return null;
 
         var document = _engine.FindById(_name, id);
-        return document != null ? AotBsonMapper.FromDocument<T>(document) : default(T);
+        if (document == null) return default;
+
+        if (typeof(T) == typeof(BsonDocument))
+        {
+            var patched = _engine.MetadataManager.ApplySchemaDefaults(_name, document);
+            return (T)(object)patched;
+        }
+
+        return AotBsonMapper.FromDocument<T>(document);
     }
 
     /// <summary>
@@ -335,6 +343,17 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
 
         var documents = _engine.FindAll(_name);
+        if (typeof(T) == typeof(BsonDocument))
+        {
+            foreach (var document in documents)
+            {
+                var patched = _engine.MetadataManager.ApplySchemaDefaults(_name, document);
+                yield return (T)(object)patched;
+            }
+
+            yield break;
+        }
+
         foreach (var document in documents)
         {
             var entity = AotBsonMapper.FromDocument<T>(document);

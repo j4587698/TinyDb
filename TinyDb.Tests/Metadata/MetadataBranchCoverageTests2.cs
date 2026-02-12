@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Reflection;
 using TinyDb.Core;
 using TinyDb.Metadata;
@@ -40,16 +41,19 @@ public class MetadataBranchCoverageTests2
     }
 
     [Test]
-    public async Task MetadataManager_GetMetadataCollectionName_ShouldFallbackToTypeName_WhenFullNameNull()
+    public async Task MetadataManager_SaveMetadata_ShouldRequire_TableName()
     {
-        var method = typeof(MetadataManager).GetMethod("GetMetadataCollectionName", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"metadata_guard_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
+            var manager = new MetadataManager(engine);
 
-        var fullName = (string)method!.Invoke(null, new object[] { typeof(GenericHolder<int>) })!;
-        await Assert.That(fullName).Contains(typeof(GenericHolder<int>).FullName!);
-
-        var typeParam = typeof(GenericHolder<>).GetGenericArguments()[0];
-        var fallback = (string)method.Invoke(null, new object[] { typeParam })!;
-        await Assert.That(fallback).Contains(typeParam.Name);
+            await Assert.That(() => manager.SaveMetadata(new MetadataDocument())).Throws<ArgumentException>();
+        }
+        finally
+        {
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { }
+        }
     }
 }

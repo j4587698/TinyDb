@@ -44,6 +44,7 @@ public sealed class TinyDbEngine : IDisposable
     private PageManager _pageManager = null!;
     private WriteAheadLog _writeAheadLog = null!;
     private FlushScheduler _flushScheduler = null!;
+    private TinyDb.Metadata.MetadataManager _metadataManager = null!;
     private readonly ConcurrentDictionary<string, IDocumentCollection> _collections;
     internal CollectionMetaStore _collectionMetaStore = null!;
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
@@ -69,6 +70,8 @@ public sealed class TinyDbEngine : IDisposable
     /// 获取此数据库实例使用的选项。
     /// </summary>
     public TinyDbOptions Options => _options;
+
+    public TinyDb.Metadata.MetadataManager MetadataManager => _metadataManager;
 
     /// <summary>
     /// 获取数据库头部信息。
@@ -128,6 +131,7 @@ public sealed class TinyDbEngine : IDisposable
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval));
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
         _dataPageAccess = new DataPageAccess(_pageManager, _largeDocumentStorage, _writeAheadLog);
+        _metadataManager = new TinyDb.Metadata.MetadataManager(this);
 
         InitializeDatabase();
     }
@@ -161,24 +165,25 @@ public sealed class TinyDbEngine : IDisposable
             using (var tempEngine = new TinyDbEngine(tempFile, _options))
             {
                 // 2. 迁移数据
-                foreach (var colName in GetCollectionNames())
+                foreach (var colName in GetCollectionNames(includeSystemCollections: true))
                 {
                     // 获取源数据
                     var docs = FindAll(colName).ToList();
-                    
-                    // 写入目标
-                    var tempCol = tempEngine.GetCollection<BsonDocument>(colName);
-                    if (docs.Count > 0)
-                    {
-                        tempCol.Insert(docs);
-                    }
-                    
-                    // 3. 重建索引
+
+                    // 写入目标：避免 GetCollection<T> 的泛型缓存冲突（同名集合可能同时以不同实体类型访问）
+                    tempEngine.RegisterCollection(colName);
+
+                    // 3. 重建索引（先建索引，再写入，确保索引得到填充）
                     var idxMgr = GetIndexManager(colName);
                     var tempIdxMgr = tempEngine.GetIndexManager(colName);
                     foreach (var stat in idxMgr.GetAllStatistics())
                     {
                         tempIdxMgr.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
+                    }
+
+                    if (docs.Count > 0)
+                    {
+                        tempEngine.InsertDocuments(colName, docs.ToArray());
                     }
                 }
             }
@@ -394,7 +399,12 @@ public sealed class TinyDbEngine : IDisposable
     public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>() where T : class, new()
     {
         var n = GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name;
-        return (ITinyCollection<T>)_collections.GetOrAdd(n, _ => { RegisterCollection(_); return new DocumentCollection<T>(this, _); });
+        return (ITinyCollection<T>)_collections.GetOrAdd(n, name =>
+        {
+            _metadataManager.EnsureSchema(name, typeof(T));
+            RegisterCollection(name);
+            return new DocumentCollection<T>(this, name);
+        });
     }
 
     /// <summary>
@@ -407,7 +417,12 @@ public sealed class TinyDbEngine : IDisposable
     public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name) where T : class, new()
     {
         var n = !string.IsNullOrEmpty(name) ? name : (GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name);
-        return (ITinyCollection<T>)_collections.GetOrAdd(n, _ => { RegisterCollection(_); return new DocumentCollection<T>(this, _); });
+        return (ITinyCollection<T>)_collections.GetOrAdd(n, actualName =>
+        {
+            _metadataManager.EnsureSchema(actualName, typeof(T));
+            RegisterCollection(actualName);
+            return new DocumentCollection<T>(this, actualName);
+        });
     }
 
 
@@ -417,11 +432,20 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     /// <returns>集合名称列表。</returns>
     public IEnumerable<string> GetCollectionNames()
+        => GetCollectionNames(includeSystemCollections: false);
+
+    public IEnumerable<string> GetCollectionNames(bool includeSystemCollections)
     {
         ThrowIfDisposed();
         EnsureInitialized();
         var all = new HashSet<string>(_collectionMetaStore.GetCollectionNames());
         foreach (var n in _collections.Keys) all.Add(n);
+
+        if (!includeSystemCollections)
+        {
+            all.RemoveWhere(n => n.StartsWith("__", StringComparison.Ordinal));
+        }
+
         return all.ToList();
     }
 
@@ -569,6 +593,7 @@ public sealed class TinyDbEngine : IDisposable
     internal BsonValue InsertDocument(string col, BsonDocument doc)
     {
         var pr = PrepareDocumentForInsert(col, doc, out var id);
+        _metadataManager.ValidateDocumentForWrite(col, pr, _options.SchemaValidationMode);
         var res = InsertPreparedDocument(col, pr, id, GetCollectionState(col), GetIndexManager(col), true);
         EnsureWriteDurability();
         return res;
@@ -584,6 +609,7 @@ public sealed class TinyDbEngine : IDisposable
     internal async Task<BsonValue> InsertDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
         var pr = PrepareDocumentForInsert(col, doc, out var id);
+        _metadataManager.ValidateDocumentForWrite(col, pr, _options.SchemaValidationMode);
         var res = InsertPreparedDocument(col, pr, id, GetCollectionState(col), GetIndexManager(col), true);
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
@@ -600,6 +626,8 @@ public sealed class TinyDbEngine : IDisposable
         {
             doc = doc.Set("_collection", col);
         }
+
+        _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
         var st = GetCollectionState(col);
         PageDocumentEntry old = default; // Declare outside lock
@@ -665,6 +693,8 @@ public sealed class TinyDbEngine : IDisposable
         {
             doc = doc.Set("_collection", col);
         }
+
+        _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
         var st = GetCollectionState(col);
         PageDocumentEntry old = default;
@@ -815,6 +845,7 @@ public sealed class TinyDbEngine : IDisposable
                 try
                 {
                     var doc = PrepareDocumentForInsert(col, d, out var id);
+                    _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
                     buffer.Reset();
                     BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
@@ -939,6 +970,7 @@ public sealed class TinyDbEngine : IDisposable
                 try
                 {
                     var doc = PrepareDocumentForInsert(col, d, out var id);
+                    _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
                     buffer.Reset();
                     BsonSerializer.SerializeDocumentToBuffer(doc, buffer);

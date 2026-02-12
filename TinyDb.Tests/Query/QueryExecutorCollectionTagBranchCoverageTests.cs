@@ -24,7 +24,7 @@ public class QueryExecutorCollectionTagBranchCoverageTests
         try
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = engine.GetCollection<BsonDocument>(collectionName);
+            var col = engine.GetBsonCollection(collectionName);
 
             col.Insert(new BsonDocument().Set("x", 1));
 

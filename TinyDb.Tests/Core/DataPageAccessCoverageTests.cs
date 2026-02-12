@@ -36,7 +36,7 @@ public class DataPageAccessCoverageTests : IDisposable
     public async Task ScanDocuments_Through_Collection_Should_Return_All_Documents()
     {
         // Test document scanning functionality through the public API
-        var col = _engine.GetCollection<BsonDocument>("test");
+        var col = _engine.GetBsonCollection("test");
         var docs = new List<BsonDocument>();
         for (int i = 0; i < 5; i++)
         {
@@ -56,7 +56,7 @@ public class DataPageAccessCoverageTests : IDisposable
     public async Task ReadDocument_With_Projection_Should_Work()
     {
         // Test document projection functionality through the public API
-        var col = _engine.GetCollection<BsonDocument>("test_proj");
+        var col = _engine.GetBsonCollection("test_proj");
         col.Insert(new BsonDocument().Set("_id", 1).Set("a", 10).Set("b", 20).Set("c", 30));
         
         // Use Find with projection - this tests the underlying ReadDocumentAt with fields
@@ -71,7 +71,7 @@ public class DataPageAccessCoverageTests : IDisposable
     public async Task InsertAndRetrieve_Documents_Should_Work()
     {
         // Test document insert and retrieval - exercises ScanRawDocumentsFromPage internally
-        var col = _engine.GetCollection<BsonDocument>("test_raw");
+        var col = _engine.GetBsonCollection("test_raw");
         col.Insert(new BsonDocument().Set("_id", 1).Set("data", "test"));
         
         var doc = col.FindById(1);
