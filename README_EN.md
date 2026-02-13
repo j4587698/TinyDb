@@ -197,7 +197,14 @@ Based on actual results after core refactoring (Reactive Group Commit, Lock Stri
 
 ## Version History
 
-### v0.2.0 (Current)
+### v0.3.0 (Current)
+- **Performance Leap**: Achieved zero/low allocation serialization via Span and Pooled Buffers, reducing memory allocation by 90%+
+- **Core Refactoring**: Introduced high-performance Reactive Group Commit and Lock Stripping technologies
+- **Metadata Refactoring**: Deeply refactored the metadata management system for better architecture and scalability
+- **Query Optimization**: Supported Predicate Push-down and Sort/Paging Push-down for more efficient BSON scanning
+- **Async Support**: Added true asynchronous read API interfaces
+
+### v0.2.0
 - Enhanced `[BsonIgnore]` attribute support
 - Added AOT-compatible serialization tests
 - Fixed source generator issues

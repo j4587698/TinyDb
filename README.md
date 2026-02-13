@@ -197,7 +197,14 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.2.0 (当前)
+### v0.3.0 (当前)
+- **性能飞跃**：通过 Span 与池化缓冲区（Pooled Buffers）实现零/低分配序列化，内存分配降低 90%+
+- **核心重构**：引入高性能响应式组提交（Reactive Group Commit）与锁剥离（Lock Stripping）技术
+- **元数据重构**：深度重构元数据管理系统，提升架构清晰度与扩展性
+- **查询优化**：支持谓词下推（Predicate Push-down）与排序/分页下推，提升 BSON 扫描效率
+- **异步支持**：新增真正的异步读取 API 接口
+
+### v0.2.0
 - 完善 `[BsonIgnore]` 属性支持
 - 新增 AOT 兼容的序列化测试
 - 修复源生成器相关问题
