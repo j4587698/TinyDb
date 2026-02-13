@@ -169,16 +169,90 @@ public sealed class BTreeIndex : IDisposable
 
     public IEnumerable<BsonValue> FindRange(IndexKey startKey, IndexKey endKey, bool includeStart = true, bool includeEnd = true)
     {
-        _lock.EnterReadLock();
-        try { return _tree.FindRange(startKey, endKey, includeStart, includeEnd).ToList(); }
-        finally { _lock.ExitReadLock(); }
+        if (startKey == null) throw new ArgumentNullException(nameof(startKey));
+        if (endKey == null) throw new ArgumentNullException(nameof(endKey));
+        return FindRangeIterator(startKey, endKey, includeStart, includeEnd);
+    }
+
+    public IEnumerable<BsonValue> FindRangeReverse(IndexKey startKey, IndexKey endKey, bool includeStart = true, bool includeEnd = true)
+    {
+        if (startKey == null) throw new ArgumentNullException(nameof(startKey));
+        if (endKey == null) throw new ArgumentNullException(nameof(endKey));
+        return FindRangeReverseIterator(startKey, endKey, includeStart, includeEnd);
     }
 
     public IEnumerable<BsonValue> GetAll() 
     { 
-        _lock.EnterReadLock(); 
-        try { return _tree.GetAll().ToList(); } 
-        finally { _lock.ExitReadLock(); } 
+        return GetAllIterator();
+    } 
+
+    public IEnumerable<BsonValue> GetAllReverse()
+    {
+        return GetAllReverseIterator();
+    }
+
+    private IEnumerable<BsonValue> FindRangeIterator(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            foreach (var id in _tree.FindRange(startKey, endKey, includeStart, includeEnd))
+            {
+                yield return id;
+            }
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
+    }
+
+    private IEnumerable<BsonValue> FindRangeReverseIterator(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            foreach (var id in _tree.FindRangeReverse(startKey, endKey, includeStart, includeEnd))
+            {
+                yield return id;
+            }
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
+    }
+
+    private IEnumerable<BsonValue> GetAllIterator()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            foreach (var id in _tree.GetAll())
+            {
+                yield return id;
+            }
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
+    }
+
+    private IEnumerable<BsonValue> GetAllReverseIterator()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            foreach (var id in _tree.GetAllReverse())
+            {
+                yield return id;
+            }
+        }
+        finally
+        {
+            _lock.ExitReadLock();
+        }
     }
 
     public void Clear()

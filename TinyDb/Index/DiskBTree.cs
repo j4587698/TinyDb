@@ -477,6 +477,48 @@ public sealed class DiskBTree : IDisposable
         }
     }
 
+    /// <summary>
+    /// 在键范围内查找值（按降序返回）。
+    /// </summary>
+    /// <param name="startKey">开始键。</param>
+    /// <param name="endKey">结束键。</param>
+    /// <param name="includeStart">是否包含开始键。</param>
+    /// <param name="includeEnd">是否包含结束键。</param>
+    /// <returns>值的集合（降序）。</returns>
+    public IEnumerable<BsonValue> FindRangeReverse(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
+    {
+        var node = FindLeafNode(endKey);
+
+        while (node != null)
+        {
+            bool pastStart = false;
+
+            for (int i = node.KeyCount - 1; i >= 0; i--)
+            {
+                var key = node.Keys[i];
+                int cmpStart = key.CompareTo(startKey);
+                int cmpEnd = key.CompareTo(endKey);
+
+                if (cmpStart < 0 || (cmpStart == 0 && !includeStart))
+                {
+                    pastStart = true;
+                    break;
+                }
+
+                if (cmpEnd > 0 || (cmpEnd == 0 && !includeEnd))
+                {
+                    continue;
+                }
+
+                yield return node.Values[i];
+            }
+
+            if (pastStart) break;
+            if (node.PrevSiblingId == 0) break;
+            node = LoadNode(node.PrevSiblingId);
+        }
+    }
+
     private DiskBTreeNode FindLeafNode(IndexKey key)
     {
         var node = LoadNode(_rootPageId);
@@ -572,6 +614,26 @@ public sealed class DiskBTree : IDisposable
             foreach (var val in node.Values) yield return val;
             if (node.NextSiblingId == 0) break;
             node = LoadNode(node.NextSiblingId);
+        }
+    }
+
+    /// <summary>
+    /// 获取树中的所有值（按降序返回）。
+    /// </summary>
+    public IEnumerable<BsonValue> GetAllReverse()
+    {
+        var node = LoadNode(_rootPageId);
+        while (!node.IsLeaf) node = LoadNode(node.ChildrenIds[^1]);
+
+        while (node != null)
+        {
+            for (int i = node.Values.Count - 1; i >= 0; i--)
+            {
+                yield return node.Values[i];
+            }
+
+            if (node.PrevSiblingId == 0) break;
+            node = LoadNode(node.PrevSiblingId);
         }
     }
 

@@ -145,19 +145,11 @@ internal static class QueryPipeline
         // 1. 提取可下推到数据库的查询条件 (Where)
         // Note: PredicateExtractor.Extract may use Expression.Lambda for combining predicates,
         // but the actual execution path in AOT uses ExecuteAot which doesn't require dynamic code.
-        LinqExp.Expression? predicate = null;
-        LinqExp.ConstantExpression? sourceConstant = null;
-        var result = PredicateExtractor.ExtractAot(expression, typeof(TSource));
-        predicate = result.Predicate;
-        sourceConstant = result.Source;
-        if (result.HasMultiplePredicates)
-        {
-            predicate = null;
-        }
+        var (shape, sourceConstant) = QueryShapeExtractor.Extract<TSource>(expression);
 
         // 2. 执行数据库查询 (直接调用泛型方法，无需反射)
         // Predicate is Expression<Func<TSource, bool>>?
-        var queryResult = executor.Execute<TSource>(collectionName, (LinqExp.Expression<Func<TSource, bool>>?)predicate);
+        var queryResult = executor.ExecuteShaped(collectionName, shape, out var pushdown);
 
         // 3. 重写表达式树：将 Queryable 转换为 Enumerable 调用
         if (sourceConstant != null)
@@ -166,7 +158,7 @@ internal static class QueryPipeline
             // 只有在 AOT 路径明确不支持的情况下才回退到动态编译路径
             try
             {
-                return ExecuteAot(expression, queryResult, predicate);
+                return ExecuteAot(expression, queryResult, pushdown);
             }
             catch (NotSupportedException)
             {
@@ -178,7 +170,7 @@ internal static class QueryPipeline
         return queryResult;
     }
 
-    private static object? ExecuteAot<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
+    private static object? ExecuteAot<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, QueryPushdownInfo pushdown)
         where TSource : class, new()
     {
         var stack = new Stack<LinqExp.MethodCallExpression>();
@@ -193,6 +185,11 @@ internal static class QueryPipeline
         IEnumerable source = queryResult;
         Type currentType = typeof(TSource);
         bool isTyped = true;
+
+        var remainingWhereSkips = pushdown.WherePushedCount;
+        var remainingOrderSkips = pushdown.OrderPushedCount;
+        var remainingSkipSkips = pushdown.SkipPushedCount;
+        var remainingTakeSkips = pushdown.TakePushedCount;
         
         foreach (var m in stack)
         {
@@ -205,10 +202,9 @@ internal static class QueryPipeline
 
             if (methodName == "Where")
             {
-                // If the database extracted a predicate, we assume it handles ALL Where clauses.
-                // We skip all in-memory filtering to avoid AOT reflection issues.
-                if (extractedPredicate != null)
+                if (remainingWhereSkips > 0)
                 {
+                    remainingWhereSkips--;
                     continue;
                 }
 
@@ -226,6 +222,12 @@ internal static class QueryPipeline
             }
             else if (methodName == "Skip")
             {
+                if (remainingSkipSkips > 0)
+                {
+                    remainingSkipSkips--;
+                    continue;
+                }
+
                 if (m.Arguments[1] is LinqExp.ConstantExpression s)
                 {
                     var count = (int)s.Value!;
@@ -237,6 +239,12 @@ internal static class QueryPipeline
             }
             else if (methodName == "Take")
             {
+                if (remainingTakeSkips > 0)
+                {
+                    remainingTakeSkips--;
+                    continue;
+                }
+
                 if (m.Arguments[1] is LinqExp.ConstantExpression t)
                 {
                     var count = (int)t.Value!;
@@ -255,6 +263,12 @@ internal static class QueryPipeline
             }
             else if (methodName == "OrderBy" || methodName == "OrderByDescending" || methodName == "ThenBy" || methodName == "ThenByDescending")
             {
+                if (remainingOrderSkips > 0)
+                {
+                    remainingOrderSkips--;
+                    continue;
+                }
+
                 if (isTyped && currentType == typeof(TSource))
                     source = ExecuteOrderByGeneric<TSource>((IEnumerable<TSource>)source, m);
                 else
@@ -294,7 +308,8 @@ internal static class QueryPipeline
     internal static object? ExecuteAotForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
         where TSource : class, new()
     {
-        return ExecuteAot(expression, queryResult, extractedPredicate);
+        var pushdown = new QueryPushdownInfo { WherePushedCount = extractedPredicate != null ? int.MaxValue : 0 };
+        return ExecuteAot(expression, queryResult, pushdown);
     }
 
     internal static IEnumerable<T> ExecuteWhereGenericForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
