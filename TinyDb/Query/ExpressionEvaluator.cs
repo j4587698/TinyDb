@@ -330,6 +330,7 @@ public static class ExpressionEvaluator
         if (val is long l) return l;
         if (val is float f) return f;
         if (val is decimal dec) return (double)dec;
+        if (val is Decimal128 d128) return (double)d128.ToDecimal(); // 关键修复：支持 Decimal128 结构体
         if (val is byte b) return b;
         if (val is short s) return s;
         

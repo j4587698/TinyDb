@@ -1,6 +1,9 @@
-using System.Diagnostics.CodeAnalysis;
-using System.Linq.Expressions;
+using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
+using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
@@ -8,19 +11,12 @@ using TinyDb.Serialization;
 
 namespace TinyDb.Query;
 
-/// <summary>
-/// 查询执行器
-/// </summary>
 public sealed class QueryExecutor
 {
     private readonly TinyDbEngine _engine;
     private readonly ExpressionParser _expressionParser;
     private readonly QueryOptimizer _queryOptimizer;
 
-    /// <summary>
-    /// 初始化查询执行器
-    /// </summary>
-    /// <param name="engine">数据库引擎</param>
     public QueryExecutor(TinyDbEngine engine)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
@@ -28,26 +24,14 @@ public sealed class QueryExecutor
         _queryOptimizer = new QueryOptimizer(engine);
     }
 
-    /// <summary>
-    /// 执行查询
-    /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <param name="collectionName">集合名称</param>
-    /// <param name="expression">查询表达式</param>
-    /// <returns>查询结果</returns>
     public IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
-        // 立即验证参数，不延迟执行
-        if (collectionName == null)
-            throw new ArgumentException("Collection name cannot be null", nameof(collectionName));
         if (string.IsNullOrWhiteSpace(collectionName))
-            throw new ArgumentException("Collection name cannot be null, empty, or whitespace", nameof(collectionName));
+            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
 
-        // 创建查询执行计划
         var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression);
 
-        // 根据执行计划选择查询策略
         return executionPlan.Strategy switch
         {
             QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookup<T>(executionPlan),
@@ -57,224 +41,110 @@ public sealed class QueryExecutor
         };
     }
 
-    internal IEnumerable<BsonDocument> ExecuteIndexScanForTests(QueryExecutionPlan executionPlan)
+    // ... (省略 Index 相关方法，保持不变) ...
+    internal IEnumerable<BsonDocument> ExecuteIndexScanForTests(QueryExecutionPlan executionPlan) => ExecuteIndexScan<BsonDocument>(executionPlan);
+    internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecutePrimaryKeyLookup<T>(executionPlan);
+    internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecuteIndexSeek<T>(executionPlan);
+
+    private IEnumerable<T> ExecutePrimaryKeyLookup<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
     {
-        return ExecuteIndexScan<BsonDocument>(executionPlan);
-    }
-
-    internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
-        where T : class, new()
-    {
-        return ExecutePrimaryKeyLookup<T>(executionPlan);
-    }
-
-    internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
-        where T : class, new()
-    {
-        return ExecuteIndexSeek<T>(executionPlan);
-    }
-
-    /// <summary>
-    /// 执行主键查找
-    /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <param name="executionPlan">执行计划</param>
-    /// <returns>查询结果</returns>
-    private IEnumerable<T> ExecutePrimaryKeyLookup<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
-        where T : class, new()
-    {
-        if (executionPlan.IndexScanKeys.Count == 0)
-            yield break;
-
-        var idValue = executionPlan.IndexScanKeys[0].Value;
-        var document = _engine.FindById(executionPlan.CollectionName, idValue);
-
-        if (document != null)
+        if (executionPlan.IndexScanKeys.Count == 0) yield break;
+        var doc = _engine.FindById(executionPlan.CollectionName, executionPlan.IndexScanKeys[0].Value);
+        if (doc != null)
         {
-            // 必须验证原始表达式，因为可能存在除主键外的其他条件（例如 Id == 1 && Name == "Bob"）
-            // 如果表达式为空（不应该发生），默认匹配
-            var isMatch = true;
-            if (executionPlan.QueryExpression != null)
+            bool match = executionPlan.QueryExpression == null || ExpressionEvaluator.Evaluate(executionPlan.QueryExpression, doc);
+            if (match)
             {
-                isMatch = ExpressionEvaluator.Evaluate(executionPlan.QueryExpression, document);
-            }
-            else if (executionPlan.OriginalExpression != null)
-            {
-                // Fallback to original expression if QueryExpression is not available (though it should be)
-                // Note: Evaluate(Expression<...>) for documents is not directly available, need QueryExpression
-                // But CreateExecutionPlan always sets QueryExpression.
-            }
-
-            if (isMatch)
-            {
-                var entity = AotBsonMapper.FromDocument<T>(document);
-                if (entity != null)
-                {
-                    yield return entity;
-                }
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
             }
         }
     }
 
-    /// <summary>
-    /// 执行索引扫描
-    /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <param name="executionPlan">执行计划</param>
-    /// <returns>查询结果</returns>
-    private IEnumerable<T> ExecuteIndexScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
-        where T : class, new()
+    private IEnumerable<T> ExecuteIndexScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
     {
-        var indexManager = _engine.GetIndexManager(executionPlan.CollectionName);
-        if (indexManager == null || executionPlan.UseIndex == null)
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        if (idxMgr == null || executionPlan.UseIndex == null)
         {
-            // 回退到全表扫描
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression))
-                yield return item;
+            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
             yield break;
         }
-
-        var index = indexManager.GetIndex(executionPlan.UseIndex.Name);
+        var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
         if (index == null)
         {
-            // 回退到全表扫描
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression))
-                yield return item;
+            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
             yield break;
         }
 
-        // 构建索引扫描范围
-        var scanRange = BuildIndexScanRange(executionPlan);
+        var range = BuildIndexScanRange(executionPlan);
+        var ids = index.FindRange(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax);
+        
+        QueryExpression? qe = null;
+        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
 
-        // 使用索引查找文档ID
-        var documentIds = index.FindRange(scanRange.MinKey, scanRange.MaxKey, scanRange.IncludeMin, scanRange.IncludeMax);
-
-        // 预解析查询表达式（如果有）
-        QueryExpression? queryExpression = null;
-        if (executionPlan.OriginalExpression != null)
+        foreach (var id in ids)
         {
-            queryExpression = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
-        }
-
-        // 根据文档ID获取完整文档
-        foreach (var documentId in documentIds)
-        {
-            var document = _engine.FindById(executionPlan.CollectionName, documentId);
-            if (document != null)
+            var doc = _engine.FindById(executionPlan.CollectionName, id);
+            if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
             {
-                // 优化：如果有额外条件，先在 BsonDocument 上评估
-                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, document))
-                {
-                    continue;
-                }
-
-                var entity = AotBsonMapper.FromDocument<T>(document);
-                if (entity != null)
-                {
-                    yield return entity;
-                }
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
             }
         }
     }
 
-    /// <summary>
-    /// 执行索引查找（用于唯一索引）
-    /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <param name="executionPlan">执行计划</param>
-    /// <returns>查询结果</returns>
-    private IEnumerable<T> ExecuteIndexSeek<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan)
-        where T : class, new()
+    private IEnumerable<T> ExecuteIndexSeek<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
     {
-        var indexManager = _engine.GetIndexManager(executionPlan.CollectionName);
-        if (indexManager == null || executionPlan.UseIndex == null)
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        if (idxMgr == null || executionPlan.UseIndex == null)
         {
-            // 回退到全表扫描
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression))
-                yield return item;
+            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
             yield break;
         }
-
-        var index = indexManager.GetIndex(executionPlan.UseIndex.Name);
+        var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
         if (index == null)
         {
-            // 回退到全表扫描
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression))
-                yield return item;
+            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
             yield break;
         }
 
-        // 构建精确的索引键
-        var exactKey = BuildExactIndexKey(executionPlan);
-        if (exactKey == null)
+        var key = BuildExactIndexKey(executionPlan);
+        if (key == null)
         {
-            // 回退到全表扫描
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression))
-                yield return item;
+            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
             yield break;
         }
 
-        // 预解析查询表达式（如果有）
-        QueryExpression? queryExpression = null;
-        if (executionPlan.OriginalExpression != null)
-        {
-            queryExpression = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
-        }
+        QueryExpression? qe = null;
+        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
 
-        // 优化：对于唯一索引，使用 FindExact 直接获取单一结果，避免返回 List 的开销
         if (index.IsUnique)
         {
-            var documentId = index.FindExact(exactKey);
-            if (documentId != null)
+            var id = index.FindExact(key);
+            if (id != null)
             {
-                var document = _engine.FindById(executionPlan.CollectionName, documentId);
-                if (document != null)
+                var doc = _engine.FindById(executionPlan.CollectionName, id);
+                if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
                 {
-                    // 如果有额外条件，先在 BsonDocument 上评估
-                    if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, document))
-                    {
-                        var entity = AotBsonMapper.FromDocument<T>(document);
-                        if (entity != null)
-                        {
-                            yield return entity;
-                        }
-                    }
+                    var entity = AotBsonMapper.FromDocument<T>(doc);
+                    if (entity != null) yield return entity;
                 }
             }
-            yield break;
         }
-
-        // 非唯一索引：使用 Find 以支持返回多个结果
-        var documentIds = index.Find(exactKey);
-
-        // 根据文档ID获取完整文档
-        foreach (var documentId in documentIds)
+        else
         {
-            var document = _engine.FindById(executionPlan.CollectionName, documentId);
-            if (document != null)
+            foreach (var id in index.Find(key))
             {
-                // 优化：如果有额外条件，先在 BsonDocument 上评估
-                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, document))
+                var doc = _engine.FindById(executionPlan.CollectionName, id);
+                if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
                 {
-                    continue;
-                }
-
-                var entity = AotBsonMapper.FromDocument<T>(document);
-                if (entity != null)
-                {
-                    yield return entity;
+                    var entity = AotBsonMapper.FromDocument<T>(doc);
+                    if (entity != null) yield return entity;
                 }
             }
         }
     }
 
-    /// <summary>
-    /// 执行全表扫描
-    /// </summary>
-    /// <typeparam name="T">文档类型</typeparam>
-    /// <param name="collectionName">集合名称</param>
-    /// <param name="expression">查询表达式</param>
-    /// <returns>查询结果</returns>
     private IEnumerable<T> ExecuteFullTableScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
@@ -283,87 +153,182 @@ public sealed class QueryExecutor
 
         if (expression != null)
         {
-            try
-            {
-                queryExpression = _expressionParser.Parse(expression);
-            }
-            catch (Exception ex)
-            {
-                // 解析失败（例如包含不支持的方法），回退到内存过滤
-                throw new NotSupportedException("不支持的查询表达式：AOT-only 模式下不再提供运行时编译回退。", ex);
-            }
+            try { queryExpression = _expressionParser.Parse(expression); }
+            catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
         }
 
-        // 1. 准备事务覆盖层
-        ConcurrentDictionary<string, BsonDocument?>? txOverlay = null;
+        // 1. 准备下推谓词
+        var predicates = new List<ScanPredicate>();
+        bool fullyPushed = CollectPredicates(queryExpression, predicates);
+        var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+
+        // 2. 处理管道
+        var rawPipeline = _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates)
+            .Select(r => (Doc: TryDeserialize(r.Slice), r.RequiresPostFilter))
+            .Where(x => x.Doc != null)
+            .Select(x => (Doc: x.Doc!, x.RequiresPostFilter))
+            .Where(x => !x.Doc.TryGetValue("_collection", out var c) || c.ToString() == collectionName)
+            .Select(x => (Doc: _engine.ResolveLargeDocument(x.Doc), x.RequiresPostFilter));
+
+        // 3. 事务覆盖
+        IEnumerable<(BsonDocument Doc, bool RequiresPostFilter)> docs;
         if (tx != null)
         {
-            txOverlay = new ConcurrentDictionary<string, BsonDocument?>();
+            var txOverlay = new ConcurrentDictionary<string, BsonDocument?>();
             foreach (var op in tx.Operations)
             {
                 if (op.CollectionName != collectionName) continue;
                 var k = op.DocumentId?.ToString() ?? "";
-                if (op.OperationType == TransactionOperationType.Delete)
-                {
-                    txOverlay[k] = null;
-                }
-                else if (op.NewDocument != null)
-                {
-                    txOverlay[k] = op.NewDocument;
-                }
+                if (op.OperationType == TransactionOperationType.Delete) txOverlay[k] = null;
+                else if (op.NewDocument != null) txOverlay[k] = op.NewDocument;
             }
+
+            if (!txOverlay.IsEmpty)
+            {
+                docs = rawPipeline.Select(item =>
+                    {
+                        var id = item.Doc["_id"].ToString();
+                        if (txOverlay.TryRemove(id, out var txDoc))
+                        {
+                            return (Doc: txDoc, RequiresPostFilter: true);
+                        }
+
+                        return (Doc: item.Doc, item.RequiresPostFilter);
+                    })
+                    .Where(x => x.Doc != null)
+                    .Select(x => (Doc: x.Doc!, x.RequiresPostFilter))
+                    .Concat(txOverlay.Values.Where(v => v != null).Select(v => (Doc: v!, RequiresPostFilter: true)));
+            }
+            else docs = rawPipeline;
+        }
+        else docs = rawPipeline;
+
+        // 4. 内存过滤与映射
+        var filtered = queryExpression == null
+            ? docs.Select(x => x.Doc)
+            : fullyPushed
+                ? docs.Where(x => !x.RequiresPostFilter || ExpressionEvaluator.Evaluate(queryExpression, x.Doc)).Select(x => x.Doc)
+                : docs.Where(x => ExpressionEvaluator.Evaluate(queryExpression, x.Doc)).Select(x => x.Doc);
+
+        return filtered
+            .Select(doc => AotBsonMapper.FromDocument<T>(doc))
+            .Where(entity => entity != null)!;
+    }
+
+    private bool CollectPredicates(QueryExpression? expr, List<ScanPredicate> predicates)
+    {
+        if (expr == null) return true;
+        if (expr is not BinaryExpression binary) return false;
+
+        if (binary.NodeType == ExpressionType.AndAlso)
+        {
+            bool left = CollectPredicates(binary.Left, predicates);
+            bool right = CollectPredicates(binary.Right, predicates);
+            return left && right;
         }
 
-        // 2. 构建处理管道
-        var rawPipeline = _engine.FindAllRaw(collectionName)
-            // 2.1 并行解析
-            .Select(slice => BsonSerializer.DeserializeDocument(slice))
-            // 2.2 过滤集合 (处理共享页面)
-            .Where(doc => !doc.TryGetValue("_collection", out var c) || c.ToString() == collectionName)
-            // 2.3 解析大文档
-            .Select(doc => _engine.ResolveLargeDocument(doc));
+        if (!IsSupportedBinaryPredicate(binary.NodeType)) return false;
 
-        // 2.4 应用事务覆盖
-        IEnumerable<BsonDocument> docs;
-        
-        if (txOverlay != null && !txOverlay.IsEmpty)
+        var (member, constant, op) = ExtractComparison(binary);
+        if (member == null || constant == null) return false;
+
+        // 只对根对象的字段进行下推，避免嵌套属性导致误过滤。
+        if (member.Expression != null && member.Expression.NodeType != ExpressionType.Parameter) return false;
+
+        var memberName = member.MemberName;
+
+        byte[] fieldNameBytes;
+        byte[]? alternateFieldNameBytes = null;
+        byte[]? secondAlternateFieldNameBytes = null;
+
+        // 与 ExpressionEvaluator 行为保持一致：优先 camelCase，其次原字段名，Id 特殊映射到 _id。
+        if (string.Equals(memberName, "Id", StringComparison.Ordinal))
         {
-            docs = rawPipeline
-                .Select(doc => {
-                    var id = doc["_id"].ToString();
-                    if (txOverlay.TryRemove(id, out var txDoc))
-                    {
-                        Console.WriteLine($"[DEBUG] Replaced {id} with tx version");
-                        return txDoc; 
-                    }
-                    Console.WriteLine($"[DEBUG] Using disk version {id}: {doc}");
-                    return doc; 
-                })
-                .Where(doc => doc != null)
-                .Select(doc => doc!)
-                .Concat(Enumerable.Range(0, 1).SelectMany(_ => txOverlay.Values).Where(v => v != null).Select(v => v!)); // 补充仅在事务中存在的新增文档
+            fieldNameBytes = System.Text.Encoding.UTF8.GetBytes("id");
+            alternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes("Id");
+            secondAlternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes("_id");
         }
         else
         {
-            docs = rawPipeline;
+            var camelName = ToCamelCase(memberName);
+            fieldNameBytes = System.Text.Encoding.UTF8.GetBytes(camelName);
+
+            if (!string.Equals(camelName, memberName, StringComparison.Ordinal))
+            {
+                alternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes(memberName);
+            }
         }
 
-        // 3. 评估与映射 (继续并行化)
-        var result = docs
-            //.AsParallel() 
-            .Where(doc => queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, doc!))
-            .Select(doc => AotBsonMapper.FromDocument<T>(doc!))
-            .Where(entity => entity != null)!;
-
-        // 4. 如果 BSON 解析失败，应用内存过滤
-        return result;
+        predicates.Add(new ScanPredicate(fieldNameBytes, alternateFieldNameBytes, secondAlternateFieldNameBytes, constant.Value, op));
+        return true;
     }
 
-    /// <summary>
-    /// 构建索引扫描范围
-    /// </summary>
-    /// <param name="executionPlan">执行计划</param>
-    /// <returns>索引扫描范围</returns>
+    private static bool IsSupportedBinaryPredicate(ExpressionType op)
+    {
+        return op is ExpressionType.Equal or ExpressionType.NotEqual
+            or ExpressionType.GreaterThan or ExpressionType.GreaterThanOrEqual
+            or ExpressionType.LessThan or ExpressionType.LessThanOrEqual;
+    }
+
+    private static string ToCamelCase(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        if (name.Length == 1) return name.ToLowerInvariant();
+        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+    }
+
+    private static ExpressionType ReverseComparisonOperator(ExpressionType op)
+    {
+        return op switch
+        {
+            ExpressionType.GreaterThan => ExpressionType.LessThan,
+            ExpressionType.GreaterThanOrEqual => ExpressionType.LessThanOrEqual,
+            ExpressionType.LessThan => ExpressionType.GreaterThan,
+            ExpressionType.LessThanOrEqual => ExpressionType.GreaterThanOrEqual,
+            _ => op
+        };
+    }
+
+    private (MemberExpression? member, ConstantExpression? constant, ExpressionType op) ExtractComparison(BinaryExpression binary)
+    {
+        // Case 1: Member OP Constant
+        if (binary.Left is MemberExpression m1 && binary.Right is ConstantExpression c1) return (m1, c1, binary.NodeType);
+        
+        // Case 2: Member OP Convert(Constant)
+        if (binary.Left is MemberExpression m2 && binary.Right is UnaryExpression u2 && u2.NodeType == ExpressionType.Convert && u2.Operand is ConstantExpression c2)
+        {
+            try 
+            {
+                var converted = Convert.ChangeType(c2.Value, u2.Type);
+                return (m2, new ConstantExpression(converted), binary.NodeType);
+            }
+            catch { }
+        }
+
+        // Case 3: Constant OP Member
+        if (binary.Left is ConstantExpression c3 && binary.Right is MemberExpression m3) return (m3, c3, ReverseComparisonOperator(binary.NodeType));
+
+        // Case 4: Convert(Constant) OP Member
+        if (binary.Left is UnaryExpression u4 && u4.NodeType == ExpressionType.Convert && u4.Operand is ConstantExpression c4 && binary.Right is MemberExpression m4)
+        {
+            try
+            {
+                var converted = Convert.ChangeType(c4.Value, u4.Type);
+                return (m4, new ConstantExpression(converted), ReverseComparisonOperator(binary.NodeType));
+            }
+            catch { }
+        }
+
+        return (null, null, binary.NodeType);
+    }
+
+    private static BsonDocument? TryDeserialize(ReadOnlyMemory<byte> slice)
+    {
+        try { return BsonSerializer.DeserializeDocument(slice); }
+        catch { return null; }
+    }
+
+    // 构建索引扫描范围
     private static IndexScanRange BuildIndexScanRange(QueryExecutionPlan executionPlan)
     {
         if (executionPlan.IndexScanKeys.Count == 0)
@@ -416,10 +381,10 @@ public sealed class QueryExecutor
                         includeMax = true;
                         break;
                 }
-                break; 
+                break;
             }
         }
-        
+
         // Pad MaxKey to ensure correct prefix/range matching
         if (!stoppedAtRange)
         {
@@ -432,7 +397,7 @@ public sealed class QueryExecutor
             // e.g. A <= 5 should include (5, 1)
             if (lastOp == ComparisonType.LessThan || lastOp == ComparisonType.LessThanOrEqual)
             {
-                 maxValues.Add(BsonMaxKey.Value);
+                maxValues.Add(BsonMaxKey.Value);
             }
         }
 
@@ -445,27 +410,15 @@ public sealed class QueryExecutor
         };
     }
 
-    /// <summary>
-    /// 构建精确索引键
-    /// </summary>
-    /// <param name="executionPlan">执行计划</param>
-    /// <returns>精确索引键</returns>
     private static IndexKey? BuildExactIndexKey(QueryExecutionPlan executionPlan)
     {
-        if (executionPlan.IndexScanKeys.Count == 0)
-        {
-            return null;
-        }
-
-        // 只有等值比较才能构建精确键
-        // keys 已经在 QueryOptimizer 中按索引字段顺序提取
+        if (executionPlan.IndexScanKeys.Count == 0) return null;
         var values = new List<BsonValue>();
         foreach (var key in executionPlan.IndexScanKeys)
         {
             if (key.ComparisonType != ComparisonType.Equal) return null;
             values.Add(key.Value);
         }
-
         return new IndexKey(values.ToArray());
     }
 }

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using TinyDb.Bson;
 using TinyDb.Storage;
 using TinyDb.Serialization;
+using TinyDb.Query;
 
 namespace TinyDb.Core;
 
@@ -13,6 +15,7 @@ internal sealed class DataPageAccess
     private readonly WriteAheadLog _wal;
 
     private const int InternalReserved = 0;
+    private static readonly byte[] IsLargeDocumentFieldNameBytes = Encoding.UTF8.GetBytes("_isLargeDocument");
 
     public DataPageAccess(PageManager pm, LargeDocumentStorage lds, WriteAheadLog wal)
     {
@@ -184,7 +187,15 @@ internal sealed class DataPageAccess
         p.Append(bytes);
     }
 
-    public IEnumerable<ReadOnlyMemory<byte>> ScanRawDocumentsFromPage(Page p)
+    public IEnumerable<ReadOnlyMemory<byte>> ScanRawDocumentsFromPage(Page p, ScanPredicate[]? predicates = null)
+    {
+        foreach (var result in ScanRawDocumentsFromPageWithPredicateInfo(p, predicates))
+        {
+            yield return result.Slice;
+        }
+    }
+
+    public IEnumerable<RawScanResult> ScanRawDocumentsFromPageWithPredicateInfo(Page p, ScanPredicate[]? predicates = null)
     {
         int count = p.Header.ItemCount;
         var mem = p.Memory;
@@ -202,8 +213,202 @@ internal sealed class DataPageAccess
             var slice = mem.Slice(offset, len);
             offset += len;
 
-            yield return slice;
+            if (predicates == null || predicates.Length == 0)
+            {
+                yield return new RawScanResult(slice, requiresPostFilter: true);
+                continue;
+            }
+
+            if (!TryMatchPredicates(slice.Span, predicates, out bool definitiveMatch))
+            {
+                continue;
+            }
+
+            yield return new RawScanResult(slice, requiresPostFilter: !definitiveMatch);
         }
+    }
+
+    private static bool TryMatchPredicates(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch)
+    {
+        definitiveMatch = false;
+
+        if (predicates.Length == 0)
+        {
+            definitiveMatch = true;
+            return true;
+        }
+
+        if (predicates.Length > 64)
+        {
+            return TryMatchPredicatesSlow(document, predicates, out definitiveMatch);
+        }
+
+        ulong remainingMask = 0;
+        for (int i = 0; i < predicates.Length; i++)
+        {
+            if (!predicates[i].IsEmpty) remainingMask |= 1UL << i;
+        }
+
+        if (remainingMask == 0)
+        {
+            definitiveMatch = true;
+            return true;
+        }
+
+        if (document.Length < 5) return true;
+
+        bool hasUnknown = false;
+        bool isLargeDocument = false;
+        bool parseComplete = false;
+
+        int offset = 4;
+
+        while (offset < document.Length)
+        {
+            var type = (BsonType)document[offset];
+            offset++;
+
+            if (type == BsonType.End)
+            {
+                parseComplete = true;
+                break;
+            }
+
+            int nameEnd = offset;
+            while (nameEnd < document.Length && document[nameEnd] != 0) nameEnd++;
+            if (nameEnd >= document.Length) break;
+
+            var nameSpan = document.Slice(offset, nameEnd - offset);
+            offset = nameEnd + 1;
+
+            int valueOffset = offset;
+
+            if (!isLargeDocument && type == BsonType.Boolean && nameSpan.SequenceEqual(IsLargeDocumentFieldNameBytes))
+            {
+                if (valueOffset < document.Length && document[valueOffset] != 0) isLargeDocument = true;
+            }
+
+            if (remainingMask != 0)
+            {
+                for (int i = 0; i < predicates.Length; i++)
+                {
+                    ulong bit = 1UL << i;
+                    if ((remainingMask & bit) == 0) continue;
+
+                    var pred = predicates[i];
+                    if (pred.IsEmpty)
+                    {
+                        remainingMask &= ~bit;
+                        continue;
+                    }
+
+                    if (!nameSpan.SequenceEqual(pred.FieldNameBytes) &&
+                        !(pred.AlternateFieldNameBytes is { Length: > 0 } alt1 && nameSpan.SequenceEqual(alt1)) &&
+                        !(pred.SecondAlternateFieldNameBytes is { Length: > 0 } alt2 && nameSpan.SequenceEqual(alt2)))
+                    {
+                        continue;
+                    }
+
+                    if (BinaryPredicateEvaluator.TryEvaluate(document, valueOffset, type, pred.Operator, pred.TargetValue, pred.TargetStringUtf8Bytes, out bool evalResult))
+                    {
+                        if (!evalResult) return false;
+                    }
+                    else
+                    {
+                        hasUnknown = true;
+                    }
+
+                    remainingMask &= ~bit;
+                }
+
+                if (remainingMask == 0) break;
+            }
+
+            if (!BsonScanner.TrySkipValue(type, document, ref offset))
+            {
+                hasUnknown = true;
+                break;
+            }
+        }
+
+        if (remainingMask == 0)
+        {
+            definitiveMatch = !hasUnknown && !isLargeDocument;
+            return true;
+        }
+
+        if (isLargeDocument)
+        {
+            definitiveMatch = false;
+            return true;
+        }
+
+        if (!parseComplete)
+        {
+            definitiveMatch = false;
+            return true;
+        }
+
+        if (remainingMask != 0)
+        {
+            // Missing fields are treated as null for non-large documents (matches ExpressionEvaluator.Compare null semantics).
+            for (int i = 0; i < predicates.Length; i++)
+            {
+                ulong bit = 1UL << i;
+                if ((remainingMask & bit) == 0) continue;
+
+                var pred = predicates[i];
+                if (pred.IsEmpty)
+                {
+                    remainingMask &= ~bit;
+                    continue;
+                }
+
+                if (BinaryPredicateEvaluator.TryEvaluate(document, 0, BsonType.Null, pred.Operator, pred.TargetValue, pred.TargetStringUtf8Bytes, out bool evalResult))
+                {
+                    if (!evalResult) return false;
+                }
+                else
+                {
+                    hasUnknown = true;
+                }
+
+                remainingMask &= ~bit;
+            }
+        }
+
+        definitiveMatch = !hasUnknown && remainingMask == 0;
+        return true;
+    }
+
+    private static bool TryMatchPredicatesSlow(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch)
+    {
+        definitiveMatch = false;
+        if (document.Length < 5) return true;
+
+        foreach (var pred in predicates)
+        {
+            if (pred.IsEmpty) continue;
+
+            bool found = BsonScanner.TryLocateField(document, pred.FieldNameBytes, out int valueOffset, out var type);
+            if (!found && pred.AlternateFieldNameBytes is { Length: > 0 } alt1)
+            {
+                found = BsonScanner.TryLocateField(document, alt1, out valueOffset, out type);
+            }
+            if (!found && pred.SecondAlternateFieldNameBytes is { Length: > 0 } alt2)
+            {
+                found = BsonScanner.TryLocateField(document, alt2, out valueOffset, out type);
+            }
+
+            if (!found) continue;
+
+            if (BinaryPredicateEvaluator.TryEvaluate(document, valueOffset, type, pred.Operator, pred.TargetValue, pred.TargetStringUtf8Bytes, out bool evalResult))
+            {
+                if (!evalResult) return false;
+            }
+        }
+
+        return true;
     }
 
     public bool CanFitInPage(Page p, List<PageDocumentEntry> docs)

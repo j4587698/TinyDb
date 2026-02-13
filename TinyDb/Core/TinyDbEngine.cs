@@ -1110,12 +1110,12 @@ public sealed class TinyDbEngine : IDisposable
     }
 
     /// <summary>
-    /// 获取集合中所有文档的原始数据（零拷贝）
-    /// 用于高性能查询引擎，支持并行解析
+    /// 获取集合中所有文档的原始数据（零拷贝），支持原地谓词下推。
     /// </summary>
     /// <param name="col">集合名称</param>
+    /// <param name="predicates">扫描谓词（可选）</param>
     /// <returns>文档原始数据的枚举</returns>
-    internal IEnumerable<ReadOnlyMemory<byte>> FindAllRaw(string col)
+    internal IEnumerable<ReadOnlyMemory<byte>> FindAllRaw(string col, ScanPredicate[]? predicates = null)
     {
         var st = GetCollectionState(col);
         var pages = st.OwnedPages.Keys.ToList();
@@ -1127,11 +1127,30 @@ public sealed class TinyDbEngine : IDisposable
             try { p = _pageManager.GetPage(pageId); } catch { continue; }
             if (p == null || p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
 
-            foreach (var slice in _dataPageAccess.ScanRawDocumentsFromPage(p))
+            foreach (var slice in _dataPageAccess.ScanRawDocumentsFromPage(p, predicates))
             {
                 // 注意：这里返回的是原始字节，未校验 _collection 字段
                 // 调用者必须在解析后进行校验
                 yield return slice;
+            }
+        }
+    }
+
+    internal IEnumerable<RawScanResult> FindAllRawWithPredicateInfo(string col, ScanPredicate[]? predicates = null)
+    {
+        var st = GetCollectionState(col);
+        var pages = st.OwnedPages.Keys.ToList();
+        pages.Sort();
+
+        foreach (var pageId in pages)
+        {
+            Page? p = null;
+            try { p = _pageManager.GetPage(pageId); } catch { continue; }
+            if (p == null || p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
+
+            foreach (var result in _dataPageAccess.ScanRawDocumentsFromPageWithPredicateInfo(p, predicates))
+            {
+                yield return result;
             }
         }
     }
