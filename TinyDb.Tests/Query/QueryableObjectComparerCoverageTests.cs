@@ -1,5 +1,6 @@
 using System;
-using System.Reflection;
+using System.Globalization;
+using System.Linq;
 using TinyDb.Bson;
 using TinyDb.Query;
 using TUnit.Assertions;
@@ -9,50 +10,62 @@ namespace TinyDb.Tests.Query;
 
 public sealed class QueryableObjectComparerCoverageTests
 {
+    private sealed class KeyItem
+    {
+        public object Key { get; init; } = null!;
+    }
+
     [Test]
     public async Task ObjectComparer_CompareAndToDouble_ShouldCoverBranches()
     {
-        var queryPipelineType = typeof(ExpressionEvaluator).Assembly.GetType("TinyDb.Query.QueryPipeline");
-        await Assert.That(queryPipelineType).IsNotNull();
+        static KeyItem Item(object key) => new() { Key = key };
 
-        var comparerType = queryPipelineType!.GetNestedType("ObjectComparer", BindingFlags.NonPublic);
-        await Assert.That(comparerType).IsNotNull();
+        static List<KeyItem> OrderByKey(params KeyItem[] items)
+        {
+            var query = items.AsQueryable().OrderBy(x => x.Key);
+            var result = QueryPipeline.ExecuteAotForTests<KeyItem>(query.Expression, items, extractedPredicate: null);
+            return ((IEnumerable<KeyItem>)result!).ToList();
+        }
 
-        var comparer = Activator.CreateInstance(comparerType!, nonPublic: true)!;
-        var compare = comparerType!.GetMethod("Compare", BindingFlags.Public | BindingFlags.Instance);
-        await Assert.That(compare).IsNotNull();
+        static double ToNumber(object value) => value switch
+        {
+            BsonDouble bd => bd.Value,
+            BsonInt32 bi => bi.Value,
+            BsonInt64 bl => bl.Value,
+            _ => Convert.ToDouble(value, CultureInfo.InvariantCulture)
+        };
 
-        var bsonCompare = (int)compare!.Invoke(comparer, new object?[] { new BsonInt32(1), new BsonInt32(2) })!;
-        await Assert.That(bsonCompare).IsNegative();
+        var bsonOrdered = OrderByKey(Item(new BsonInt32(2)), Item(new BsonInt32(1)));
+        await Assert.That(((BsonValue)bsonOrdered[0].Key).ToInt32(null)).IsEqualTo(1);
+        await Assert.That(((BsonValue)bsonOrdered[1].Key).ToInt32(null)).IsEqualTo(2);
 
-        var bsonDoubleCompare = (int)compare.Invoke(comparer, new object?[] { new BsonDouble(1.0d), 2.0d })!;
-        await Assert.That(bsonDoubleCompare).IsNegative();
+        var bsonDoubleVsDoubleOrdered = OrderByKey(Item(2.0d), Item(new BsonDouble(1.0d)));
+        await Assert.That(ToNumber(bsonDoubleVsDoubleOrdered[0].Key)).IsEqualTo(1.0d);
+        await Assert.That(ToNumber(bsonDoubleVsDoubleOrdered[1].Key)).IsEqualTo(2.0d);
 
-        var bsonInt32Compare = (int)compare.Invoke(comparer, new object?[] { new BsonInt32(2), 1 })!;
-        await Assert.That(bsonInt32Compare).IsPositive();
+        var numericOrdered = OrderByKey(Item(3), Item(1L), Item((short)2));
+        await Assert.That(ToNumber(numericOrdered[0].Key)).IsEqualTo(1.0d);
+        await Assert.That(ToNumber(numericOrdered[1].Key)).IsEqualTo(2.0d);
+        await Assert.That(ToNumber(numericOrdered[2].Key)).IsEqualTo(3.0d);
 
-        var bsonInt64Compare = (int)compare.Invoke(comparer, new object?[] { new BsonInt64(2), 3L })!;
-        await Assert.That(bsonInt64Compare).IsNegative();
+        var stringOrdered = OrderByKey(Item("b"), Item("a"));
+        await Assert.That((string)stringOrdered[0].Key).IsEqualTo("a");
+        await Assert.That((string)stringOrdered[1].Key).IsEqualTo("b");
 
-        var decimalCompare = (int)compare.Invoke(comparer, new object?[] { 1.5m, 2 })!;
-        await Assert.That(decimalCompare).IsNegative();
+        var d1 = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var d2 = d1.AddDays(1);
+        var dateOrdered = OrderByKey(Item(d2), Item(d1));
+        await Assert.That((DateTime)dateOrdered[0].Key).IsEqualTo(d1);
+        await Assert.That((DateTime)dateOrdered[1].Key).IsEqualTo(d2);
 
-        var fallbackNumericCompare = (int)compare.Invoke(comparer, new object?[] { (short)1, (byte)2 })!;
-        await Assert.That(fallbackNumericCompare).IsNegative();
+        var g1 = Guid.Empty;
+        var g2 = Guid.NewGuid();
+        var guidOrdered = OrderByKey(Item(g2), Item(g1));
+        await Assert.That((Guid)guidOrdered[0].Key).IsEqualTo(g1);
+        await Assert.That((Guid)guidOrdered[1].Key).IsEqualTo(g2);
 
-        var floatCompare = (int)compare.Invoke(comparer, new object?[] { 1.0f, 2.0f })!;
-        await Assert.That(floatCompare).IsNegative();
-
-        var guidCompare = (int)compare.Invoke(comparer, new object?[] { Guid.Empty, Guid.NewGuid() })!;
-        await Assert.That(guidCompare).IsNotEqualTo(0);
-
-        var guidVsStringCompare = (int)compare.Invoke(comparer, new object?[] { Guid.Empty, "x" })!;
-        await Assert.That(guidVsStringCompare).IsNotEqualTo(0);
-
-        var toDouble = comparerType.GetMethod("ToDouble", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(toDouble).IsNotNull();
-
-        var convertFail = (double)toDouble!.Invoke(null, new object?[] { new object() })!;
-        await Assert.That(convertFail).IsEqualTo(0.0d);
+        var mixedOrdered = OrderByKey(Item("x"), Item(Guid.Empty));
+        await Assert.That(mixedOrdered.Count).IsEqualTo(2);
+        await Assert.That(mixedOrdered[0].Key).IsEqualTo(Guid.Empty);
     }
 }

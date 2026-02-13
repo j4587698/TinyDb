@@ -1,9 +1,9 @@
 using System;
 using System.IO;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Storage;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -66,7 +66,7 @@ public sealed class WriteAheadLogFlushToLsnCoverageTests
         page.WriteData(0, new byte[] { 1 });
         wal.AppendPage(page);
 
-        var mutex = GetPrivateField<SemaphoreSlim>(wal, "_mutex");
+        var mutex = UnsafeAccessors.WriteAheadLogAccessor.Mutex(wal);
         mutex.Wait();
 
         var released = false;
@@ -75,7 +75,7 @@ public sealed class WriteAheadLogFlushToLsnCoverageTests
             var flushTask = wal.FlushToLSNAsync(1);
 
             await Task.Delay(25);
-            SetPrivateField(wal, "_flushedLSN", 9999L);
+            UnsafeAccessors.WriteAheadLogAccessor.FlushedLsn(wal) = 9999L;
 
             mutex.Release();
             released = true;
@@ -100,19 +100,4 @@ public sealed class WriteAheadLogFlushToLsnCoverageTests
         var ext = Path.GetExtension(dbFile).TrimStart('.');
         return Path.Combine(directory, $"{name}-wal.{ext}");
     }
-
-    private static T GetPrivateField<T>(object instance, string fieldName)
-    {
-        var field = instance.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field == null) throw new InvalidOperationException($"Field '{fieldName}' not found.");
-        return (T)field.GetValue(instance)!;
-    }
-
-    private static void SetPrivateField<T>(object instance, string fieldName, T value)
-    {
-        var field = instance.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field == null) throw new InvalidOperationException($"Field '{fieldName}' not found.");
-        field.SetValue(instance, value);
-    }
 }
-

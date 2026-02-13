@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Storage;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -76,27 +77,13 @@ public sealed class TinyDbEngineAdditionalCoverageTests
             var col = engine.GetBsonCollection("c");
             col.Insert(new BsonDocument().Set("x", 1));
 
-            var collectionStatesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(collectionStatesField).IsNotNull();
-
-            var collectionStates = collectionStatesField!.GetValue(engine)!;
-            var tryGetValue = collectionStates.GetType().GetMethod("TryGetValue");
-            await Assert.That(tryGetValue).IsNotNull();
-
-            var args = new object?[] { "c", null };
-            var found = (bool)tryGetValue!.Invoke(collectionStates, args)!;
+            var collectionStates = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
+            var found = collectionStates.TryGetValue("c", out var state);
             await Assert.That(found).IsTrue();
-            var stateObj = args[1];
+            await Assert.That(state).IsNotNull();
 
-            var ownedPagesProp = stateObj!.GetType().GetProperty("OwnedPages", BindingFlags.Public | BindingFlags.Instance);
-            await Assert.That(ownedPagesProp).IsNotNull();
-
-            var ownedPages = (ConcurrentDictionary<uint, byte>)ownedPagesProp!.GetValue(stateObj)!;
-
-            var pageManagerField = typeof(TinyDbEngine).GetField("_pageManager", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(pageManagerField).IsNotNull();
-
-            var pm = (PageManager)pageManagerField!.GetValue(engine)!;
+            var ownedPages = state!.OwnedPages;
+            var pm = UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine);
 
             var indexPage = pm.NewPage(PageType.Index);
             pm.SavePage(indexPage, forceFlush: true);
@@ -261,30 +248,17 @@ public sealed class TinyDbEngineAdditionalCoverageTests
             var inserted = new BsonDocument().Set("x", 1);
             col.Insert(inserted);
 
-            var collectionStatesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(collectionStatesField).IsNotNull();
-
-            var collectionStates = collectionStatesField!.GetValue(engine)!;
-            var tryGetValue = collectionStates.GetType().GetMethod("TryGetValue");
-            await Assert.That(tryGetValue).IsNotNull();
-
-            var args = new object?[] { "c", null };
-            var found = (bool)tryGetValue!.Invoke(collectionStates, args)!;
+            var collectionStates = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
+            var found = collectionStates.TryGetValue("c", out var state);
             await Assert.That(found).IsTrue();
-            var stateObj = args[1];
+            await Assert.That(state).IsNotNull();
 
-            var ownedPagesProp = stateObj!.GetType().GetProperty("OwnedPages", BindingFlags.Public | BindingFlags.Instance);
-            await Assert.That(ownedPagesProp).IsNotNull();
-
-            var ownedPages = (ConcurrentDictionary<uint, byte>)ownedPagesProp!.GetValue(stateObj)!;
+            var ownedPages = state!.OwnedPages;
 
             ownedPages.TryAdd(0, 0);
             ownedPages.TryAdd(1, 0);
 
-            var pageManagerField = typeof(TinyDbEngine).GetField("_pageManager", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(pageManagerField).IsNotNull();
-
-            var pm = (PageManager)pageManagerField!.GetValue(engine)!;
+            var pm = UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine);
             var emptyDataPage = pm.NewPage(PageType.Data);
             pm.SavePage(emptyDataPage, forceFlush: true);
             ownedPages.TryAdd(emptyDataPage.PageID, 0);

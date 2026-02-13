@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Core;
 using TinyDb.Storage;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -202,7 +203,7 @@ public class FlushSchedulerTests
 
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         completed.TrySetResult();
-        SetPrivateField(fs, "_journalBatchTcs", completed);
+        UnsafeAccessors.FlushSchedulerAccessor.JournalBatchTcs(fs) = completed;
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         await fs.EnsureDurabilityAsync(WriteConcern.Journaled, cts.Token);
@@ -218,20 +219,20 @@ public class FlushSchedulerTests
         _pageManager.SavePage(page);
         _wal.AppendPage(page);
 
-        var walMutex = GetPrivateField<SemaphoreSlim>(_wal, "_mutex");
+        var walMutex = UnsafeAccessors.WriteAheadLogAccessor.Mutex(_wal);
         walMutex.Wait();
 
         try
         {
             var first = fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
-            if (!SpinWait.SpinUntil(() => GetPrivateField<int>(fs, "_journalRequests") == 0, TimeSpan.FromSeconds(2)))
+            if (!SpinWait.SpinUntil(() => UnsafeAccessors.FlushSchedulerAccessor.JournalRequests(fs) == 0, TimeSpan.FromSeconds(2)))
             {
                 throw new TimeoutException("Journal worker did not start within timeout.");
             }
 
             var second = fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
 
-            GetPrivateField<CancellationTokenSource>(fs, "_cts").Cancel();
+            UnsafeAccessors.FlushSchedulerAccessor.Cts(fs).Cancel();
 
             await Assert.That(async () => await first.WaitAsync(TimeSpan.FromSeconds(2))).Throws<OperationCanceledException>();
             await Assert.That(async () => await second.WaitAsync(TimeSpan.FromSeconds(2))).Throws<OperationCanceledException>();
@@ -252,14 +253,14 @@ public class FlushSchedulerTests
         _pageManager.SavePage(page);
         _wal.AppendPage(page);
 
-        var walMutex = GetPrivateField<SemaphoreSlim>(_wal, "_mutex");
+        var walMutex = UnsafeAccessors.WriteAheadLogAccessor.Mutex(_wal);
         walMutex.Wait();
 
         try
         {
             var first = fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
 
-            GetPrivateField<CancellationTokenSource>(fs, "_cts").Cancel();
+            UnsafeAccessors.FlushSchedulerAccessor.Cts(fs).Cancel();
 
             await Assert.That(async () => await first.WaitAsync(TimeSpan.FromSeconds(2))).Throws<OperationCanceledException>();
         }
@@ -314,19 +315,5 @@ public class FlushSchedulerTests
         public DiskStreamStatistics GetStatistics() => _inner.GetStatistics();
 
         public void Dispose() => _inner.Dispose();
-    }
-
-    private static T GetPrivateField<T>(object instance, string fieldName)
-    {
-        var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        if (field == null) throw new InvalidOperationException($"Field '{fieldName}' not found.");
-        return (T)field.GetValue(instance)!;
-    }
-
-    private static void SetPrivateField<T>(object instance, string fieldName, T value)
-    {
-        var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        if (field == null) throw new InvalidOperationException($"Field '{fieldName}' not found.");
-        field.SetValue(instance, value);
     }
 }

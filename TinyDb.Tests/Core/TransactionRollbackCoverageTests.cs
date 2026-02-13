@@ -31,11 +31,9 @@ public sealed class TransactionRollbackCoverageTests
             await Assert.That(index).IsNotNull();
             index!.Dispose();
 
-            using var tx = engine.BeginTransaction();
-            var recordDropIndex = tx.GetType().GetMethod("RecordDropIndex", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(recordDropIndex).IsNotNull();
+            using var tx = (Transaction)engine.BeginTransaction();
 
-            await Assert.That(() => recordDropIndex!.Invoke(tx, new object[] { collectionName, indexName }))
+            await Assert.That(() => tx.RecordDropIndex(collectionName, indexName))
                 .ThrowsNothing();
         }
         finally
