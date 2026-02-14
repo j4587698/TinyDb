@@ -76,9 +76,31 @@ public sealed class FlushScheduler : IDisposable
         }
     }
 
+    public void EnsureDurability(WriteConcern concern)
+    {
+        switch (concern)
+        {
+            case WriteConcern.None:
+                return;
+            case WriteConcern.Journaled:
+                EnsureJournalFlush();
+                return;
+            case WriteConcern.Synced:
+                _wal.Synchronize(() => _pageManager.FlushDirtyPages());
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(concern), concern, null);
+        }
+    }
+
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         return _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken);
+    }
+
+    public void Flush()
+    {
+        _wal.Synchronize(() => _pageManager.FlushDirtyPages());
     }
 
     private Task EnsureJournalFlushAsync(CancellationToken cancellationToken)
@@ -118,6 +140,22 @@ public sealed class FlushScheduler : IDisposable
         }
 
         return cancellationToken.CanBeCanceled ? batchTask.WaitAsync(cancellationToken) : batchTask;
+    }
+
+    private void EnsureJournalFlush()
+    {
+        if (!_wal.IsEnabled)
+        {
+            _pageManager.FlushDirtyPages();
+            return;
+        }
+
+        if (!_wal.HasPendingEntries)
+        {
+            return;
+        }
+
+        _wal.FlushLog();
     }
 
     private async Task RunJournalWorkerAsync()
@@ -177,14 +215,20 @@ public sealed class FlushScheduler : IDisposable
         await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken).ConfigureAwait(false);
     }
 
+    public void FlushPending()
+    {
+        if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
+        _wal.Synchronize(() => _pageManager.FlushDirtyPages());
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         _cts.Cancel();
         try { _journalWorkerTask?.Wait(); } catch { }
-        _backgroundTask?.Wait();
-        try { FlushAsync().GetAwaiter().GetResult(); } catch { }
+        try { _backgroundTask?.Wait(); } catch { }
+        try { Flush(); } catch { }
         _cts.Dispose();
     }
 }

@@ -20,14 +20,29 @@ public sealed class PageManager : IDisposable
     private long _fileSize;
     private bool _disposed;
 
-    private Func<long, Task>? _flushLogToLsn;
+    private Action<long>? _flushLogToLsn;
+    private Func<long, CancellationToken, Task>? _flushLogToLsnAsync;
 
     /// <summary>
     /// 注册 WAL 刷新回调
     /// </summary>
     /// <param name="flushLogToLsn">根据 LSN 刷新日志的异步函数</param>
-    public void RegisterWAL(Func<long, Task> flushLogToLsn)
+    public void RegisterWAL(Func<long, Task> flushLogToLsnAsync)
     {
+        if (flushLogToLsnAsync == null) throw new ArgumentNullException(nameof(flushLogToLsnAsync));
+        _flushLogToLsnAsync = (lsn, _) => flushLogToLsnAsync(lsn);
+    }
+
+    public void RegisterWAL(Func<long, CancellationToken, Task> flushLogToLsnAsync)
+    {
+        if (flushLogToLsnAsync == null) throw new ArgumentNullException(nameof(flushLogToLsnAsync));
+        _flushLogToLsnAsync = flushLogToLsnAsync;
+    }
+
+    public void RegisterWAL(Action<long> flushLogToLsn)
+    {
+        if (flushLogToLsn == null) throw new ArgumentNullException(nameof(flushLogToLsn));
+
         _flushLogToLsn = flushLogToLsn;
     }
 
@@ -346,7 +361,7 @@ public sealed class PageManager : IDisposable
         // WAL 检查：日志必须先于数据落盘
         if (_flushLogToLsn != null && page.Header.LSN > 0)
         {
-            _flushLogToLsn(page.Header.LSN).GetAwaiter().GetResult();
+            _flushLogToLsn(page.Header.LSN);
         }
 
         lock (_allocationLock)

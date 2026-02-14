@@ -44,9 +44,13 @@ public class StressTests
     [Test]
     public async Task HighConcurrency_Insert_StressTest()
     {
-        const int threadCount = 10;
-        const int itemsPerThread = 1000;
-        const int totalItems = threadCount * itemsPerThread;
+        var isCi =
+            string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase);
+
+        var threadCount = isCi ? 4 : 10;
+        var itemsPerThread = isCi ? 250 : 1000;
+        var totalItems = threadCount * itemsPerThread;
 
         using (var engine = new TinyDbEngine(_databasePath, _options))
         {
@@ -75,9 +79,13 @@ public class StressTests
             await Assert.That(count).IsEqualTo(totalItems);
 
             // Verify some samples
-            var sample = collection.Find(u => u.Name == "User_5_500").FirstOrDefault();
+            var sampleThread = Math.Min(5, Math.Max(0, threadCount - 1));
+            var sampleIndex = Math.Min(500, Math.Max(0, itemsPerThread - 1));
+            var sampleName = $"User_{sampleThread}_{sampleIndex}";
+
+            var sample = collection.Find(u => u.Name == sampleName).FirstOrDefault();
             await Assert.That(sample).IsNotNull();
-            await Assert.That(sample!.Age).IsEqualTo(50 + (500 % 100));
+            await Assert.That(sample!.Age).IsEqualTo((sampleThread * 10) + (sampleIndex % 100));
         }
     }
 

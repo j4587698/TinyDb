@@ -221,6 +221,25 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
+    public void FlushToLSN(long targetLSN)
+    {
+        if (!IsEnabled || targetLSN <= _flushedLSN) return;
+
+        _mutex.Wait();
+        try
+        {
+            if (targetLSN > _flushedLSN)
+            {
+                _stream!.Flush(true);
+                _flushedLSN = _stream.Position;
+            }
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
     public async Task FlushLogAsync(CancellationToken cancellationToken = default)
     {
         if (!IsEnabled || !_hasPendingEntries) return;
@@ -232,6 +251,63 @@ public sealed class WriteAheadLog : IDisposable
             {
                 _stream!.Flush(true);
                 _flushedLSN = _stream.Position;
+            }
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public void FlushLog()
+    {
+        if (!IsEnabled || !_hasPendingEntries) return;
+
+        _mutex.Wait();
+        try
+        {
+            if (_hasPendingEntries)
+            {
+                _stream!.Flush(true);
+                _flushedLSN = _stream.Position;
+            }
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public void Synchronize(Action flushData)
+    {
+        if (flushData == null) throw new ArgumentNullException(nameof(flushData));
+
+        if (!IsEnabled)
+        {
+            flushData();
+            return;
+        }
+
+        _mutex.Wait();
+        try
+        {
+            var stream = _stream!;
+
+            if (_hasPendingEntries)
+            {
+                stream.Flush(true);
+                _flushedLSN = stream.Position;
+            }
+
+            flushData();
+
+            if (_hasPendingEntries)
+            {
+                stream.SetLength(0);
+                stream.Seek(0, SeekOrigin.End);
+                stream.Flush(true);
+                _hasPendingEntries = false;
+                _flushedLSN = stream.Position;
             }
         }
         finally
@@ -258,6 +334,7 @@ public sealed class WriteAheadLog : IDisposable
             if (_hasPendingEntries)
             {
                 stream.Flush(true);
+                _flushedLSN = stream.Position;
             }
 
             await flushDataAsync(cancellationToken).ConfigureAwait(false);
@@ -268,7 +345,119 @@ public sealed class WriteAheadLog : IDisposable
                 stream.Seek(0, SeekOrigin.End);
                 stream.Flush(true);
                 _hasPendingEntries = false;
+                _flushedLSN = stream.Position;
             }
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public void Replay(Action<uint, byte[]> apply)
+    {
+        if (!IsEnabled) return;
+        if (apply == null) throw new ArgumentNullException(nameof(apply));
+
+        var stream = _stream!;
+        _mutex.Wait();
+        long lastSuccessfulPosition = 0;
+        try
+        {
+            stream.Flush(true);
+            stream.Seek(0, SeekOrigin.Begin);
+
+            const int FullHeaderSize = HeaderSize + 4; // 13 bytes
+            var headerBuffer = new byte[FullHeaderSize];
+
+            while (stream.Position < stream.Length)
+            {
+                long currentEntryStart = stream.Position;
+
+                var read = stream.Read(headerBuffer, 0, FullHeaderSize);
+                if (read < HeaderSize)
+                {
+                    break;
+                }
+
+                if (headerBuffer[0] != EntryTypePage)
+                {
+                    Console.Error.WriteLine($"WAL: Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}");
+                    break;
+                }
+
+                var pageId = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer.AsSpan(1, 4));
+                var length = BinaryPrimitives.ReadInt32LittleEndian(headerBuffer.AsSpan(5, 4));
+
+                uint? expectedCrc = null;
+                if (read >= FullHeaderSize)
+                {
+                    expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer.AsSpan(9, 4));
+                }
+                else
+                {
+                    if (read > HeaderSize)
+                    {
+                        Console.Error.WriteLine($"WAL: Incomplete header at {currentEntryStart}");
+                        break;
+                    }
+                }
+
+                if (length <= 0 || length > _maxRecordSize)
+                {
+                    Console.Error.WriteLine($"WAL: Invalid record length {length} at {currentEntryStart}");
+                    break;
+                }
+
+                var buffer = new byte[length];
+                var offset = 0;
+                while (offset < length)
+                {
+                    var chunk = stream.Read(buffer, offset, length - offset);
+                    if (chunk == 0)
+                    {
+                        break;
+                    }
+                    offset += chunk;
+                }
+
+                if (offset != length)
+                {
+                    Console.Error.WriteLine($"WAL: Incomplete data record at {currentEntryStart}");
+                    break;
+                }
+
+                if (expectedCrc.HasValue)
+                {
+                    var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
+                    if (actualCrc != expectedCrc.Value)
+                    {
+                        Console.Error.WriteLine($"WAL: CRC mismatch at {currentEntryStart}");
+                        break;
+                    }
+                }
+
+                apply(pageId, buffer);
+                lastSuccessfulPosition = stream.Position;
+            }
+
+            if (lastSuccessfulPosition < stream.Length)
+            {
+                stream.SetLength(lastSuccessfulPosition);
+            }
+            else if (lastSuccessfulPosition > 0)
+            {
+                stream.SetLength(0);
+            }
+
+            stream.Seek(0, SeekOrigin.End);
+            _hasPendingEntries = stream.Length > 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"WAL: Fatal error during replay: {ex.Message}");
+            try { stream.SetLength(lastSuccessfulPosition); } catch { }
+            throw;
         }
         finally
         {

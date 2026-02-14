@@ -126,7 +126,8 @@ public sealed class TinyDbEngine : IDisposable
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
         
-        _pageManager.RegisterWAL(lsn => _writeAheadLog.FlushToLSNAsync(lsn));
+        _pageManager.RegisterWAL(lsn => _writeAheadLog.FlushToLSN(lsn));
+        _pageManager.RegisterWAL((lsn, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ct));
 
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval));
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
@@ -234,12 +235,12 @@ public sealed class TinyDbEngine : IDisposable
                 // 只有当 WAL 中的 LSN 大于磁盘页面的 LSN 时，才应用恢复逻辑（幂等恢复）。
                 if (_writeAheadLog.IsEnabled)
                 {
-                    _writeAheadLog.ReplayAsync(async (id, data) =>
+                    _writeAheadLog.Replay((id, data) =>
                     {
                         var pageOffset = (id - 1) * _options.PageSize;
                         if (_diskStream.Size >= pageOffset + _options.PageSize)
                         {
-                            var diskData = await _diskStream.ReadPageAsync(pageOffset, (int)_options.PageSize).ConfigureAwait(false);
+                            var diskData = _diskStream.ReadPage(pageOffset, (int)_options.PageSize);
                             var diskHeader = PageHeader.FromByteArray(diskData);
                             var walHeader = PageHeader.FromByteArray(data);
 
@@ -251,7 +252,7 @@ public sealed class TinyDbEngine : IDisposable
                         }
                         
                         _pageManager.RestorePage(id, data);
-                    }).GetAwaiter().GetResult();
+                    });
                 }
 
                 // 步骤 2: 文件结构初始化。
@@ -375,7 +376,7 @@ public sealed class TinyDbEngine : IDisposable
     {
         // 强制刷新 WAL 缓冲区到磁盘。
         // 对于最高安全级别 (WriteConcern.Journaled)，这将等待磁盘确认。
-        _writeAheadLog.FlushLogAsync().GetAwaiter().GetResult();
+        _writeAheadLog.FlushLog();
     }
 
     internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;
@@ -487,7 +488,7 @@ public sealed class TinyDbEngine : IDisposable
     {
         ThrowIfDisposed();
         if (!_isInitialized) return;
-        _flushScheduler.FlushAsync().GetAwaiter().GetResult();
+        _flushScheduler.Flush();
         _collectionMetaStore.SaveCollections(true);
         WriteHeader();
         _diskStream.Flush();
@@ -1374,7 +1375,7 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
-    private void EnsureWriteDurability() { _flushScheduler.EnsureDurabilityAsync(_options.WriteConcern).GetAwaiter().GetResult(); }
+    private void EnsureWriteDurability() { _flushScheduler.EnsureDurability(_options.WriteConcern); }
 
     private Task EnsureWriteDurabilityAsync(CancellationToken cancellationToken = default) 
     { 
