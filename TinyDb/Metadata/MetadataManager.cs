@@ -197,7 +197,13 @@ public class MetadataManager
                 _validationProfiles[tableName] = SchemaValidationProfile.Build(doc);
                 return doc;
             }
-        } catch { }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to load metadata for table '{tableName}'.",
+                ex);
+        }
         
         return null;
     }

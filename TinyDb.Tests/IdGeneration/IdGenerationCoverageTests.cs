@@ -124,9 +124,10 @@ public class IdGenerationCoverageTests
     }
 
     [Test]
-    public async Task GenerateIdForEntity_InvalidStrategy_ShouldReturnFalse()
+    public async Task GenerateIdForEntity_InvalidStrategy_ShouldThrow()
     {
         var e = new InvalidStrategyIdClass();
-        await Assert.That(IdGenerationHelper<InvalidStrategyIdClass>.GenerateIdForEntity(e)).IsFalse();
+        await Assert.That(() => IdGenerationHelper<InvalidStrategyIdClass>.GenerateIdForEntity(e))
+            .Throws<NotSupportedException>();
     }
 }

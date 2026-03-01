@@ -598,9 +598,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
                 _engine.EnsureIndex(_name, "_id", indexName, unique: true);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // 索引创建失败不应影响插入操作
+            if (ex is ObjectDisposedException) throw;
+
+            throw new InvalidOperationException(
+                $"Failed to ensure unique _id index for collection '{_name}'.", ex);
         }
     }
 
@@ -615,7 +618,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         {
             return AotIdAccessor<T>.GetId(entity);
         }
-        catch
+        catch (InvalidOperationException)
         {
             return BsonNull.Value;
         }
@@ -632,7 +635,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         {
             AotIdAccessor<T>.SetId(entity, id);
         }
-        catch
+        catch (InvalidOperationException)
         {
             // 如果实体没有ID属性，忽略更新
         }

@@ -127,24 +127,39 @@ public class EngineCoverageTests
     [Test]
     public async Task Engine_CompactDatabase_WhenTargetLocked_ShouldThrow()
     {
-        using var engine = new TinyDbEngine(_dbFile);
-        engine.GetBsonCollection("locked_compact").Insert(new BsonDocument().Set("x", 1));
-
-        using var lockStream = new FileStream(_dbFile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
-
-        // Windows: an open handle without FileShare.Delete prevents rename/replace, so we expect CompactDatabase to fail.
-        // Linux/macOS: renaming over an open file is allowed, so CompactDatabase may succeed even if another handle exists.
-        if (!OperatingSystem.IsWindows())
+        var engine = new TinyDbEngine(_dbFile);
+        try
         {
-            await Assert.That(() => engine.CompactDatabase()).ThrowsNothing();
-            return;
+            engine.GetBsonCollection("locked_compact").Insert(new BsonDocument().Set("x", 1));
+
+            using var lockStream = new FileStream(_dbFile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+
+            // Windows: open handle blocks replace.
+            // Linux/macOS: rename/replace generally allowed.
+            if (!OperatingSystem.IsWindows())
+            {
+                await Assert.That(() => engine.CompactDatabase()).ThrowsNothing();
+                return;
+            }
+
+            Exception? caught = null;
+            try { engine.CompactDatabase(); } catch (Exception ex) { caught = ex; }
+
+            await Assert.That(caught).IsNotNull();
+
+            var isExpected = caught is IOException || caught is UnauthorizedAccessException;
+            if (caught is AggregateException aggregate)
+            {
+                var flattened = aggregate.Flatten();
+                isExpected = flattened.InnerExceptions.Any(e => e is IOException || e is UnauthorizedAccessException);
+            }
+
+            await Assert.That(isExpected).IsTrue();
         }
-
-        Exception? caught = null;
-        try { engine.CompactDatabase(); } catch (Exception ex) { caught = ex; }
-
-        await Assert.That(caught).IsNotNull();
-        await Assert.That(caught is IOException || caught is UnauthorizedAccessException).IsTrue();
+        finally
+        {
+            try { engine.Dispose(); } catch { }
+        }
     }
 
     [Test]

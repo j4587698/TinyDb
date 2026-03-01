@@ -103,7 +103,7 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
         {
             return ToDecimal().ToString();
         }
-        catch
+        catch (OverflowException)
         {
             return "NaN/Infinity/Overflow";
         }

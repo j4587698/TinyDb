@@ -233,7 +233,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
             value = new ObjectId(s);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
         {
             value = Empty;
             return false;

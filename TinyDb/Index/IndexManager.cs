@@ -421,7 +421,7 @@ public sealed class IndexManager : IDisposable
                 _tempPm!.Dispose();
                 if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
                 {
-                    try { File.Delete(_tempFilePath); } catch { }
+                    File.Delete(_tempFilePath);
                 }
             }
             _disposed = true;

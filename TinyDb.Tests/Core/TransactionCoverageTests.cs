@@ -151,7 +151,7 @@ public class TransactionCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task Dispose_UntrackedTransaction_ShouldSwallowRollbackErrors()
+    public async Task Dispose_UntrackedTransaction_ShouldThrowAggregateException()
     {
         using var engine = CreateTestEngine();
 
@@ -161,7 +161,7 @@ public class TransactionCoverageTests : IDisposable
         var manager = (TransactionManager)managerField!.GetValue(engine)!;
         var untracked = new Transaction(manager);
 
-        await Assert.That(() => untracked.Dispose()).ThrowsNothing();
+        await Assert.That(() => untracked.Dispose()).Throws<AggregateException>();
         await Assert.That(() => untracked.Commit()).Throws<ObjectDisposedException>();
     }
 

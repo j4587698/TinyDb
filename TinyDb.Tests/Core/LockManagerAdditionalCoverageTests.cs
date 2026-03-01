@@ -196,7 +196,7 @@ public class LockManagerAdditionalCoverageTests
     }
 
     [Test]
-    public async Task DeadlockDetectionTask_WhenDetectionThrows_ShouldBeSwallowed()
+    public async Task DeadlockDetectionTask_WhenDetectionThrows_DisposeShouldSurfaceCorruption()
     {
         var manager = new LockManager();
         try
@@ -217,12 +217,12 @@ public class LockManagerAdditionalCoverageTests
         }
         finally
         {
-            manager.Dispose();
+            await Assert.That(() => manager.Dispose()).Throws<InvalidOperationException>();
         }
     }
 
     [Test]
-    public async Task Dispose_WhenInternalStateCorrupted_ShouldSwallowException()
+    public async Task Dispose_WhenInternalStateCorrupted_ShouldThrow()
     {
         var manager = new LockManager();
 
@@ -230,7 +230,7 @@ public class LockManagerAdditionalCoverageTests
         if (lockBucketsField == null) throw new InvalidOperationException("_lockBuckets field not found");
         lockBucketsField.SetValue(manager, null);
 
-        manager.Dispose();
+        await Assert.That(() => manager.Dispose()).Throws<InvalidOperationException>();
     }
 
     [Test]

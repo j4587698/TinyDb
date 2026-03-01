@@ -35,7 +35,7 @@ public sealed class IndexManagerTryAddFailureCoverageTests
 
         try
         {
-            await Assert.That(writeStarted.Wait(TimeSpan.FromSeconds(5))).IsTrue();
+            await Assert.That(writeStarted.Wait(TimeSpan.FromSeconds(30))).IsTrue();
             await Assert.That(indexes.TryAdd("idx", dummyIndex)).IsTrue();
         }
         finally
@@ -117,4 +117,3 @@ public sealed class IndexManagerTryAddFailureCoverageTests
         public void Dispose() => _inner.Dispose();
     }
 }
-

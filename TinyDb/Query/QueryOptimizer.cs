@@ -55,7 +55,7 @@ public sealed class QueryOptimizer
             queryExpression = _expressionParser.Parse(expression);
             plan.QueryExpression = queryExpression;
         }
-        catch
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException)
         {
             // 解析失败（例如包含不支持的节点），回退到全表扫描
             plan.Strategy = QueryExecutionStrategy.FullTableScan;
@@ -352,7 +352,7 @@ public sealed class QueryOptimizer
                 _ => null
             };
         }
-        catch
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or InvalidCastException or FormatException or OverflowException or ArgumentException)
         {
             // 评估失败时忽略，降级为不使用索引
             return null;

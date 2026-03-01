@@ -15,7 +15,7 @@ namespace TinyDb.Tests.Core;
 public sealed class TransactionRollbackCoverageTests
 {
     [Test]
-    public async Task RecordDropIndex_WhenIndexStatisticsThrows_ShouldBeSwallowed()
+    public async Task RecordDropIndex_WhenIndexStatisticsThrows_ShouldThrow()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"tx_dropidx_{Guid.NewGuid():N}.db");
 
@@ -34,7 +34,7 @@ public sealed class TransactionRollbackCoverageTests
             using var tx = (Transaction)engine.BeginTransaction();
 
             await Assert.That(() => tx.RecordDropIndex(collectionName, indexName))
-                .ThrowsNothing();
+                .Throws<InvalidOperationException>();
         }
         finally
         {

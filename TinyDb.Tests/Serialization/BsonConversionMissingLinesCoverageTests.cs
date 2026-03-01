@@ -58,10 +58,10 @@ public sealed class BsonConversionMissingLinesCoverageTests
     }
 
     [Test]
-    public async Task FromBsonValue_EnumNumericParseFailure_ShouldRethrow()
+    public async Task FromBsonValue_EnumNumericParseFailure_ShouldWrapAsInvalidOperationException()
     {
         await Assert.That(() => BsonConversion.FromBsonValue(new BsonString("not-a-number"), typeof(IntEnum)))
-            .Throws<FormatException>();
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -74,4 +74,3 @@ public sealed class BsonConversionMissingLinesCoverageTests
         await Assert.That(result).IsFalse();
     }
 }
-

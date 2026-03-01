@@ -124,6 +124,7 @@ public sealed class LockManager : IDisposable
     private readonly ConcurrentDictionary<Guid, List<LockRequest>> _transactionLocks;
     private readonly object _globalLock = new();
     private readonly TimeSpan _defaultTimeout;
+    private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private bool _disposed;
 
     /// <summary>
@@ -157,14 +158,22 @@ public sealed class LockManager : IDisposable
     /// 初始化锁管理器
     /// </summary>
     /// <param name="defaultTimeout">默认超时时间</param>
-    public LockManager(TimeSpan? defaultTimeout = null)
+    public LockManager(
+        TimeSpan? defaultTimeout = null,
+        Action<TinyDbLogLevel, string, Exception?>? logger = null)
     {
+        _log = logger ?? TinyDbLogging.NoopLogger;
         _defaultTimeout = defaultTimeout ?? TimeSpan.FromSeconds(30);
         _lockBuckets = new ConcurrentDictionary<string, LockBucket>();
         _transactionLocks = new ConcurrentDictionary<Guid, List<LockRequest>>();
 
         // 启动死锁检测任务
         _ = StartDeadlockDetectionTask();
+    }
+
+    private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
+    {
+        TinyDbLogging.SafeLog(_log, level, message, ex);
     }
 
     /// <summary>
@@ -464,8 +473,12 @@ public sealed class LockManager : IDisposable
                 await Task.Delay(TimeSpan.FromSeconds(10)); // 每10秒检查一次
                 DetectAndResolveDeadlocks();
             }
-            catch
+            catch (Exception ex)
             {
+                if (!_disposed)
+                {
+                    Log(TinyDbLogLevel.Warning, "Deadlock detection task iteration failed.", ex);
+                }
             }
         }
     }
@@ -642,6 +655,7 @@ public sealed class LockManager : IDisposable
     {
         if (!_disposed)
         {
+            Exception? cleanupException = null;
             try
             {
                 // 清理所有锁
@@ -657,12 +671,18 @@ public sealed class LockManager : IDisposable
                 _lockBuckets.Clear();
                 _transactionLocks.Clear();
             }
-            catch
+            catch (Exception ex)
             {
+                cleanupException = new InvalidOperationException("LockManager dispose cleanup failed.", ex);
             }
             finally
             {
                 _disposed = true;
+            }
+
+            if (cleanupException != null)
+            {
+                throw cleanupException;
             }
         }
     }

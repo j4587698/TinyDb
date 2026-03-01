@@ -67,7 +67,7 @@ public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAc
 
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or InvalidCastException or FormatException or OverflowException or TargetException or TargetInvocationException)
         {
             return false;
         }

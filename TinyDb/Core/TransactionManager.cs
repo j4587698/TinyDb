@@ -207,18 +207,8 @@ public sealed class TransactionManager : IDisposable
                 throw new ArgumentException("Savepoint not found", nameof(savepointId));
             }
 
-            // 回滚到保存点之后的操作
-            var operationsToRollback = transaction.Operations
-                .Skip(savepoint.OperationCount)
-                .Reverse()
-                .ToList();
-
-            foreach (var operation in operationsToRollback)
-            {
-                RollbackSingleOperation(operation);
-            }
-
-            // 移除回滚的操作
+            // 事务采用延迟提交模型：保存点回滚只需丢弃保存点之后的挂起操作，
+            // 不应对数据库执行补偿写入。
             transaction.Operations.RemoveRange(savepoint.OperationCount, transaction.Operations.Count - savepoint.OperationCount);
 
             // 移除后续的保存点
@@ -381,9 +371,10 @@ public sealed class TransactionManager : IDisposable
                         break;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // 忽略元数据读取错误
+                    throw new InvalidOperationException(
+                        $"Failed to read foreign key metadata for collection '{name}' from '{metaColName}'.", ex);
                 }
             }
             
@@ -406,8 +397,10 @@ public sealed class TransactionManager : IDisposable
                 appliedCount++;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            var compensationErrors = new List<Exception>();
+
             // 关键：当前操作可能已部分生效（例如写入页面后索引插入失败）。
             // 先尝试对“失败的那一条”进行补偿，避免残留半应用状态。
             try
@@ -417,9 +410,11 @@ public sealed class TransactionManager : IDisposable
                     RollbackSingleOperation(transaction.Operations[appliedCount]);
                 }
             }
-            catch
+            catch (Exception compensationEx)
             {
-                // 忽略补偿过程中的二次异常，优先抛出原始异常
+                compensationErrors.Add(new InvalidOperationException(
+                    "Rollback of failed operation during compensation failed.",
+                    compensationEx));
             }
 
             // 如果应用过程中出错，回滚已经成功的操作
@@ -429,12 +424,25 @@ public sealed class TransactionManager : IDisposable
                 {
                     RollbackSingleOperation(transaction.Operations[i]);
                 }
-                catch
+                catch (Exception rollbackEx)
                 {
-                    // 记录但忽略回滚过程中的二次异常，优先抛出原始异常
+                    compensationErrors.Add(new InvalidOperationException(
+                        $"Rollback compensation failed for operation index {i}.",
+                        rollbackEx));
                 }
             }
-            throw;
+
+            if (compensationErrors.Count == 0)
+            {
+                throw new InvalidOperationException("Transaction apply failed.", ex);
+            }
+
+            var allErrors = new List<Exception>
+            {
+                new InvalidOperationException("Transaction apply failed.", ex)
+            };
+            allErrors.AddRange(compensationErrors);
+            throw new AggregateException("Transaction apply failed and compensation rollback encountered errors.", allErrors);
         }
     }
 
@@ -511,11 +519,10 @@ public sealed class TransactionManager : IDisposable
     /// <param name="transaction">事务</param>
     private void RollbackOperations(Transaction transaction)
     {
-        // 按相反顺序回滚操作（后进先出）
-        for (int i = transaction.Operations.Count - 1; i >= 0; i--)
-        {
-            RollbackSingleOperation(transaction.Operations[i]);
-        }
+        // 事务采用延迟提交模型：显式回滚仅需丢弃挂起操作。
+        // 真正的补偿回滚仅在 Commit 过程中部分应用失败时发生（见 ApplyOperationsToDatabase）。
+        transaction.Operations.Clear();
+        transaction.Savepoints.Clear();
     }
 
     /// <summary>
@@ -560,8 +567,7 @@ public sealed class TransactionManager : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"FATAL: Transaction compensation failed for {operation.OperationType}: {ex.Message}");
-            if (ex is NotSupportedException) throw;
+            throw new InvalidOperationException($"Transaction compensation failed for {operation.OperationType}.", ex);
         }
     }
 

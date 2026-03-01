@@ -90,39 +90,44 @@ internal sealed class CollectionMetaStore
             var collectionPage = _pageManager.GetPage(pageId);
             const int dataOffset = 247;
             var collectionData = collectionPage.ReadBytes(dataOffset, collectionPage.DataSize - dataOffset);
-            if (collectionData.Length >= 4)
+            if (collectionData.Length < 4) return;
+
+            var bsonLength = BitConverter.ToInt32(collectionData, 0);
+            // 新建数据库时该页可能已分配但尚未写入（长度头为 0），按“空元数据”处理。
+            if (bsonLength == 0) return;
+
+            if (bsonLength <= 4 || bsonLength > collectionData.Length)
             {
-                try
+                throw new InvalidDataException(
+                    $"Invalid collection metadata BSON length {bsonLength} on page {pageId}.");
+            }
+
+            var documentBytes = collectionData.AsSpan(0, bsonLength).ToArray();
+            var document = BsonSerializer.DeserializeDocument(documentBytes);
+            lock (_lock)
+            {
+                _collectionsMetadata.Clear();
+                foreach (var kvp in document)
                 {
-                    var bsonLength = BitConverter.ToInt32(collectionData, 0);
-                    if (bsonLength > 4 && bsonLength <= collectionData.Length)
+                    // Value can be String (Legacy) or Document (New)
+                    if (kvp.Value is BsonString)
                     {
-                        var documentBytes = collectionData.AsSpan(0, bsonLength).ToArray();
-                        var document = BsonSerializer.DeserializeDocument(documentBytes);
-                        lock (_lock)
-                        {
-                            _collectionsMetadata.Clear();
-                            foreach (var kvp in document)
-                            {
-                                // Value can be String (Legacy) or Document (New)
-                                if (kvp.Value is BsonString strName)
-                                {
-                                    // Legacy format: Key=Name, Value=Name
-                                    // We use Key as name.
-                                    _collectionsMetadata[kvp.Key] = new BsonDocument();
-                                }
-                                else if (kvp.Value is BsonDocument meta)
-                                {
-                                    _collectionsMetadata[kvp.Key] = meta;
-                                }
-                            }
-                        }
+                        // Legacy format: Key=Name, Value=Name
+                        // We use Key as name.
+                        _collectionsMetadata[kvp.Key] = new BsonDocument();
+                    }
+                    else if (kvp.Value is BsonDocument meta)
+                    {
+                        _collectionsMetadata[kvp.Key] = meta;
                     }
                 }
-                catch { }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to load collection metadata from page {pageId}.", ex);
+        }
     }
 
     public void SaveCollections(bool forceFlush)

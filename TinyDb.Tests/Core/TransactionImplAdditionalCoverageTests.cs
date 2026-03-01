@@ -50,7 +50,7 @@ public sealed class TransactionImplAdditionalCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task Dispose_WhenOperationsListIsCorrupted_ShouldNotThrow()
+    public async Task Dispose_WhenOperationsListIsCorrupted_ShouldThrowAggregateException()
     {
         using var engine = new TinyDbEngine(_dbPath);
         engine.BeginTransaction();
@@ -63,7 +63,6 @@ public sealed class TransactionImplAdditionalCoverageTests : IDisposable
 
         operationsField!.SetValue(tx, null);
 
-        await Assert.That(() => tx!.Dispose()).ThrowsNothing();
+        await Assert.That(() => tx!.Dispose()).Throws<AggregateException>();
     }
 }
-

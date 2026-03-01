@@ -340,9 +340,7 @@ public sealed class QueryExecutor
 
         // 2. 处理管道
         var rawPipeline = _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates)
-            .Select(r => (Doc: TryDeserialize(r.Slice), r.RequiresPostFilter))
-            .Where(x => x.Doc != null)
-            .Select(x => (Doc: x.Doc!, x.RequiresPostFilter))
+            .Select(r => (Doc: DeserializeDocumentOrThrow(r.Slice), r.RequiresPostFilter))
             .Where(x => !x.Doc.TryGetValue("_collection", out var c) || c.ToString() == collectionName)
             .Select(x => (Doc: _engine.ResolveLargeDocument(x.Doc), x.RequiresPostFilter));
 
@@ -863,8 +861,7 @@ public sealed class QueryExecutor
                 }
                 else
                 {
-                    doc = TryDeserialize(slice);
-                    if (doc == null) return;
+                    doc = DeserializeDocumentOrThrow(slice);
                     doc = _engine.ResolveLargeDocument(doc);
 
                     match = fullyPushed
@@ -1009,7 +1006,7 @@ public sealed class QueryExecutor
 
             return value != null;
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException or IndexOutOfRangeException or OverflowException)
         {
             value = null;
             return false;
@@ -1222,8 +1219,12 @@ public sealed class QueryExecutor
 
         private static double SafeToDouble(Decimal128 d)
         {
-            try { return (double)d.ToDecimal(); }
-            catch { return 0d; }
+            if (TryConvertDecimal128ToDouble(d, out var value))
+            {
+                return value;
+            }
+
+            throw new InvalidOperationException("Decimal128 value cannot be converted to double for sort comparison.");
         }
 
         public static int Compare(in SortKeyRef a, in SortKey b)
@@ -1347,9 +1348,11 @@ public sealed class QueryExecutor
                         var lo = BinaryPrimitives.ReadUInt64LittleEndian(document.Slice(valueOffset, 8));
                         var hi = BinaryPrimitives.ReadUInt64LittleEndian(document.Slice(valueOffset + 8, 8));
                         var dec = new Decimal128(lo, hi);
-                        double d;
-                        try { d = (double)dec.ToDecimal(); }
-                        catch { d = 0d; }
+                        if (!TryConvertDecimal128ToDouble(dec, out var d))
+                        {
+                            return false;
+                        }
+
                         key = new SortKeyRef(type, d, 0, default);
                         return true;
                     }
@@ -1380,7 +1383,7 @@ public sealed class QueryExecutor
                         return false;
                 }
             }
-            catch
+            catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException or IndexOutOfRangeException or OverflowException)
             {
                 key = Null;
                 return false;
@@ -1591,12 +1594,10 @@ public sealed class QueryExecutor
         // Case 2: Member OP Convert(Constant)
         if (binary.Left is MemberExpression m2 && binary.Right is UnaryExpression u2 && u2.NodeType == ExpressionType.Convert && u2.Operand is ConstantExpression c2)
         {
-            try 
+            if (TryConvertConstant(c2, u2.Type, out var converted))
             {
-                var converted = Convert.ChangeType(c2.Value, u2.Type);
-                return (m2, new ConstantExpression(converted), binary.NodeType);
+                return (m2, converted, binary.NodeType);
             }
-            catch { }
         }
 
         // Case 3: Constant OP Member
@@ -1605,21 +1606,65 @@ public sealed class QueryExecutor
         // Case 4: Convert(Constant) OP Member
         if (binary.Left is UnaryExpression u4 && u4.NodeType == ExpressionType.Convert && u4.Operand is ConstantExpression c4 && binary.Right is MemberExpression m4)
         {
-            try
+            if (TryConvertConstant(c4, u4.Type, out var converted))
             {
-                var converted = Convert.ChangeType(c4.Value, u4.Type);
-                return (m4, new ConstantExpression(converted), ReverseComparisonOperator(binary.NodeType));
+                return (m4, converted, ReverseComparisonOperator(binary.NodeType));
             }
-            catch { }
         }
 
         return (null, null, binary.NodeType);
     }
 
-    private static BsonDocument? TryDeserialize(ReadOnlyMemory<byte> slice)
+    private static bool TryConvertConstant(ConstantExpression constant, Type targetType, out ConstantExpression converted)
     {
-        try { return BsonSerializer.DeserializeDocument(slice); }
-        catch { return null; }
+        converted = constant;
+
+        object? convertedValue;
+        try
+        {
+            convertedValue = Convert.ChangeType(constant.Value, targetType);
+        }
+        catch (InvalidCastException)
+        {
+            return false;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+
+        converted = new ConstantExpression(convertedValue);
+        return true;
+    }
+
+    private static bool TryConvertDecimal128ToDouble(Decimal128 value, out double converted)
+    {
+        try
+        {
+            converted = (double)value.ToDecimal();
+            return true;
+        }
+        catch (OverflowException)
+        {
+            converted = default;
+            return false;
+        }
+    }
+
+    private static BsonDocument DeserializeDocumentOrThrow(ReadOnlyMemory<byte> slice)
+    {
+        try
+        {
+            return BsonSerializer.DeserializeDocument(slice);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("Failed to deserialize BSON document from storage slice.", ex);
+        }
     }
 
     // 构建索引扫描范围

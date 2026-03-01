@@ -48,7 +48,7 @@ public sealed class ExpressionParser
 
                 // 对于其他不包含参数的表达式，尝试编译并执行 (仅在支持动态代码的环境下)
             }
-            catch
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException or FormatException or InvalidCastException or OverflowException or System.Reflection.TargetException or System.Reflection.TargetInvocationException)
             {
                 // 如果求值失败（极少情况），降级为常规解析
             }
@@ -288,7 +288,7 @@ public sealed class ExpressionParser
 
             return null;
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or OverflowException or DivideByZeroException)
         {
             return null;
         }
@@ -393,7 +393,7 @@ public sealed class ExpressionParser
         {
             return Convert.ChangeType(operand, unaryExpr.Type);
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
         {
             return null;
         }
@@ -429,7 +429,7 @@ public sealed class ExpressionParser
             // 对于无参构造函数
             return Activator.CreateInstance(newExpr.Type);
         }
-        catch
+        catch (Exception ex) when (ex is MissingMethodException or MemberAccessException or ArgumentException or InvalidOperationException or System.Reflection.TargetInvocationException)
         {
             return null;
         }
@@ -565,10 +565,10 @@ public sealed class ExpressionParser
 
                 throw new NotSupportedException($"Failed to evaluate static member {member.Member.Name}");
             }
-            catch
+            catch (Exception ex) when (ex is NotSupportedException or ArgumentException or InvalidOperationException or System.Reflection.TargetException or System.Reflection.TargetInvocationException)
             {
                 // 如果求值失败，抛出异常或作为普通成员访问处理(虽然静态成员必须求值)
-                throw new NotSupportedException($"Failed to evaluate static member {member.Member.Name}");
+                throw new NotSupportedException($"Failed to evaluate static member {member.Member.Name}", ex);
             }
         }
 
@@ -593,7 +593,7 @@ public sealed class ExpressionParser
 
                 return new ConstantExpression(value);
             }
-            catch
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException or System.Reflection.TargetException or System.Reflection.TargetInvocationException)
             {
                 // 求值失败忽略，继续作为成员表达式处理 (虽然理论上不应该发生)
             }

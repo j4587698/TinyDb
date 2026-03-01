@@ -297,9 +297,11 @@ internal sealed class Transaction : ITransaction
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // 忽略错误，如果无法获取信息，回滚可能受限
+            throw new InvalidOperationException(
+                $"Failed to capture index metadata for rollback (collection '{collectionName}', index '{indexName}').",
+                ex);
         }
 
         var operation = new TransactionOperation(
@@ -357,6 +359,9 @@ internal sealed class Transaction : ITransaction
     {
         if (!_disposed)
         {
+            Exception? rollbackException = null;
+            Exception? cleanupException = null;
+
             try
             {
                 // 如果事务仍然活动，自动回滚
@@ -366,21 +371,30 @@ internal sealed class Transaction : ITransaction
                     {
                         Rollback();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        // 忽略回滚错误
+                        rollbackException = new InvalidOperationException("Rollback during transaction dispose failed.", ex);
                     }
                 }
 
                 _operations.Clear();
                 _savepoints.Clear();
             }
-            catch
+            catch (Exception ex)
             {
+                cleanupException = new InvalidOperationException("Transaction dispose cleanup failed.", ex);
             }
             finally
             {
                 _disposed = true;
+            }
+
+            if (rollbackException != null || cleanupException != null)
+            {
+                var exceptions = new List<Exception>();
+                if (rollbackException != null) exceptions.Add(rollbackException);
+                if (cleanupException != null) exceptions.Add(cleanupException);
+                throw new AggregateException("One or more errors occurred during transaction dispose.", exceptions);
             }
         }
     }

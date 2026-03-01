@@ -765,7 +765,7 @@ public sealed class DiskBTree : IDisposable
             var root = LoadNode(_rootPageId);
             return ValidateNode(root, null, null);
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
         }

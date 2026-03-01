@@ -203,7 +203,7 @@ public class DocumentCollectionAdditionalCoverageTests
     }
 
     [Test]
-    public async Task EnsureIdIndex_Private_WhenEngineDisposed_ShouldSwallowEnsureIndexErrors()
+    public async Task EnsureIdIndex_Private_WhenEngineDisposed_ShouldThrowObjectDisposed()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_ensure_id_{Guid.NewGuid():N}.db");
 
@@ -217,7 +217,11 @@ public class DocumentCollectionAdditionalCoverageTests
 
             engine.Dispose();
 
-            await Assert.That(() => ensureIdIndex!.Invoke(col, Array.Empty<object>())).ThrowsNothing();
+            var ex = await Assert.That(() => ensureIdIndex!.Invoke(col, Array.Empty<object>()))
+                .Throws<TargetInvocationException>();
+
+            await Assert.That(ex!.InnerException).IsNotNull();
+            await Assert.That(ex.InnerException).IsTypeOf<ObjectDisposedException>();
         }
         finally
         {

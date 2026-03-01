@@ -30,8 +30,7 @@ public sealed class ExpressionEvaluatorToDoubleCoverageTests
         var bsonInt64 = (double)method.Invoke(null, new object?[] { new BsonInt64(4) })!;
         await Assert.That(bsonInt64).IsEqualTo(4.0d);
 
-        var fallback = (double)method.Invoke(null, new object?[] { new object() })!;
-        await Assert.That(fallback).IsEqualTo(0.0d);
+        await Assert.That(() => method.Invoke(null, new object?[] { new object() }))
+            .Throws<TargetInvocationException>();
     }
 }
-

@@ -13,7 +13,7 @@ namespace TinyDb.Tests.Core;
 public class TransactionManagerAdditionalCoverageTests
 {
     [Test]
-    public async Task Rollback_WithUnsupportedOperation_ShouldWrapException()
+    public async Task Rollback_WithUnsupportedOperation_ShouldDiscardPendingOperations()
     {
         var testDirectory = CreateTempDirectory();
         try
@@ -25,11 +25,10 @@ public class TransactionManagerAdditionalCoverageTests
             var tx = (Transaction)manager.BeginTransaction();
             manager.RecordOperation(tx, new TransactionOperation((TransactionOperationType)999, "c"));
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            {
-                tx.Rollback();
-                return Task.CompletedTask;
-            });
+            tx.Rollback();
+
+            await Assert.That(tx.State).IsEqualTo(TransactionState.RolledBack);
+            await Assert.That(tx.Operations).IsEmpty();
         }
         finally
         {

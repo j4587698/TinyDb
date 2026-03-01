@@ -579,11 +579,13 @@ public static class BsonConversion
             // 转换为枚举
             return Enum.ToObject(enumType, convertedValue!);
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
         {
-            // 如果数字转换失败，尝试字符串转换
-            throw;
+            throw new InvalidOperationException(
+                $"Cannot convert BSON value '{bsonValue}' to enum '{enumType.FullName}'.",
+                ex);
         }
+
     }
 
     /// <summary>

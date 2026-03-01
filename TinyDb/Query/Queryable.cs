@@ -725,9 +725,15 @@ internal static class QueryPipeline
             if (val is BsonDouble bd) return bd.Value;
             if (val is BsonInt32 bi) return bi.Value;
             if (val is BsonInt64 bl) return bl.Value;
-            
-            try { return Convert.ToDouble(val, System.Globalization.CultureInfo.InvariantCulture); }
-            catch { return 0.0; }
+
+            try
+            {
+                return Convert.ToDouble(val, System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+            {
+                throw new InvalidOperationException($"Unable to convert value '{val}' ({val.GetType().FullName}) to double.", ex);
+            }
         }
     }
 

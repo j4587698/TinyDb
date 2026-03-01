@@ -155,7 +155,7 @@ public static class ExpressionEvaluator
                     {
                         value = Convert.ChangeType(value, prop.PropertyType);
                     }
-                    catch
+                    catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
                     {
                         // Keep original value if conversion fails
                     }
@@ -344,9 +344,9 @@ public static class ExpressionEvaluator
         {
             return Convert.ToDouble(val, CultureInfo.InvariantCulture);
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
         {
-            return 0.0;
+            throw new InvalidOperationException($"Unable to convert value '{val}' ({val.GetType().FullName}) to double.", ex);
         }
     }
 

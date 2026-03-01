@@ -45,7 +45,7 @@ internal static class ClrTypeName
             {
                 return SimplifyReflectionTypeName(trimmed);
             }
-            catch
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FormatException or TypeLoadException)
             {
                 return trimmed;
             }

@@ -96,6 +96,7 @@ public class StressTests
         using (var engine = new TinyDbEngine(_databasePath, _options))
         {
             var collection = engine.GetCollection<Product>();
+            var operationErrors = new ConcurrentBag<Exception>();
             
             // Initial data
             for(int i=0; i<100; i++)
@@ -103,19 +104,42 @@ public class StressTests
 
             var insertTask = Task.Run(() => {
                 for(int i=0; i<iterations; i++)
-                    collection.Insert(new Product { Name = $"New_{i}", Price = i });
+                {
+                    try
+                    {
+                        collection.Insert(new Product { Name = $"New_{i}", Price = i });
+                    }
+                    catch (Exception ex)
+                    {
+                        operationErrors.Add(ex);
+                    }
+                }
             });
 
             var updateTask = Task.Run(() => {
                 var random = new Random(42);
                 for(int i=0; i<iterations; i++)
                 {
-                    var all = collection.FindAll().Take(10).ToList();
-                    if(all.Any())
+                    try
                     {
-                        var p = all[random.Next(all.Count)];
-                        p.Price += 1;
-                        collection.Update(p);
+                        var all = collection.FindAll().Take(10).ToList();
+                        if(all.Any())
+                        {
+                            var p = all[random.Next(all.Count)];
+                            p.Price += 1;
+                            try
+                            {
+                                collection.Update(p);
+                            }
+                            catch (Exception ex)
+                            {
+                                operationErrors.Add(ex);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        operationErrors.Add(ex);
                     }
                 }
             });
@@ -123,13 +147,41 @@ public class StressTests
             var deleteTask = Task.Run(() => {
                 for(int i=0; i<iterations/2; i++)
                 {
-                    var first = collection.FindAll().FirstOrDefault();
-                    if(first != null)
-                        collection.Delete(first.Id);
+                    try
+                    {
+                        var first = collection.FindAll().FirstOrDefault();
+                        if(first != null)
+                        {
+                            try
+                            {
+                                collection.Delete(first.Id);
+                            }
+                            catch (Exception ex)
+                            {
+                                operationErrors.Add(ex);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        operationErrors.Add(ex);
+                    }
                 }
             });
 
             await Task.WhenAll(insertTask, updateTask, deleteTask);
+
+            var unexpectedErrors = operationErrors.ToList();
+
+            if (unexpectedErrors.Count > 0)
+            {
+                foreach (var ex in unexpectedErrors.Take(10))
+                {
+                    Console.WriteLine($"Unexpected mixed-load error: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            await Assert.That(unexpectedErrors.Count).IsEqualTo(0);
             
             // Just ensure engine didn't crash and we can still query
             var finalCount = collection.Count();
@@ -137,4 +189,5 @@ public class StressTests
             await Assert.That(finalCount).IsGreaterThan(0);
         }
     }
+
 }

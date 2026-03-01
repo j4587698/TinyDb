@@ -122,7 +122,7 @@ public static class BinaryPredicateEvaluator
                     return false;
             }
         }
-        catch
+        catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException or IndexOutOfRangeException or InvalidCastException or FormatException or OverflowException)
         {
             result = false;
             return false;
@@ -179,7 +179,7 @@ public static class BinaryPredicateEvaluator
             result = Convert.ToInt32(value);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
             return false;
         }
@@ -195,7 +195,7 @@ public static class BinaryPredicateEvaluator
             result = Convert.ToInt64(value);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
             return false;
         }
@@ -211,7 +211,7 @@ public static class BinaryPredicateEvaluator
             result = Convert.ToDouble(value);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
             return false;
         }
@@ -227,7 +227,7 @@ public static class BinaryPredicateEvaluator
             result = Convert.ToDecimal(value);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
             return false;
         }
@@ -242,7 +242,7 @@ public static class BinaryPredicateEvaluator
             result = value is bool b ? b : Convert.ToBoolean(value);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
             return false;
         }
@@ -260,7 +260,7 @@ public static class BinaryPredicateEvaluator
             result = Convert.ToDateTime(value);
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
         {
             return false;
         }

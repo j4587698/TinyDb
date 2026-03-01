@@ -41,7 +41,7 @@ public sealed class CollectionMetaStoreInternalCoverageTests
     }
 
     [Test]
-    public async Task LoadCollections_WhenStoredBytesInvalid_ShouldSwallowDeserializeError()
+    public async Task LoadCollections_WhenStoredBytesInvalid_ShouldThrow()
     {
         using var ctx = new MetaStoreTestContext();
         var page = ctx.PageManager.NewPage(PageType.Collection);
@@ -51,9 +51,7 @@ public sealed class CollectionMetaStoreInternalCoverageTests
         page.WriteData(247, invalid);
         ctx.PageManager.SavePage(page, forceFlush: true);
 
-        ctx.MetaStore.LoadCollections();
-
-        await Assert.That(ctx.MetaStore.GetCollectionNames()).IsEmpty();
+        await Assert.That(() => ctx.MetaStore.LoadCollections()).Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -68,13 +66,11 @@ public sealed class CollectionMetaStoreInternalCoverageTests
     }
 
     [Test]
-    public async Task LoadCollections_WhenPageManagerIsNull_ShouldSwallowOuterErrors()
+    public async Task LoadCollections_WhenPageManagerIsNull_ShouldThrow()
     {
         var metaStore = new CollectionMetaStore(null!, () => 1u, _ => { });
 
-        metaStore.LoadCollections();
-
-        await Assert.That(metaStore.GetCollectionNames()).IsEmpty();
+        await Assert.That(() => metaStore.LoadCollections()).Throws<InvalidOperationException>();
     }
 
     [Test]

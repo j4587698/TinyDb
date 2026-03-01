@@ -287,7 +287,7 @@ public sealed class BTreeIndex : IDisposable
                 _tempPm!.Dispose();
                 if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
                 {
-                    try { File.Delete(_tempFilePath); } catch { }
+                    File.Delete(_tempFilePath);
                 }
             }
             _disposed = true;
@@ -325,8 +325,7 @@ public sealed class BTreeIndex : IDisposable
 
     public override string ToString()
     {
-        int count = 0;
-        try { count = EntryCount; } catch { }
-        return $"BTreeIndex[{Name}] ({_fields.Length} fields, {count} entries)";
+        var countText = _disposed ? "disposed" : EntryCount.ToString();
+        return $"BTreeIndex[{Name}] ({_fields.Length} fields, {countText} entries)";
     }
 }

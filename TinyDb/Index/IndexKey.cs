@@ -117,17 +117,14 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
         if (leftType != rightType)
         {
             // 特殊处理数值类型之间的比较：如果数值不相等，按数值排序
-            if (IsNumeric(left) && IsNumeric(right))
+            if (IsNumeric(left) &&
+                IsNumeric(right) &&
+                TryGetComparableDecimal(left, out var lVal) &&
+                TryGetComparableDecimal(right, out var rVal))
             {
-                try
-                {
-                    var lVal = left.ToDecimal(null);
-                    var rVal = right.ToDecimal(null);
-                    var numComp = lVal.CompareTo(rVal);
-                    if (numComp != 0) return numComp;
-                    // 如果数值相等但类型不同，降级到按类型顺序排序
-                }
-                catch { }
+                var numComp = lVal.CompareTo(rVal);
+                if (numComp != 0) return numComp;
+                // 如果数值相等但类型不同，降级到按类型顺序排序
             }
             
             return GetTypeOrder(leftType).CompareTo(GetTypeOrder(rightType));
@@ -155,6 +152,27 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
                val.BsonType == BsonType.Int64 ||
                val.BsonType == BsonType.Double ||
                val.BsonType == BsonType.Decimal128;
+    }
+
+    private static bool TryGetComparableDecimal(BsonValue value, out decimal result)
+    {
+        try
+        {
+            result = value.ToDecimal(null);
+            return true;
+        }
+        catch (InvalidCastException)
+        {
+        }
+        catch (FormatException)
+        {
+        }
+        catch (OverflowException)
+        {
+        }
+
+        result = default;
+        return false;
     }
 
     /// <summary>
