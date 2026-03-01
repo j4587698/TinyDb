@@ -177,27 +177,41 @@ var options = new TinyDbOptions
     PageSize = 8192,               // Page size (default 8KB)
     CacheSize = 1000,              // Cache pages count
     EnableJournaling = true,       // Enable WAL journaling
-    Timeout = TimeSpan.FromMinutes(5)  // Operation timeout
+    Timeout = TimeSpan.FromMinutes(5), // Operation timeout
+    Logger = (level, message, ex) =>
+    {
+        Console.WriteLine($"[{level}] {message}");
+        if (ex != null) Console.WriteLine(ex);
+    }
 };
 ```
 
+`Logger` is an optional callback with signature `Action<TinyDbLogLevel, string, Exception?>`, with levels: `Debug`, `Information`, `Warning`, `Error`, `Critical`.
+
 ## Performance
 
-Based on actual results after core refactoring (Reactive Group Commit, Lock Stripping, Zero-Allocation Serialization):
+Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28):
 
-| Operation | Performance | Allocation | Notes |
-|-----------|-------------|------------|-------|
-| **Single Insert** | ~270 ops/s | ~5 KB/op | Journaled mode, 3 active indexes |
-| **Fast Insert** | ~7600 ops/s | ~4 KB/op | Journaled mode, no extra indexes |
-| **Batch Insert** | ~4300 ops/s | ~4 KB/op | Optimized 1000-item batch write |
-| **PK Lookup** | ~5000 ops/s | < 7 KB/op | B+ tree primary key lookup |
-| **Index Query** | ~2500 ops/s | < 8 KB/op | Complex LINQ filtering via index |
+| Operation | `SynchronousWrites=true` | `SynchronousWrites=false` | Allocation |
+|-----------|--------------------------|---------------------------|------------|
+| `Insert1000_Individual` | `3,704,472.3 μs` (~`270 ops/s`) | `3,771,622.8 μs` (~`265 ops/s`) | `~5.2 MB` |
+| `Insert1000_Batch` | `259,325.2 μs` (~`3,856 ops/s`) | `223,901.9 μs` (~`4,466 ops/s`) | `~4.8-4.9 MB` |
+| `QueryWithoutIndex` | `582.2 μs` | `596.2 μs` | `260.99 KB` |
+| `QueryWithIndex` | `415.7 μs` | `421.7 μs` | `59.47 KB` |
+| `QueryWithUniqueIndex` | `257.4 μs` | `267.6 μs` | `7.80 KB` |
+| `FindById` | `235.5 μs` | `244.1 μs` | `6.49 KB` |
 
-> **Note:** Benchmarks performed on AMD EPYC 7763 2.44GHz. Memory allocation has been reduced by over **90%** compared to previous versions thanks to advanced pooling techniques.
+> **Note:** Environment: AMD EPYC 7763 2.44GHz, .NET 9.0.12. This benchmark set uses `EnableJournaling=false` to isolate core read/write path behavior.
 
 ## Version History
 
-### v0.3.0 (Current)
+### v0.3.1 (Current)
+- **Concurrency consistency fix**: added collection-level write serialization to eliminate index conflicts and commit races under concurrent writes.
+- **Stronger error propagation**: critical data-safety paths (for example `Flush`, page switch, fallback-to-new-page failures) now throw instead of being swallowed.
+- **Scan-path optimization**: raw scan moved from full-collection complete snapshot to compact per-page snapshot (`Snapshot(false)`), reducing extra scan overhead.
+- **Observability**: added `TinyDbOptions.Logger` callback with `TinyDbLogLevel`-based structured levels.
+
+### v0.3.0
 - **Performance Leap**: Achieved zero/low allocation serialization via Span and Pooled Buffers, reducing memory allocation by 90%+
 - **Core Refactoring**: Introduced high-performance Reactive Group Commit and Lock Stripping technologies
 - **Metadata Refactoring**: Deeply refactored the metadata management system for better architecture and scalability

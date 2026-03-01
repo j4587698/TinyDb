@@ -177,27 +177,41 @@ var options = new TinyDbOptions
     PageSize = 8192,            // 页面大小（默认 8KB）
     CacheSize = 1000,           // 缓存页数
     EnableJournaling = true,    // 启用 WAL 日志
-    Timeout = TimeSpan.FromMinutes(5)  // 操作超时时间
+    Timeout = TimeSpan.FromMinutes(5), // 操作超时时间
+    Logger = (level, message, ex) =>
+    {
+        Console.WriteLine($"[{level}] {message}");
+        if (ex != null) Console.WriteLine(ex);
+    }
 };
 ```
 
+`Logger` 是可选回调，签名为 `Action<TinyDbLogLevel, string, Exception?>`，支持级别：`Debug`、`Information`、`Warning`、`Error`、`Critical`。
+
 ## 性能数据
 
-基于深度重构（响应式组提交、锁瘦身、零分配序列化）后的实际运行结果：
+以下为 `BenchmarkDotNet` 最新实测均值（`QuickIndexBenchmark`，2026-02-28）：
 
-| 操作 | 性能 | 内存分配 | 说明 |
+| 操作 | `SynchronousWrites=true` | `SynchronousWrites=false` | 内存分配 |
 |------|------|------|------|
-| **单条插入** | ~270 ops/s | ~5 KB/条 | Journaled 模式，含 3 个活跃索引 |
-| **极速插入** | ~7600 ops/s | ~4 KB/条 | Journaled 模式，无额外索引 |
-| **批量插入** | ~4300 ops/s | ~4 KB/条 | 1000 条批量写入优化 |
-| **主键查询** | ~5000 ops/s | < 7 KB/次 | B+树主键索引快速查找 |
-| **索引查询** | ~2500 ops/s | < 8 KB/次 | 复杂 LINQ 条件索引过滤 |
+| `Insert1000_Individual` | `3,704,472.3 μs`（约 `270 ops/s`） | `3,771,622.8 μs`（约 `265 ops/s`） | `~5.2 MB` |
+| `Insert1000_Batch` | `259,325.2 μs`（约 `3,856 ops/s`） | `223,901.9 μs`（约 `4,466 ops/s`） | `~4.8-4.9 MB` |
+| `QueryWithoutIndex` | `582.2 μs` | `596.2 μs` | `260.99 KB` |
+| `QueryWithIndex` | `415.7 μs` | `421.7 μs` | `59.47 KB` |
+| `QueryWithUniqueIndex` | `257.4 μs` | `267.6 μs` | `7.80 KB` |
+| `FindById` | `235.5 μs` | `244.1 μs` | `6.49 KB` |
 
-> **注：** 以上数据在 AMD EPYC 7763 2.44GHz 环境下测得。通过 Pool 缓冲池技术，内存分配较旧版本降低了 **90%** 以上。
+> **注：** 测试环境为 AMD EPYC 7763 2.44GHz，.NET 9.0.12。该组基准使用 `EnableJournaling=false`，用于对比核心读写路径。
 
 ## 版本历史
 
-### v0.3.0 (当前)
+### v0.3.1 (当前)
+- **并发一致性修复**：新增集合级写入串行化，避免高并发写入下的索引冲突与提交竞态。
+- **错误传播强化**：对关键数据安全路径（如 `Flush`、页切换、新页回退失败等）不再吞异常，直接抛出给上层处理。
+- **扫描性能优化**：Raw 扫描从“整集合完整快照”改为按页紧凑快照（`Snapshot(false)`），降低扫描额外开销。
+- **可观测性增强**：新增 `TinyDbOptions.Logger` 回调配置，支持 `TinyDbLogLevel` 分级日志。
+
+### v0.3.0
 - **性能飞跃**：通过 Span 与池化缓冲区（Pooled Buffers）实现零/低分配序列化，内存分配降低 90%+
 - **核心重构**：引入高性能响应式组提交（Reactive Group Commit）与锁剥离（Lock Stripping）技术
 - **元数据重构**：深度重构元数据管理系统，提升架构清晰度与扩展性
