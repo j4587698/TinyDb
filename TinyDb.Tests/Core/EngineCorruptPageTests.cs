@@ -22,7 +22,7 @@ public class EngineCorruptPageTests : IDisposable
     }
 
     [Test]
-    public async Task FindAll_Should_Handle_Page_Read_Error_By_Skipping()
+    public async Task FindAll_ShouldThrow_WhenPageReadFails()
     {
         TinyDbEngine? engine = null;
         try
@@ -48,15 +48,8 @@ public class EngineCorruptPageTests : IDisposable
                 fs.Write(garbage, 0, garbage.Length);
             }
             
-            // Re-open engine
-            engine = new TinyDbEngine(_testDbPath);
-            
-            // FindAll should handle read error in FetchDocumentsByLocations
-            var all = engine.FindAll(colName).ToList();
-            
-            // document should be gone from results and cache
-            await Assert.That(all.Count).IsEqualTo(0);
-            // await Assert.That(engine.GetCachedDocumentCount(colName)).IsEqualTo(0);
+            await Assert.That(() => new TinyDbEngine(_testDbPath))
+                .Throws<InvalidOperationException>();
         }
         finally
         {

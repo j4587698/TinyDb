@@ -236,7 +236,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
     }
 
     [Test]
-    public async Task FindAllAsync_ShouldSkipNonDataAndEmptyPages_AndSwallowPageErrors()
+    public async Task FindAllAsync_WhenOwnedPagesContainInvalidIds_ShouldThrow()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"engine_findall_{Guid.NewGuid():N}.db");
 
@@ -263,9 +263,8 @@ public sealed class TinyDbEngineAdditionalCoverageTests
             pm.SavePage(emptyDataPage, forceFlush: true);
             ownedPages.TryAdd(emptyDataPage.PageID, 0);
 
-            var docs = await col.FindAllAsync();
-            await Assert.That(docs.Count).IsGreaterThan(0);
-            await Assert.That(docs.Exists(d => d.TryGetValue("x", out var v) && v.ToInt32(null) == 1)).IsTrue();
+            await Assert.That(async () => await col.FindAllAsync())
+                .Throws<InvalidOperationException>();
         }
         finally
         {

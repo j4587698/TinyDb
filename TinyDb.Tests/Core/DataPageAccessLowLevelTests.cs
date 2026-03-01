@@ -499,7 +499,7 @@ public class DataPageAccessLowLevelTests : IDisposable
     #region Boundary Conditions Tests
 
     [Test]
-    public async Task ScanDocumentsFromPage_WithCorruptedData_SkipsCorruptedEntries()
+    public async Task ScanDocumentsFromPage_WithCorruptedData_ShouldThrow()
     {
         // This test verifies that corrupted documents are silently skipped
         var page = _pm.NewPage(PageType.Data);
@@ -512,8 +512,8 @@ public class DataPageAccessLowLevelTests : IDisposable
         // Add corrupted document bytes (invalid BSON)
         page.Append(new byte[] { 1, 2, 3 });
         
-        var scanned = _dpa.ScanDocumentsFromPage(page).ToList();
-        await Assert.That(scanned.Count).IsEqualTo(1);
+        await Assert.That(() => _dpa.ScanDocumentsFromPage(page).ToList())
+            .Throws<InvalidDataException>();
     }
 
     [Test]
@@ -561,7 +561,7 @@ public class DataPageAccessLowLevelTests : IDisposable
     }
 
     [Test]
-    public async Task ReadDocumentsFromPage_WithInvalidBson_SkipsInvalidEntryAndContinues()
+    public async Task ReadDocumentsFromPage_WithInvalidBson_ShouldThrow()
     {
         var page = _pm.NewPage(PageType.Data);
         page.ResetBytes(0);
@@ -573,21 +573,20 @@ public class DataPageAccessLowLevelTests : IDisposable
         var validDoc = new BsonDocument().Set("_id", 7).Set("name", "ok");
         page.Append(BsonSerializer.SerializeDocument(validDoc));
 
-        var entries = _dpa.ReadDocumentsFromPage(page);
-        await Assert.That(entries.Count).IsEqualTo(1);
-        await Assert.That(entries[0].Document["_id"].ToInt32(null)).IsEqualTo(7);
+        await Assert.That(() => _dpa.ReadDocumentsFromPage(page))
+            .Throws<InvalidDataException>();
     }
 
     [Test]
-    public async Task ReadDocumentAt_WithInvalidBson_ReturnsNull()
+    public async Task ReadDocumentAt_WithInvalidBson_ShouldThrow()
     {
         var page = _pm.NewPage(PageType.Data);
         page.ResetBytes(0);
 
         page.Append(new byte[] { 1, 2, 3 });
 
-        var entry = _dpa.ReadDocumentAt(page, 0);
-        await Assert.That(entry).IsNull();
+        await Assert.That(() => _dpa.ReadDocumentAt(page, 0))
+            .Throws<InvalidDataException>();
     }
 
     [Test]
@@ -677,15 +676,15 @@ public class DataPageAccessLowLevelTests : IDisposable
     }
 
     [Test]
-    public async Task ReadDocumentAt_WithFields_InvalidBson_ReturnsNull()
+    public async Task ReadDocumentAt_WithFields_InvalidBson_ShouldThrow()
     {
         var page = _pm.NewPage(PageType.Data);
         page.ResetBytes(0);
         page.Append(new byte[] { 1, 2, 3 });
 
         var fields = new HashSet<string> { "_id" };
-        var doc = _dpa.ReadDocumentAt(page, 0, fields);
-        await Assert.That(doc is null).IsTrue();
+        await Assert.That(() => _dpa.ReadDocumentAt(page, 0, fields))
+            .Throws<InvalidDataException>();
     }
 
     [Test]

@@ -63,15 +63,20 @@ public class PageManagerScanTests : IDisposable
     }
 
     [Test]
-    public async Task Initialize_WhenPagesAreCorrupt_ShouldSwallowScanErrors()
+    public async Task Initialize_WhenPagesAreCorrupt_ShouldThrow()
     {
         const uint pageSize = 4096;
         using var ds = new ThrowOnWriteDiskStream("mem://scan", initialSize: (long)pageSize * 3);
-        using var pm = new PageManager(ds, pageSize);
-
-        pm.Initialize(3, 0);
-
-        await Assert.That(pm.FirstFreePageID).IsNotEqualTo(0u);
+        var pm = new PageManager(ds, pageSize);
+        try
+        {
+            await Assert.That(() => pm.Initialize(3, 0)).Throws<InvalidOperationException>();
+        }
+        finally
+        {
+            ds.ShouldThrowOnWrite = false;
+            pm.Dispose();
+        }
     }
 
     private sealed class ThrowOnWriteDiskStream : IDiskStream
@@ -86,16 +91,30 @@ public class PageManagerScanTests : IDisposable
         public long Size { get; private set; }
         public bool IsReadable => true;
         public bool IsWritable => true;
+        public bool ShouldThrowOnWrite { get; set; } = true;
 
         public byte[] ReadPage(long pageOffset, int pageSize) => new byte[pageSize];
 
-        public void WritePage(long pageOffset, byte[] pageData) => throw new IOException("Simulated write failure");
+        public void WritePage(long pageOffset, byte[] pageData)
+        {
+            if (ShouldThrowOnWrite)
+            {
+                throw new IOException("Simulated write failure");
+            }
+        }
 
         public Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default) =>
             Task.FromResult(ReadPage(pageOffset, pageSize));
 
-        public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default) =>
-            Task.FromException(new IOException("Simulated write failure"));
+        public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
+        {
+            if (ShouldThrowOnWrite)
+            {
+                return Task.FromException(new IOException("Simulated write failure"));
+            }
+
+            return Task.CompletedTask;
+        }
 
         public void Flush()
         {

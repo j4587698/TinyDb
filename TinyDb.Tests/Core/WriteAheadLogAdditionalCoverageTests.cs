@@ -71,7 +71,7 @@ public class WriteAheadLogAdditionalCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task WhenDisabled_DeleteFailure_ShouldBeSwallowed()
+    public async Task WhenDisabled_DeleteFailure_ShouldThrow()
     {
         // Windows: an exclusive handle prevents deletion, so this reliably triggers the swallow path.
         if (OperatingSystem.IsWindows())
@@ -81,10 +81,8 @@ public class WriteAheadLogAdditionalCoverageTests : IDisposable
 
             using (new FileStream(_defaultWalPath, FileMode.Open, FileAccess.Read, FileShare.None))
             {
-                using (var wal = new WriteAheadLog(_dbPath, 8192, enabled: false))
-                {
-                    await Assert.That(wal.IsEnabled).IsFalse();
-                }
+                await Assert.That(() => new WriteAheadLog(_dbPath, 8192, enabled: false))
+                    .Throws<InvalidOperationException>();
             }
 
             await Assert.That(File.Exists(_defaultWalPath)).IsTrue();
@@ -108,10 +106,8 @@ public class WriteAheadLogAdditionalCoverageTests : IDisposable
                 tempDir,
                 originalMode & ~(UnixFileMode.UserWrite | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite));
 
-            using (var wal = new WriteAheadLog(dbPath, 8192, enabled: false))
-            {
-                await Assert.That(wal.IsEnabled).IsFalse();
-            }
+            await Assert.That(() => new WriteAheadLog(dbPath, 8192, enabled: false))
+                .Throws<InvalidOperationException>();
 
             await Assert.That(File.Exists(walPath)).IsTrue();
         }

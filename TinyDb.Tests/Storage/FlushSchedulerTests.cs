@@ -79,10 +79,20 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_Journaled_WhenWalDisabled_ShouldFallbackToPageFlush()
     {
-        using var walDisabled = new WriteAheadLog(_dbFile, 8192, false);
-        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero);
+        var isolatedDbFile = Path.Combine(Path.GetTempPath(), $"fs_wal_disabled_{Guid.NewGuid():N}.db");
+        var isolatedWalFile = Path.Combine(Path.GetDirectoryName(isolatedDbFile)!, $"{Path.GetFileNameWithoutExtension(isolatedDbFile)}-wal.db");
+        try
+        {
+            using var walDisabled = new WriteAheadLog(isolatedDbFile, 8192, false);
+            using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero);
 
-        await fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
+            await fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
+        }
+        finally
+        {
+            try { if (File.Exists(isolatedDbFile)) File.Delete(isolatedDbFile); } catch { }
+            try { if (File.Exists(isolatedWalFile)) File.Delete(isolatedWalFile); } catch { }
+        }
     }
 
     [Test]
@@ -165,19 +175,30 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_BackgroundLoop_WhenHasDirtyPagesThrows_ShouldSwallowException()
     {
-        using var walDisabled = new WriteAheadLog(_dbFile, 8192, false);
-        using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.FromMilliseconds(10));
+        var isolatedDbFile = Path.Combine(Path.GetTempPath(), $"fs_dirty_throw_{Guid.NewGuid():N}.db");
+        var isolatedWalFile = Path.Combine(Path.GetDirectoryName(isolatedDbFile)!, $"{Path.GetFileNameWithoutExtension(isolatedDbFile)}-wal.db");
+        try
+        {
+            using var walDisabled = new WriteAheadLog(isolatedDbFile, 8192, false);
+            var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.FromMilliseconds(10));
 
-        _pageManager.Dispose();
+            _pageManager.Dispose();
 
-        // Give the background loop a chance to run and hit the catch-all branch.
-        await Task.Delay(200);
+            // Give the background loop a chance to run and hit the catch-all branch.
+            await Task.Delay(200);
+            await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
+        }
+        finally
+        {
+            try { if (File.Exists(isolatedDbFile)) File.Delete(isolatedDbFile); } catch { }
+            try { if (File.Exists(isolatedWalFile)) File.Delete(isolatedWalFile); } catch { }
+        }
     }
 
     [Test]
     public async Task FlushScheduler_Journaled_AfterDispose_WithPendingEntries_ShouldThrowObjectDisposedException()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
 
         var page = _pageManager.GetPage(1);
         page.WriteData(0, new byte[] { 1 });
@@ -185,7 +206,7 @@ public class FlushSchedulerTests
         _wal.AppendPage(page);
 
         _pageManager.Dispose(); // Make FlushAsync during Dispose fail, keep WAL pending entries
-        fs.Dispose();
+        await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
 
         await Assert.That(() => fs.EnsureDurabilityAsync(WriteConcern.Journaled))
             .Throws<ObjectDisposedException>();
@@ -273,7 +294,7 @@ public class FlushSchedulerTests
     [Test]
     public async Task FlushScheduler_JournalWorker_WhenWalFlushThrows_ShouldFaultBatchTask()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
 
         var page = _pageManager.GetPage(1);
         page.WriteData(0, new byte[] { 1 });
@@ -284,6 +305,8 @@ public class FlushSchedulerTests
 
         await Assert.That(async () => await fs.EnsureDurabilityAsync(WriteConcern.Journaled))
             .Throws<ObjectDisposedException>();
+
+        await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
     }
 
     private sealed class ThrowingWriteAsyncDiskStream : IDiskStream

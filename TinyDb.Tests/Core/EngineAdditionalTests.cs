@@ -88,7 +88,7 @@ public class EngineAdditionalTests : IDisposable
     }
 
     [Test]
-    public async Task FindAll_WhenOwnedPagesContainsInvalidPageId_ShouldSkipAndContinue()
+    public async Task FindAll_WhenOwnedPagesContainsInvalidPageId_ShouldThrow()
     {
         const string col = "owned_pages_skip";
         _engine.InsertDocument(col, new BsonDocument().Set("_id", 1).Set("val", 1));
@@ -98,7 +98,6 @@ public class EngineAdditionalTests : IDisposable
         var st = states[col];
         st.OwnedPages.TryAdd(0, 0);
 
-        var all = _engine.FindAll(col).ToList();
-        await Assert.That(all.Count).IsEqualTo(1);
+        await Assert.That(() => _engine.FindAll(col).ToList()).Throws<InvalidOperationException>();
     }
 }

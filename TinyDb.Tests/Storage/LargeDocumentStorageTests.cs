@@ -112,13 +112,14 @@ public class LargeDocumentStorageTests : IDisposable
     }
 
     [Test]
-    public async Task DeleteLargeDocument_With_Wrong_PageType_Should_NotThrow()
+    public async Task DeleteLargeDocument_With_Wrong_PageType_Should_Throw()
     {
         var storage = new LargeDocumentStorage(_pageManager, PageSize);
         var page = _pageManager.NewPage(PageType.Data);
         _pageManager.SavePage(page);
 
-        await Assert.That(() => storage.DeleteLargeDocument(page.PageID)).ThrowsNothing();
+        await Assert.That(() => storage.DeleteLargeDocument(page.PageID))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]

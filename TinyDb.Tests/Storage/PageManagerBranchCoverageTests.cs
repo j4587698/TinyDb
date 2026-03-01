@@ -100,7 +100,7 @@ public class PageManagerBranchCoverageTests
     }
 
     [Test]
-    public async Task SavePage_WhenPageDisposed_ShouldReturnWithoutThrowing()
+    public async Task SavePage_WhenPageDisposed_ShouldThrowObjectDisposedException()
     {
         using var ds = new MockDiskStream();
         using var pm = new PageManager(ds, pageSize: 4096, maxCacheSize: 10);
@@ -108,13 +108,12 @@ public class PageManagerBranchCoverageTests
         var page = pm.NewPage(PageType.Data);
         page.Dispose();
 
-        pm.SavePage(page);
-
-        await Assert.That(pm.CachedPages).IsEqualTo(1);
+        await Assert.That(() => pm.SavePage(page)).Throws<ObjectDisposedException>();
+        pm.ClearCache();
     }
 
     [Test]
-    public async Task SavePageAsync_WhenPageDisposed_ShouldReturnWithoutThrowing()
+    public async Task SavePageAsync_WhenPageDisposed_ShouldThrowObjectDisposedException()
     {
         using var ds = new MockDiskStream();
         using var pm = new PageManager(ds, pageSize: 4096, maxCacheSize: 10);
@@ -122,8 +121,7 @@ public class PageManagerBranchCoverageTests
         var page = pm.NewPage(PageType.Data);
         page.Dispose();
 
-        await pm.SavePageAsync(page);
-
-        await Assert.That(pm.CachedPages).IsEqualTo(1);
+        await Assert.That(() => pm.SavePageAsync(page)).Throws<ObjectDisposedException>();
+        pm.ClearCache();
     }
 }
