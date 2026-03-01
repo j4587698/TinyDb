@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using TinyDb.Bson;
+using TinyDb.Core;
 using TinyDb.Serialization;
 
 namespace TinyDb.Storage;
@@ -13,6 +14,7 @@ public class LargeDocumentStorage
 {
     private readonly PageManager _pageManager;
     private readonly int _dataPayloadSize;
+    private readonly Action<TinyDbLogLevel, string, Exception?> _log;
 
     private const int LargeDocumentHeaderSize =
         sizeof(int) + sizeof(int) + sizeof(int) + sizeof(uint);
@@ -25,11 +27,20 @@ public class LargeDocumentStorage
     /// </summary>
     /// <param name="pageManager">页面管理器。</param>
     /// <param name="pageSize">页面大小。</param>
-    public LargeDocumentStorage(PageManager pageManager, int pageSize)
+    public LargeDocumentStorage(
+        PageManager pageManager,
+        int pageSize,
+        Action<TinyDbLogLevel, string, Exception?>? logger = null)
     {
         _pageManager = pageManager;
         // 使用 Page.DataStartOffset (41) + 边距 (4)
         _dataPayloadSize = pageSize - Page.DataStartOffset - DataPageHeaderSize - 4;
+        _log = logger ?? TinyDbLogging.NoopLogger;
+    }
+
+    private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
+    {
+        TinyDbLogging.SafeLog(_log, level, message, ex);
     }
 
     /// <summary>
@@ -160,9 +171,13 @@ public class LargeDocumentStorage
     /// <param name="indexPageId">大文档索引页面的 ID。</param>
     public void DeleteLargeDocument(uint indexPageId)
     {
-        try {
+        try
+        {
             var indexPage = _pageManager.GetPage(indexPageId);
-            if (indexPage.PageType != PageType.LargeDocumentIndex) return;
+            if (indexPage.PageType != PageType.LargeDocumentIndex)
+            {
+                throw new InvalidOperationException($"Page {indexPageId} is not a large document index page.");
+            }
 
             var header = ReadIndexPageHeader(indexPage);
             var currentPageId = header.FirstDataPageId;
@@ -173,7 +188,13 @@ public class LargeDocumentStorage
                 _pageManager.FreePage(dataPage.PageID);
             }
             _pageManager.FreePage(indexPageId);
-        } catch {}
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to delete large document at index page {indexPageId}.",
+                ex);
+        }
     }
 
     /// <summary>
@@ -209,7 +230,7 @@ public class LargeDocumentStorage
 
             return true;
         }
-        catch
+        catch (Exception)
         {
             return false;
         }

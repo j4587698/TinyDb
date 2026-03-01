@@ -124,6 +124,11 @@ public sealed class TinyDbOptions
     public TimeSpan BackgroundFlushInterval { get; set; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
+    /// 可选日志回调。若未设置则默认不输出。
+    /// </summary>
+    public Action<TinyDbLogLevel, string, Exception?>? Logger { get; set; }
+
+    /// <summary>
     /// 是否启用同步写入（兼容旧配置）。
     /// </summary>
     public bool SynchronousWrites
@@ -225,7 +230,8 @@ public sealed class TinyDbOptions
             MaxTransactions = MaxTransactions,
             TransactionTimeout = TransactionTimeout,
             WriteConcern = WriteConcern,
-            BackgroundFlushInterval = BackgroundFlushInterval
+            BackgroundFlushInterval = BackgroundFlushInterval,
+            Logger = Logger
         };
     }
 

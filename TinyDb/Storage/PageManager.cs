@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using TinyDb.Core;
 using TinyDb.Utils;
 
 namespace TinyDb.Storage;
@@ -14,6 +15,7 @@ public sealed class PageManager : IDisposable
     private readonly object _allocationLock = new(); // 用于分配新页面的锁
     private readonly object[] _pageLocks; // 分段锁，用于页面级别的同步
     private readonly LRUCache<uint, Page> _lruCache;
+    private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private const int LockStripes = 64; // 分段锁的数量
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
@@ -77,12 +79,17 @@ public sealed class PageManager : IDisposable
     /// <param name="diskStream">磁盘流</param>
     /// <param name="pageSize">页面大小</param>
     /// <param name="maxCacheSize">最大缓存大小</param>
-    public PageManager(IDiskStream diskStream, uint pageSize = 8192, int maxCacheSize = 1000)
+    public PageManager(
+        IDiskStream diskStream,
+        uint pageSize = 8192,
+        int maxCacheSize = 1000,
+        Action<TinyDbLogLevel, string, Exception?>? logger = null)
     {
         _diskStream = diskStream ?? throw new ArgumentNullException(nameof(diskStream));
         if (pageSize <= PageHeader.Size) throw new ArgumentException($"Page size must be larger than {PageHeader.Size}", nameof(pageSize));
         if (maxCacheSize <= 0) throw new ArgumentOutOfRangeException(nameof(maxCacheSize));
 
+        _log = logger ?? TinyDbLogging.NoopLogger;
         _pageSize = pageSize;
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
@@ -92,6 +99,11 @@ public sealed class PageManager : IDisposable
         _fileSize = _diskStream.Size;
         _nextPageID = 0;
         _firstFreePageID = 0;
+    }
+
+    private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
+    {
+        TinyDbLogging.SafeLog(_log, level, message, ex);
     }
 
     /// <summary>
@@ -137,7 +149,10 @@ public sealed class PageManager : IDisposable
                     lastFreeId = i;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to scan free page {i}.", ex);
+            }
         }
     }
 
@@ -166,7 +181,11 @@ public sealed class PageManager : IDisposable
                     var pData = _diskStream.ReadPage(pOffset, (int)_pageSize);
                     var header = PageHeader.FromByteArray(pData);
                     current = header.NextPageID;
-                } catch { break; }
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Failed to traverse free-page list at page {current}.", ex);
+                }
             }
 
             return new PageManagerStatistics
@@ -216,6 +235,11 @@ public sealed class PageManager : IDisposable
         try
         {
             var pageData = _diskStream.ReadPage(pageOffset, (int)_pageSize);
+            if (IsZeroFilledPage(pageData))
+            {
+                return CreateNewPage(pageID, PageType.Empty);
+            }
+
             var page = new Page(pageID, pageData);
 
             // 如果是空页面，初始化为 Empty 类型
@@ -232,10 +256,9 @@ public sealed class PageManager : IDisposable
 
             return page;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 如果页面损坏，创建一个新的空页面
-            return CreateNewPage(pageID, PageType.Empty);
+            throw new InvalidDataException($"Failed to load page {pageID} at offset {pageOffset}.", ex);
         }
     }
 
@@ -260,10 +283,20 @@ public sealed class PageManager : IDisposable
 
         // 从磁盘异步读取
         var pageOffset = CalculatePageOffset(pageID);
+        if (pageOffset + _pageSize > _fileSize)
+        {
+            return CreateNewPage(pageID, PageType.Empty);
+        }
+
         var pageData = await _diskStream.ReadPageAsync(pageOffset, (int)_pageSize, cancellationToken);
 
         try
         {
+            if (IsZeroFilledPage(pageData))
+            {
+                return CreateNewPage(pageID, PageType.Empty);
+            }
+
             var page = new Page(pageID, pageData);
 
             // 如果是空页面，初始化为 Empty 类型
@@ -280,11 +313,20 @@ public sealed class PageManager : IDisposable
 
             return page;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 如果页面损坏，创建一个新的空页面
-            return await Task.FromResult(CreateNewPage(pageID, PageType.Empty));
+            throw new InvalidDataException($"Failed to parse page {pageID} at offset {pageOffset}.", ex);
         }
+    }
+
+    private static bool IsZeroFilledPage(byte[] pageData)
+    {
+        for (int i = 0; i < pageData.Length; i++)
+        {
+            if (pageData[i] != 0) return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -370,14 +412,7 @@ public sealed class PageManager : IDisposable
             page.UpdateChecksum();
 
             var pageOffset = CalculatePageOffset(page.PageID);
-            try
-            {
-                _diskStream.WritePage(pageOffset, page.Buffer);
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
+            _diskStream.WritePage(pageOffset, page.Buffer);
 
             if (forceFlush)
             {
@@ -661,22 +696,40 @@ public sealed class PageManager : IDisposable
     {
         if (!_disposed)
         {
+            Exception? flushException = null;
+            Exception? cleanupException = null;
             try
             {
-                // 刷新所有脏页面
-                FlushDirtyPages();
+                try
+                {
+                    // 刷新所有脏页面
+                    FlushDirtyPages();
+                }
+                catch (Exception ex)
+                {
+                    flushException = new InvalidOperationException("Flush dirty pages during PageManager dispose failed.", ex);
+                }
 
                 // 清理缓存
                 ClearCache();
 
                 _diskStream.Dispose();
             }
-            catch
+            catch (Exception ex)
             {
+                cleanupException = new InvalidOperationException("PageManager dispose failed.", ex);
             }
             finally
             {
                 _disposed = true;
+            }
+
+            if (flushException != null || cleanupException != null)
+            {
+                var exceptions = new List<Exception>();
+                if (flushException != null) exceptions.Add(flushException);
+                if (cleanupException != null) exceptions.Add(cleanupException);
+                throw new AggregateException("One or more errors occurred during PageManager dispose.", exceptions);
             }
         }
     }
@@ -703,3 +756,4 @@ public sealed class PageManagerStatistics
         return $"PageManager: {UsedPages}/{TotalPages} used, {CachedPages}/{MaxCacheSize} cached, {DirtyPages} dirty, HitRatio={CacheHitRatio * 100:F1}%";
     }
 }
+

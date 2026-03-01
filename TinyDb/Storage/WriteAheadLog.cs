@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using TinyDb.Core;
 
 namespace TinyDb.Storage;
 
@@ -16,6 +17,7 @@ public sealed class WriteAheadLog : IDisposable
 
     private readonly string _logFilePath;
     private readonly FileStream? _stream;
+    private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly int _maxRecordSize;
     private bool _disposed;
@@ -37,11 +39,17 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public bool HasPendingEntries => IsEnabled && _hasPendingEntries;
 
-    public WriteAheadLog(string databaseFilePath, int pageSize, bool enabled, string? walFileNameFormat = null)
+    public WriteAheadLog(
+        string databaseFilePath,
+        int pageSize,
+        bool enabled,
+        string? walFileNameFormat = null,
+        Action<TinyDbLogLevel, string, Exception?>? logger = null)
     {
         if (string.IsNullOrWhiteSpace(databaseFilePath))
             throw new ArgumentException("Database file path cannot be null or empty", nameof(databaseFilePath));
 
+        _log = logger ?? TinyDbLogging.NoopLogger;
         _maxRecordSize = Math.Max(pageSize, 0);
         IsEnabled = enabled;
         _logFilePath = GenerateWalFilePath(databaseFilePath, walFileNameFormat ?? "{name}-wal.{ext}");
@@ -102,6 +110,11 @@ public sealed class WriteAheadLog : IDisposable
         return Path.Combine(directory, formattedFileName);
     }
 
+    private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
+    {
+        TinyDbLogging.SafeLog(_log, level, message, ex);
+    }
+
     private void TryDeleteExistingLog()
     {
         try
@@ -111,9 +124,9 @@ public sealed class WriteAheadLog : IDisposable
                 File.Delete(_logFilePath);
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // 忽略清理失败
+            throw new InvalidOperationException($"Failed to delete existing log file '{_logFilePath}'.", ex);
         }
     }
 
@@ -382,7 +395,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (headerBuffer[0] != EntryTypePage)
                 {
-                    Console.Error.WriteLine($"WAL: Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}");
+                    Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}.");
                     break;
                 }
 
@@ -398,14 +411,14 @@ public sealed class WriteAheadLog : IDisposable
                 {
                     if (read > HeaderSize)
                     {
-                        Console.Error.WriteLine($"WAL: Incomplete header at {currentEntryStart}");
+                        Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
                         break;
                     }
                 }
 
                 if (length <= 0 || length > _maxRecordSize)
                 {
-                    Console.Error.WriteLine($"WAL: Invalid record length {length} at {currentEntryStart}");
+                    Log(TinyDbLogLevel.Warning, $"Invalid record length {length} at {currentEntryStart}.");
                     break;
                 }
 
@@ -423,7 +436,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (offset != length)
                 {
-                    Console.Error.WriteLine($"WAL: Incomplete data record at {currentEntryStart}");
+                    Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
                     break;
                 }
 
@@ -432,7 +445,7 @@ public sealed class WriteAheadLog : IDisposable
                     var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value)
                     {
-                        Console.Error.WriteLine($"WAL: CRC mismatch at {currentEntryStart}");
+                        Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         break;
                     }
                 }
@@ -455,8 +468,23 @@ public sealed class WriteAheadLog : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"WAL: Fatal error during replay: {ex.Message}");
-            try { stream.SetLength(lastSuccessfulPosition); } catch { }
+            Exception? recoveryException = null;
+            try
+            {
+                stream.SetLength(lastSuccessfulPosition);
+            }
+            catch (Exception recoverEx)
+            {
+                recoveryException = new InvalidOperationException(
+                    "Failed to truncate WAL to last successful position during replay recovery.",
+                    recoverEx);
+            }
+
+            if (recoveryException != null)
+            {
+                throw new AggregateException("Fatal error during WAL replay and replay recovery truncation failed.", ex, recoveryException);
+            }
+
             throw;
         }
         finally
@@ -496,7 +524,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (headerBuffer[0] != EntryTypePage)
                 {
-                    Console.Error.WriteLine($"WAL: Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}");
+                    Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}.");
                     break; // 无效类型，停止重放
                 }
 
@@ -513,14 +541,14 @@ public sealed class WriteAheadLog : IDisposable
                 {
                     if (read > HeaderSize) 
                     {
-                        Console.Error.WriteLine($"WAL: Incomplete header at {currentEntryStart}");
+                        Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
                         break; 
                     }
                 }
 
                 if (length <= 0 || length > _maxRecordSize)
                 {
-                    Console.Error.WriteLine($"WAL: Invalid record length {length} at {currentEntryStart}");
+                    Log(TinyDbLogLevel.Warning, $"Invalid record length {length} at {currentEntryStart}.");
                     break; // 无效长度
                 }
 
@@ -538,7 +566,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (offset != length)
                 {
-                    Console.Error.WriteLine($"WAL: Incomplete data record at {currentEntryStart}");
+                    Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
                     break; // 数据不完整
                 }
 
@@ -548,7 +576,7 @@ public sealed class WriteAheadLog : IDisposable
                     var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value)
                     {
-                        Console.Error.WriteLine($"WAL: CRC mismatch at {currentEntryStart}");
+                        Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         break;
                     }
                 }
@@ -574,9 +602,24 @@ public sealed class WriteAheadLog : IDisposable
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"WAL: Fatal error during replay: {ex.Message}");
+            Exception? recoveryException = null;
             // 尽力而为：截断到已知正确的位置
-            try { stream.SetLength(lastSuccessfulPosition); } catch { }
+            try
+            {
+                stream.SetLength(lastSuccessfulPosition);
+            }
+            catch (Exception recoverEx)
+            {
+                recoveryException = new InvalidOperationException(
+                    "Failed to truncate WAL to last successful position during replay recovery.",
+                    recoverEx);
+            }
+
+            if (recoveryException != null)
+            {
+                throw new AggregateException("Fatal error during WAL replay and replay recovery truncation failed.", ex, recoveryException);
+            }
+
             throw;
         }
         finally

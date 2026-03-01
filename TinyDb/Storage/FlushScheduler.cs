@@ -13,6 +13,7 @@ public sealed class FlushScheduler : IDisposable
     private readonly PageManager _pageManager;
     private readonly WriteAheadLog _wal;
     private readonly TimeSpan _backgroundInterval;
+    private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task? _backgroundTask;
     private readonly object _flushLock = new();
@@ -29,16 +30,26 @@ public sealed class FlushScheduler : IDisposable
     /// <param name="pageManager">页面管理器。</param>
     /// <param name="wal">写前日志。</param>
     /// <param name="backgroundInterval">后台刷新间隔。</param>
-    public FlushScheduler(PageManager pageManager, WriteAheadLog wal, TimeSpan backgroundInterval)
+    public FlushScheduler(
+        PageManager pageManager,
+        WriteAheadLog wal,
+        TimeSpan backgroundInterval,
+        Action<TinyDbLogLevel, string, Exception?>? logger = null)
     {
         _pageManager = pageManager ?? throw new ArgumentNullException(nameof(pageManager));
         _wal = wal ?? throw new ArgumentNullException(nameof(wal));
         _backgroundInterval = backgroundInterval;
+        _log = logger ?? TinyDbLogging.NoopLogger;
 
         if (_backgroundInterval > TimeSpan.Zero || _wal.IsEnabled)
         {
             _backgroundTask = Task.Run(BackgroundLoopAsync);
         }
+    }
+
+    private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
+    {
+        TinyDbLogging.SafeLog(_log, level, message, ex);
     }
 
     private async Task BackgroundLoopAsync()
@@ -54,8 +65,14 @@ public sealed class FlushScheduler : IDisposable
                 await Task.Delay(effectiveInterval, _cts.Token).ConfigureAwait(false);
                 await FlushPendingAsync(_cts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { }
-            catch { }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
+                // Expected during shutdown.
+            }
+            catch (Exception ex)
+            {
+                Log(TinyDbLogLevel.Warning, "Background flush loop failed.", ex);
+            }
         }
     }
 
@@ -226,9 +243,49 @@ public sealed class FlushScheduler : IDisposable
         if (_disposed) return;
         _disposed = true;
         _cts.Cancel();
-        try { _journalWorkerTask?.Wait(); } catch { }
-        try { _backgroundTask?.Wait(); } catch { }
-        try { Flush(); } catch { }
-        _cts.Dispose();
+
+        Exception? journalWaitException = null;
+        Exception? backgroundWaitException = null;
+        Exception? flushException = null;
+
+        try
+        {
+            _journalWorkerTask?.Wait();
+        }
+        catch (Exception ex)
+        {
+            journalWaitException = new InvalidOperationException("Journal worker stop failed.", ex);
+        }
+
+        try
+        {
+            _backgroundTask?.Wait();
+        }
+        catch (Exception ex)
+        {
+            backgroundWaitException = new InvalidOperationException("Background worker stop failed.", ex);
+        }
+
+        try
+        {
+            Flush();
+        }
+        catch (Exception ex)
+        {
+            flushException = ex;
+        }
+        finally
+        {
+            _cts.Dispose();
+        }
+
+        if (journalWaitException != null || backgroundWaitException != null || flushException != null)
+        {
+            var exceptions = new List<Exception>();
+            if (journalWaitException != null) exceptions.Add(journalWaitException);
+            if (backgroundWaitException != null) exceptions.Add(backgroundWaitException);
+            if (flushException != null) exceptions.Add(flushException);
+            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+        }
     }
 }

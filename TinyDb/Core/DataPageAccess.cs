@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using TinyDb.Bson;
 using TinyDb.Storage;
@@ -50,7 +51,11 @@ internal sealed class DataPageAccess
             {
                 doc = BsonSerializer.DeserializeDocument(slice);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Failed to deserialize document in page {p.PageID} at entry {i}.", ex);
+            }
 
             if (doc != null)
             {
@@ -89,7 +94,11 @@ internal sealed class DataPageAccess
                 int lS = isL ? (int)doc["_largeDocumentSize"].ToInt64(null) : 0;
                 res.Add(new PageDocumentEntry(doc, bytes, isL, lId, lS));
             }
-            catch { }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Failed to deserialize document in page {p.PageID} at entry {i}.", ex);
+            }
         }
 
         p.CachedParsedData = res;
@@ -127,7 +136,11 @@ internal sealed class DataPageAccess
             int lS = isL ? (int)doc["_largeDocumentSize"].ToInt64(null) : 0;
             return new PageDocumentEntry(doc, bytes, isL, lId, lS);
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException(
+                $"Failed to deserialize document in page {p.PageID} at entry {index}.", ex);
+        }
     }
 
     public BsonDocument? ReadDocumentAt(Page p, int index, HashSet<string>? fields)
@@ -179,7 +192,11 @@ internal sealed class DataPageAccess
 
             return doc;
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException(
+                $"Failed to read document in page {p.PageID} at entry {index}.", ex);
+        }
     }
 
     public void AppendDocumentToPage(Page p, ReadOnlySpan<byte> bytes)
@@ -197,10 +214,29 @@ internal sealed class DataPageAccess
 
     public IEnumerable<RawScanResult> ScanRawDocumentsFromPageWithPredicateInfo(Page p, ScanPredicate[]? predicates = null)
     {
-        int count = p.Header.ItemCount;
-        var mem = p.Memory;
-        int offset = Page.DataStartOffset + InternalReserved;
         int endOffset = p.PageSize - p.Header.FreeBytes;
+        foreach (var result in ScanRawDocumentsFromBuffer(p.Memory, p.Header.ItemCount, endOffset, predicates))
+        {
+            yield return result;
+        }
+    }
+
+    public IEnumerable<RawScanResult> ScanRawDocumentsFromPageSnapshotWithPredicateInfo(ReadOnlyMemory<byte> pageSnapshot, int itemCount, int endOffset, ScanPredicate[]? predicates = null)
+    {
+        foreach (var result in ScanRawDocumentsFromBuffer(pageSnapshot, itemCount, endOffset, predicates))
+        {
+            yield return result;
+        }
+    }
+
+    private IEnumerable<RawScanResult> ScanRawDocumentsFromBuffer(ReadOnlyMemory<byte> mem, int count, int endOffset, ScanPredicate[]? predicates)
+    {
+        if (count <= 0) yield break;
+        if (endOffset < 0) yield break;
+        if (endOffset > mem.Length) endOffset = mem.Length;
+
+        int offset = Page.DataStartOffset + InternalReserved;
+        if (offset > endOffset) yield break;
 
         for (int i = 0; i < count; i++)
         {
