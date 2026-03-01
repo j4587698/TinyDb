@@ -8,6 +8,7 @@ internal sealed class CollectionState
 {
     private int _cacheInitialized;
     public DataPageState PageState { get; } = new();
+    public object WriteSyncRoot { get; } = new();
     
     // 抽象层：可以是内存索引，也可以是磁盘索引
     public IDocumentIndex Index { get; set; } = default!;

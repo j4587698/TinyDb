@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Bson;
@@ -54,6 +55,7 @@ public sealed class TinyDbEngine : IDisposable
     private DataPageAccess _dataPageAccess = null!;
     private readonly object _lock = new();
     private readonly AsyncLocal<ITransaction?> _currentTransaction = new();
+    private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private DatabaseHeader _header;
     private bool _disposed;
     private bool _isInitialized;
@@ -101,6 +103,7 @@ public sealed class TinyDbEngine : IDisposable
         _filePath = f ?? throw new ArgumentNullException();
         _options = o ?? new TinyDbOptions();
         _options.Validate();
+        _log = _options.Logger ?? TinyDbLogging.NoopLogger;
 
         _collections = new ConcurrentDictionary<string, IDocumentCollection>(StringComparer.Ordinal);
         _indexManagers = new ConcurrentDictionary<string, IndexManager>(StringComparer.Ordinal);
@@ -123,14 +126,14 @@ public sealed class TinyDbEngine : IDisposable
             _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.ReadWrite);
         }
 
-        _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize);
-        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat);
+        _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log);
+        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log);
         
         _pageManager.RegisterWAL(lsn => _writeAheadLog.FlushToLSN(lsn));
         _pageManager.RegisterWAL((lsn, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ct));
 
-        _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval));
-        _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize);
+        _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), _log);
+        _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize, _log);
         _dataPageAccess = new DataPageAccess(_pageManager, _largeDocumentStorage, _writeAheadLog);
         _metadataManager = new TinyDb.Metadata.MetadataManager(this);
 
@@ -198,7 +201,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 File.Move(tempFile, _filePath, overwrite: true);
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // 移动失败，尝试恢复组件
                 InitializeComponents(null);
@@ -294,7 +297,7 @@ public sealed class TinyDbEngine : IDisposable
                 // 步骤 5: 安全检查。
                 EnsureDatabaseSecurity();
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _isInitialized = false;
                 Dispose();
@@ -593,9 +596,15 @@ public sealed class TinyDbEngine : IDisposable
 
     internal BsonValue InsertDocument(string col, BsonDocument doc)
     {
+        var st = GetCollectionState(col);
+        var idx = GetIndexManager(col);
         var pr = PrepareDocumentForInsert(col, doc, out var id);
         _metadataManager.ValidateDocumentForWrite(col, pr, _options.SchemaValidationMode);
-        var res = InsertPreparedDocument(col, pr, id, GetCollectionState(col), GetIndexManager(col), true);
+        BsonValue res;
+        lock (st.WriteSyncRoot)
+        {
+            res = InsertPreparedDocument(col, pr, id, st, idx, true);
+        }
         EnsureWriteDurability();
         return res;
     }
@@ -609,9 +618,15 @@ public sealed class TinyDbEngine : IDisposable
     /// <returns>插入文档的ID</returns>
     internal async Task<BsonValue> InsertDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
+        var st = GetCollectionState(col);
+        var idx = GetIndexManager(col);
         var pr = PrepareDocumentForInsert(col, doc, out var id);
         _metadataManager.ValidateDocumentForWrite(col, pr, _options.SchemaValidationMode);
-        var res = InsertPreparedDocument(col, pr, id, GetCollectionState(col), GetIndexManager(col), true);
+        BsonValue res;
+        lock (st.WriteSyncRoot)
+        {
+            res = InsertPreparedDocument(col, pr, id, st, idx, true);
+        }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
     }
@@ -631,48 +646,48 @@ public sealed class TinyDbEngine : IDisposable
         _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
         var st = GetCollectionState(col);
-        PageDocumentEntry old = default; // Declare outside lock
+        var idxMgr = GetIndexManager(col);
+        PageDocumentEntry old = default;
 
-        lock (st.PageState.SyncRoot)
+        lock (st.WriteSyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-            if (i >= e.Count) return 0; // Guard against index mismatch
-            old = e[i];
-
-            // Handle Large Doc
-            var bs = BsonSerializer.SerializeDocument(doc);
-            if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+            lock (st.PageState.SyncRoot)
             {
-                var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
-                doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
-                bs = BsonSerializer.SerializeDocument(doc);
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+                if (i >= e.Count) return 0;
+                old = e[i];
+
+                var bs = BsonSerializer.SerializeDocument(doc);
+                if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+                {
+                    var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
+                    doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
+                    bs = BsonSerializer.SerializeDocument(doc);
+                }
+
+                e[i] = new PageDocumentEntry(doc, bs);
+
+                if (!_dataPageAccess.CanFitInPage(p, e))
+                {
+                    e[i] = old;
+                    e.RemoveAt(i);
+                    st.Index.Remove(id);
+
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+
+                    var pr = PrepareDocumentForInsert(col, doc, out _);
+                    InsertPreparedDocument(col, pr, id, st, idxMgr, false);
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+
+                if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
             }
 
-            e[i] = new PageDocumentEntry(doc, bs);
-
-            // Check if it fits
-            if (!_dataPageAccess.CanFitInPage(p, e))
-            {
-                // Overflow! Fallback: Delete + Insert
-                e[i] = old; // Revert in memory list to old state to delete cleanly
-                // Delete logic inline
-                e.RemoveAt(i);
-                st.Index.Remove(id);
-
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-
-                // Now Insert new
-                var pr = PrepareDocumentForInsert(col, doc, out _);
-                InsertPreparedDocument(col, pr, id, st, GetIndexManager(col), false); // false = don't update index manager yet
-            }
-            else
-            {
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-            }
-
-            if (old.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(old.LargeDocumentIndexPageId); } catch { }
+            idxMgr.UpdateDocument(old.Document, doc, id);
         }
-        GetIndexManager(col).UpdateDocument(old.Document, doc, id);
 
         EnsureWriteDurability();
         return 1;
@@ -698,43 +713,48 @@ public sealed class TinyDbEngine : IDisposable
         _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
         var st = GetCollectionState(col);
+        var idxMgr = GetIndexManager(col);
         PageDocumentEntry old = default;
 
-        lock (st.PageState.SyncRoot)
+        lock (st.WriteSyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-            if (i >= e.Count) return 0;
-            old = e[i];
-
-            var bs = BsonSerializer.SerializeDocument(doc);
-            if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+            lock (st.PageState.SyncRoot)
             {
-                var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
-                doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
-                bs = BsonSerializer.SerializeDocument(doc);
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+                if (i >= e.Count) return 0;
+                old = e[i];
+
+                var bs = BsonSerializer.SerializeDocument(doc);
+                if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+                {
+                    var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
+                    doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
+                    bs = BsonSerializer.SerializeDocument(doc);
+                }
+
+                e[i] = new PageDocumentEntry(doc, bs);
+
+                if (!_dataPageAccess.CanFitInPage(p, e))
+                {
+                    e[i] = old;
+                    e.RemoveAt(i);
+                    st.Index.Remove(id);
+
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+
+                    var pr = PrepareDocumentForInsert(col, doc, out _);
+                    InsertPreparedDocument(col, pr, id, st, idxMgr, false);
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+
+                if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
             }
 
-            e[i] = new PageDocumentEntry(doc, bs);
-
-            if (!_dataPageAccess.CanFitInPage(p, e))
-            {
-                e[i] = old;
-                e.RemoveAt(i);
-                st.Index.Remove(id);
-
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-
-                var pr = PrepareDocumentForInsert(col, doc, out _);
-                InsertPreparedDocument(col, pr, id, st, GetIndexManager(col), false);
-            }
-            else
-            {
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-            }
-
-            if (old.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(old.LargeDocumentIndexPageId); } catch { }
+            idxMgr.UpdateDocument(old.Document, doc, id);
         }
-        GetIndexManager(col).UpdateDocument(old.Document, doc, id);
 
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
@@ -743,28 +763,31 @@ public sealed class TinyDbEngine : IDisposable
     internal int DeleteDocument(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
-        lock (st.PageState.SyncRoot)
+        var idxMgr = GetIndexManager(col);
+        lock (st.WriteSyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-            if (i >= e.Count) return 0; // Guard against index mismatch
-            var entry = e[i];
-            e.RemoveAt(i);
-            st.Index.Remove(id);
-            if (e.Count == 0)
+            lock (st.PageState.SyncRoot)
             {
-                st.OwnedPages.TryRemove(p.PageID, out _); // Remove from OwnedPages
-                // Also need to reset st.PageState.PageId if it points to freed page (Bug Fix reinforcement)
-                if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+                if (i >= e.Count) return 0;
+                var entry = e[i];
+                e.RemoveAt(i);
+                st.Index.Remove(id);
+                if (e.Count == 0)
+                {
+                    st.OwnedPages.TryRemove(p.PageID, out _);
+                    if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
 
-                _pageManager.FreePage(p.PageID);
-                lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                    _pageManager.FreePage(p.PageID);
+                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+                if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
+                idxMgr.DeleteDocument(entry.Document, id);
             }
-            else
-            {
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-            }
-            if (entry.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(entry.LargeDocumentIndexPageId); } catch { }
-            GetIndexManager(col).DeleteDocument(entry.Document, id);
         }
         EnsureWriteDurability();
         return 1;
@@ -780,26 +803,30 @@ public sealed class TinyDbEngine : IDisposable
     internal async Task<int> DeleteDocumentAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
         var st = GetCollectionState(col);
-        lock (st.PageState.SyncRoot)
+        var idxMgr = GetIndexManager(col);
+        lock (st.WriteSyncRoot)
         {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-            if (i >= e.Count) return 0;
-            var entry = e[i];
-            e.RemoveAt(i);
-            st.Index.Remove(id);
-            if (e.Count == 0)
+            lock (st.PageState.SyncRoot)
             {
-                st.OwnedPages.TryRemove(p.PageID, out _);
-                if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
-                _pageManager.FreePage(p.PageID);
-                lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+                if (i >= e.Count) return 0;
+                var entry = e[i];
+                e.RemoveAt(i);
+                st.Index.Remove(id);
+                if (e.Count == 0)
+                {
+                    st.OwnedPages.TryRemove(p.PageID, out _);
+                    if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
+                    _pageManager.FreePage(p.PageID);
+                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+                if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
+                idxMgr.DeleteDocument(entry.Document, id);
             }
-            else
-            {
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-            }
-            if (entry.IsLargeDocument) try { _largeDocumentStorage.DeleteLargeDocument(entry.LargeDocumentIndexPageId); } catch { }
-            GetIndexManager(col).DeleteDocument(entry.Document, id);
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
@@ -822,104 +849,135 @@ public sealed class TinyDbEngine : IDisposable
         var exceptions = new List<Exception>();
 
         var pagesToPersist = new HashSet<Page>();
+        var pinnedPages = new List<Page>();
 
-        lock (st.PageState.SyncRoot)
+        void TrackPageForPersist(Page page)
         {
-            Page? currentPage = null;
-            if (st.PageState.PageId != 0)
+            if (pagesToPersist.Add(page))
             {
-                try { currentPage = _pageManager.GetPage(st.PageState.PageId); } catch { }
+                page.Pin();
+                pinnedPages.Add(page);
             }
+        }
 
-            if (currentPage == null || currentPage.Header.PageType != PageType.Data)
+        try
+        {
+            lock (st.WriteSyncRoot)
             {
-                 var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024); 
-                 currentPage = p;
-                 st.OwnedPages.TryAdd(p.PageID, 0);
-                 if (isN) lock (_lock) { _header.UsedPages++; }
-             }
-
-            foreach (var d in docs)
-            {
-                if (d == null) continue;
-
-                try
+                lock (st.PageState.SyncRoot)
                 {
-                    var doc = PrepareDocumentForInsert(col, d, out var id);
-                    _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
-
-                    buffer.Reset();
-                    BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
-
-                    if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
+                    Page? currentPage = null;
+                    if (st.PageState.PageId != 0)
                     {
-                        var bytes = buffer.WrittenSpan.ToArray();
-                        var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
-                        doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
-                        
-                        buffer.Reset();
-                        BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+                        try
+                        {
+                            currentPage = _pageManager.GetPage(st.PageState.PageId);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException(
+                                $"Failed to load writable page {st.PageState.PageId} for collection '{col}'.",
+                                ex);
+                        }
                     }
 
-                    int len = buffer.WrittenCount;
-                    int reqSize = DataPageAccess.GetEntrySize(len);
-
-                    if (currentPage!.Header.FreeBytes < reqSize)
+                    if (currentPage == null || currentPage.Header.PageType != PageType.Data)
                     {
-                         pagesToPersist.Add(currentPage);
-                         var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
-                         currentPage = p;
-                         st.OwnedPages.TryAdd(p.PageID, 0);
-                         if (isN) lock (_lock) { _header.UsedPages++; }
-                     }
+                        var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024);
+                        currentPage = p;
+                        st.OwnedPages.TryAdd(p.PageID, 0);
+                        if (isN) lock (_lock) { _header.UsedPages++; }
+                    }
 
-                    ushort i = currentPage.Header.ItemCount;
-                    _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
-                    st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
-                    
-                    docsToUpdateIndex.Add((doc, id));
-                    insertedCount++;
+                    foreach (var d in docs)
+                    {
+                        if (d == null) continue;
+
+                        try
+                        {
+                            var doc = PrepareDocumentForInsert(col, d, out var id);
+                            _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
+
+                            buffer.Reset();
+                            BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+
+                            if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
+                            {
+                                var bytes = buffer.WrittenSpan.ToArray();
+                                var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
+                                doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
+
+                                buffer.Reset();
+                                BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+                            }
+
+                            int len = buffer.WrittenCount;
+                            int reqSize = DataPageAccess.GetEntrySize(len);
+
+                            if (currentPage!.Header.FreeBytes < reqSize)
+                            {
+                                TrackPageForPersist(currentPage);
+                                var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
+                                currentPage = p;
+                                st.OwnedPages.TryAdd(p.PageID, 0);
+                                if (isN) lock (_lock) { _header.UsedPages++; }
+                            }
+
+                            ushort i = currentPage.Header.ItemCount;
+                            _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
+                            st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
+
+                            docsToUpdateIndex.Add((doc, id));
+                            insertedCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            exceptions.Add(ex);
+                        }
+                    }
+
+                    if (currentPage != null)
+                    {
+                        TrackPageForPersist(currentPage);
+                    }
+
+                    lock (_lock) { WriteHeader(); }
                 }
-                catch (Exception ex)
+
+                foreach (var page in pagesToPersist)
                 {
-                    exceptions.Add(ex);
+                    _dataPageAccess.PersistPage(page);
                 }
-            }
 
-            if (currentPage != null)
-            {
-                pagesToPersist.Add(currentPage);
-            }
+                foreach (var (doc, id) in docsToUpdateIndex)
+                {
+                    try
+                    {
+                        idx.InsertDocument(doc, id);
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                }
 
-            lock (_lock) { WriteHeader(); }
+                EnsureWriteDurability();
+
+                if (exceptions.Count > 0)
+                {
+                    throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+                }
+
+                return insertedCount;
+            }
         }
-
-        // 在锁外执行持久化
-        foreach (var page in pagesToPersist)
+        finally
         {
-            _dataPageAccess.PersistPage(page);
-        }
-
-        foreach (var (doc, id) in docsToUpdateIndex)
-        {
-            try
+            foreach (var page in pinnedPages)
             {
-                idx.InsertDocument(doc, id);
-            }
-            catch (Exception ex)
-            {
-                exceptions.Add(ex);
+                page.Unpin();
             }
         }
-
-        EnsureWriteDurability();
-
-        if (exceptions.Count > 0)
-        {
-            throw new AggregateException("One or more errors occurred during batch insert", exceptions);
-        }
-
-        return insertedCount;
     }
 
     /// <summary>
@@ -946,172 +1004,159 @@ public sealed class TinyDbEngine : IDisposable
         var exceptions = new List<Exception>();
 
         var pagesToPersist = new HashSet<Page>();
+        var pinnedPages = new List<Page>();
 
-        lock (st.PageState.SyncRoot)
+        void TrackPageForPersist(Page page)
         {
-            Page? currentPage = null;
-            if (st.PageState.PageId != 0)
+            if (pagesToPersist.Add(page))
             {
-                try { currentPage = _pageManager.GetPage(st.PageState.PageId); } catch { }
+                page.Pin();
+                pinnedPages.Add(page);
             }
+        }
 
-            if (currentPage == null || currentPage.Header.PageType != PageType.Data)
+        try
+        {
+            lock (st.WriteSyncRoot)
             {
-                 var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024); 
-                 currentPage = p;
-                 st.OwnedPages.TryAdd(p.PageID, 0);
-                 if (isN) lock (_lock) { _header.UsedPages++; }
-             }
-
-            foreach (var d in docs)
-            {
-                if (d == null) continue;
-                cancellationToken.ThrowIfCancellationRequested();
-
-                try
+                lock (st.PageState.SyncRoot)
                 {
-                    var doc = PrepareDocumentForInsert(col, d, out var id);
-                    _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
-
-                    buffer.Reset();
-                    BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
-
-                    if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
+                    Page? currentPage = null;
+                    if (st.PageState.PageId != 0)
                     {
-                        var bytes = buffer.WrittenSpan.ToArray();
-                        var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
-                        doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
-
-                        buffer.Reset();
-                        BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+                        try
+                        {
+                            currentPage = _pageManager.GetPage(st.PageState.PageId);
+                        }
+                        catch (Exception ex)
+                        {
+                            throw new InvalidOperationException(
+                                $"Failed to load writable page {st.PageState.PageId} for collection '{col}'.",
+                                ex);
+                        }
                     }
 
-                    int len = buffer.WrittenCount;
-                    int reqSize = DataPageAccess.GetEntrySize(len);
-
-                    if (currentPage!.Header.FreeBytes < reqSize)
+                    if (currentPage == null || currentPage.Header.PageType != PageType.Data)
                     {
-                         pagesToPersist.Add(currentPage);
-                         var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
-                         currentPage = p;
-                         st.OwnedPages.TryAdd(p.PageID, 0);
-                         if (isN) lock (_lock) { _header.UsedPages++; }
-                     }
+                        var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, 1024);
+                        currentPage = p;
+                        st.OwnedPages.TryAdd(p.PageID, 0);
+                        if (isN) lock (_lock) { _header.UsedPages++; }
+                    }
 
-                    ushort i = currentPage.Header.ItemCount;
-                    _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
-                    st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
-                    
-                    docsToUpdateIndex.Add((doc, id));
-                    insertedCount++;
+                    foreach (var d in docs)
+                    {
+                        if (d == null) continue;
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        try
+                        {
+                            var doc = PrepareDocumentForInsert(col, d, out var id);
+                            _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
+
+                            buffer.Reset();
+                            BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+
+                            if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
+                            {
+                                var bytes = buffer.WrittenSpan.ToArray();
+                                var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
+                                doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
+
+                                buffer.Reset();
+                                BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
+                            }
+
+                            int len = buffer.WrittenCount;
+                            int reqSize = DataPageAccess.GetEntrySize(len);
+
+                            if (currentPage!.Header.FreeBytes < reqSize)
+                            {
+                                TrackPageForPersist(currentPage);
+                                var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
+                                currentPage = p;
+                                st.OwnedPages.TryAdd(p.PageID, 0);
+                                if (isN) lock (_lock) { _header.UsedPages++; }
+                            }
+
+                            ushort i = currentPage.Header.ItemCount;
+                            _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
+                            st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
+
+                            docsToUpdateIndex.Add((doc, id));
+                            insertedCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            exceptions.Add(ex);
+                        }
+                    }
+
+                    if (currentPage != null)
+                    {
+                        TrackPageForPersist(currentPage);
+                    }
+
+                    lock (_lock) { WriteHeader(); }
                 }
-                catch (Exception ex)
+
+                foreach (var page in pagesToPersist)
                 {
-                    exceptions.Add(ex);
+                    _dataPageAccess.PersistPage(page);
+                }
+
+                foreach (var (doc, id) in docsToUpdateIndex)
+                {
+                    try
+                    {
+                        idx.InsertDocument(doc, id);
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                }
+
+                if (exceptions.Count > 0)
+                {
+                    throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
             }
 
-            if (currentPage != null)
-            {
-                pagesToPersist.Add(currentPage);
-            }
-
-            lock (_lock) { WriteHeader(); }
+            await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
+            return insertedCount;
         }
-
-        // 持久化页面
-        foreach (var page in pagesToPersist)
+        finally
         {
-            _dataPageAccess.PersistPage(page);
-        }
-
-        foreach (var (doc, id) in docsToUpdateIndex)
-        {
-            try
+            foreach (var page in pinnedPages)
             {
-                idx.InsertDocument(doc, id);
-            }
-            catch (Exception ex)
-            {
-                exceptions.Add(ex);
+                page.Unpin();
             }
         }
-
-        await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
-
-        if (exceptions.Count > 0)
-        {
-            throw new AggregateException("One or more errors occurred during batch insert", exceptions);
-        }
-
-        return insertedCount;
     }
 
     internal IEnumerable<BsonDocument> FindAll(string col)
     {
         var st = GetCollectionState(col);
-        var ds = new List<BsonDocument>();
-        
-        // 获取所有属于该集合的页面ID并排序，以确保存储顺序读取
-        var pages = st.OwnedPages.Keys.ToList();
-        pages.Sort();
-        
-        foreach (var pageId in pages)
-        {
-            try
-            {
-                var p = _pageManager.GetPage(pageId);
-                // 验证页面类型和归属（双重检查）
-                if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
-
-                foreach (var doc in _dataPageAccess.ScanDocumentsFromPage(p))
-                {
-                    // 再次检查集合标签，防止页面跨集合共享时的泄露
-                    if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
-                    ds.Add(ResolveLargeDocument(doc));
-                }
-            }
-            catch { }
-        }
-
+        var ds = ReadAllDocumentsSnapshot(col, st);
         var tx = GetCurrentTransaction();
-        // 关键修复：即使 ds 为空，也应该进行事务合并，以包含事务中新增但尚未落盘的文档
+        // 即使 ds 为空，也需要合并事务挂起操作
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
     }
 
-    internal async Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
+    internal Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var st = GetCollectionState(col);
-        var ds = new List<BsonDocument>();
-
-        var pages = st.OwnedPages.Keys.ToList();
-        pages.Sort();
-
-        foreach (var pageId in pages)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var p = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
-
-                foreach (var doc in _dataPageAccess.ScanDocumentsFromPage(p))
-                {
-                    if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
-                    ds.Add(await ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false));
-                }
-            }
-            catch
-            {
-            }
-        }
-
+        var ds = ReadAllDocumentsSnapshot(col, st, cancellationToken);
         var tx = GetCurrentTransaction();
-        return tx != null ? MergeTransactionOperations(col, ds, tx).ToList() : ds;
+        var result = tx != null ? MergeTransactionOperations(col, ds, tx).ToList() : ds;
+        return Task.FromResult(result);
     }
 
     /// <summary>
-    /// 获取集合中所有文档的原始数据（零拷贝），支持原地谓词下推。
+    /// 获取集合中所有文档的原始数据快照，支持原地谓词下推。
     /// </summary>
     /// <param name="col">集合名称</param>
     /// <param name="predicates">扫描谓词（可选）</param>
@@ -1119,63 +1164,43 @@ public sealed class TinyDbEngine : IDisposable
     internal IEnumerable<ReadOnlyMemory<byte>> FindAllRaw(string col, ScanPredicate[]? predicates = null)
     {
         var st = GetCollectionState(col);
-        var pages = st.OwnedPages.Keys.ToList();
-        pages.Sort();
-
-        foreach (var pageId in pages)
-        {
-            Page? p = null;
-            try { p = _pageManager.GetPage(pageId); } catch { continue; }
-            if (p == null || p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
-
-            foreach (var slice in _dataPageAccess.ScanRawDocumentsFromPage(p, predicates))
-            {
-                // 注意：这里返回的是原始字节，未校验 _collection 字段
-                // 调用者必须在解析后进行校验
-                yield return slice;
-            }
-        }
+        return ReadRawDocumentSnapshot(col, st, predicates);
     }
 
     internal IEnumerable<RawScanResult> FindAllRawWithPredicateInfo(string col, ScanPredicate[]? predicates = null)
     {
         var st = GetCollectionState(col);
-        var pages = st.OwnedPages.Keys.ToList();
-        pages.Sort();
-
-        foreach (var pageId in pages)
-        {
-            Page? p = null;
-            try { p = _pageManager.GetPage(pageId); } catch { continue; }
-            if (p == null || p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
-
-            foreach (var result in _dataPageAccess.ScanRawDocumentsFromPageWithPredicateInfo(p, predicates))
-            {
-                yield return result;
-            }
-        }
+        return ReadRawScanResultSnapshot(col, st, predicates);
     }
 
     internal BsonDocument? FindById(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
-        if (st.Index.TryGet(id, out var loc))
+        lock (st.PageState.SyncRoot)
         {
-            var p = _pageManager.GetPage(loc.PageId);
-            var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
-            if (entry != null) return ResolveLargeDocument(entry.Value.Document);
+            if (st.Index.TryGet(id, out var loc))
+            {
+                var p = _pageManager.GetPage(loc.PageId);
+                var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
+                if (entry != null) return ResolveLargeDocument(entry.Value.Document);
+            }
         }
+
         return FindByIdFullScan(col, id, st);
     }
 
     internal async Task<BsonDocument?> FindByIdAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var st = GetCollectionState(col);
-        if (st.Index.TryGet(id, out var loc))
+        lock (st.PageState.SyncRoot)
         {
-            var p = await _pageManager.GetPageAsync(loc.PageId, cancellationToken: cancellationToken).ConfigureAwait(false);
-            var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
-            if (entry != null) return await ResolveLargeDocumentAsync(entry.Value.Document, cancellationToken).ConfigureAwait(false);
+            if (st.Index.TryGet(id, out var loc))
+            {
+                var p = _pageManager.GetPage(loc.PageId);
+                var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
+                if (entry != null) return ResolveLargeDocument(entry.Value.Document);
+            }
         }
 
         return await FindByIdFullScanAsync(col, id, cancellationToken).ConfigureAwait(false);
@@ -1185,6 +1210,134 @@ public sealed class TinyDbEngine : IDisposable
     {
         var all = await FindAllAsync(col, cancellationToken).ConfigureAwait(false);
         return all.FirstOrDefault(d => d["_id"].Equals(id));
+    }
+
+    private List<BsonDocument> ReadAllDocumentsSnapshot(string col, CollectionState st, CancellationToken cancellationToken = default)
+    {
+        var ds = new List<BsonDocument>();
+
+        lock (st.PageState.SyncRoot)
+        {
+            // 固定当前集合页列表，避免读过程中页集合被并发写线程修改。
+            var pages = st.OwnedPages.Keys.ToList();
+            pages.Sort();
+
+            foreach (var pageId in pages)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var p = _pageManager.GetPage(pageId);
+                    if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
+
+                    foreach (var doc in _dataPageAccess.ScanDocumentsFromPage(p))
+                    {
+                        if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
+                        ds.Add(ResolveLargeDocument(doc));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to scan page {pageId} in collection '{col}'.", ex);
+                }
+            }
+        }
+
+        return ds;
+    }
+
+    private IEnumerable<ReadOnlyMemory<byte>> ReadRawDocumentSnapshot(string col, CollectionState st, ScanPredicate[]? predicates)
+    {
+        foreach (var result in StreamRawScanResultPages(col, st, predicates))
+        {
+            yield return result.Slice;
+        }
+    }
+
+    private IEnumerable<RawScanResult> ReadRawScanResultSnapshot(string col, CollectionState st, ScanPredicate[]? predicates)
+    {
+        foreach (var result in StreamRawScanResultPages(col, st, predicates))
+        {
+            yield return result;
+        }
+    }
+
+    private IEnumerable<RawScanResult> StreamRawScanResultPages(string col, CollectionState st, ScanPredicate[]? predicates)
+    {
+        List<uint> pages;
+        lock (st.PageState.SyncRoot)
+        {
+            pages = st.OwnedPages.Keys.ToList();
+        }
+
+        pages.Sort();
+
+        foreach (var pageId in pages)
+        {
+            byte[]? pageSnapshot = null;
+            int itemCount = 0;
+            int endOffset = 0;
+            Exception? lastError = null;
+
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    lock (st.PageState.SyncRoot)
+                    {
+                        var p = _pageManager.GetPage(pageId);
+                        if (p.PageType != PageType.Data || p.Header.ItemCount == 0)
+                        {
+                            pageSnapshot = null;
+                            itemCount = 0;
+                            endOffset = 0;
+                            break;
+                        }
+
+                        // 为当前页创建稳定快照：每页只复制一次，避免逐文档 ToArray 带来的分配放大。
+                        p.Pin();
+                        try
+                        {
+                            itemCount = p.Header.ItemCount;
+                            pageSnapshot = p.Snapshot(includeUnusedTail: false);
+                            endOffset = pageSnapshot.Length;
+                        }
+                        finally
+                        {
+                            p.Unpin();
+                        }
+                    }
+
+                    lastError = null;
+                    break;
+                }
+                catch (ObjectDisposedException ex) when (attempt == 0)
+                {
+                    // 页面可能在极窄窗口内被缓存淘汰，重试一次即可。
+                    lastError = ex;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    break;
+                }
+            }
+
+            if (lastError != null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to read page {pageId} in collection '{col}'.", lastError);
+            }
+
+            if (pageSnapshot == null || itemCount == 0) continue;
+
+            foreach (var result in _dataPageAccess.ScanRawDocumentsFromPageSnapshotWithPredicateInfo(pageSnapshot, itemCount, endOffset, predicates))
+            {
+                yield return result;
+            }
+        }
     }
 
     internal BsonDocument ResolveLargeDocument(BsonDocument doc)
@@ -1211,8 +1364,13 @@ public sealed class TinyDbEngine : IDisposable
 
     internal BsonValue InsertDocumentInternal(string col, BsonDocument d)
     {
+        var st = GetCollectionState(col);
+        var idx = GetIndexManager(col);
         var pr = PrepareDocumentForInsert(col, d, out var id);
-        return InsertPreparedDocument(col, pr, id, GetCollectionState(col), GetIndexManager(col), true);
+        lock (st.WriteSyncRoot)
+        {
+            return InsertPreparedDocument(col, pr, id, st, idx, true);
+        }
     }
 
     internal int UpdateDocumentInternal(string col, BsonDocument d) => UpdateDocument(col, d);
@@ -1238,7 +1396,7 @@ public sealed class TinyDbEngine : IDisposable
 
             var span = buffer.WrittenSpan;
 
-            Page p;
+            Page? p = null;
             bool isNewPage = false;
             ushort entryIndex;
 
@@ -1246,6 +1404,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 var (page, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, DataPageAccess.GetEntrySize(span.Length));
                 p = page;
+                p.Pin();
                 isNewPage = isN;
                 st.OwnedPages.TryAdd(p.PageID, 0);
                 entryIndex = p.Header.ItemCount;
@@ -1253,16 +1412,23 @@ public sealed class TinyDbEngine : IDisposable
                 st.Index.Set(id, new DocumentLocation(p.PageID, entryIndex));
             }
 
-            // 在锁外处理全局状态和持久化
-            if (isNewPage)
+            try
             {
-                lock (_lock) { _header.UsedPages++; WriteHeader(); }
-            }
-        
-            _dataPageAccess.PersistPage(p);
+                // 在锁外处理全局状态和持久化
+                if (isNewPage)
+                {
+                    lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                }
 
-            if (u) idx.InsertDocument(doc, id);
-            return id;
+                _dataPageAccess.PersistPage(p!);
+
+                if (u) idx.InsertDocument(doc, id);
+                return id;
+            }
+            finally
+            {
+                p?.Unpin();
+            }
         }
         finally
         {
@@ -1342,7 +1508,15 @@ public sealed class TinyDbEngine : IDisposable
         for (uint pId = 1; pId <= total; pId++)
         {
             Page p;
-            try { p = _pageManager.GetPage(pId); } catch { continue; }
+            try
+            {
+                p = _pageManager.GetPage(pId);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to rebuild collection '{col}' from page {pId}.", ex);
+            }
             if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
             
             ushort idx = 0;
@@ -1394,7 +1568,15 @@ public sealed class TinyDbEngine : IDisposable
         return dict.Values;
     }
 
-    private void SafeFlush() { try { Flush(); } catch { } }
+    internal void Log(TinyDbLogLevel level, string message, Exception? ex = null)
+    {
+        TinyDbLogging.SafeLog(_log, level, message, ex);
+    }
+
+    private void DeleteLargeDocumentOrThrow(uint largeDocumentIndexPageId)
+    {
+        _largeDocumentStorage.DeleteLargeDocument(largeDocumentIndexPageId);
+    }
 
     private void DisposeIndexManagers() { foreach (var m in _indexManagers.Values) m.Dispose(); _indexManagers.Clear(); }
 
@@ -1410,23 +1592,72 @@ public sealed class TinyDbEngine : IDisposable
     {
         if (!_disposed)
         {
+            Exception? flushException = null;
+            Exception? metadataException = null;
+            Exception? cleanupException = null;
+
             try
             {
-                if (_isInitialized) _collectionMetaStore.SaveCollections(false);
-                SafeFlush();
+                if (_isInitialized)
+                {
+                    _collectionMetaStore.SaveCollections(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                metadataException = new InvalidOperationException("Failed to save collection metadata during dispose.", ex);
+            }
+
+            try
+            {
+                Flush();
+            }
+            catch (Exception ex)
+            {
+                flushException = ex;
+            }
+
+            try
+            {
                 foreach (var c in _collections.Values) c.Dispose();
                 _collections.Clear();
                 _collectionStates.Clear();
                 _transactionManager.Dispose();
                 DisposeIndexManagers();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                cleanupException = new InvalidOperationException("Dispose cleanup failed.", ex);
+            }
             finally
             {
                 DisposeComponents();
                 _disposed = true;
                 _isInitialized = false;
             }
+
+            if (flushException != null)
+            {
+                var flushRelated = new List<Exception> { flushException };
+                if (metadataException != null) flushRelated.Add(metadataException);
+                if (cleanupException != null) flushRelated.Add(cleanupException);
+                if (flushRelated.Count > 1)
+                {
+                    throw new AggregateException("One or more errors occurred during dispose.", flushRelated);
+                }
+
+                ExceptionDispatchInfo.Capture(flushException).Throw();
+            }
+
+            if (metadataException != null || cleanupException != null)
+            {
+                var disposeRelated = new List<Exception>();
+                if (metadataException != null) disposeRelated.Add(metadataException);
+                if (cleanupException != null) disposeRelated.Add(cleanupException);
+                throw new AggregateException("One or more errors occurred during dispose.", disposeRelated);
+            }
         }
     }
 }
+
+
