@@ -79,6 +79,8 @@ public interface ITinyCollection<T> where T : class
     /// <returns>匹配的文档集合</returns>
     IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate);
 
+    IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit);
+
     /// <summary>
     /// 查找单个文档
     /// </summary>
@@ -208,6 +210,8 @@ public interface ITinyCollection<T> where T : class
     /// 异步根据查询条件查找文档
     /// </summary>
     Task<List<T>> FindAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default);
+
+    Task<List<T>> FindAsync(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// 异步查找单个文档

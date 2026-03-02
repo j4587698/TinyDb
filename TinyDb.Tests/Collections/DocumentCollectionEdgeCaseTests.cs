@@ -301,6 +301,53 @@ public class DocumentCollectionEdgeCaseTests
     }
 
     [Test]
+    public async Task Find_WithPaging_ShouldMatchQuerySkipTake()
+    {
+        _collection.Insert(new TestEntity { Name = "A", Value = 1 });
+        _collection.Insert(new TestEntity { Name = "B", Value = 2 });
+        _collection.Insert(new TestEntity { Name = "C", Value = 3 });
+        _collection.Insert(new TestEntity { Name = "D", Value = 4 });
+
+        var expectedIds = _collection.Query()
+            .Where(x => x.Value > 0)
+            .Skip(1)
+            .Take(2)
+            .Select(x => x.Id.ToString())
+            .ToList();
+
+        var actualIds = _collection.Find(x => x.Value > 0, 1, 2)
+            .Select(x => x.Id.ToString())
+            .ToList();
+
+        await Assert.That(actualIds.SequenceEqual(expectedIds)).IsTrue();
+    }
+
+    [Test]
+    public async Task Find_WithNegativeSkip_ShouldThrowArgumentOutOfRangeException()
+    {
+        await Assert.That(() => _collection.Find(x => x.Value >= 0, -1, 10).ToList())
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task Find_WithNegativeLimit_ShouldThrowArgumentOutOfRangeException()
+    {
+        await Assert.That(() => _collection.Find(x => x.Value >= 0, 0, -1).ToList())
+            .Throws<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task Find_WithZeroLimit_ShouldReturnEmpty()
+    {
+        _collection.Insert(new TestEntity { Name = "A", Value = 1 });
+        _collection.Insert(new TestEntity { Name = "B", Value = 2 });
+
+        var result = _collection.Find(x => x.Value > 0, 0, 0).ToList();
+
+        await Assert.That(result.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task FindOne_WithNullPredicate_ShouldThrowArgumentNullException()
     {
         await Assert.That(() => _collection.FindOne(null!))

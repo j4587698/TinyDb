@@ -184,6 +184,59 @@ public class AsyncCollectionTests : IDisposable
     }
 
     [Test]
+    public async Task FindAsync_WithPaging_ShouldMatchQuerySkipTake()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A", Value = 1 });
+        collection.Insert(new AsyncTestEntity { Name = "B", Value = 2 });
+        collection.Insert(new AsyncTestEntity { Name = "C", Value = 3 });
+        collection.Insert(new AsyncTestEntity { Name = "D", Value = 4 });
+        collection.Insert(new AsyncTestEntity { Name = "E", Value = 5 });
+
+        var expectedIds = collection.Query()
+            .Where(x => x.Value > 0)
+            .Skip(2)
+            .Take(2)
+            .Select(x => x.Id.ToString())
+            .ToList();
+
+        var actual = await collection.FindAsync(x => x.Value > 0, 2, 2);
+        var actualIds = actual.Select(x => x.Id.ToString()).ToList();
+
+        await Assert.That(actualIds.SequenceEqual(expectedIds)).IsTrue();
+    }
+
+    [Test]
+    public async Task FindAsync_WithNegativeSkip_ShouldThrowArgumentOutOfRangeException()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+
+        await Assert.That(() => collection.FindAsync(x => x.Value >= 0, -1, 10))
+            .ThrowsExactly<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FindAsync_WithNegativeLimit_ShouldThrowArgumentOutOfRangeException()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+
+        await Assert.That(() => collection.FindAsync(x => x.Value >= 0, 0, -1))
+            .ThrowsExactly<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FindAsync_WithZeroLimit_ShouldReturnEmpty()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        collection.Insert(new AsyncTestEntity { Name = "A", Value = 1 });
+        collection.Insert(new AsyncTestEntity { Name = "B", Value = 2 });
+
+        var result = await collection.FindAsync(x => x.Value > 0, 0, 0);
+
+        await Assert.That(result.Count).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task FindOneAsync_Should_Return_First_Match()
     {
         var collection = _engine.GetCollection<AsyncTestEntity>();

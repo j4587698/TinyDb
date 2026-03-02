@@ -371,10 +371,29 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// <returns>匹配的文档集合</returns>
     public IEnumerable<T> Find(Expression<Func<T, bool>> predicate)
     {
+        return Find(predicate, 0, int.MaxValue);
+    }
+
+    public IEnumerable<T> Find(Expression<Func<T, bool>> predicate, int skip, int limit)
+    {
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
-        return Query().Where(predicate);
+        ValidatePaginationArguments(skip, limit);
+        if (limit == 0) return Enumerable.Empty<T>();
+
+        var query = Query().Where(predicate);
+        if (skip > 0)
+        {
+            query = query.Skip(skip);
+        }
+
+        if (limit < int.MaxValue)
+        {
+            query = query.Take(limit);
+        }
+
+        return query;
     }
 
     /// <summary>
@@ -657,6 +676,19 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         return _engine.GetIndexManager(_name);
     }
 
+    private static void ValidatePaginationArguments(int skip, int limit)
+    {
+        if (skip < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(skip), "skip must be greater than or equal to 0.");
+        }
+
+        if (limit < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "limit must be greater than or equal to 0.");
+        }
+    }
+
     #region 异步方法实现
 
     /// <summary>
@@ -933,12 +965,22 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
     public async Task<List<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
+        return await FindAsync(predicate, 0, int.MaxValue, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<List<T>> FindAsync(Expression<Func<T, bool>> predicate, int skip, int limit, CancellationToken cancellationToken = default)
+    {
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+        ValidatePaginationArguments(skip, limit);
+        if (limit == 0) return new List<T>();
 
         var queryExpression = new ExpressionParser().Parse(predicate);
         var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
-        var results = new List<T>();
+        var results = limit == int.MaxValue
+            ? new List<T>()
+            : new List<T>(Math.Min(limit, documents.Count));
+        var skipped = 0;
 
         foreach (var document in documents)
         {
@@ -950,9 +992,22 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             }
 
             var entity = AotBsonMapper.FromDocument<T>(document);
-            if (entity != null)
+            if (entity == null)
             {
-                results.Add(entity);
+                continue;
+            }
+
+            if (skipped < skip)
+            {
+                skipped++;
+                continue;
+            }
+
+            results.Add(entity);
+
+            if (limit < int.MaxValue && results.Count >= limit)
+            {
+                break;
             }
         }
 

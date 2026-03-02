@@ -57,6 +57,7 @@ public sealed class DocumentCollectionAsyncBranchCoverageTests : IDisposable
         Expression<Func<AsyncTestEntity, bool>> predicate = null!;
 
         await Assert.That(() => col.FindAsync(predicate)).ThrowsExactly<ArgumentNullException>();
+        await Assert.That(() => col.FindAsync(predicate, 0, 10)).ThrowsExactly<ArgumentNullException>();
         await Assert.That(() => col.FindOneAsync(predicate)).ThrowsExactly<ArgumentNullException>();
         await Assert.That(() => col.CountAsync(predicate)).ThrowsExactly<ArgumentNullException>();
         await Assert.That(() => col.ExistsAsync(predicate)).ThrowsExactly<ArgumentNullException>();
@@ -77,4 +78,3 @@ public sealed class DocumentCollectionAsyncBranchCoverageTests : IDisposable
         }
     }
 }
-
