@@ -44,12 +44,6 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="3.0.1" />
-        <PackageReference Include="System.IO.Hashing" Version="10.0.1" />
-        <PackageReference Include="System.IO.Pipelines" Version="10.0.1" />
-    </ItemGroup>
-
-    <ItemGroup>
         <Compile Remove="AotTest\**" />
         <Compile Remove="Generated\**" />
         <Compile Remove="bin\**" />

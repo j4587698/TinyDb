@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Storage;
+using TinyDb.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -214,7 +215,7 @@ public class WriteAheadLogReplayEdgeCaseTests
         
         // Create valid data
         var testData = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-        var correctCrc = System.IO.Hashing.Crc32.HashToUInt32(testData);
+        var correctCrc = TinyCrc32.HashToUInt32(testData);
         
         // Write header with wrong CRC
         var headerBuffer = new byte[13];
@@ -247,7 +248,7 @@ public class WriteAheadLogReplayEdgeCaseTests
         
         // Create valid entry manually
         var testData = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-        var crc = System.IO.Hashing.Crc32.HashToUInt32(testData);
+        var crc = TinyCrc32.HashToUInt32(testData);
         
         var headerBuffer = new byte[13];
         headerBuffer[0] = 0x01; // Valid type

@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Core;
+using TinyDb.Utils;
 
 namespace TinyDb.Storage;
 
@@ -185,7 +186,7 @@ public sealed class WriteAheadLog : IDisposable
         var stream = _stream!;
         
         // 计算校验和
-        var crc32 = System.IO.Hashing.Crc32.HashToUInt32(data);
+        var crc32 = TinyCrc32.HashToUInt32(data);
         
         // 头部格式: [Type(1)] [PageId(4)] [Length(4)] [CRC32(4)]
         Span<byte> header = stackalloc byte[HeaderSize + 4]; // HeaderSize is 9, +4 for CRC = 13
@@ -203,7 +204,7 @@ public sealed class WriteAheadLog : IDisposable
         var stream = _stream!;
         
         // 计算校验和
-        var crc32 = System.IO.Hashing.Crc32.HashToUInt32(data);
+        var crc32 = TinyCrc32.HashToUInt32(data);
         
         byte[] header = new byte[HeaderSize + 4];
         header[0] = EntryTypePage;
@@ -442,7 +443,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (expectedCrc.HasValue)
                 {
-                    var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
+                    var actualCrc = TinyCrc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value)
                     {
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
@@ -573,7 +574,7 @@ public sealed class WriteAheadLog : IDisposable
                 // 验证校验和 (如果存在)
                 if (expectedCrc.HasValue)
                 {
-                    var actualCrc = System.IO.Hashing.Crc32.HashToUInt32(buffer);
+                    var actualCrc = TinyCrc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value)
                     {
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");

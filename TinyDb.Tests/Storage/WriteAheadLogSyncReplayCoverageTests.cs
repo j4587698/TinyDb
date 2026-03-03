@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using TinyDb.Storage;
 using TinyDb.Tests.Utils;
+using TinyDb.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -83,7 +84,7 @@ public sealed class WriteAheadLogSyncReplayCoverageTests : IDisposable
         wrongCrcHeader[0] = 0x01;
         BinaryPrimitives.WriteUInt32LittleEndian(wrongCrcHeader.AsSpan(1, 4), 9);
         BinaryPrimitives.WriteInt32LittleEndian(wrongCrcHeader.AsSpan(5, 4), data.Length);
-        BinaryPrimitives.WriteUInt32LittleEndian(wrongCrcHeader.AsSpan(9, 4), System.IO.Hashing.Crc32.HashToUInt32(data) + 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(wrongCrcHeader.AsSpan(9, 4), TinyCrc32.HashToUInt32(data) + 1);
         var crcPayload = new byte[wrongCrcHeader.Length + data.Length];
         Array.Copy(wrongCrcHeader, crcPayload, wrongCrcHeader.Length);
         Array.Copy(data, 0, crcPayload, wrongCrcHeader.Length, data.Length);

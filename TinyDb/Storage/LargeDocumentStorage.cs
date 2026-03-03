@@ -74,6 +74,18 @@ public class LargeDocumentStorage
     /// <returns>大文档索引页面的 ID。</returns>
     public uint StoreLargeDocument(byte[] documentBytes, string collectionName)
     {
+        if (documentBytes == null) throw new ArgumentNullException(nameof(documentBytes));
+        return StoreLargeDocument(documentBytes.AsSpan(), collectionName);
+    }
+
+    /// <summary>
+    /// 存储大文档（只读内存片段形式）。
+    /// </summary>
+    /// <param name="documentBytes">文档二进制数据。</param>
+    /// <param name="collectionName">所属集合名称。</param>
+    /// <returns>大文档索引页面 ID。</returns>
+    public uint StoreLargeDocument(ReadOnlySpan<byte> documentBytes, string collectionName)
+    {
         var totalLength = documentBytes.Length;
         var requiredPages = CalculateRequiredPages(totalLength);
 
@@ -257,7 +269,7 @@ public class LargeDocumentStorage
         };
     }
 
-    private uint CreateDataPagesChain(byte[] documentBytes, int pageCount)
+    private uint CreateDataPagesChain(ReadOnlySpan<byte> documentBytes, int pageCount)
     {
         uint firstPageId = 0;
         uint previousPageId = 0;
@@ -272,11 +284,8 @@ public class LargeDocumentStorage
 
             if (chunkSize > 0)
             {
-                var chunk = new byte[chunkSize];
-                Buffer.BlockCopy(documentBytes, startOffset, chunk, 0, chunkSize);
-
                 WriteDataPageHeader(page, i, 0); 
-                page.WriteData(DataPageHeaderSize, chunk);
+                page.WriteData(DataPageHeaderSize, documentBytes.Slice(startOffset, chunkSize));
             }
 
             if (previousPageId != 0)

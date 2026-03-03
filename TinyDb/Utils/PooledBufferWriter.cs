@@ -7,7 +7,7 @@ namespace TinyDb.Utils;
 /// <summary>
 /// 基于 <see cref="ArrayPool{T}"/> 的 <see cref="IBufferWriter{T}"/> 实现，用于减少序列化过程中的内存分配。
 /// </summary>
-internal sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
+internal sealed class PooledBufferWriter : IPatchableBufferWriter, IDisposable
 {
     private byte[] _buffer;
     private int _index;
@@ -26,7 +26,7 @@ internal sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
         _index = 0;
     }
 
-    internal void WriteInt32LittleEndianAt(int offset, int value)
+    public void WriteInt32LittleEndianAt(int offset, int value)
     {
         if ((uint)offset > (uint)(_index - 4))
         {

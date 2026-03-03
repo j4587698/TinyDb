@@ -93,7 +93,7 @@ public static class BsonSerializer
     /// 获取可回收的内存流
     /// </summary>
     /// <returns>内存流</returns>
-    public static RecyclableMemoryStream GetRecyclableStream()
+    public static Stream GetRecyclableStream()
     {
         return MemoryStreamManager.GetStream();
     }
@@ -139,10 +139,10 @@ public static class BsonSerializer
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        using var stream = MemoryStreamManager.GetStream();
-        using var writer = new BsonWriter(stream);
+        var buffer = new FixedBufferWriter(CalculateDocumentSize(document));
+        using var writer = new BsonWriter(buffer);
         writer.WriteDocument(document);
-        return stream.ToArray();
+        return buffer.WrittenArray;
     }
 
     /// <summary>
@@ -218,10 +218,10 @@ public static class BsonSerializer
     {
         if (array == null) throw new ArgumentNullException(nameof(array));
 
-        using var stream = MemoryStreamManager.GetStream();
-        using var writer = new BsonWriter(stream);
+        var buffer = new FixedBufferWriter(CalculateArraySize(array));
+        using var writer = new BsonWriter(buffer);
         writer.WriteArray(array);
-        return stream.ToArray();
+        return buffer.WrittenArray;
     }
 
     /// <summary>
@@ -482,16 +482,16 @@ public sealed class BsonWriter : IDisposable
         }
         else
         {
-            if (_bufferWriter is PooledBufferWriter pooled)
+            if (_bufferWriter is IPatchableBufferWriter patchable)
             {
-                int sizePosition = pooled.WrittenCount;
+                int sizePosition = patchable.WrittenCount;
                 InternalWrite(0); // 占位符
 
                 foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
                 InternalWrite((byte)BsonType.End);
 
-                int endPosition = pooled.WrittenCount;
-                pooled.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
+                int endPosition = patchable.WrittenCount;
+                patchable.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
                 return;
             }
 
@@ -531,16 +531,16 @@ public sealed class BsonWriter : IDisposable
         }
         else
         {
-            if (_bufferWriter is PooledBufferWriter pooled)
+            if (_bufferWriter is IPatchableBufferWriter patchable)
             {
-                int sizePosition = pooled.WrittenCount;
+                int sizePosition = patchable.WrittenCount;
                 InternalWrite(0); // 占位符
 
                 for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
                 InternalWrite((byte)BsonType.End);
 
-                int endPosition = pooled.WrittenCount;
-                pooled.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
+                int endPosition = patchable.WrittenCount;
+                patchable.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
                 return;
             }
 

@@ -20,7 +20,6 @@ using TinyDb.Serialization;
 using TinyDb.Storage;
 using TinyDb.Attributes;
 using TinyDb.Utils;
-using Microsoft.IO;
 
 namespace TinyDb.Core;
 
@@ -903,9 +902,8 @@ public sealed class TinyDbEngine : IDisposable
 
                             if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
                             {
-                                var bytes = buffer.WrittenSpan.ToArray();
-                                var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
-                                doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
+                                var lId = _largeDocumentStorage.StoreLargeDocument(buffer.WrittenSpan, col);
+                                doc = CreateLargeDocumentIndexDocument(id, col, lId, buffer.WrittenCount);
 
                                 buffer.Reset();
                                 BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
@@ -1059,9 +1057,8 @@ public sealed class TinyDbEngine : IDisposable
 
                             if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
                             {
-                                var bytes = buffer.WrittenSpan.ToArray();
-                                var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
-                                doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
+                                var lId = _largeDocumentStorage.StoreLargeDocument(buffer.WrittenSpan, col);
+                                doc = CreateLargeDocumentIndexDocument(id, col, lId, buffer.WrittenCount);
 
                                 buffer.Reset();
                                 BsonSerializer.SerializeDocumentToBuffer(doc, buffer);
@@ -1386,9 +1383,8 @@ public sealed class TinyDbEngine : IDisposable
 
             if (LargeDocumentStorage.RequiresLargeDocumentStorage(buffer.WrittenCount, _dataPageAccess.GetMaxDocumentSize()))
             {
-                var bytes = buffer.WrittenSpan.ToArray();
-                var lId = _largeDocumentStorage.StoreLargeDocument(bytes, col);
-                doc = CreateLargeDocumentIndexDocument(id, col, lId, bytes.Length);
+                var lId = _largeDocumentStorage.StoreLargeDocument(buffer.WrittenSpan, col);
+                doc = CreateLargeDocumentIndexDocument(id, col, lId, buffer.WrittenCount);
 
                 buffer.Reset();
                 BsonSerializer.SerializeDocumentToBuffer(doc, buffer);

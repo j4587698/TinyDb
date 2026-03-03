@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
+using TinyDb.Utils;
 
 namespace TinyDb.Core;
 
@@ -298,7 +299,7 @@ public struct DatabaseHeader
         var data = ToByteArray();
         
         // 使用 CRC32 算法计算校验和
-        var checksum = System.IO.Hashing.Crc32.HashToUInt32(data);
+        var checksum = TinyCrc32.HashToUInt32(data);
 
         // 恢复原始校验和
         Checksum = originalChecksum;
