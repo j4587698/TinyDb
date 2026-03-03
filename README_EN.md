@@ -205,7 +205,10 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.3.1 (Current)
+### v0.3.2 (Current)
+- **Query API enhancement**: added `Find` overloads for more flexible query invocation.
+
+### v0.3.1
 - **Concurrency consistency fix**: added collection-level write serialization to eliminate index conflicts and commit races under concurrent writes.
 - **Stronger error propagation**: critical data-safety paths (for example `Flush`, page switch, fallback-to-new-page failures) now throw instead of being swallowed.
 - **Scan-path optimization**: raw scan moved from full-collection complete snapshot to compact per-page snapshot (`Snapshot(false)`), reducing extra scan overhead.
