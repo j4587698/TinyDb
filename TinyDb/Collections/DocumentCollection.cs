@@ -167,7 +167,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (documents.Count == 0) return 0;
 
         // 批量插入到数据库
-        var insertedCount = _engine.InsertDocuments(_name, documents.ToArray());
+        var insertedCount = _engine.InsertDocuments(_name, documents);
 
         // 更新实体的ID
         for (int i = 0; i < Math.Min(insertedCount, entities.Count); i++)
@@ -791,7 +791,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         if (documents.Count == 0) return 0;
 
-        var insertedCount = await _engine.InsertDocumentsAsync(_name, documents.ToArray(), cancellationToken).ConfigureAwait(false);
+        var insertedCount = await _engine.InsertDocumentsAsync(_name, documents, cancellationToken).ConfigureAwait(false);
 
         for (int i = 0; i < Math.Min(insertedCount, entities.Count); i++)
         {

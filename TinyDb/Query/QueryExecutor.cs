@@ -1,7 +1,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
@@ -324,7 +323,6 @@ public sealed class QueryExecutor
     private IEnumerable<T> ExecuteFullTableScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
-        var tx = _engine.GetCurrentTransaction();
         QueryExpression? queryExpression = null;
 
         if (expression != null)
@@ -333,60 +331,77 @@ public sealed class QueryExecutor
             catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
         }
 
-        // 1. 准备下推谓词
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
 
-        // 2. 处理管道
-        var rawPipeline = _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates)
-            .Select(r => (Doc: DeserializeDocumentOrThrow(r.Slice), r.RequiresPostFilter))
-            .Where(x => !x.Doc.TryGetValue("_collection", out var c) || c.ToString() == collectionName)
-            .Select(x => (Doc: _engine.ResolveLargeDocument(x.Doc), x.RequiresPostFilter));
+        return Iterator();
 
-        // 3. 事务覆盖
-        IEnumerable<(BsonDocument Doc, bool RequiresPostFilter)> docs;
-        if (tx != null)
+        IEnumerable<T> Iterator()
         {
-            var txOverlay = new ConcurrentDictionary<string, BsonDocument?>();
-            foreach (var op in tx.Operations)
+            Dictionary<string, BsonDocument?>? txOverlay = null;
+            var tx = _engine.GetCurrentTransaction();
+            if (tx != null)
             {
-                if (op.CollectionName != collectionName) continue;
-                var k = op.DocumentId?.ToString() ?? "";
-                if (op.OperationType == TransactionOperationType.Delete) txOverlay[k] = null;
-                else if (op.NewDocument != null) txOverlay[k] = op.NewDocument;
+                txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
+                foreach (var op in tx.Operations)
+                {
+                    if (op.CollectionName != collectionName) continue;
+                    var key = op.DocumentId?.ToString() ?? string.Empty;
+                    if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
+                    else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
+                }
+
+                if (txOverlay.Count == 0) txOverlay = null;
             }
 
-            if (!txOverlay.IsEmpty)
+            foreach (var result in _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates))
             {
-                docs = rawPipeline.Select(item =>
+                var doc = DeserializeDocumentOrThrow(result.Slice);
+                if (doc.TryGetValue("_collection", out var c) && c.ToString() != collectionName)
+                {
+                    continue;
+                }
+
+                doc = _engine.ResolveLargeDocument(doc);
+                var requiresPostFilter = result.RequiresPostFilter;
+
+                if (txOverlay != null)
+                {
+                    var idKey = doc["_id"].ToString();
+                    if (txOverlay.TryGetValue(idKey, out var txDoc))
                     {
-                        var id = item.Doc["_id"].ToString();
-                        if (txOverlay.TryRemove(id, out var txDoc))
-                        {
-                            return (Doc: txDoc, RequiresPostFilter: true);
-                        }
+                        txOverlay.Remove(idKey);
+                        if (txDoc == null) continue;
+                        doc = txDoc;
+                        requiresPostFilter = true;
+                    }
+                }
 
-                        return (Doc: item.Doc, item.RequiresPostFilter);
-                    })
-                    .Where(x => x.Doc != null)
-                    .Select(x => (Doc: x.Doc!, x.RequiresPostFilter))
-                    .Concat(txOverlay.Values.Where(v => v != null).Select(v => (Doc: v!, RequiresPostFilter: true)));
+                if (queryExpression != null)
+                {
+                    var matched = fullyPushed
+                        ? (!requiresPostFilter || ExpressionEvaluator.Evaluate(queryExpression, doc))
+                        : ExpressionEvaluator.Evaluate(queryExpression, doc);
+                    if (!matched) continue;
+                }
+
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
             }
-            else docs = rawPipeline;
+
+            if (txOverlay != null)
+            {
+                foreach (var txDoc in txOverlay.Values)
+                {
+                    if (txDoc == null) continue;
+                    if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, txDoc)) continue;
+
+                    var entity = AotBsonMapper.FromDocument<T>(txDoc);
+                    if (entity != null) yield return entity;
+                }
+            }
         }
-        else docs = rawPipeline;
-
-        // 4. 内存过滤与映射
-        var filtered = queryExpression == null
-            ? docs.Select(x => x.Doc)
-            : fullyPushed
-                ? docs.Where(x => !x.RequiresPostFilter || ExpressionEvaluator.Evaluate(queryExpression, x.Doc)).Select(x => x.Doc)
-                : docs.Where(x => ExpressionEvaluator.Evaluate(queryExpression, x.Doc)).Select(x => x.Doc);
-
-        return filtered
-            .Select(doc => AotBsonMapper.FromDocument<T>(doc))
-            .Where(entity => entity != null)!;
     }
 
     private bool TryGetOrderIndex(string collectionName, IReadOnlyList<QuerySortField> sort, [NotNullWhen(true)] out BTreeIndex? index, out bool allDescending)

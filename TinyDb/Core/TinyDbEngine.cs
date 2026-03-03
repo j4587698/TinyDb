@@ -186,7 +186,7 @@ public sealed class TinyDbEngine : IDisposable
 
                     if (docs.Count > 0)
                     {
-                        tempEngine.InsertDocuments(colName, docs.ToArray());
+                        tempEngine.InsertDocuments(colName, docs);
                     }
                 }
             }
@@ -831,16 +831,16 @@ public sealed class TinyDbEngine : IDisposable
         return 1;
     }
 
-    internal int InsertDocuments(string col, BsonDocument[] docs)
+    internal int InsertDocuments(string col, IReadOnlyList<BsonDocument> docs)
     {
         ThrowIfDisposed();
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
-        if (docs.Length == 0) return 0;
+        if (docs.Count == 0) return 0;
 
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
-        var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(docs.Length);
+        var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
         int insertedCount = 0;
 
         using var buffer = new PooledBufferWriter(1024);
@@ -888,8 +888,9 @@ public sealed class TinyDbEngine : IDisposable
                         if (isN) lock (_lock) { _header.UsedPages++; }
                     }
 
-                    foreach (var d in docs)
+                    for (int docIndex = 0; docIndex < docs.Count; docIndex++)
                     {
+                        var d = docs[docIndex];
                         if (d == null) continue;
 
                         try
@@ -985,16 +986,16 @@ public sealed class TinyDbEngine : IDisposable
     /// <param name="docs">要插入的文档数组</param>
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>插入的文档数量</returns>
-    internal async Task<int> InsertDocumentsAsync(string col, BsonDocument[] docs, CancellationToken cancellationToken = default)
+    internal async Task<int> InsertDocumentsAsync(string col, IReadOnlyList<BsonDocument> docs, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
-        if (docs.Length == 0) return 0;
+        if (docs.Count == 0) return 0;
 
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
-        var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(docs.Length);
+        var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
         int insertedCount = 0;
 
         using var buffer = new PooledBufferWriter(1024);
@@ -1042,8 +1043,9 @@ public sealed class TinyDbEngine : IDisposable
                         if (isN) lock (_lock) { _header.UsedPages++; }
                     }
 
-                    foreach (var d in docs)
+                    for (int docIndex = 0; docIndex < docs.Count; docIndex++)
                     {
+                        var d = docs[docIndex];
                         if (d == null) continue;
                         cancellationToken.ThrowIfCancellationRequested();
 
