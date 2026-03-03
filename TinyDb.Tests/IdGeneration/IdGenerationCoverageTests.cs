@@ -51,6 +51,17 @@ public class IdGenerationCoverageTests
     public class StringIdClass { [IdGeneration(IdGenerationStrategy.ObjectId)] public string Id { get; set; } = ""; }
     public class UnsupportedDecimalIdClass { [IdGeneration(IdGenerationStrategy.GuidV4)] public decimal Id { get; set; } }
     public class InvalidStrategyIdClass { [IdGeneration((IdGenerationStrategy)123)] public int Id { get; set; } }
+    public class ThrowingSetterIdClass
+    {
+        private Guid _id;
+
+        [IdGeneration(IdGenerationStrategy.GuidV4)]
+        public Guid Id
+        {
+            get => _id;
+            set => throw new InvalidOperationException("setter failed");
+        }
+    }
 
     [Test]
     public async Task ConvertGeneratedId_Coverage()
@@ -129,5 +140,13 @@ public class IdGenerationCoverageTests
         var e = new InvalidStrategyIdClass();
         await Assert.That(() => IdGenerationHelper<InvalidStrategyIdClass>.GenerateIdForEntity(e))
             .Throws<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task GenerateIdForEntity_WhenPropertySetterThrows_ShouldReturnFalse()
+    {
+        var e = new ThrowingSetterIdClass();
+        var ok = IdGenerationHelper<ThrowingSetterIdClass>.GenerateIdForEntity(e);
+        await Assert.That(ok).IsFalse();
     }
 }

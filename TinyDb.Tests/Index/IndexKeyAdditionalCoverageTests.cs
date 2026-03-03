@@ -104,4 +104,53 @@ public sealed class IndexKeyAdditionalCoverageTests
         _ = new IndexKey(BsonMinKey.Value).CompareTo(new IndexKey(BsonMinKey.Value));
         _ = new IndexKey(BsonMaxKey.Value).CompareTo(new IndexKey(BsonMaxKey.Value));
     }
+
+    [Test]
+    public async Task CompareTo_Numeric_WhenToDecimalThrowsInvalidCastOrFormat_ShouldFallbackToTypeOrder()
+    {
+        var invalidCastLeft = new IndexKey(new ThrowingNumericBsonValue(new InvalidCastException("bad cast")));
+        var formatRight = new IndexKey(new ThrowingNumericBsonValue(new FormatException("bad format")));
+        var reference = new IndexKey(new BsonInt32(1));
+
+        var invalidCastComparison = invalidCastLeft.CompareTo(reference);
+        var formatComparison = formatRight.CompareTo(reference);
+
+        await Assert.That(invalidCastComparison).IsGreaterThan(0);
+        await Assert.That(formatComparison).IsGreaterThan(0);
+    }
+
+    private sealed class ThrowingNumericBsonValue : BsonValue
+    {
+        private readonly Exception _exception;
+
+        public ThrowingNumericBsonValue(Exception exception)
+        {
+            _exception = exception;
+        }
+
+        public override BsonType BsonType => BsonType.Double;
+        public override object? RawValue => 0d;
+        public override int CompareTo(BsonValue? other) => 0;
+        public override bool Equals(BsonValue? other) => ReferenceEquals(this, other);
+        public override int GetHashCode() => 0;
+        public override TypeCode GetTypeCode() => TypeCode.Double;
+
+        public override bool ToBoolean(IFormatProvider? provider) => throw new InvalidCastException();
+        public override byte ToByte(IFormatProvider? provider) => throw new InvalidCastException();
+        public override char ToChar(IFormatProvider? provider) => throw new InvalidCastException();
+        public override DateTime ToDateTime(IFormatProvider? provider) => throw new InvalidCastException();
+
+        public override decimal ToDecimal(IFormatProvider? provider) => throw _exception;
+        public override double ToDouble(IFormatProvider? provider) => throw new InvalidCastException();
+        public override short ToInt16(IFormatProvider? provider) => throw new InvalidCastException();
+        public override int ToInt32(IFormatProvider? provider) => throw new InvalidCastException();
+        public override long ToInt64(IFormatProvider? provider) => throw new InvalidCastException();
+        public override sbyte ToSByte(IFormatProvider? provider) => throw new InvalidCastException();
+        public override float ToSingle(IFormatProvider? provider) => throw new InvalidCastException();
+        public override string ToString(IFormatProvider? provider) => string.Empty;
+        public override object ToType(Type conversionType, IFormatProvider? provider) => throw new InvalidCastException();
+        public override ushort ToUInt16(IFormatProvider? provider) => throw new InvalidCastException();
+        public override uint ToUInt32(IFormatProvider? provider) => throw new InvalidCastException();
+        public override ulong ToUInt64(IFormatProvider? provider) => throw new InvalidCastException();
+    }
 }

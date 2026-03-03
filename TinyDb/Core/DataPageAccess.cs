@@ -332,11 +332,6 @@ internal sealed class DataPageAccess
                     if ((remainingMask & bit) == 0) continue;
 
                     var pred = predicates[i];
-                    if (pred.IsEmpty)
-                    {
-                        remainingMask &= ~bit;
-                        continue;
-                    }
 
                     if (!nameSpan.SequenceEqual(pred.FieldNameBytes) &&
                         !(pred.AlternateFieldNameBytes is { Length: > 0 } alt1 && nameSpan.SequenceEqual(alt1)) &&
@@ -394,19 +389,10 @@ internal sealed class DataPageAccess
                 if ((remainingMask & bit) == 0) continue;
 
                 var pred = predicates[i];
-                if (pred.IsEmpty)
-                {
-                    remainingMask &= ~bit;
-                    continue;
-                }
 
                 if (BinaryPredicateEvaluator.TryEvaluate(document, 0, BsonType.Null, pred.Operator, pred.TargetValue, pred.TargetStringUtf8Bytes, out bool evalResult))
                 {
                     if (!evalResult) return false;
-                }
-                else
-                {
-                    hasUnknown = true;
                 }
 
                 remainingMask &= ~bit;

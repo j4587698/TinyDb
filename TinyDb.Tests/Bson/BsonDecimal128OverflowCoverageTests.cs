@@ -26,4 +26,16 @@ public class BsonDecimal128OverflowCoverageTests
 
         await Assert.That(comparison).IsEqualTo(val.BsonType.CompareTo(other.BsonType));
     }
+
+    [Test]
+    public async Task BsonDecimal128_CompareTo_BsonDoubleNaNAndOutOfRange_ShouldFallbackToTypeComparison()
+    {
+        var value = new BsonDecimal128(123.45m);
+
+        var nanComparison = value.CompareTo(new BsonDouble(double.NaN));
+        var outOfRangeComparison = value.CompareTo(new BsonDouble(double.MaxValue));
+
+        await Assert.That(nanComparison).IsEqualTo(value.BsonType.CompareTo(BsonType.Double));
+        await Assert.That(outOfRangeComparison).IsEqualTo(value.BsonType.CompareTo(BsonType.Double));
+    }
 }

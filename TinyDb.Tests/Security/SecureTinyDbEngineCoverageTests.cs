@@ -1,6 +1,7 @@
 using TinyDb.Bson;
 using TinyDb.Security;
 using TinyDb.Core;
+using TinyDb.Attributes;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -128,6 +129,18 @@ public class SecureTinyDbEngineCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task GetCollection_GenericOverload_ShouldWork_WhenAuthenticated()
+    {
+        var path = GetDbPath();
+        using var secureEngine = new SecureTinyDbEngine(path, "password123", createIfNotExists: true);
+
+        var col = secureEngine.GetCollection<SecureEntity>();
+        col.Insert(new SecureEntity { Id = 1, Name = "n1" });
+
+        await Assert.That(col.Count()).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Operations_WhenNotAuthenticated_ShouldThrow()
     {
         var path = GetDbPath();
@@ -140,5 +153,13 @@ public class SecureTinyDbEngineCoverageTests : IDisposable
 
         await Assert.That(() => secureEngine.CollectionExists("test"))
             .Throws<UnauthorizedAccessException>();
+    }
+
+    [Entity("secure_entities")]
+    public sealed class SecureEntity
+    {
+        [Id]
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
     }
 }

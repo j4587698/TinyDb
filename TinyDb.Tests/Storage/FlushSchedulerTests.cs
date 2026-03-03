@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Core;
@@ -145,6 +146,63 @@ public class FlushSchedulerTests
         
         await fs.FlushAsync();
         await Assert.That(_wal.HasPendingEntries).IsFalse();
+    }
+
+    [Test]
+    public async Task FlushScheduler_EnsureDurability_SyncBranches_ShouldWork()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        fs.EnsureDurability(WriteConcern.None);
+        fs.EnsureDurability(WriteConcern.Journaled); // no pending entries path
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 9 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        fs.EnsureDurability(WriteConcern.Journaled); // pending entries path
+        fs.EnsureDurability(WriteConcern.Synced);
+
+        await Assert.That(_wal.HasPendingEntries).IsFalse();
+
+        await Assert.That(() => fs.EnsureDurability((WriteConcern)999))
+            .ThrowsExactly<ArgumentOutOfRangeException>();
+    }
+
+    [Test]
+    public async Task FlushScheduler_FlushPending_SyncBranches_ShouldWork()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        fs.FlushPending(); // early return
+
+        var page = _pageManager.GetPage(2);
+        page.WriteData(0, new byte[] { 7 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        fs.FlushPending();
+        await Assert.That(_wal.HasPendingEntries).IsFalse();
+    }
+
+    [Test]
+    public async Task FlushScheduler_Journaled_WhenWalDisabled_Sync_ShouldFallbackToPageFlush()
+    {
+        var isolatedDbFile = Path.Combine(Path.GetTempPath(), $"fs_sync_wal_disabled_{Guid.NewGuid():N}.db");
+        var isolatedWalFile = Path.Combine(Path.GetDirectoryName(isolatedDbFile)!, $"{Path.GetFileNameWithoutExtension(isolatedDbFile)}-wal.db");
+        try
+        {
+            using var walDisabled = new WriteAheadLog(isolatedDbFile, 8192, false);
+            using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero);
+            fs.EnsureDurability(WriteConcern.Journaled);
+            await Assert.That(walDisabled.HasPendingEntries).IsFalse();
+        }
+        finally
+        {
+            try { if (File.Exists(isolatedDbFile)) File.Delete(isolatedDbFile); } catch { }
+            try { if (File.Exists(isolatedWalFile)) File.Delete(isolatedWalFile); } catch { }
+        }
     }
 
     [Test]
@@ -305,6 +363,23 @@ public class FlushSchedulerTests
 
         await Assert.That(async () => await fs.EnsureDurabilityAsync(WriteConcern.Journaled))
             .Throws<ObjectDisposedException>();
+
+        await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
+    }
+
+    [Test]
+    [SkipInAot]
+    public async Task FlushScheduler_Dispose_WhenWorkerWaitFaults_ShouldCoverWaitCatchBranches()
+    {
+        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromHours(1));
+
+        var journalTaskField = typeof(FlushScheduler).GetField("_journalWorkerTask", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingFieldException(typeof(FlushScheduler).FullName, "_journalWorkerTask");
+        var backgroundTaskField = typeof(FlushScheduler).GetField("_backgroundTask", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingFieldException(typeof(FlushScheduler).FullName, "_backgroundTask");
+
+        journalTaskField.SetValue(fs, Task.FromException(new InvalidOperationException("journal wait failed")));
+        backgroundTaskField.SetValue(fs, Task.FromException(new InvalidOperationException("background wait failed")));
 
         await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
     }

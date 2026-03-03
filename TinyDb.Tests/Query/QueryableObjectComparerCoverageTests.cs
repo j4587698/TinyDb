@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Linq;
+using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Query;
 using TUnit.Assertions;
@@ -67,5 +68,20 @@ public sealed class QueryableObjectComparerCoverageTests
         var mixedOrdered = OrderByKey(Item("x"), Item(Guid.Empty));
         await Assert.That(mixedOrdered.Count).IsEqualTo(2);
         await Assert.That(mixedOrdered[0].Key).IsEqualTo(Guid.Empty);
+    }
+
+    [Test]
+    public async Task ObjectComparer_ToDouble_WhenConvertFails_ShouldThrowInvalidOperation()
+    {
+        var comparerType = typeof(QueryPipeline).GetNestedType("ObjectComparer", BindingFlags.NonPublic)
+            ?? throw new MissingMemberException(typeof(QueryPipeline).FullName, "ObjectComparer");
+        var toDouble = comparerType.GetMethod("ToDouble", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException(comparerType.FullName, "ToDouble");
+
+        var ex = await Assert.That(() => toDouble.Invoke(null, new object[] { new object() }))
+            .Throws<TargetInvocationException>();
+
+        await Assert.That(ex!.InnerException).IsTypeOf<InvalidOperationException>();
+        await Assert.That(ex.InnerException!.Message).Contains("Unable to convert value");
     }
 }

@@ -1,3 +1,4 @@
+using TinyDb.Attributes;
 using TinyDb.Metadata;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -81,6 +82,13 @@ public class MetadataExtractorCoverageTests
         public T? Data { get; set; }
     }
 
+    [Entity(IdProperty = nameof(SpecifiedIdEntity.CustomId))]
+    public sealed class SpecifiedIdEntity
+    {
+        public int CustomId { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
     [Test]
     public async Task Extract_GenericClass_ShouldWork()
     {
@@ -130,5 +138,35 @@ public class MetadataExtractorCoverageTests
     {
         await Assert.That(() => MetadataExtractor.ExtractEntityMetadata(null!)).Throws<ArgumentNullException>();
         await Assert.That(() => MetadataExtractor.ExtractPropertyMetadata(null!)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Extract_WithSpecifiedIdProperty_ShouldUseConfiguredId()
+    {
+        var meta = MetadataExtractor.ExtractEntityMetadata(typeof(SpecifiedIdEntity));
+        var idProp = meta.Properties.First(p => p.PropertyName == nameof(SpecifiedIdEntity.CustomId));
+
+        await Assert.That(idProp.IsPrimaryKey).IsTrue();
+    }
+
+    [Test]
+    public async Task MetadataRegistry_RegisterAndTryGet_ShouldCoverNullGuardsAndSet()
+    {
+        var metadata = new EntityMetadata
+        {
+            TypeName = "TinyDb.Tests.Metadata.PlainClass",
+            CollectionName = "plain_classes",
+            DisplayName = "PlainClass",
+            Properties = new List<TinyDb.Metadata.PropertyMetadata>()
+        };
+
+        await Assert.That(() => MetadataRegistry.Register(null!, metadata)).Throws<ArgumentNullException>();
+        await Assert.That(() => MetadataRegistry.Register(typeof(PlainClass), null!)).Throws<ArgumentNullException>();
+
+        MetadataRegistry.Register(typeof(PlainClass), metadata);
+        var found = MetadataRegistry.TryGet(typeof(PlainClass), out var resolved);
+
+        await Assert.That(found).IsTrue();
+        await Assert.That(object.ReferenceEquals(resolved, metadata)).IsTrue();
     }
 }

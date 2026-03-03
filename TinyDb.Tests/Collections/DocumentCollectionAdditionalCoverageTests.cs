@@ -229,6 +229,36 @@ public class DocumentCollectionAdditionalCoverageTests
         }
     }
 
+    [Test]
+    public async Task EnsureIdIndex_Private_WhenConflictingIndexExists_ShouldWrapAsInvalidOperation()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_ensure_id_conflict_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
+            var col = (DocumentCollection<BatchItem>)engine.GetCollection<BatchItem>("batch_conflict");
+            _ = col;
+
+            // Pre-create same index name with a different uniqueness option to force CreateIndex throw.
+            var created = engine.EnsureIndex("batch_conflict", "_id", "idx_batch_conflict_id", unique: false);
+            await Assert.That(created).IsTrue();
+
+            var ensureIdIndex = typeof(DocumentCollection<BatchItem>).GetMethod("EnsureIdIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+            await Assert.That(ensureIdIndex).IsNotNull();
+
+            var ex = await Assert.That(() => ensureIdIndex!.Invoke(col, Array.Empty<object>()))
+                .Throws<TargetInvocationException>();
+
+            await Assert.That(ex!.InnerException).IsTypeOf<InvalidOperationException>();
+            await Assert.That(ex.InnerException!.Message).Contains("Failed to ensure unique _id index");
+        }
+        finally
+        {
+            CleanupDb(dbPath);
+        }
+    }
+
     private static void CleanupDb(string dbPath)
     {
         if (File.Exists(dbPath)) File.Delete(dbPath);

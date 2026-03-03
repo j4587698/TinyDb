@@ -196,7 +196,12 @@ internal static class ClrTypeName
         if (i < input.Length && input[i] == '`')
         {
             i++; // skip `
+            var arityStart = i;
             while (i < input.Length && char.IsDigit(input[i])) i++;
+            if (arityStart == i)
+            {
+                throw new FormatException("Invalid reflection generic type name: missing arity digits after '`'.");
+            }
 
             if (i + 1 < input.Length && input[i] == '[' && input[i + 1] == '[')
             {

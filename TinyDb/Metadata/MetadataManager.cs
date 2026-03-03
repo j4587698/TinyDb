@@ -396,6 +396,15 @@ public class MetadataManager
         var normalized = ClrTypeName.NormalizeForComparison(typeName);
         if (string.IsNullOrWhiteSpace(normalized)) return false;
 
+        // byte[] is BSON binary, not array semantics.
+        if (normalized.Equals("byte[]", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("System.Byte[]", StringComparison.OrdinalIgnoreCase) ||
+            normalized.EndsWith("System.Byte[]", StringComparison.Ordinal))
+        {
+            kind = ExpectedBsonKind.Binary;
+            return true;
+        }
+
         if (normalized.EndsWith("[]", StringComparison.Ordinal) ||
             normalized.Contains("System.Collections.Generic.List", StringComparison.Ordinal) ||
             normalized.Contains("System.Collections.Generic.IEnumerable", StringComparison.Ordinal))
@@ -437,14 +446,6 @@ public class MetadataManager
             normalized.EndsWith("System.Guid", StringComparison.Ordinal))
         {
             kind = ExpectedBsonKind.String;
-            return true;
-        }
-
-        if (normalized.Equals("byte[]", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Equals("System.Byte[]", StringComparison.OrdinalIgnoreCase) ||
-            normalized.EndsWith("System.Byte[]", StringComparison.Ordinal))
-        {
-            kind = ExpectedBsonKind.Binary;
             return true;
         }
 

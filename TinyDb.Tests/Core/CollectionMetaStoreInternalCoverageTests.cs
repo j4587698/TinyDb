@@ -55,6 +55,21 @@ public sealed class CollectionMetaStoreInternalCoverageTests
     }
 
     [Test]
+    public async Task LoadCollections_WhenBsonLengthHeaderIsInvalid_ShouldThrow()
+    {
+        using var ctx = new MetaStoreTestContext();
+        var page = ctx.PageManager.NewPage(PageType.Collection);
+        ctx.CollectionPageId = page.PageID;
+
+        // Header says BSON length is 3 (<= 4), which should hit invalid-length guard.
+        var invalidLengthHeader = new byte[] { 3, 0, 0, 0 };
+        page.WriteData(247, invalidLengthHeader);
+        ctx.PageManager.SavePage(page, forceFlush: true);
+
+        await Assert.That(() => ctx.MetaStore.LoadCollections()).Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task LoadCollections_WhenPageMissing_ShouldSwallowPageReadError()
     {
         using var ctx = new MetaStoreTestContext();
