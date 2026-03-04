@@ -205,7 +205,11 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.3.2 (Current)
+### v0.4.0 (Current)
+- **Dependency reduction**: removed external dependencies `Microsoft.IO.RecyclableMemoryStream`, `System.IO.Hashing`, and `System.IO.Pipelines`, replaced with built-in minimal compatible implementations.
+- **Performance optimization**: reduced intermediate allocations (for example `ToArray`) and optimized batch insert and non-index full-scan query paths.
+
+### v0.3.2
 - **Query API enhancement**: added `Find` overloads for more flexible query invocation.
 
 ### v0.3.1

@@ -205,7 +205,11 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.3.2 (当前)
+### v0.4.0 (当前)
+- **依赖精简**：移除 `Microsoft.IO.RecyclableMemoryStream`、`System.IO.Hashing`、`System.IO.Pipelines` 外部依赖，改为内置最小兼容实现。
+- **性能优化**：减少 `ToArray` 等中间分配，优化批量写入与无索引全表扫描路径。
+
+### v0.3.2
 - **查询 API 增强**：新增 `Find` 重载，支持更灵活的查询调用方式。
 
 ### v0.3.1
