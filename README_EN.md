@@ -205,7 +205,11 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.4.0 (Current)
+### v0.4.1 (Current)
+- **Paged-count enhancement**: added `Find(..., skip, limit, out totalCount)` to return page data and total count in one query call.
+- **Query experience enhancement**: added `Query().Count(out totalCount)` extension to get total count and paged result together in `Skip/Take` pipelines.
+
+### v0.4.0
 - **Dependency reduction**: removed external dependencies `Microsoft.IO.RecyclableMemoryStream`, `System.IO.Hashing`, and `System.IO.Pipelines`, replaced with built-in minimal compatible implementations.
 - **Performance optimization**: reduced intermediate allocations (for example `ToArray`) and optimized batch insert and non-index full-scan query paths.
 

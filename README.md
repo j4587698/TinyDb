@@ -205,7 +205,11 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.4.0 (当前)
+### v0.4.1 (当前)
+- **分页计数增强**：新增 `Find(..., skip, limit, out totalCount)`，支持一次查询同时返回分页结果与总数。
+- **Query 体验增强**：新增 `Query().Count(out totalCount)` 扩展，支持在 `Skip/Take` 链路中同步获取总数与分页结果。
+
+### v0.4.0
 - **依赖精简**：移除 `Microsoft.IO.RecyclableMemoryStream`、`System.IO.Hashing`、`System.IO.Pipelines` 外部依赖，改为内置最小兼容实现。
 - **性能优化**：减少 `ToArray` 等中间分配，优化批量写入与无索引全表扫描路径。
 
