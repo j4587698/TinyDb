@@ -96,6 +96,37 @@ public class DocumentCollectionTests : IDisposable
 
         await Assert.That(collection.FindById(1)!.Name).IsEqualTo("1_U");
     }
+
+    [Test]
+    public async Task Find_With_TotalCount_Should_Return_Page_And_Total_In_One_Call()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+        collection.Insert(new DocumentCollectionItem { Id = 1, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 2, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 3, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 4, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 5, Name = "B" });
+
+        var page = collection.Find(x => x.Name == "A", 1, 2, out var totalCount).ToList();
+
+        await Assert.That(totalCount).IsEqualTo(4);
+        await Assert.That(page.Count).IsEqualTo(2);
+        await Assert.That(page.All(x => x.Name == "A")).IsTrue();
+    }
+
+    [Test]
+    public async Task Find_With_TotalCount_And_Zero_Limit_Should_Return_Empty_Page_And_Total()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+        collection.Insert(new DocumentCollectionItem { Id = 1, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 2, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 3, Name = "B" });
+
+        var page = collection.Find(x => x.Name == "A", 0, 0, out var totalCount).ToList();
+
+        await Assert.That(totalCount).IsEqualTo(2);
+        await Assert.That(page.Count).IsEqualTo(0);
+    }
 }
 
 [Entity("Items")]

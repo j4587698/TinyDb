@@ -398,4 +398,63 @@ public class QueryableTests : IDisposable
         await Assert.That(queryable.Where(p => p.Category == "Electronics").FirstOrDefault()).IsNotNull();
         await Assert.That(queryable.Where(p => p.Price > 1000).FirstOrDefault()).IsNull();
     }
+
+    [Test]
+    public async Task Count_With_Out_Total_Should_Return_Page_And_Total()
+    {
+        const string collectionName = "products";
+        var products = new List<TestProduct>
+        {
+            new() { Name = "A1", Price = 10, Category = "A", InStock = true, CreatedAt = DateTime.UtcNow },
+            new() { Name = "A2", Price = 20, Category = "A", InStock = true, CreatedAt = DateTime.UtcNow },
+            new() { Name = "A3", Price = 30, Category = "A", InStock = true, CreatedAt = DateTime.UtcNow },
+            new() { Name = "A4", Price = 40, Category = "A", InStock = true, CreatedAt = DateTime.UtcNow },
+            new() { Name = "B1", Price = 50, Category = "B", InStock = true, CreatedAt = DateTime.UtcNow }
+        };
+
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        foreach (var product in products)
+        {
+            collection.Insert(product);
+        }
+
+        var queryable = new Queryable<TestProduct>(_executor, collectionName);
+
+        var page = queryable
+            .Where(p => p.Category == "A")
+            .OrderBy(p => p.Price)
+            .Skip(1)
+            .Take(2)
+            .Count(out var totalCount);
+
+        await Assert.That(totalCount).IsEqualTo(4);
+        await Assert.That(page.Count).IsEqualTo(2);
+        await Assert.That(page[0].Name).IsEqualTo("A2");
+        await Assert.That(page[1].Name).IsEqualTo("A3");
+    }
+
+    [Test]
+    public async Task Count_With_Out_Total_Without_Pagination_Should_Return_All_And_Total()
+    {
+        const string collectionName = "products";
+        var products = new List<TestProduct>
+        {
+            new() { Name = "P1", Price = 10, Category = "C", InStock = true, CreatedAt = DateTime.UtcNow },
+            new() { Name = "P2", Price = 20, Category = "C", InStock = true, CreatedAt = DateTime.UtcNow },
+            new() { Name = "P3", Price = 30, Category = "C", InStock = false, CreatedAt = DateTime.UtcNow }
+        };
+
+        var collection = _engine.GetCollection<TestProduct>(collectionName);
+        foreach (var product in products)
+        {
+            collection.Insert(product);
+        }
+
+        var queryable = new Queryable<TestProduct>(_executor, collectionName);
+
+        var list = queryable.Where(p => p.Category == "C").Count(out var totalCount);
+
+        await Assert.That(totalCount).IsEqualTo(3);
+        await Assert.That(list.Count).IsEqualTo(3);
+    }
 }

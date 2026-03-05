@@ -396,6 +396,32 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         return query;
     }
 
+    public IEnumerable<T> Find(Expression<Func<T, bool>> predicate, int skip, int limit, out long totalCount)
+    {
+        ThrowIfDisposed();
+        if (predicate == null) throw new ArgumentNullException(nameof(predicate));
+
+        ValidatePaginationArguments(skip, limit);
+
+        var results = limit == int.MaxValue
+            ? new List<T>()
+            : new List<T>(Math.Max(0, limit));
+
+        long matchedCount = 0;
+        foreach (var item in Query().Where(predicate))
+        {
+            if (matchedCount >= skip && (limit == int.MaxValue || results.Count < limit))
+            {
+                results.Add(item);
+            }
+
+            matchedCount++;
+        }
+
+        totalCount = matchedCount;
+        return results;
+    }
+
     /// <summary>
     /// 查找单个文档
     /// </summary>

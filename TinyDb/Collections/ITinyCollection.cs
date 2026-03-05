@@ -81,6 +81,8 @@ public interface ITinyCollection<T> where T : class
 
     IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit);
 
+    IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit, out long totalCount);
+
     /// <summary>
     /// 查找单个文档
     /// </summary>
