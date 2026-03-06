@@ -1373,7 +1373,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     sb.AppendLine("            {");
                     sb.AppendLine($"                if (bson_{prop.Name}.IsNull)");
                     sb.AppendLine("                {");
-                    if (prop.IsNullable || !prop.IsValueType)
+                    // 仅在目标属性本身可空时才写入 null/default；
+                    // 对非可空引用类型保持构造时默认值，避免生成 CS8625。
+                    if (prop.IsNullable)
                     {
                         sb.AppendLine($"                    result.{prop.Name} = default;");
                     }
