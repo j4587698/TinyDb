@@ -205,7 +205,12 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.4.1 (Current)
+### v0.4.2 (Current)
+- **AOT complex-collection fix**: restored and improved `List<complex-type>` deserialization in AOT mode, including complex object collections inside dependent types referenced by `Entity`.
+- **Source Generator enhancement**: completed collection/dictionary metadata tracking and dedicated serialization branches for dependent complex types, avoiding `List element type ... is not supported in AOT mode`.
+- **Regression coverage**: added round-trip serialization regression tests and validated with published AOT binary execution.
+
+### v0.4.1
 - **Paged-count enhancement**: added `Find(..., skip, limit, out totalCount)` to return page data and total count in one query call.
 - **Query experience enhancement**: added `Query().Count(out totalCount)` extension to get total count and paged result together in `Skip/Take` pipelines.
 

@@ -205,7 +205,12 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.4.1 (当前)
+### v0.4.2 (当前)
+- **AOT 复杂集合修复**：恢复并增强 `List<复杂类型>` 在 AOT 模式下的反序列化支持，覆盖 `Entity` 依赖类型中的复杂对象集合场景。
+- **源生成器增强**：补齐依赖复杂类型路径中的集合/字典元数据与专用序列化分支，避免 `List element type ... is not supported in AOT mode` 异常。
+- **回归验证补齐**：新增相关往返序列化测试，并通过 AOT 发布后二进制运行验证。
+
+### v0.4.1
 - **分页计数增强**：新增 `Find(..., skip, limit, out totalCount)`，支持一次查询同时返回分页结果与总数。
 - **Query 体验增强**：新增 `Query().Count(out totalCount)` 扩展，支持在 `Skip/Take` 链路中同步获取总数与分页结果。
 
