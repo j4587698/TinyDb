@@ -26,6 +26,25 @@ public class BsonConversionAdditionalCoverageTests2
         public int Id { get; set; }
     }
 
+    private static AotEntityAdapter<AdapterPoco> CreateAdapterPocoAdapter()
+    {
+        return new AotEntityAdapter<AdapterPoco>(
+            toDocument: e => new BsonDocument().Set("id", e.Id),
+            fromDocument: document =>
+            {
+                var poco = new AdapterPoco();
+                if (document.TryGetValue("id", out var idValue))
+                {
+                    poco.Id = idValue.ToInt32(null);
+                }
+                return poco;
+            },
+            getId: e => BsonInt32.FromValue(e.Id),
+            setId: (e, id) => e.Id = id.ToInt32(null),
+            hasValidId: e => e.Id != 0,
+            getPropertyValue: (e, name) => name == nameof(AdapterPoco.Id) ? e.Id : null);
+    }
+
     [Test]
     public async Task FromBsonValueEnum_ShouldCoverNumericArms_And_DefaultFallback()
     {
@@ -92,27 +111,28 @@ public class BsonConversionAdditionalCoverageTests2
     [Test]
     public async Task FromBsonValue_ComplexType_FromBsonDocument_WithRegisteredAdapter_ShouldUseAdapter()
     {
-        var adapter = new AotEntityAdapter<AdapterPoco>(
-            toDocument: _ => new BsonDocument(),
-            fromDocument: document =>
-            {
-                var poco = new AdapterPoco();
-                if (document.TryGetValue("id", out var idValue))
-                {
-                    poco.Id = idValue.ToInt32(null);
-                }
-                return poco;
-            },
-            getId: e => BsonInt32.FromValue(e.Id),
-            setId: (e, id) => e.Id = id.ToInt32(null),
-            hasValidId: e => e.Id != 0,
-            getPropertyValue: (e, name) => name == nameof(AdapterPoco.Id) ? e.Id : null);
-
-        AotHelperRegistry.Register(adapter);
+        AotHelperRegistry.Register(CreateAdapterPocoAdapter());
 
         var doc = new BsonDocument().Set("id", 123);
         var obj = (AdapterPoco)BsonConversion.FromBsonValue(doc, typeof(AdapterPoco))!;
         await Assert.That(obj.Id).IsEqualTo(123);
+    }
+
+    [Test]
+    public async Task FromBsonValue_ListOfComplexType_WithRegisteredAdapter_ShouldUseAdapterForElements()
+    {
+        AotHelperRegistry.Register(CreateAdapterPocoAdapter());
+
+        var array = new BsonArray(new BsonValue[]
+        {
+            new BsonDocument().Set("id", 1),
+            new BsonDocument().Set("id", 2)
+        });
+
+        var list = (List<AdapterPoco>)BsonConversion.FromBsonValue(array, typeof(List<AdapterPoco>))!;
+        await Assert.That(list.Count).IsEqualTo(2);
+        await Assert.That(list[0].Id).IsEqualTo(1);
+        await Assert.That(list[1].Id).IsEqualTo(2);
     }
 
     [Test]

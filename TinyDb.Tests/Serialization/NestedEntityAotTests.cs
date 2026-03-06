@@ -77,6 +77,31 @@ public class NestedEntityAotTests
         }
     }
 
+    /// <summary>
+    /// 包含“依赖复杂类型里的复杂集合”的嵌套 Entity 测试
+    /// </summary>
+    public class NestedCollectionContainer
+    {
+        public class Challenge
+        {
+            public string Token { get; set; } = string.Empty;
+            public DateTime ExpiresAt { get; set; }
+        }
+
+        public class AcmeDetails
+        {
+            public string Domain { get; set; } = string.Empty;
+            public List<Challenge> Challenges { get; set; } = new();
+        }
+
+        [Entity("nested_acme_docs")]
+        public class NestedAcmeDoc
+        {
+            public int Id { get; set; }
+            public AcmeDetails Details { get; set; } = new();
+        }
+    }
+
     #endregion
 
     #region 单层嵌套 Entity 测试
@@ -384,6 +409,33 @@ public class NestedEntityAotTests
         await Assert.That(restored.Address!.Street).IsEqualTo(original.Address!.Street);
         await Assert.That(restored.Address.City).IsEqualTo(original.Address.City);
         await Assert.That(restored.Address.ZipCode).IsEqualTo(original.Address.ZipCode);
+    }
+
+    [Test]
+    public async Task NestedEntityWithDependentComplexCollection_RoundTrip_Should_Preserve_Data()
+    {
+        var original = new NestedCollectionContainer.NestedAcmeDoc
+        {
+            Id = 1001,
+            Details = new NestedCollectionContainer.AcmeDetails
+            {
+                Domain = "example.com",
+                Challenges = new List<NestedCollectionContainer.Challenge>
+                {
+                    new() { Token = "token-1", ExpiresAt = new DateTime(2026, 1, 1, 10, 0, 0, DateTimeKind.Utc) },
+                    new() { Token = "token-2", ExpiresAt = new DateTime(2026, 1, 2, 11, 30, 0, DateTimeKind.Utc) }
+                }
+            }
+        };
+
+        var bson = AotBsonMapper.ToDocument(original);
+        var restored = AotBsonMapper.FromDocument<NestedCollectionContainer.NestedAcmeDoc>(bson);
+
+        await Assert.That(restored.Id).IsEqualTo(original.Id);
+        await Assert.That(restored.Details.Domain).IsEqualTo("example.com");
+        await Assert.That(restored.Details.Challenges.Count).IsEqualTo(2);
+        await Assert.That(restored.Details.Challenges[0].Token).IsEqualTo("token-1");
+        await Assert.That(restored.Details.Challenges[1].Token).IsEqualTo("token-2");
     }
 
     #endregion

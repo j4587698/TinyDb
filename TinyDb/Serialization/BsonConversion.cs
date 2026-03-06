@@ -263,7 +263,7 @@ public static class BsonConversion
             }
         }
 
-        // Handle generic collections ONLY if they have adapters or are not using reflection creation
+        // Handle generic collections
         if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(List<>))
         {
             if (bsonValue is BsonArray listArray)
@@ -271,25 +271,12 @@ public static class BsonConversion
                 var elementType = targetType.GetGenericArguments()[0];
                 var list = (System.Collections.IList)Activator.CreateInstance(targetType)!;
 
-                if (elementType == typeof(int))
+                foreach (var item in listArray)
                 {
-                    foreach (var item in listArray)
-                    {
-                        list.Add(FromBsonValue(item, typeof(int)));
-                    }
-                    return list;
+                    list.Add(FromBsonValue(item, elementType));
                 }
 
-                if (elementType == typeof(string))
-                {
-                    foreach (var item in listArray)
-                    {
-                        list.Add(FromBsonValue(item, typeof(string)));
-                    }
-                    return list;
-                }
-
-                throw new NotSupportedException($"List element type '{elementType.FullName}' is not supported in AOT mode.");
+                return list;
             }
         }
         else if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>))

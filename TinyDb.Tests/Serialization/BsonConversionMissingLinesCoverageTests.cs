@@ -42,11 +42,14 @@ public sealed class BsonConversionMissingLinesCoverageTests
     }
 
     [Test]
-    public async Task FromBsonValue_ListUnsupportedElementType_ShouldThrow()
+    public async Task FromBsonValue_ListDouble_ShouldWork()
     {
-        var array = new BsonArray(new BsonValue[] { 1 });
-        await Assert.That(() => BsonConversion.FromBsonValue(array, typeof(List<double>)))
-            .Throws<NotSupportedException>();
+        var array = new BsonArray(new BsonValue[] { 1, new BsonDouble(2.5) });
+        var list = (List<double>)BsonConversion.FromBsonValue(array, typeof(List<double>))!;
+
+        await Assert.That(list.Count).IsEqualTo(2);
+        await Assert.That(list[0]).IsEqualTo(1d);
+        await Assert.That(list[1]).IsEqualTo(2.5d);
     }
 
     [Test]

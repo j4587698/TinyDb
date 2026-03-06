@@ -1250,6 +1250,74 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     }
                 }
             }
+            else if (prop.IsCollection && prop.IsElementComplexType)
+            {
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            if (obj.{prop.Name} == null)");
+                    sb.AppendLine($"                document = document.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    sb.AppendLine($"            else");
+                    sb.AppendLine($"            {{");
+                }
+
+                sb.AppendLine($"            var array_{prop.Name} = new BsonArray();");
+                sb.AppendLine($"            foreach (var item in obj.{prop.Name})");
+                sb.AppendLine($"            {{");
+
+                if (prop.IsElementValueType)
+                {
+                    sb.AppendLine($"                array_{prop.Name} = array_{prop.Name}.AddValue(SerializeComplexObject(item));");
+                }
+                else
+                {
+                    sb.AppendLine($"                if (item == null)");
+                    sb.AppendLine($"                    array_{prop.Name} = array_{prop.Name}.AddValue(BsonNull.Value);");
+                    sb.AppendLine($"                else");
+                    sb.AppendLine($"                    array_{prop.Name} = array_{prop.Name}.AddValue(SerializeComplexObject(item));");
+                }
+
+                sb.AppendLine($"            }}");
+                sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", array_{prop.Name});");
+
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            }}");
+                }
+            }
+            else if (prop.IsDictionary && prop.IsDictionaryValueComplexType)
+            {
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            if (obj.{prop.Name} == null)");
+                    sb.AppendLine($"                document = document.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    sb.AppendLine($"            else");
+                    sb.AppendLine($"            {{");
+                }
+
+                sb.AppendLine($"            var dict_{prop.Name} = new BsonDocument();");
+                sb.AppendLine($"            foreach (var kvp in obj.{prop.Name})");
+                sb.AppendLine($"            {{");
+
+                if (prop.IsDictionaryValueValueType)
+                {
+                    sb.AppendLine($"                dict_{prop.Name} = dict_{prop.Name}.Set(kvp.Key.ToString(), SerializeComplexObject(kvp.Value));");
+                }
+                else
+                {
+                    sb.AppendLine($"                if (kvp.Value == null)");
+                    sb.AppendLine($"                    dict_{prop.Name} = dict_{prop.Name}.Set(kvp.Key.ToString(), BsonNull.Value);");
+                    sb.AppendLine($"                else");
+                    sb.AppendLine($"                    dict_{prop.Name} = dict_{prop.Name}.Set(kvp.Key.ToString(), SerializeComplexObject(kvp.Value));");
+                }
+
+                sb.AppendLine($"            }}");
+                sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", dict_{prop.Name});");
+
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"            }}");
+                }
+            }
             else
             {
                 // 简单类型使用 ConvertToBsonValue
@@ -1316,6 +1384,95 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     sb.AppendLine("                }");
                     sb.AppendLine("            }");
                 }
+            }
+            else if (prop.IsCollection)
+            {
+                var elementType = prop.ElementType ?? "object";
+
+                sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
+                sb.AppendLine("            {");
+                sb.AppendLine($"                if (bson_{prop.Name}.IsNull)");
+                sb.AppendLine("                {");
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"                    result.{prop.Name} = default!;");
+                }
+                sb.AppendLine("                }");
+                sb.AppendLine($"                else if (bson_{prop.Name} is BsonArray array_{prop.Name})");
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    var list_{prop.Name} = new System.Collections.Generic.List<{elementType}>();");
+                sb.AppendLine($"                    foreach (var item in array_{prop.Name})");
+                sb.AppendLine("                    {");
+                sb.AppendLine($"                        if (item.IsNull)");
+                sb.AppendLine($"                            list_{prop.Name}.Add(default!);");
+
+                if (prop.IsElementComplexType)
+                {
+                    sb.AppendLine($"                        else if (item is BsonDocument itemDoc)");
+                    sb.AppendLine($"                            list_{prop.Name}.Add(DeserializeComplexObject<{elementType}>(itemDoc));");
+                    sb.AppendLine("                        else");
+                    sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+                }
+                else
+                {
+                    sb.AppendLine("                        else");
+                    sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+                }
+
+                sb.AppendLine("                    }");
+                if (prop.IsArray)
+                {
+                    sb.AppendLine($"                    result.{prop.Name} = list_{prop.Name}.ToArray();");
+                }
+                else
+                {
+                    sb.AppendLine($"                    result.{prop.Name} = list_{prop.Name};");
+                }
+                sb.AppendLine("                }");
+                sb.AppendLine("            }");
+            }
+            else if (prop.IsDictionary && (prop.DictionaryKeyType == null ||
+                                           prop.DictionaryKeyType == "string" ||
+                                           prop.DictionaryKeyType == "System.String" ||
+                                           prop.DictionaryKeyType == "global::System.String"))
+            {
+                var keyType = prop.DictionaryKeyType ?? "string";
+                var valueType = prop.DictionaryValueType ?? "object";
+
+                sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
+                sb.AppendLine("            {");
+                sb.AppendLine($"                if (bson_{prop.Name}.IsNull)");
+                sb.AppendLine("                {");
+                if (prop.IsNullable)
+                {
+                    sb.AppendLine($"                    result.{prop.Name} = default!;");
+                }
+                sb.AppendLine("                }");
+                sb.AppendLine($"                else if (bson_{prop.Name} is BsonDocument dict_{prop.Name})");
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    var result_{prop.Name} = new System.Collections.Generic.Dictionary<{keyType}, {valueType}>();");
+                sb.AppendLine($"                    foreach (var kvp in dict_{prop.Name})");
+                sb.AppendLine("                    {");
+                sb.AppendLine("                        if (kvp.Value.IsNull)");
+                sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = default!;");
+
+                if (prop.IsDictionaryValueComplexType)
+                {
+                    sb.AppendLine("                        else if (kvp.Value is BsonDocument valueDoc)");
+                    sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = DeserializeComplexObject<{valueType}>(valueDoc);");
+                    sb.AppendLine("                        else");
+                    sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                }
+                else
+                {
+                    sb.AppendLine("                        else");
+                    sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                }
+
+                sb.AppendLine("                    }");
+                sb.AppendLine($"                    result.{prop.Name} = result_{prop.Name};");
+                sb.AppendLine("                }");
+                sb.AppendLine("            }");
             }
             else
             {
@@ -2209,45 +2366,66 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                                  (propType is INamedTypeSymbol { IsGenericType: true } namedType &&
                                   namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T);
 
-                // 检查属性类型是否是复杂类型
-                var isComplex = IsComplexObjectType(propType);
+                var typeAnalysis = AnalyzePropertyType(propType);
+                var isComplex = typeAnalysis.IsComplexType;
                 string? complexFullName = null;
                 bool isCircularRef = false;
 
-                if (isComplex && !HasEntityAttribute(propType))
+                void TrackDependentType(ITypeSymbol? dependencyTypeSymbol)
                 {
-                    complexFullName = propFullTypeName;
-                    
-                    // 获取实际的类型符号（处理可空类型）
-                    var actualPropType = propType;
-                    if (propType is INamedTypeSymbol { IsGenericType: true } nullableNamed &&
-                        nullableNamed.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
-                        nullableNamed.TypeArguments.Length == 1)
+                    if (dependencyTypeSymbol == null)
                     {
-                        actualPropType = nullableNamed.TypeArguments[0];
+                        return;
                     }
-                    
-                    // 检测循环引用：当前路径中是否已包含此类型
-                    if (currentPath.Contains(propFullTypeName))
+
+                    if (HasEntityAttribute(dependencyTypeSymbol))
                     {
-                        // 检测到循环引用
+                        return;
+                    }
+
+                    var dependencyFullName = dependencyTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+                    if (currentPath.Contains(dependencyFullName))
+                    {
                         isCircularRef = true;
-                        var cyclePath = new List<string>(currentPath) { propFullTypeName };
-                        var cycleStartIndex = currentPath.IndexOf(propFullTypeName);
+                        var cyclePath = new List<string>(currentPath) { dependencyFullName };
+                        var cycleStartIndex = currentPath.IndexOf(dependencyFullName);
                         var cycleChain = string.Join(" -> ", cyclePath.Skip(cycleStartIndex));
                         circularRefs.Add(new CircularReferenceInfo(
                             fullName,
-                            propFullTypeName,
+                            dependencyFullName,
                             propertySymbol.Name,
                             cycleChain));
+                        return;
                     }
-                    // 如果这个类型还没有被访问过且不是循环引用，直接使用属性类型符号加入队列
-                    else if (!visited.Contains(propFullTypeName))
+
+                    if (!visited.Contains(dependencyFullName))
                     {
-                        visited.Add(propFullTypeName);
-                        var newPath = new List<string>(currentPath) { propFullTypeName };
-                        toProcess.Enqueue((propFullTypeName, actualPropType, newPath));
+                        visited.Add(dependencyFullName);
+                        var newPath = new List<string>(currentPath) { dependencyFullName };
+                        toProcess.Enqueue((dependencyFullName, dependencyTypeSymbol, newPath));
                     }
+                }
+
+                if (isComplex && !HasEntityAttribute(propType))
+                {
+                    var actualPropType = GetActualType(propType) ?? propType;
+                    complexFullName = actualPropType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    TrackDependentType(actualPropType);
+                }
+
+                if (typeAnalysis.IsCollection && typeAnalysis.IsElementComplexType)
+                {
+                    var elementTypeSymbol = GetElementTypeSymbol(propType);
+                    var actualElementType = elementTypeSymbol != null ? (GetActualType(elementTypeSymbol) ?? elementTypeSymbol) : null;
+                    TrackDependentType(actualElementType);
+                }
+
+                if (typeAnalysis.IsDictionary && typeAnalysis.IsDictionaryValueComplexType)
+                {
+                    var valueTypeSymbol = GetDictionaryValueTypeSymbol(propType);
+                    var actualValueType = valueTypeSymbol != null ? (GetActualType(valueTypeSymbol) ?? valueTypeSymbol) : null;
+                    TrackDependentType(actualValueType);
                 }
 
                 properties.Add(new DependentTypeProperty(
@@ -2258,6 +2436,16 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     isNullable,
                     isComplex && !HasEntityAttribute(propType),
                     complexFullName,
+                    typeAnalysis.IsCollection,
+                    typeAnalysis.IsDictionary,
+                    typeAnalysis.IsArray,
+                    typeAnalysis.ElementType,
+                    typeAnalysis.IsElementComplexType,
+                    typeAnalysis.IsElementValueType,
+                    typeAnalysis.DictionaryKeyType,
+                    typeAnalysis.DictionaryValueType,
+                    typeAnalysis.IsDictionaryValueComplexType,
+                    typeAnalysis.IsDictionaryValueValueType,
                     isCircularRef));
             }
         }
@@ -2454,12 +2642,40 @@ public class DependentTypeProperty
     public bool IsNullable { get; }
     public bool IsComplexType { get; }
     public string? ComplexTypeFullName { get; }
+    public bool IsCollection { get; }
+    public bool IsDictionary { get; }
+    public bool IsArray { get; }
+    public string? ElementType { get; }
+    public bool IsElementComplexType { get; }
+    public bool IsElementValueType { get; }
+    public string? DictionaryKeyType { get; }
+    public string? DictionaryValueType { get; }
+    public bool IsDictionaryValueComplexType { get; }
+    public bool IsDictionaryValueValueType { get; }
     /// <summary>
     /// 是否是循环引用（属性类型在依赖链中形成循环）
     /// </summary>
     public bool IsCircularReference { get; }
 
-    public DependentTypeProperty(string name, string typeName, string fullyQualifiedTypeName, bool isValueType, bool isNullable, bool isComplexType = false, string? complexTypeFullName = null, bool isCircularReference = false)
+    public DependentTypeProperty(
+        string name,
+        string typeName,
+        string fullyQualifiedTypeName,
+        bool isValueType,
+        bool isNullable,
+        bool isComplexType = false,
+        string? complexTypeFullName = null,
+        bool isCollection = false,
+        bool isDictionary = false,
+        bool isArray = false,
+        string? elementType = null,
+        bool isElementComplexType = false,
+        bool isElementValueType = false,
+        string? dictionaryKeyType = null,
+        string? dictionaryValueType = null,
+        bool isDictionaryValueComplexType = false,
+        bool isDictionaryValueValueType = false,
+        bool isCircularReference = false)
     {
         Name = name;
         TypeName = typeName;
@@ -2468,6 +2684,16 @@ public class DependentTypeProperty
         IsNullable = isNullable;
         IsComplexType = isComplexType;
         ComplexTypeFullName = complexTypeFullName;
+        IsCollection = isCollection;
+        IsDictionary = isDictionary;
+        IsArray = isArray;
+        ElementType = elementType;
+        IsElementComplexType = isElementComplexType;
+        IsElementValueType = isElementValueType;
+        DictionaryKeyType = dictionaryKeyType;
+        DictionaryValueType = dictionaryValueType;
+        IsDictionaryValueComplexType = isDictionaryValueComplexType;
+        IsDictionaryValueValueType = isDictionaryValueValueType;
         IsCircularReference = isCircularReference;
     }
 }
