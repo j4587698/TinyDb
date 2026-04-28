@@ -56,11 +56,11 @@ public sealed class DocumentCollectionAsyncBranchCoverageTests : IDisposable
 
         Expression<Func<AsyncTestEntity, bool>> predicate = null!;
 
-        await Assert.That(() => col.FindAsync(predicate)).ThrowsExactly<ArgumentNullException>();
-        await Assert.That(() => col.FindAsync(predicate, 0, 10)).ThrowsExactly<ArgumentNullException>();
-        await Assert.That(() => col.FindOneAsync(predicate)).ThrowsExactly<ArgumentNullException>();
-        await Assert.That(() => col.CountAsync(predicate)).ThrowsExactly<ArgumentNullException>();
-        await Assert.That(() => col.ExistsAsync(predicate)).ThrowsExactly<ArgumentNullException>();
+        await Assert.That(async () => { await col.FindAsync(predicate); }).ThrowsExactly<ArgumentNullException>();
+        await Assert.That(async () => { await col.FindAsync(predicate, 0, 10); }).ThrowsExactly<ArgumentNullException>();
+        await Assert.That(async () => { await col.FindOneAsync(predicate); }).ThrowsExactly<ArgumentNullException>();
+        await Assert.That(async () => { await col.CountAsync(predicate); }).ThrowsExactly<ArgumentNullException>();
+        await Assert.That(async () => { await col.ExistsAsync(predicate); }).ThrowsExactly<ArgumentNullException>();
     }
 
     [Test]

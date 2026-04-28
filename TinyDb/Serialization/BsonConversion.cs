@@ -273,7 +273,7 @@ public static class BsonConversion
 
                 foreach (var item in listArray)
                 {
-                    list.Add(FromBsonValue(item, elementType));
+                    list.Add(FromBsonValueForCollectionElement(item, elementType));
                 }
 
                 return list;
@@ -407,7 +407,9 @@ public static class BsonConversion
             var t when t == typeof(bool) =>
                 bsonValue is BsonBoolean bl ? bl.Value : Convert.ToBoolean(bsonValue.ToString()),
             var t when t == typeof(DateTime) =>
-                bsonValue is BsonDateTime dt ? dt.Value : Convert.ToDateTime(bsonValue.ToString()),
+                bsonValue is BsonDateTime dt
+                    ? dt.Value
+                    : DateTime.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
             var t when t == typeof(Guid) =>
                 bsonValue is BsonString bsonString
                     ? Guid.Parse(bsonString.Value)
@@ -500,6 +502,23 @@ public static class BsonConversion
                 },
             _ => bsonValue.ToString()
         };
+    }
+
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2062",
+        Justification = "Collection element conversion uses explicit scalar conversions or registered AOT adapters; unsupported dynamic types fail deterministically.")]
+    [UnconditionalSuppressMessage(
+        "Trimming",
+        "IL2067",
+        Justification = "Collection element conversion uses explicit scalar conversions or registered AOT adapters; unsupported dynamic types fail deterministically.")]
+    [UnconditionalSuppressMessage(
+        "AOT",
+        "IL2067",
+        Justification = "Collection element conversion uses explicit scalar conversions or registered AOT adapters; unsupported dynamic types fail deterministically.")]
+    private static object? FromBsonValueForCollectionElement(BsonValue bsonValue, Type elementType)
+    {
+        return FromBsonValue(bsonValue, elementType);
     }
 
     /// <summary>

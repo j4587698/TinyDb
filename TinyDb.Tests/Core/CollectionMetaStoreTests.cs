@@ -55,6 +55,24 @@ public class CollectionMetaStoreTests : IDisposable
     }
 
     [Test]
+    public async Task GetMetadata_AfterEnsureIndex_ShouldHideInternalIndexDefinitions()
+    {
+        const string collectionName = "indexed_metadata_collection";
+        var collection = _engine.GetCollection<TestItem>(collectionName);
+        collection.Insert(new TestItem { Id = 1, Name = "A" });
+
+        _engine.EnsureIndex(collectionName, "Name", "idx_metadata_name");
+
+        var metaStore = GetCollectionMetaStore();
+        var publicMetadata = metaStore.GetMetadata(collectionName);
+        var internalMetadata = metaStore.GetMetadata(collectionName, includeInternal: true);
+
+        await Assert.That(publicMetadata.ContainsKey("__indexes")).IsFalse();
+        await Assert.That(publicMetadata.Count()).IsEqualTo(0);
+        await Assert.That(internalMetadata.ContainsKey("__indexes")).IsTrue();
+    }
+
+    [Test]
     public async Task UpdateMetadata_NewCollection_ShouldRegisterAndSave()
     {
         var metaStore = GetCollectionMetaStore();

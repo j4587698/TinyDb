@@ -49,6 +49,135 @@ public class QueryExecutorIndexTests : IDisposable
     }
 
     [Test]
+    public async Task EnsureIndex_AfterExistingDocuments_ShouldBackfillIndex()
+    {
+        var col = _engine.GetCollection<Product>("products_backfill");
+        col.Insert(new Product { Id = 1, Code = "A", Group = 1, Score = 10 });
+        col.Insert(new Product { Id = 2, Code = "B", Group = 1, Score = 20 });
+
+        _engine.EnsureIndex("products_backfill", "Code", "idx_code_backfill", unique: true);
+
+        var res = col.Find(p => p.Code == "B").ToList();
+        await Assert.That(res.Count).IsEqualTo(1);
+        await Assert.That(res[0].Id).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task EnsureIndex_AfterReopen_ShouldLoadPersistedRootPage()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"idx_persist_{Guid.NewGuid():N}.db");
+        const string collectionName = "persisted_products";
+        const string indexName = "idx_code_persisted";
+        uint rootPageId;
+
+        try
+        {
+            using (var engine = new TinyDbEngine(dbPath))
+            {
+                var col = engine.GetCollection<Product>(collectionName);
+                col.Insert(new Product { Id = 1, Code = "A", Group = 1, Score = 10 });
+                col.Insert(new Product { Id = 2, Code = "B", Group = 1, Score = 20 });
+
+                engine.EnsureIndex(collectionName, "Code", indexName, unique: true);
+                var index = engine.GetIndexManager(collectionName).GetIndex(indexName);
+
+                await Assert.That(index).IsNotNull();
+                await Assert.That(index!.EntryCount).IsEqualTo(2);
+                rootPageId = index.RootPageId;
+                engine.Flush();
+            }
+
+            using (var engine = new TinyDbEngine(dbPath))
+            {
+                var indexManager = engine.GetIndexManager(collectionName);
+                await Assert.That(indexManager.IndexExists(indexName)).IsTrue();
+
+                var index = indexManager.GetIndex(indexName);
+                await Assert.That(index).IsNotNull();
+                await Assert.That(index!.RootPageId).IsEqualTo(rootPageId);
+                await Assert.That(index.EntryCount).IsEqualTo(2);
+
+                var col = engine.GetCollection<Product>(collectionName);
+                var res = col.Find(p => p.Code == "B").ToList();
+                await Assert.That(res.Count).IsEqualTo(1);
+                await Assert.That(res[0].Id).IsEqualTo(2);
+            }
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Test]
+    public async Task DropCollection_AfterPersistedIndex_ShouldRemoveIndexDefinitionOnReopen()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"idx_drop_{Guid.NewGuid():N}.db");
+        const string collectionName = "drop_index_products";
+        const string indexName = "idx_code_drop";
+
+        try
+        {
+            using (var engine = new TinyDbEngine(dbPath))
+            {
+                var col = engine.GetCollection<Product>(collectionName);
+                col.Insert(new Product { Id = 1, Code = "A", Group = 1, Score = 10 });
+
+                engine.EnsureIndex(collectionName, "Code", indexName, unique: true);
+                await Assert.That(engine.GetIndexManager(collectionName).IndexExists(indexName)).IsTrue();
+
+                await Assert.That(engine.DropCollection(collectionName)).IsTrue();
+                engine.Flush();
+            }
+
+            using (var engine = new TinyDbEngine(dbPath))
+            {
+                await Assert.That(engine.CollectionExists(collectionName)).IsFalse();
+
+                engine.GetCollection<Product>(collectionName);
+                await Assert.That(engine.GetIndexManager(collectionName).IndexExists(indexName)).IsFalse();
+            }
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Test]
+    public async Task EnsureIndex_WhenBackfillFails_ShouldNotPersistIndexDefinition()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"idx_failed_backfill_{Guid.NewGuid():N}.db");
+        const string collectionName = "failed_backfill_products";
+        const string indexName = "idx_duplicate_code";
+
+        try
+        {
+            using (var engine = new TinyDbEngine(dbPath))
+            {
+                var col = engine.GetCollection<Product>(collectionName);
+                col.Insert(new Product { Id = 1, Code = "DUP", Group = 1, Score = 10 });
+                col.Insert(new Product { Id = 2, Code = "DUP", Group = 1, Score = 20 });
+
+                await Assert.That(() => engine.EnsureIndex(collectionName, "Code", indexName, unique: true))
+                    .Throws<InvalidOperationException>();
+                await Assert.That(engine.GetIndexManager(collectionName).IndexExists(indexName)).IsFalse();
+
+                engine.Flush();
+            }
+
+            using (var engine = new TinyDbEngine(dbPath))
+            {
+                await Assert.That(engine.GetIndexManager(collectionName).IndexExists(indexName)).IsFalse();
+            }
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Test]
     public async Task IndexScan_Composite_Prefix_ShouldWork()
     {
         var col = _engine.GetCollection<Product>("products");

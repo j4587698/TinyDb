@@ -77,6 +77,91 @@ public class TinyDbEngineRecoveryTests : IDisposable
             await Assert.That(all.Any(x => x.Id == 4)).IsTrue();
         }
     }
+
+    [Test]
+    public async Task Engine_Should_Reopen_ExistingDatabase_WithPersistedPageSize()
+    {
+        using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { PageSize = 4096 }))
+        {
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            collection.Insert(new RecoveryDataItem { Id = 1, Value = "legacy-page-size" });
+        }
+
+        using (var engine = new TinyDbEngine(_testDbPath))
+        {
+            await Assert.That(engine.Options.PageSize).IsEqualTo(4096u);
+
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            var item = collection.FindById(1);
+
+            await Assert.That(item).IsNotNull();
+            await Assert.That(item!.Value).IsEqualTo("legacy-page-size");
+        }
+
+        using (var engine = new TinyDbEngine(_testDbPath))
+        {
+            await Assert.That(engine.Options.PageSize).IsEqualTo(4096u);
+
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            var item = collection.FindById(1);
+
+            await Assert.That(item).IsNotNull();
+            await Assert.That(item!.Value).IsEqualTo("legacy-page-size");
+        }
+    }
+
+    [Test]
+    public async Task Engine_Should_WriteValidHeader_DuringInitialCreation()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+
+        byte[] bytes;
+        using (var stream = new FileStream(_testDbPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            bytes = new byte[stream.Length];
+            _ = stream.Read(bytes, 0, bytes.Length);
+        }
+
+        var headerBytes = bytes.Skip(Page.DataStartOffset).Take(DatabaseHeader.Size).ToArray();
+        var header = DatabaseHeader.FromByteArray(headerBytes);
+
+        await Assert.That(header.IsValid()).IsTrue();
+        await Assert.That(header.CollectionInfoPage).IsNotEqualTo(0u);
+        await Assert.That(header.IndexInfoPage).IsNotEqualTo(0u);
+        await Assert.That(header.TotalPages).IsGreaterThanOrEqualTo(3u);
+    }
+
+    [Test]
+    public async Task Engine_Should_IgnoreStaleWal_WhenMainDatabaseWasDeleted()
+    {
+        var options = new TinyDbOptions { EnableJournaling = true };
+
+        using (var engine = new TinyDbEngine(_testDbPath, options))
+        {
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            collection.Insert(new RecoveryDataItem { Id = 1, Value = "stale-wal" });
+        }
+
+        var directory = Path.GetDirectoryName(_testDbPath)!;
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(_testDbPath);
+        var ext = Path.GetExtension(_testDbPath).TrimStart('.');
+        var walPath = Path.Combine(directory, $"{fileNameNoExt}-wal.{ext}");
+
+        await Assert.That(File.Exists(walPath)).IsTrue();
+        File.Delete(_testDbPath);
+
+        using (var engine = new TinyDbEngine(_testDbPath, options))
+        {
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            await Assert.That(collection.FindAll().Any(item => item.Value == "stale-wal")).IsFalse();
+        }
+
+        using (var engine = new TinyDbEngine(_testDbPath, options))
+        {
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            await Assert.That(collection.FindAll().Any(item => item.Value == "stale-wal")).IsFalse();
+        }
+    }
 }
 
 [Entity("data")]

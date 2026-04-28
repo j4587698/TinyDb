@@ -186,7 +186,7 @@ public class LargeDocumentStorageTests : IDisposable
         var regularPage = _pageManager.NewPage(PageType.Data);
         _pageManager.SavePage(regularPage);
 
-        await Assert.That(() => storage.ReadLargeDocumentAsync(regularPage.PageID))
+        await Assert.That(async () => { await storage.ReadLargeDocumentAsync(regularPage.PageID); })
             .Throws<InvalidOperationException>();
     }
 
@@ -199,7 +199,7 @@ public class LargeDocumentStorageTests : IDisposable
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        await Assert.That(() => storage.ReadLargeDocumentAsync(indexPageId, cts.Token))
+        await Assert.That(async () => { await storage.ReadLargeDocumentAsync(indexPageId, cts.Token); })
             .Throws<OperationCanceledException>();
     }
 
@@ -232,7 +232,7 @@ public class LargeDocumentStorageTests : IDisposable
         firstDataPage.WriteData(0, BitConverter.GetBytes(123));
         _pageManager.SavePage(firstDataPage);
 
-        await Assert.That(() => storage.ReadLargeDocumentAsync(indexPageId))
+        await Assert.That(async () => { await storage.ReadLargeDocumentAsync(indexPageId); })
             .Throws<InvalidOperationException>();
     }
 }

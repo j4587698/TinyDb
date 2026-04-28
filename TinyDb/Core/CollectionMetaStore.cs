@@ -56,11 +56,23 @@ internal sealed class CollectionMetaStore
         lock (_lock) return _collectionsMetadata.ContainsKey(name);
     }
     
-    public BsonDocument GetMetadata(string name)
+    public BsonDocument GetMetadata(string name, bool includeInternal = false)
     {
         lock (_lock)
         {
-            return _collectionsMetadata.TryGetValue(name, out var doc) ? doc : new BsonDocument();
+            if (!_collectionsMetadata.TryGetValue(name, out var doc)) return new BsonDocument();
+            if (includeInternal) return doc;
+
+            var filtered = new BsonDocument();
+            foreach (var element in doc)
+            {
+                if (!element.Key.StartsWith("__", StringComparison.Ordinal))
+                {
+                    filtered = filtered.Set(element.Key, element.Value);
+                }
+            }
+
+            return filtered;
         }
     }
     

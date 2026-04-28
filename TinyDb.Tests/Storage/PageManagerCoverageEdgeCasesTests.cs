@@ -125,7 +125,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
         stream.WritePage(0, mismatched.Buffer);
 
         using var manager = new PageManager(stream, 4096);
-        await Assert.That(() => manager.GetPageAsync(1, useCache: false)).Throws<InvalidDataException>();
+        await Assert.That(async () => { await manager.GetPageAsync(1, useCache: false); }).Throws<InvalidDataException>();
     }
 
     private class FakeDiskStreamBase : IDiskStream

@@ -20,6 +20,8 @@
     <!-- Reduce NativeAOT linker/ilc memory pressure for the test assembly -->
     <IlcGenerateCompleteTypeMetadata>false</IlcGenerateCompleteTypeMetadata>
     <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
+    <!-- Test-only coverage cases intentionally exercise reflection/expression/dynamic-code branches and are skipped in AOT runtime. -->
+    <NoWarn>$(NoWarn);IL2026;IL2060;IL2070;IL2075;IL2091;IL3050</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

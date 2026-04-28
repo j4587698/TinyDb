@@ -25,24 +25,23 @@ public static class IndexScanner
         if (entityType == null) throw new ArgumentNullException(nameof(entityType));
         if (string.IsNullOrEmpty(collectionName)) throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
 
-        var indexManager = engine.GetIndexManager(collectionName);
-
         // 自动创建主键索引（_id字段）
-        CreatePrimaryKeyIndex(indexManager, collectionName);
+        CreatePrimaryKeyIndex(engine, collectionName);
 
         // 扫描单个属性索引
-        ScanPropertyIndexes(indexManager, entityType);
+        ScanPropertyIndexes(engine, entityType, collectionName);
 
         // 扫描复合索引
-        ScanCompositeIndexes(indexManager, entityType);
+        ScanCompositeIndexes(engine, entityType, collectionName);
     }
 
     /// <summary>
     /// 扫描属性上的索引标记
     /// </summary>
-    /// <param name="indexManager">索引管理器</param>
+    /// <param name="engine">数据库引擎</param>
     /// <param name="entityType">实体类型</param>
-    private static void ScanPropertyIndexes(IndexManager indexManager, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
+    /// <param name="collectionName">集合名称</param>
+    private static void ScanPropertyIndexes(TinyDbEngine engine, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType, string collectionName)
     {
         var indexedProperties = new List<(PropertyInfo Property, IndexAttribute Attribute)>();
 
@@ -75,37 +74,32 @@ public static class IndexScanner
 
         foreach (var (indexName, entries) in groupedIndexes)
         {
-            if (!indexManager.IndexExists(indexName))
-            {
-                var fields = entries.Select(e => ToCamelCase(e.Property.Name)).ToArray();
-                var unique = entries.Any(e => e.Attribute.Unique);
+            var fields = entries.Select(e => ToCamelCase(e.Property.Name)).ToArray();
+            var unique = entries.Any(e => e.Attribute.Unique);
 
-                indexManager.CreateIndex(indexName, fields, unique);
-            }
+            engine.EnsureIndex(collectionName, fields, indexName, unique);
         }
     }
 
     /// <summary>
     /// 扫描复合索引标记
     /// </summary>
-    /// <param name="indexManager">索引管理器</param>
+    /// <param name="engine">数据库引擎</param>
     /// <param name="entityType">实体类型</param>
-    private static void ScanCompositeIndexes(IndexManager indexManager, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType)
+    /// <param name="collectionName">集合名称</param>
+    private static void ScanCompositeIndexes(TinyDbEngine engine, [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type entityType, string collectionName)
     {
         var compositeIndexes = entityType.GetCustomAttributes<CompositeIndexAttribute>();
 
         foreach (var compositeAttr in compositeIndexes)
         {
-            if (!indexManager.IndexExists(compositeAttr.Name))
+            // Convert fields to camelCase to match BsonMapper behavior
+            var fields = new string[compositeAttr.Fields.Length];
+            for (int i = 0; i < compositeAttr.Fields.Length; i++)
             {
-                // Convert fields to camelCase to match BsonMapper behavior
-                var fields = new string[compositeAttr.Fields.Length];
-                for (int i = 0; i < compositeAttr.Fields.Length; i++)
-                {
-                    fields[i] = ToCamelCase(compositeAttr.Fields[i]);
-                }
-                indexManager.CreateIndex(compositeAttr.Name, fields, compositeAttr.Unique);
+                fields[i] = ToCamelCase(compositeAttr.Fields[i]);
             }
+            engine.EnsureIndex(collectionName, fields, compositeAttr.Name, compositeAttr.Unique);
         }
     }
 
@@ -177,20 +171,14 @@ public static class IndexScanner
     /// <summary>
     /// 创建主键索引
     /// </summary>
-    /// <param name="indexManager">索引管理器</param>
+    /// <param name="engine">数据库引擎</param>
     /// <param name="collectionName">集合名称</param>
-    private static void CreatePrimaryKeyIndex(IndexManager indexManager, string collectionName)
+    private static void CreatePrimaryKeyIndex(TinyDbEngine engine, string collectionName)
     {
         string primaryKeyIndexName = $"pk_{collectionName}_id";
 
-        // 检查主键索引是否已存在（字典或底层页面）
-        if (indexManager.IndexExists(primaryKeyIndexName))
-        {
-            return; 
-        }
-
         // 创建主键索引，_id字段是唯一的
-        indexManager.CreateIndex(primaryKeyIndexName, new[] { "_id" }, true);
+        engine.EnsureIndex(collectionName, new[] { "_id" }, primaryKeyIndexName, true);
     }
 
     private static string ToCamelCase(string name)

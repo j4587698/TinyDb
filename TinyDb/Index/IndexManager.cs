@@ -4,11 +4,14 @@ using System.Collections.Concurrent;
 
 namespace TinyDb.Index;
 
+internal readonly record struct PersistedIndexDefinition(string Name, string[] Fields, bool IsUnique, uint RootPageId, int MaxKeys);
+
 public sealed class IndexManager : IDisposable
 {
     private readonly ConcurrentDictionary<string, BTreeIndex> _indexes;
     private readonly string _collectionName;
     private readonly PageManager _pm;
+    private readonly Action<IReadOnlyList<PersistedIndexDefinition>, bool>? _persistDefinitions;
     private readonly ReaderWriterLockSlim _rwLock = new();
     private bool _disposed;
     
@@ -38,11 +41,23 @@ public sealed class IndexManager : IDisposable
     /// <param name="collectionName">集合名称。</param>
     /// <param name="pm">页面管理器。</param>
     public IndexManager(string collectionName, PageManager pm)
+        : this(collectionName, pm, null, null)
+    {
+    }
+
+    internal IndexManager(
+        string collectionName,
+        PageManager pm,
+        IReadOnlyList<PersistedIndexDefinition>? persistedDefinitions,
+        Action<IReadOnlyList<PersistedIndexDefinition>, bool>? persistDefinitions)
     {
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
         _indexes = new ConcurrentDictionary<string, BTreeIndex>();
+        _persistDefinitions = persistDefinitions;
         _ownsPageManager = false;
+
+        LoadPersistedIndexes(persistedDefinitions);
     }
 
     /// <summary>
@@ -57,6 +72,7 @@ public sealed class IndexManager : IDisposable
         _tempPm = new PageManager(ds);
         _pm = _tempPm;
         _indexes = new ConcurrentDictionary<string, BTreeIndex>();
+        _persistDefinitions = null;
         _ownsPageManager = true;
     }
 
@@ -68,6 +84,16 @@ public sealed class IndexManager : IDisposable
     /// <param name="unique">索引是否应该是唯一的。</param>
     /// <returns>如果创建成功则为 true；如果已存在则为 false。</returns>
     public bool CreateIndex(string name, string[] fields, bool unique = false)
+    {
+        return CreateIndexCore(name, fields, unique, persistImmediately: true);
+    }
+
+    internal bool CreateIndexForBackfill(string name, string[] fields, bool unique = false)
+    {
+        return CreateIndexCore(name, fields, unique, persistImmediately: false);
+    }
+
+    private bool CreateIndexCore(string name, string[] fields, bool unique, bool persistImmediately)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
         if (fields == null || fields.Length == 0) throw new ArgumentException("Fields cannot be null or empty", nameof(fields));
@@ -99,6 +125,10 @@ public sealed class IndexManager : IDisposable
             var index = new BTreeIndex(_pm, name, normalizedFields, unique);
             if (_indexes.TryAdd(name, index))
             {
+                if (persistImmediately)
+                {
+                    PersistDefinitions(forceFlush: false);
+                }
                 return true;
             }
             else
@@ -120,6 +150,57 @@ public sealed class IndexManager : IDisposable
         return char.ToLowerInvariant(name[0]) + name.Substring(1);
     }
 
+    private void LoadPersistedIndexes(IReadOnlyList<PersistedIndexDefinition>? definitions)
+    {
+        if (definitions == null || definitions.Count == 0) return;
+
+        foreach (var definition in definitions)
+        {
+            if (string.IsNullOrEmpty(definition.Name) || definition.Fields == null || definition.Fields.Length == 0 || definition.RootPageId == 0)
+            {
+                continue;
+            }
+
+            var normalizedFields = definition.Fields.Select(ToCamelCase).ToArray();
+            var index = new BTreeIndex(_pm, definition.Name, normalizedFields, definition.IsUnique, definition.RootPageId, definition.MaxKeys);
+            if (!_indexes.TryAdd(definition.Name, index))
+            {
+                index.Dispose();
+            }
+        }
+    }
+
+    private void PersistDefinitions(bool forceFlush)
+    {
+        _persistDefinitions?.Invoke(CreateDefinitionSnapshot(), forceFlush);
+    }
+
+    internal void PersistCurrentDefinitions(bool forceFlush = false)
+    {
+        _rwLock.EnterReadLock();
+        try
+        {
+            PersistDefinitions(forceFlush);
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+    }
+
+    private IReadOnlyList<PersistedIndexDefinition> CreateDefinitionSnapshot()
+    {
+        return _indexes.Values
+            .OrderBy(index => index.Name, StringComparer.Ordinal)
+            .Select(index => new PersistedIndexDefinition(
+                index.Name,
+                index.Fields.ToArray(),
+                index.IsUnique,
+                index.RootPageId,
+                index.MaxKeys))
+            .ToArray();
+    }
+
     /// <summary>
     /// 根据名称删除索引。
     /// </summary>
@@ -135,6 +216,7 @@ public sealed class IndexManager : IDisposable
             if (_indexes.TryRemove(name, out var index))
             {
                 index.Dispose();
+                PersistDefinitions(forceFlush: false);
                 return true;
             }
             return false;
@@ -321,6 +403,44 @@ public sealed class IndexManager : IDisposable
         finally
         {
             _rwLock.ExitReadLock();
+        }
+    }
+
+    /// <summary>
+    /// 使用现有文档重建指定索引。
+    /// </summary>
+    /// <param name="name">索引名称。</param>
+    /// <param name="documents">用于回填的文档集合。</param>
+    public void RebuildIndex(string name, IEnumerable<BsonDocument> documents)
+    {
+        if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
+        if (documents == null) throw new ArgumentNullException(nameof(documents));
+
+        _rwLock.EnterWriteLock();
+        try
+        {
+            if (!_indexes.TryGetValue(name, out var index))
+            {
+                throw new InvalidOperationException($"Index '{name}' does not exist.");
+            }
+
+            index.Clear();
+
+            foreach (var document in documents)
+            {
+                if (document == null) continue;
+                if (!document.TryGetValue("_id", out var documentId) || documentId == null || documentId.IsNull) continue;
+
+                var key = ExtractIndexKey(index, document);
+                if (key != null && !index.Insert(key, documentId))
+                {
+                    throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}' while rebuilding index");
+                }
+            }
+        }
+        finally
+        {
+            _rwLock.ExitWriteLock();
         }
     }
 

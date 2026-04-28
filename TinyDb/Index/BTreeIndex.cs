@@ -29,6 +29,8 @@ public sealed class BTreeIndex : IDisposable
     public string Name => _name;
     public IReadOnlyList<string> Fields => _fields;
     public bool IsUnique => _unique;
+    internal uint RootPageId => _tree.RootPageId;
+    internal int MaxKeys => _maxKeys;
     
     public int NodeCount 
     { 
@@ -73,6 +75,20 @@ public sealed class BTreeIndex : IDisposable
         _unique = unique;
         _maxKeys = maxKeys;
         _tree = DiskBTree.Create(pm, maxKeys);
+        _ownsPageManager = false;
+        UpdateRootField();
+    }
+
+    internal BTreeIndex(PageManager pm, string name, string[] fields, bool unique, uint rootPageId, int maxKeys)
+    {
+        if (rootPageId == 0) throw new ArgumentOutOfRangeException(nameof(rootPageId));
+
+        _name = name ?? throw new ArgumentNullException(nameof(name));
+        _fields = fields ?? throw new ArgumentNullException(nameof(fields));
+        if (fields.Length == 0) throw new ArgumentException("Fields cannot be empty", nameof(fields));
+        _unique = unique;
+        _maxKeys = maxKeys > 0 ? maxKeys : 200;
+        _tree = new DiskBTree(pm ?? throw new ArgumentNullException(nameof(pm)), rootPageId, _maxKeys);
         _ownsPageManager = false;
         UpdateRootField();
     }

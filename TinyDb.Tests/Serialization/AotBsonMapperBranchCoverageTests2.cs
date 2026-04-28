@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Serialization;
@@ -14,6 +15,18 @@ public class AotBsonMapperBranchCoverageTests2
     private sealed class NoMatchingCtorCollection
     {
         public NoMatchingCtorCollection(string _) { }
+    }
+
+    [UnconditionalSuppressMessage("Trimming", "IL2111", Justification = "Coverage test intentionally invokes a private AOT mapper helper through reflection to exercise guarded branches.")]
+    private static object? InvokeTryWrapWithTargetCollection(Type targetCollectionType, object source)
+    {
+        var method = typeof(AotBsonMapper).GetMethod("TryWrapWithTargetCollection", BindingFlags.NonPublic | BindingFlags.Static);
+        if (method == null)
+        {
+            throw new InvalidOperationException("TryWrapWithTargetCollection was not found.");
+        }
+
+        return method.Invoke(null, new object[] { targetCollectionType, source });
     }
 
     [Test]
@@ -36,11 +49,8 @@ public class AotBsonMapperBranchCoverageTests2
     [Test]
     public async Task TryWrapWithTargetCollection_WhenNoMatchingCtor_ShouldReturnNull()
     {
-        var method = typeof(AotBsonMapper).GetMethod("TryWrapWithTargetCollection", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         var source = new List<int> { 1, 2, 3 };
-        var wrapped = method!.Invoke(null, new object[] { typeof(NoMatchingCtorCollection), source });
+        var wrapped = InvokeTryWrapWithTargetCollection(typeof(NoMatchingCtorCollection), source);
         await Assert.That(wrapped).IsNull();
     }
 }

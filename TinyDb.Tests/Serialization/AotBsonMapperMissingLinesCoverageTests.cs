@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Metadata;
@@ -13,6 +14,7 @@ namespace TinyDb.Tests.Serialization;
 
 public class AotBsonMapperMissingLinesCoverageTests
 {
+    [UnconditionalSuppressMessage("Trimming", "IL2111", Justification = "Coverage tests intentionally invoke private AOT mapper helpers through reflection to exercise guarded branches.")]
     private static object? InvokePrivateStatic(string methodName, params object?[] args)
     {
         var method = typeof(AotBsonMapper)

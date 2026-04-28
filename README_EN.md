@@ -205,7 +205,14 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.4.2 (Current)
+### v0.4.3 (Current)
+- **New database initialization fix**: immediately writes and flushes a valid header for newly created databases, preventing `Invalid database header` after application restarts.
+- **WAL safety fix**: ignores stale WAL data when the main database file was deleted and a new database is being created, preventing old log records from contaminating the new database.
+- **Index reliability improvements**: `EnsureIndex()` now backfills existing documents, persists index root pages, restores indexes after reopen, and leaves no invalid index definitions after failed backfill.
+- **Transaction visibility fix**: `FindById()` now observes pending inserts/deletes in the current transaction.
+- **AOT validation improvements**: cleaned AOT/trim warnings and added NativeAOT regression coverage.
+
+### v0.4.2
 - **AOT complex-collection fix**: restored and improved `List<complex-type>` deserialization in AOT mode, including complex object collections inside dependent types referenced by `Entity`.
 - **Source Generator enhancement**: completed collection/dictionary metadata tracking and dedicated serialization branches for dependent complex types, avoiding `List element type ... is not supported in AOT mode`.
 - **Regression coverage**: added round-trip serialization regression tests and validated with published AOT binary execution.

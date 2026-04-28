@@ -61,6 +61,12 @@ public sealed class TinyDbEngine : IDisposable
 
     private const int DocumentLengthPrefixSize = sizeof(int);
     private const int MinimumFreeSpaceThreshold = DocumentLengthPrefixSize + 64;
+    private const string IndexMetadataKey = "__indexes";
+    private const string IndexNameKey = "n";
+    private const string IndexFieldsKey = "f";
+    private const string IndexUniqueKey = "u";
+    private const string IndexRootPageKey = "r";
+    private const string IndexMaxKeysKey = "m";
 
     /// <summary>
     /// 获取数据库文件路径。
@@ -125,6 +131,8 @@ public sealed class TinyDbEngine : IDisposable
             _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.ReadWrite);
         }
 
+        _options.PageSize = ResolvePageSize(_diskStream, _options.PageSize);
+
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log);
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log);
         
@@ -137,6 +145,35 @@ public sealed class TinyDbEngine : IDisposable
         _metadataManager = new TinyDb.Metadata.MetadataManager(this);
 
         InitializeDatabase();
+    }
+
+    private static uint ResolvePageSize(IDiskStream diskStream, uint configuredPageSize)
+    {
+        if (diskStream.Size < Page.DataStartOffset + DatabaseHeader.Size)
+        {
+            return configuredPageSize;
+        }
+
+        try
+        {
+            var headerBytes = diskStream.ReadPage(Page.DataStartOffset, DatabaseHeader.Size);
+            var header = DatabaseHeader.FromByteArray(headerBytes);
+            if (header.Magic == DatabaseHeader.MagicNumber && IsSupportedPageSize(header.PageSize))
+            {
+                return header.PageSize;
+            }
+        }
+        catch
+        {
+            // Fall through to the configured size; normal header validation will report corruption.
+        }
+
+        return configuredPageSize;
+    }
+
+    private static bool IsSupportedPageSize(uint pageSize)
+    {
+        return pageSize >= 4096 && pageSize <= int.MaxValue && (pageSize & (pageSize - 1)) == 0;
     }
 
     private void DisposeComponents()
@@ -233,37 +270,49 @@ public sealed class TinyDbEngine : IDisposable
             if (_isInitialized) return;
             try
             {
+                var isNewDatabase = _diskStream.Size == 0;
+
                 // 步骤 1: 崩溃恢复。
                 // 只有当 WAL 中的 LSN 大于磁盘页面的 LSN 时，才应用恢复逻辑（幂等恢复）。
                 if (_writeAheadLog.IsEnabled)
                 {
-                    _writeAheadLog.Replay((id, data) =>
+                    if (isNewDatabase)
                     {
-                        var pageOffset = (id - 1) * _options.PageSize;
-                        if (_diskStream.Size >= pageOffset + _options.PageSize)
+                        // If the main database file was deleted but a stale WAL remains, replaying that WAL
+                        // would resurrect pages from a different database generation and can corrupt the new header.
+                        _writeAheadLog.TruncateAsync().GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        _writeAheadLog.Replay((id, data) =>
                         {
-                            var diskData = _diskStream.ReadPage(pageOffset, (int)_options.PageSize);
-                            var diskHeader = PageHeader.FromByteArray(diskData);
-                            var walHeader = PageHeader.FromByteArray(data);
-
-                            if (walHeader.LSN <= diskHeader.LSN)
+                            var pageOffset = (id - 1) * _options.PageSize;
+                            if (_diskStream.Size >= pageOffset + _options.PageSize)
                             {
-                                // 磁盘版本已经是最新的，跳过此条日志
-                                return;
+                                var diskData = _diskStream.ReadPage(pageOffset, (int)_options.PageSize);
+                                var diskHeader = PageHeader.FromByteArray(diskData);
+                                var walHeader = PageHeader.FromByteArray(data);
+
+                                if (walHeader.LSN <= diskHeader.LSN)
+                                {
+                                    // 磁盘版本已经是最新的，跳过此条日志
+                                    return;
+                                }
                             }
-                        }
-                        
-                        _pageManager.RestorePage(id, data);
-                    });
+
+                            _pageManager.RestorePage(id, data);
+                        });
+                    }
                 }
 
                 // 步骤 2: 文件结构初始化。
-                if (_diskStream.Size == 0)
+                if (isNewDatabase)
                 {
                     // 空文件：初始化 Header 页。
                     _header = new DatabaseHeader();
                     _header.Initialize(_options.PageSize, _options.DatabaseName, _options.EnableJournaling);
                     var p1 = _pageManager.NewPage(PageType.Header);
+                    p1.WriteData(0, _header.ToByteArray());
                     _pageManager.SavePage(p1, true);
                     // 初始化 PageManager (新数据库)
                     _pageManager.Initialize(1, 0);
@@ -272,7 +321,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     // 已有文件：加载 Header 并验证。
                     ReadHeader();
-                    if (!_header.IsValid()) throw new InvalidOperationException("Invalid database header");
+                    if (!_header.IsValid()) throw new InvalidOperationException(CreateInvalidHeaderMessage(_header));
                     
                     // 初始化 PageManager (现有数据库)
                     _pageManager.Initialize(_header.TotalPages, _header.FirstFreePage);
@@ -305,25 +354,48 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private static string CreateInvalidHeaderMessage(DatabaseHeader header)
+    {
+        return "Invalid database header " +
+               $"(magic=0x{header.Magic:X8}, version=0x{header.DatabaseVersion:X8}, pageSize={header.PageSize}, " +
+               $"totalPages={header.TotalPages}, usedPages={header.UsedPages}, " +
+               $"createdAt={header.CreatedAt}, modifiedAt={header.ModifiedAt}).";
+    }
+
     private void ReadHeader()
     {
         var p = _pageManager.GetPage(1);
         _header = DatabaseHeader.FromByteArray(p.ReadBytes(0, DatabaseHeader.Size));
     }
 
-    private void WriteHeader()
+    private void WriteHeader(bool forceFlush = false)
     {
         _header.TotalPages = _pageManager.TotalPages;
         _header.FirstFreePage = _pageManager.FirstFreePageID;
         var p = _pageManager.GetPage(1);
         p.WriteData(0, _header.ToByteArray());
-        _pageManager.SavePage(p, false);
+        _pageManager.SavePage(p, forceFlush);
     }
 
     private void InitializeSystemPages()
     {
-        if (_header.CollectionInfoPage == 0) _header.CollectionInfoPage = AllocateSystemPage(PageType.Collection, "Cols");
-        if (_header.IndexInfoPage == 0) _header.IndexInfoPage = AllocateSystemPage(PageType.Index, "Idxs");
+        var headerChanged = false;
+        if (_header.CollectionInfoPage == 0)
+        {
+            _header.CollectionInfoPage = AllocateSystemPage(PageType.Collection, "Cols");
+            headerChanged = true;
+        }
+
+        if (_header.IndexInfoPage == 0)
+        {
+            _header.IndexInfoPage = AllocateSystemPage(PageType.Index, "Idxs");
+            headerChanged = true;
+        }
+
+        if (headerChanged)
+        {
+            WriteHeader(forceFlush: true);
+        }
     }
 
     private uint AllocateSystemPage(PageType t, string n)
@@ -478,8 +550,11 @@ public sealed class TinyDbEngine : IDisposable
         {
             _collectionMetaStore.RemoveCollection(n, true);
             _collectionStates.TryRemove(n, out _);
+            if (_indexManagers.TryRemove(n, out var indexManager)) indexManager.Dispose();
             return true;
         }
+
+        if (_indexManagers.TryRemove(n, out var removedIndexManager)) removedIndexManager.Dispose();
         return r;
     }
 
@@ -535,10 +610,219 @@ public sealed class TinyDbEngine : IDisposable
     /// <returns>如果成功则为 true。</returns>
     public bool EnsureIndex(string collectionName, string fieldName, string indexName, bool unique = false)
     {
-        return GetIndexManager(collectionName).CreateIndex(indexName, new[] { fieldName }, unique);
+        return EnsureIndex(collectionName, new[] { fieldName }, indexName, unique);
     }
 
-    public IndexManager GetIndexManager(string c) => _indexManagers.GetOrAdd(c, n => new IndexManager(n, _pageManager));
+    internal bool EnsureIndex(string collectionName, string[] fields, string indexName, bool unique = false)
+    {
+        var indexManager = GetIndexManager(collectionName);
+        var created = indexManager.CreateIndexForBackfill(indexName, fields, unique);
+        if (!created) return false;
+
+        try
+        {
+            BackfillIndex(collectionName, indexManager, indexName);
+            indexManager.PersistCurrentDefinitions(_options.WriteConcern == WriteConcern.Synced);
+            return true;
+        }
+        catch
+        {
+            indexManager.DropIndex(indexName);
+            throw;
+        }
+    }
+
+    private void BackfillIndex(string collectionName, IndexManager indexManager, string indexName)
+    {
+        var state = GetCollectionState(collectionName);
+        var existingDocuments = ReadAllDocumentsSnapshot(collectionName, state);
+        indexManager.RebuildIndex(indexName, existingDocuments);
+    }
+
+    public IndexManager GetIndexManager(string c) => _indexManagers.GetOrAdd(c, CreateIndexManager);
+
+    private IndexManager CreateIndexManager(string collectionName)
+    {
+        var persistedDefinitions = LoadPersistedIndexDefinitions(collectionName);
+        return new IndexManager(
+            collectionName,
+            _pageManager,
+            persistedDefinitions,
+            (definitions, forceFlush) => SavePersistedIndexDefinitions(
+                collectionName,
+                definitions,
+                forceFlush || _options.WriteConcern == WriteConcern.Synced));
+    }
+
+    private IReadOnlyList<PersistedIndexDefinition> LoadPersistedIndexDefinitions(string collectionName)
+    {
+        var metadata = _collectionMetaStore.GetMetadata(collectionName, includeInternal: true);
+        if (!metadata.TryGetValue(IndexMetadataKey, out var indexDefinitionsValue) || indexDefinitionsValue is not BsonArray indexDefinitions)
+        {
+            return Array.Empty<PersistedIndexDefinition>();
+        }
+
+        var definitions = new List<PersistedIndexDefinition>(indexDefinitions.Count);
+        foreach (var indexDefinitionValue in indexDefinitions)
+        {
+            if (!TryGetDocument(indexDefinitionValue, out var indexDefinition)) continue;
+            if (!TryGetString(indexDefinition, IndexNameKey, out var name)) continue;
+            if (!TryGetStringArray(indexDefinition, IndexFieldsKey, out var fields) || fields.Length == 0) continue;
+            if (!TryGetUInt32(indexDefinition, IndexRootPageKey, out var rootPageId) || rootPageId == 0) continue;
+
+            var unique = TryGetBoolean(indexDefinition, IndexUniqueKey, out var uniqueValue) && uniqueValue;
+            var maxKeys = TryGetInt32(indexDefinition, IndexMaxKeysKey, out var maxKeysValue) && maxKeysValue > 0
+                ? maxKeysValue
+                : 200;
+
+            definitions.Add(new PersistedIndexDefinition(name, fields, unique, rootPageId, maxKeys));
+        }
+
+        return definitions;
+    }
+
+    private void SavePersistedIndexDefinitions(string collectionName, IReadOnlyList<PersistedIndexDefinition> definitions, bool forceFlush)
+    {
+        var metadata = _collectionMetaStore.GetMetadata(collectionName, includeInternal: true);
+        if (definitions.Count == 0)
+        {
+            metadata = metadata.RemoveKey(IndexMetadataKey);
+        }
+        else
+        {
+            var indexDefinitions = new BsonArray();
+            foreach (var definition in definitions)
+            {
+                var fields = new BsonArray();
+                foreach (var field in definition.Fields)
+                {
+                    fields = fields.AddValue(new BsonString(field));
+                }
+
+                var document = new BsonDocument()
+                    .Set(IndexNameKey, new BsonString(definition.Name))
+                    .Set(IndexFieldsKey, fields)
+                    .Set(IndexUniqueKey, BsonBoolean.FromValue(definition.IsUnique))
+                    .Set(IndexRootPageKey, new BsonInt64(definition.RootPageId))
+                    .Set(IndexMaxKeysKey, BsonInt32.FromValue(definition.MaxKeys));
+
+                indexDefinitions = indexDefinitions.AddValue(document);
+            }
+
+            metadata = metadata.Set(IndexMetadataKey, indexDefinitions);
+        }
+
+        _collectionMetaStore.UpdateMetadata(collectionName, metadata, forceFlush);
+    }
+
+    private static bool TryGetDocument(BsonValue value, [NotNullWhen(true)] out BsonDocument? document)
+    {
+        if (value is BsonDocument bsonDocument)
+        {
+            document = bsonDocument;
+            return true;
+        }
+
+        if (value.IsDocument && value.RawValue is BsonDocument rawDocument)
+        {
+            document = rawDocument;
+            return true;
+        }
+
+        document = null;
+        return false;
+    }
+
+    private static bool TryGetString(BsonDocument document, string key, [NotNullWhen(true)] out string? value)
+    {
+        if (document.TryGetValue(key, out var bsonValue) && bsonValue is BsonString bsonString)
+        {
+            value = bsonString.Value;
+            return !string.IsNullOrEmpty(value);
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static bool TryGetStringArray(BsonDocument document, string key, out string[] values)
+    {
+        if (!document.TryGetValue(key, out var bsonValue) || bsonValue is not BsonArray array)
+        {
+            values = Array.Empty<string>();
+            return false;
+        }
+
+        var result = new List<string>(array.Count);
+        foreach (var item in array)
+        {
+            if (item is BsonString bsonString && !string.IsNullOrEmpty(bsonString.Value))
+            {
+                result.Add(bsonString.Value);
+            }
+        }
+
+        values = result.ToArray();
+        return values.Length > 0;
+    }
+
+    private static bool TryGetBoolean(BsonDocument document, string key, out bool value)
+    {
+        if (document.TryGetValue(key, out var bsonValue) && bsonValue is BsonBoolean bsonBoolean)
+        {
+            value = bsonBoolean.Value;
+            return true;
+        }
+
+        value = false;
+        return false;
+    }
+
+    private static bool TryGetUInt32(BsonDocument document, string key, out uint value)
+    {
+        if (TryGetInt64(document, key, out var longValue) && longValue >= 0 && longValue <= uint.MaxValue)
+        {
+            value = (uint)longValue;
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryGetInt32(BsonDocument document, string key, out int value)
+    {
+        if (TryGetInt64(document, key, out var longValue) && longValue >= int.MinValue && longValue <= int.MaxValue)
+        {
+            value = (int)longValue;
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryGetInt64(BsonDocument document, string key, out long value)
+    {
+        if (document.TryGetValue(key, out var bsonValue))
+        {
+            switch (bsonValue)
+            {
+                case BsonInt32 bsonInt32:
+                    value = bsonInt32.Value;
+                    return true;
+                case BsonInt64 bsonInt64:
+                    value = bsonInt64.Value;
+                    return true;
+                case BsonString bsonString when long.TryParse(bsonString.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed):
+                    value = parsed;
+                    return true;
+            }
+        }
+
+        value = 0;
+        return false;
+    }
 
     internal void ClearCurrentTransaction() => _currentTransaction.Value = null;
 
@@ -1174,6 +1458,12 @@ public sealed class TinyDbEngine : IDisposable
 
     internal BsonDocument? FindById(string col, BsonValue id)
     {
+        var tx = GetCurrentTransaction();
+        if (tx != null && TryGetTransactionDocument(tx, col, id, out var transactionDocument))
+        {
+            return transactionDocument;
+        }
+
         var st = GetCollectionState(col);
         lock (st.PageState.SyncRoot)
         {
@@ -1556,14 +1846,62 @@ public sealed class TinyDbEngine : IDisposable
 
     private IEnumerable<BsonDocument> MergeTransactionOperations(string col, IEnumerable<BsonDocument> ds, Transaction tx)
     {
-        var dict = ds.ToDictionary(d => d["_id"].ToString(), d => d);
+        var dict = new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
+
+        foreach (var document in ds)
+        {
+            if (document.TryGetValue("_id", out var id) && id != null && !id.IsNull)
+            {
+                dict[id] = document;
+            }
+        }
+
         foreach (var op in tx.Operations.Where(o => o.CollectionName == col))
         {
-            var k = op.DocumentId?.ToString() ?? "";
-            if (op.OperationType == TransactionOperationType.Delete) dict.Remove(k);
-            else if (op.NewDocument != null) dict[k] = op.NewDocument;
+            if (op.DocumentId == null || op.DocumentId.IsNull) continue;
+
+            if (op.OperationType == TransactionOperationType.Delete)
+            {
+                dict[op.DocumentId] = null;
+            }
+            else if (op.NewDocument != null)
+            {
+                dict[op.DocumentId] = op.NewDocument;
+            }
         }
-        return dict.Values;
+
+        return dict.Values.Where(document => document != null).Select(document => document!);
+    }
+
+    private static bool TryGetTransactionDocument(Transaction tx, string collectionName, BsonValue id, out BsonDocument? document)
+    {
+        document = null;
+        if (tx.Operations.Count == 0) return false;
+
+        for (int i = tx.Operations.Count - 1; i >= 0; i--)
+        {
+            var op = tx.Operations[i];
+            if (op.CollectionName != collectionName) continue;
+            if (op.DocumentId == null || op.DocumentId.IsNull) continue;
+            if (!op.DocumentId.Equals(id)) continue;
+
+            if (op.OperationType == TransactionOperationType.Delete)
+            {
+                document = null;
+                return true;
+            }
+
+            if (op.NewDocument != null)
+            {
+                document = op.NewDocument;
+                return true;
+            }
+
+            document = null;
+            return true;
+        }
+
+        return false;
     }
 
     internal void Log(TinyDbLogLevel level, string message, Exception? ex = null)

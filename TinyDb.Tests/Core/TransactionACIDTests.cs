@@ -122,13 +122,31 @@ public class TransactionACIDTests
         // Assert - 验证回滚后所有操作都被撤销
         var finalCount = collection.FindAll().Count();
         await Assert.That(finalCount).IsEqualTo(initialCount);
-
         // 验证插入的数据都不存在
         foreach (var userId in insertedIds)
         {
             var foundUser = collection.FindById(userId);
             await Assert.That(foundUser).IsNull();
         }
+    }
+
+    [Test]
+    public async Task Transaction_FindById_ShouldSeePendingOperations()
+    {
+        var collection = _engine.GetCollection<UserWithIntId>();
+        using var transaction = _engine.BeginTransaction();
+
+        var user = new UserWithIntId { Id = 101, Name = "TxUser", Age = 30 };
+        collection.Insert(user);
+
+        var inserted = collection.FindById(101);
+        await Assert.That(inserted).IsNotNull();
+        await Assert.That(inserted!.Name).IsEqualTo("TxUser");
+
+        collection.Delete(101);
+        await Assert.That(collection.FindById(101)).IsNull();
+
+        transaction.Rollback();
     }
 
     /// <summary>

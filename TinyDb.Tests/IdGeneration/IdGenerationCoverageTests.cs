@@ -53,7 +53,7 @@ public class IdGenerationCoverageTests
     public class InvalidStrategyIdClass { [IdGeneration((IdGenerationStrategy)123)] public int Id { get; set; } }
     public class ThrowingSetterIdClass
     {
-        private Guid _id;
+        private Guid _id = Guid.Empty;
 
         [IdGeneration(IdGenerationStrategy.GuidV4)]
         public Guid Id

@@ -211,7 +211,7 @@ public class AsyncCollectionTests : IDisposable
     {
         var collection = _engine.GetCollection<AsyncTestEntity>();
 
-        await Assert.That(() => collection.FindAsync(x => x.Value >= 0, -1, 10))
+        await Assert.That(async () => { await collection.FindAsync(x => x.Value >= 0, -1, 10); })
             .ThrowsExactly<ArgumentOutOfRangeException>();
     }
 
@@ -220,7 +220,7 @@ public class AsyncCollectionTests : IDisposable
     {
         var collection = _engine.GetCollection<AsyncTestEntity>();
 
-        await Assert.That(() => collection.FindAsync(x => x.Value >= 0, 0, -1))
+        await Assert.That(async () => { await collection.FindAsync(x => x.Value >= 0, 0, -1); })
             .ThrowsExactly<ArgumentOutOfRangeException>();
     }
 
