@@ -205,7 +205,13 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.4.3 (当前)
+### v0.4.4 (当前)
+- **并发初始化修复**：串行化集合注册、集合状态构建和索引管理器创建，避免 `ConcurrentDictionary.GetOrAdd` 工厂在并发下重复执行带副作用的 schema、元数据和索引页初始化逻辑。
+- **Schema 写入竞态修复**：`MetadataManager.EnsureSchema()` 增加同步与二次检查，避免首次并发访问同一实体时重复写入 `__sys_catalog`。
+- **ASP.NET 元数据兼容增强**：`BsonConversion` 原生支持 `JsonElement` / `JsonDocument`，可递归转换 `Dictionary<string, object>` 中来自 JSON 请求体的对象、数组、数值、布尔值和 `null`。
+- **回归验证补齐**：新增并发首次访问带索引集合的重开库验证，以及 `JsonElement` 递归 BSON 转换测试。
+
+### v0.4.3
 - **新库初始化修复**：新建数据库时立即写入并刷新有效 Header，避免应用重启后出现 `Invalid database header`。
 - **WAL 安全修复**：删除主数据库文件但遗留 WAL 时，创建新库会忽略旧 WAL，避免旧日志污染新数据库。
 - **索引可靠性增强**：`EnsureIndex()` 支持回填已有文档，持久化索引根页并在重启后恢复，回填失败不会留下无效索引定义。

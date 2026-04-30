@@ -50,6 +50,9 @@ public sealed class TinyDbEngine : IDisposable
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly TransactionManager _transactionManager;
     private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
+    private readonly object _collectionRegistryLock = new();
+    private readonly object _collectionStateInitLock = new();
+    private readonly ConcurrentDictionary<string, object> _indexCreationLocks;
     private LargeDocumentStorage _largeDocumentStorage = null!;
     private DataPageAccess _dataPageAccess = null!;
     private readonly object _lock = new();
@@ -114,6 +117,7 @@ public sealed class TinyDbEngine : IDisposable
         _indexManagers = new ConcurrentDictionary<string, IndexManager>(StringComparer.Ordinal);
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
         _collectionStates = new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal);
+        _indexCreationLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
 
         InitializeComponents(ds);
     }
@@ -474,12 +478,7 @@ public sealed class TinyDbEngine : IDisposable
     public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>() where T : class, new()
     {
         var n = GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name;
-        return (ITinyCollection<T>)_collections.GetOrAdd(n, name =>
-        {
-            _metadataManager.EnsureSchema(name, typeof(T));
-            RegisterCollection(name);
-            return new DocumentCollection<T>(this, name);
-        });
+        return GetOrCreateCollection<T>(n);
     }
 
     /// <summary>
@@ -492,12 +491,30 @@ public sealed class TinyDbEngine : IDisposable
     public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name) where T : class, new()
     {
         var n = !string.IsNullOrEmpty(name) ? name : (GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name);
-        return (ITinyCollection<T>)_collections.GetOrAdd(n, actualName =>
+        return GetOrCreateCollection<T>(n);
+    }
+
+    private ITinyCollection<T> GetOrCreateCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string name) where T : class, new()
+    {
+        if (_collections.TryGetValue(name, out var existing))
         {
-            _metadataManager.EnsureSchema(actualName, typeof(T));
-            RegisterCollection(actualName);
-            return new DocumentCollection<T>(this, actualName);
-        });
+            return (ITinyCollection<T>)existing;
+        }
+
+        lock (_collectionRegistryLock)
+        {
+            if (_collections.TryGetValue(name, out existing))
+            {
+                return (ITinyCollection<T>)existing;
+            }
+
+            _metadataManager.EnsureSchema(name, typeof(T));
+            RegisterCollection(name);
+
+            var collection = new DocumentCollection<T>(this, name);
+            _collections[name] = collection;
+            return collection;
+        }
     }
 
 
@@ -615,20 +632,25 @@ public sealed class TinyDbEngine : IDisposable
 
     internal bool EnsureIndex(string collectionName, string[] fields, string indexName, bool unique = false)
     {
-        var indexManager = GetIndexManager(collectionName);
-        var created = indexManager.CreateIndexForBackfill(indexName, fields, unique);
-        if (!created) return false;
+        var lockKey = collectionName + "\u001F" + indexName;
+        var indexLock = _indexCreationLocks.GetOrAdd(lockKey, _ => new object());
+        lock (indexLock)
+        {
+            var indexManager = GetIndexManager(collectionName);
+            var created = indexManager.CreateIndexForBackfill(indexName, fields, unique);
+            if (!created) return false;
 
-        try
-        {
-            BackfillIndex(collectionName, indexManager, indexName);
-            indexManager.PersistCurrentDefinitions(_options.WriteConcern == WriteConcern.Synced);
-            return true;
-        }
-        catch
-        {
-            indexManager.DropIndex(indexName);
-            throw;
+            try
+            {
+                BackfillIndex(collectionName, indexManager, indexName);
+                indexManager.PersistCurrentDefinitions(_options.WriteConcern == WriteConcern.Synced);
+                return true;
+            }
+            catch
+            {
+                indexManager.DropIndex(indexName);
+                throw;
+            }
         }
     }
 
@@ -639,7 +661,30 @@ public sealed class TinyDbEngine : IDisposable
         indexManager.RebuildIndex(indexName, existingDocuments);
     }
 
-    public IndexManager GetIndexManager(string c) => _indexManagers.GetOrAdd(c, CreateIndexManager);
+    public IndexManager GetIndexManager(string c)
+    {
+        if (_indexManagers.TryGetValue(c, out var existing))
+        {
+            return existing;
+        }
+
+        lock (_collectionRegistryLock)
+        {
+            if (_indexManagers.TryGetValue(c, out existing))
+            {
+                return existing;
+            }
+
+            var created = CreateIndexManager(c);
+            if (_indexManagers.TryAdd(c, created))
+            {
+                return created;
+            }
+
+            created.Dispose();
+            return _indexManagers[c];
+        }
+    }
 
     private IndexManager CreateIndexManager(string collectionName)
     {
@@ -868,13 +913,24 @@ public sealed class TinyDbEngine : IDisposable
 
     private CollectionState GetCollectionState(string col)
     {
-        return _collectionStates.GetOrAdd(col, n =>
+        if (_collectionStates.TryGetValue(col, out var existing))
         {
-            var s = new CollectionState { Index = new MemoryDocumentIndex() };
-            BuildDocumentLocationCache(n, s);
-            s.MarkCacheInitialized();
-            return s;
-        });
+            return existing;
+        }
+
+        lock (_collectionStateInitLock)
+        {
+            if (_collectionStates.TryGetValue(col, out existing))
+            {
+                return existing;
+            }
+
+            var state = new CollectionState { Index = new MemoryDocumentIndex() };
+            BuildDocumentLocationCache(col, state);
+            state.MarkCacheInitialized();
+            _collectionStates[col] = state;
+            return state;
+        }
     }
 
     internal BsonValue InsertDocument(string col, BsonDocument doc)

@@ -15,6 +15,7 @@ public class MetadataManager
 {
     private readonly TinyDbEngine _engine;
     private const string CATALOG_COLLECTION = "__sys_catalog";
+    private readonly object _schemaSyncRoot = new();
     
     // 内存 LRU 模式缓存 (AOT 环境下使用 ConcurrentDictionary 极其稳定)
     private readonly ConcurrentDictionary<string, MetadataDocument> _cache = new();
@@ -107,7 +108,6 @@ public class MetadataManager
 
         if (GetMetadata(tableName) != null) return;
 
-        MetadataDocument doc;
         if (_engine.Options.ReadOnly)
         {
             throw new InvalidOperationException($"Schema not found for table '{tableName}' (read-only mode).");
@@ -119,20 +119,26 @@ public class MetadataManager
                 $"Schema is required for table '{tableName}'. Create schema via MetadataManager.SaveMetadata before accessing BsonDocument collections.");
         }
 
-        var entityMeta = MetadataExtractor.ExtractEntityMetadata(documentType);
-        if (entityMeta.Properties.Count == 0)
+        lock (_schemaSyncRoot)
         {
-            doc = CreateMinimalSchema(tableName);
-        }
-        else
-        {
-            entityMeta.CollectionName = tableName;
-            doc = MetadataDocument.FromEntityMetadata(entityMeta);
-            doc.TableName = tableName;
-            if (string.IsNullOrWhiteSpace(doc.DisplayName)) doc.DisplayName = tableName;
-        }
+            if (GetMetadata(tableName) != null) return;
 
-        SaveMetadata(doc);
+            MetadataDocument doc;
+            var entityMeta = MetadataExtractor.ExtractEntityMetadata(documentType);
+            if (entityMeta.Properties.Count == 0)
+            {
+                doc = CreateMinimalSchema(tableName);
+            }
+            else
+            {
+                entityMeta.CollectionName = tableName;
+                doc = MetadataDocument.FromEntityMetadata(entityMeta);
+                doc.TableName = tableName;
+                if (string.IsNullOrWhiteSpace(doc.DisplayName)) doc.DisplayName = tableName;
+            }
+
+            SaveMetadata(doc);
+        }
     }
 
     /// <summary>

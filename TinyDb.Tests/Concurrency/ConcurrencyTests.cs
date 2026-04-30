@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using TinyDb.Attributes;
+using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Tests.TestEntities;
 using TUnit.Assertions;
@@ -170,5 +172,73 @@ public class ConcurrencyTests
         await Assert.That(finalCount).IsEqualTo(100); // 50 initial + 50 new
     }
 
+    [Test]
+    public async Task ConcurrentFirstAccessToIndexedCollection_ShouldInitializeOnceAndReopenCleanly()
+    {
+        const int threadCount = 32;
+        var start = new ManualResetEventSlim(false);
+        var tasks = new List<Task>();
+        var exceptions = new List<Exception>();
 
+        for (int i = 0; i < threadCount; i++)
+        {
+            var workerId = i;
+            tasks.Add(Task.Run(() =>
+            {
+                try
+                {
+                    start.Wait();
+                    var collection = _engine.GetCollection<ConcurrentIndexedUser>();
+                    collection.Insert(new ConcurrentIndexedUser
+                    {
+                        Name = $"User {workerId}",
+                        Email = $"user{workerId}@example.com",
+                        Age = workerId
+                    });
+                }
+                catch (Exception ex)
+                {
+                    lock (exceptions)
+                    {
+                        exceptions.Add(ex);
+                    }
+                }
+            }));
+        }
+
+        start.Set();
+        await Task.WhenAll(tasks);
+
+        await Assert.That(exceptions).IsEmpty();
+
+        var collectionAfterConcurrentAccess = _engine.GetCollection<ConcurrentIndexedUser>();
+        await Assert.That(collectionAfterConcurrentAccess.FindAll().Count()).IsEqualTo(threadCount);
+
+        _engine.Flush();
+        _engine.Dispose();
+
+        using var reopenedEngine = new TinyDbEngine(_testFile);
+        var reopenedCollection = reopenedEngine.GetCollection<ConcurrentIndexedUser>();
+        await Assert.That(reopenedCollection.FindAll().Count()).IsEqualTo(threadCount);
+
+        var indexManager = reopenedCollection.GetIndexManager();
+        await Assert.That(indexManager.IndexExists("idx_concurrent_name")).IsTrue();
+        await Assert.That(indexManager.IndexExists("uidx_concurrent_email")).IsTrue();
+    }
+
+
+}
+
+[Entity("concurrent_indexed_users")]
+public class ConcurrentIndexedUser
+{
+    public ObjectId Id { get; set; } = ObjectId.NewObjectId();
+
+    [Index(Name = "idx_concurrent_name")]
+    public string Name { get; set; } = string.Empty;
+
+    [Index(Name = "uidx_concurrent_email", Unique = true)]
+    public string Email { get; set; } = string.Empty;
+
+    public int Age { get; set; }
 }

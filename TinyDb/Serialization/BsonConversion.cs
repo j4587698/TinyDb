@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Text.Json;
 using TinyDb.Bson;
 
 namespace TinyDb.Serialization;
@@ -112,6 +113,8 @@ public static class BsonConversion
             DateTime dt => new BsonDateTime(dt),
             Guid guid => new BsonString(guid.ToString()),
             ObjectId oid => new BsonObjectId(oid),
+            JsonElement jsonElement => ConvertJsonElementToBsonValue(jsonElement),
+            JsonDocument jsonDocument => ConvertJsonElementToBsonValue(jsonDocument.RootElement),
             Enum enumValue => ConvertEnumToBsonValue(enumValue),
             System.Collections.IDictionary dict => ConvertDictionaryToBsonDocument(dict),
             System.Collections.IEnumerable enumerable => ConvertEnumerableToBsonArray(enumerable),
@@ -128,6 +131,64 @@ public static class BsonConversion
         var underlyingType = Enum.GetUnderlyingType(enumValue.GetType());
         var convertedValue = Convert.ChangeType(enumValue, underlyingType);
         return ToBsonValue(convertedValue!);
+    }
+
+    private static BsonValue ConvertJsonElementToBsonValue(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Undefined => BsonNull.Value,
+            JsonValueKind.Null => BsonNull.Value,
+            JsonValueKind.String => new BsonString(element.GetString() ?? string.Empty),
+            JsonValueKind.True => BsonBoolean.True,
+            JsonValueKind.False => BsonBoolean.False,
+            JsonValueKind.Number => ConvertJsonNumberToBsonValue(element),
+            JsonValueKind.Array => ConvertJsonArrayToBsonArray(element),
+            JsonValueKind.Object => ConvertJsonObjectToBsonDocument(element),
+            _ => new BsonString(element.GetRawText())
+        };
+    }
+
+    private static BsonValue ConvertJsonNumberToBsonValue(JsonElement element)
+    {
+        if (element.TryGetInt32(out var intValue))
+        {
+            return BsonInt32.FromValue(intValue);
+        }
+
+        if (element.TryGetInt64(out var longValue))
+        {
+            return new BsonInt64(longValue);
+        }
+
+        if (element.TryGetDecimal(out var decimalValue))
+        {
+            return new BsonDecimal128(decimalValue);
+        }
+
+        return new BsonDouble(element.GetDouble());
+    }
+
+    private static BsonDocument ConvertJsonObjectToBsonDocument(JsonElement element)
+    {
+        var document = new BsonDocument();
+        foreach (var property in element.EnumerateObject())
+        {
+            document = document.Set(property.Name, ConvertJsonElementToBsonValue(property.Value));
+        }
+
+        return document;
+    }
+
+    private static BsonArray ConvertJsonArrayToBsonArray(JsonElement element)
+    {
+        var values = new List<BsonValue>();
+        foreach (var item in element.EnumerateArray())
+        {
+            values.Add(ConvertJsonElementToBsonValue(item));
+        }
+
+        return new BsonArray(values);
     }
 
     /// <summary>

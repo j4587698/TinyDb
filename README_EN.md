@@ -205,7 +205,13 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.4.3 (Current)
+### v0.4.4 (Current)
+- **Concurrent initialization fix**: serialized collection registration, collection-state construction, and index-manager creation to prevent `ConcurrentDictionary.GetOrAdd` factories from running side-effectful schema, metadata, and index-page initialization more than once under contention.
+- **Schema write race fix**: `MetadataManager.EnsureSchema()` now uses synchronization and a second existence check to avoid duplicate `__sys_catalog` writes during first concurrent access to the same entity.
+- **ASP.NET metadata compatibility**: `BsonConversion` now natively supports `JsonElement` / `JsonDocument`, recursively converting objects, arrays, numbers, booleans, and `null` values from JSON-backed `Dictionary<string, object>` payloads.
+- **Regression coverage**: added reopen validation for concurrent first access to indexed collections and recursive BSON conversion coverage for `JsonElement`.
+
+### v0.4.3
 - **New database initialization fix**: immediately writes and flushes a valid header for newly created databases, preventing `Invalid database header` after application restarts.
 - **WAL safety fix**: ignores stale WAL data when the main database file was deleted and a new database is being created, preventing old log records from contaminating the new database.
 - **Index reliability improvements**: `EnsureIndex()` now backfills existing documents, persists index root pages, restores indexes after reopen, and leaves no invalid index definitions after failed backfill.

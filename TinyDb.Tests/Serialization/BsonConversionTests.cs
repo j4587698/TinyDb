@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TinyDb.Attributes;
@@ -39,6 +40,34 @@ public class BsonConversionTests
         
         Memory<byte> mem = new byte[] { 4, 5 };
         await Assert.That(BsonConversion.ToBsonValue(mem)).IsTypeOf<BsonBinary>();
+    }
+
+    [Test]
+    public async Task ToBsonValue_ShouldHandleJsonElementRecursively()
+    {
+        using var json = JsonDocument.Parse("""
+        {
+            "name": "compose",
+            "enabled": true,
+            "count": 2,
+            "ratio": 1.5,
+            "tags": ["web", "smoke"],
+            "nested": { "port": 80 },
+            "empty": null
+        }
+        """);
+
+        var bson = BsonConversion.ToBsonValue(json.RootElement);
+
+        await Assert.That(bson).IsTypeOf<BsonDocument>();
+        var doc = (BsonDocument)bson;
+        await Assert.That(((BsonString)doc["name"]).Value).IsEqualTo("compose");
+        await Assert.That(((BsonBoolean)doc["enabled"]).Value).IsTrue();
+        await Assert.That(((BsonInt32)doc["count"]).Value).IsEqualTo(2);
+        await Assert.That(doc["ratio"]).IsTypeOf<BsonDecimal128>();
+        await Assert.That(((BsonArray)doc["tags"]).Count).IsEqualTo(2);
+        await Assert.That(((BsonInt32)((BsonDocument)doc["nested"])["port"]).Value).IsEqualTo(80);
+        await Assert.That(doc["empty"]).IsEqualTo(BsonNull.Value);
     }
 
     [Test]
