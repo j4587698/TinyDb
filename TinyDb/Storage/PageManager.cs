@@ -460,32 +460,42 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
-        lock (_allocationLock)
+        while (true)
         {
-            // 获取页面
-            var page = GetPage(pageID); 
-            
-            // 标记为空闲并链接到链表头部
+            Page page;
+            uint nextFreePageID;
+
+            lock (_allocationLock)
+            {
+                page = GetPage(pageID);
+                nextFreePageID = _firstFreePageID;
+            }
+
             page.ClearData();
             page.UpdatePageType(PageType.Empty);
-            
-            // NextPageID 指向旧的头部
-            page.SetLinks(0, _firstFreePageID);
-            
-            // 更新头部指针
-            _firstFreePageID = pageID;
-
+            page.SetLinks(0, nextFreePageID);
             page.Header.ItemCount = 0;
             page.Header.FreeBytes = (ushort)(page.DataSize);
-            page.UpdateChecksum();
 
             SavePage(page, forceFlush: false);
 
-            if (_pageCache.TryRemove(pageID, out _))
+            lock (_allocationLock)
             {
-                _lruCache.Remove(pageID);
+                if (_firstFreePageID != nextFreePageID)
+                {
+                    continue;
+                }
+
+                _firstFreePageID = pageID;
+
+                if (_pageCache.TryRemove(pageID, out var cachedPage))
+                {
+                    _lruCache.Remove(pageID);
+                    cachedPage.Dispose();
+                }
+
+                return;
             }
-            page.Dispose();
         }
     }
 
