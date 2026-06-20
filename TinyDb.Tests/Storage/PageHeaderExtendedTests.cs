@@ -54,4 +54,23 @@ public class PageHeaderExtendedTests
         data[0]++;
         await Assert.That(header.VerifyChecksum(data)).IsFalse();
     }
+
+    [Test]
+    public async Task PageHeader_VerifyChecksum_Should_Accept_Legacy_Additive_Checksum()
+    {
+        var header = new PageHeader();
+        var data = new byte[100];
+        new Random(42).NextBytes(data);
+
+        uint legacyChecksum = 0;
+        for (int i = 0; i < data.Length; i++)
+        {
+            if (i >= 21 && i < 25) continue;
+            legacyChecksum += data[i];
+        }
+
+        header.Checksum = legacyChecksum;
+
+        await Assert.That(header.VerifyChecksum(data)).IsTrue();
+    }
 }

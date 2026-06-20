@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using TinyDb.Utils;
 
 namespace TinyDb.Storage;
 
@@ -128,15 +129,7 @@ public class PageHeader
             if (pageData == null || pageData.Length < Size)
                 return 0;
     
-            // 暂时使用简单的累加校验，实际应用中应使用 CRC32 或更强大的算法
-            uint checksum = 0;
-            for (int i = 0; i < pageData.Length; i++)
-            {
-                // 跳过校验和字段本身（起始偏移量 21，长度 4）
-                if (i >= 21 && i < 25) continue;
-                checksum += pageData[i];
-            }
-            return checksum;
+            return TinyCrc32.HashToUInt32WithZeroedRange(pageData, 21, sizeof(uint));
         }
 
     /// <summary>
@@ -144,7 +137,22 @@ public class PageHeader
     /// </summary>
     public bool VerifyChecksum(byte[] pageData)
     {
-        return CalculateChecksum(pageData) == Checksum;
+        return CalculateChecksum(pageData) == Checksum || CalculateLegacyChecksum(pageData) == Checksum;
+    }
+
+    private static uint CalculateLegacyChecksum(byte[] pageData)
+    {
+        if (pageData == null || pageData.Length < Size)
+            return 0;
+
+        uint checksum = 0;
+        for (int i = 0; i < pageData.Length; i++)
+        {
+            if (i >= 21 && i < 25) continue;
+            checksum += pageData[i];
+        }
+
+        return checksum;
     }
 
     /// <summary>

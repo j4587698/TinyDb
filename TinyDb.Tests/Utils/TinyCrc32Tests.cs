@@ -27,4 +27,16 @@ public class TinyCrc32Tests
         await Assert.That(() => TinyCrc32.HashToUInt32((byte[])null!))
             .Throws<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task HashToUInt32WithZeroedRange_ShouldIgnoreSelectedBytes()
+    {
+        var data = Encoding.ASCII.GetBytes("abcd1234efgh");
+        var expected = Encoding.ASCII.GetBytes("abcd1234efgh");
+        Array.Clear(expected, 4, 4);
+
+        var crc = TinyCrc32.HashToUInt32WithZeroedRange(data, 4, 4);
+
+        await Assert.That(crc).IsEqualTo(TinyCrc32.HashToUInt32(expected));
+    }
 }

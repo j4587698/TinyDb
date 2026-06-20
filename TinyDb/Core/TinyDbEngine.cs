@@ -140,7 +140,7 @@ public sealed class TinyDbEngine : IDisposable
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log);
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log);
         
-        _pageManager.RegisterWAL(lsn => _writeAheadLog.FlushToLSN(lsn));
+        _pageManager.RegisterWAL(page => _writeAheadLog.AppendPage(page), lsn => _writeAheadLog.FlushToLSN(lsn));
         _pageManager.RegisterWAL((lsn, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ct));
 
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), _log);
@@ -297,7 +297,7 @@ public sealed class TinyDbEngine : IDisposable
                                 var diskHeader = PageHeader.FromByteArray(diskData);
                                 var walHeader = PageHeader.FromByteArray(data);
 
-                                if (walHeader.LSN <= diskHeader.LSN)
+                                if (walHeader.LSN <= diskHeader.LSN && diskHeader.IsValid() && diskHeader.PageID == id && diskHeader.VerifyChecksum(diskData))
                                 {
                                     // 磁盘版本已经是最新的，跳过此条日志
                                     return;

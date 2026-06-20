@@ -20,6 +20,7 @@ public sealed class WriteAheadLog : IDisposable
     private readonly FileStream? _stream;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private readonly SemaphoreSlim _mutex = new(1, 1);
+    private readonly AsyncLocal<int> _synchronizationDepth = new();
     private readonly int _maxRecordSize;
     private bool _disposed;
     private bool _hasPendingEntries;
@@ -135,18 +136,18 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled) return;
 
+        if (_synchronizationDepth.Value > 0)
+        {
+            var data = PreparePageRecord(page);
+            await WriteEntryAsync(page.PageID, data, cancellationToken).ConfigureAwait(false);
+            _hasPendingEntries = true;
+            return;
+        }
+
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var stream = _stream!;
-            long lsn = stream.Position;
-            
-            // 更新页面头部的 LSN
-            var header = page.Header;
-            header.LSN = lsn;
-            page.UpdateHeader(header);
-            
-            var data = page.Snapshot(includeUnusedTail: true);
+            var data = PreparePageRecord(page);
             await WriteEntryAsync(page.PageID, data, cancellationToken).ConfigureAwait(false);
             _hasPendingEntries = true;
         }
@@ -160,18 +161,19 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled) return;
 
+        if (_synchronizationDepth.Value > 0)
+        {
+            var data = PreparePageRecord(page);
+            WriteEntry(page.PageID, data);
+            _hasPendingEntries = true;
+            return;
+        }
+
         _mutex.Wait();
         try
         {
-            var stream = _stream!;
-            long lsn = stream.Position;
-            
-            // 更新页面头部的 LSN
-            var header = page.Header;
-            header.LSN = lsn;
-            page.UpdateHeader(header);
+            var data = PreparePageRecord(page);
 
-            var data = page.Snapshot(includeUnusedTail: true);
             WriteEntry(page.PageID, data);
             _hasPendingEntries = true;
         }
@@ -179,6 +181,19 @@ public sealed class WriteAheadLog : IDisposable
         {
             _mutex.Release();
         }
+    }
+
+    private byte[] PreparePageRecord(Page page)
+    {
+        var stream = _stream!;
+        long lsn = stream.Position;
+
+        var header = page.Header;
+        header.LSN = lsn;
+        page.UpdateHeader(header);
+        page.UpdateChecksum();
+
+        return page.Snapshot(includeUnusedTail: true);
     }
 
     private void WriteEntry(uint pageId, byte[] data)
@@ -218,16 +233,18 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task FlushToLSNAsync(long targetLSN, CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || targetLSN <= _flushedLSN) return;
+        if (!IsEnabled || targetLSN < _flushedLSN) return;
+
+        if (_synchronizationDepth.Value > 0)
+        {
+            FlushToLSNCore(targetLSN);
+            return;
+        }
 
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (targetLSN > _flushedLSN)
-            {
-                _stream!.Flush(true);
-                _flushedLSN = _stream.Position;
-            }
+            FlushToLSNCore(targetLSN);
         }
         finally
         {
@@ -237,16 +254,18 @@ public sealed class WriteAheadLog : IDisposable
 
     public void FlushToLSN(long targetLSN)
     {
-        if (!IsEnabled || targetLSN <= _flushedLSN) return;
+        if (!IsEnabled || targetLSN < _flushedLSN) return;
+
+        if (_synchronizationDepth.Value > 0)
+        {
+            FlushToLSNCore(targetLSN);
+            return;
+        }
 
         _mutex.Wait();
         try
         {
-            if (targetLSN > _flushedLSN)
-            {
-                _stream!.Flush(true);
-                _flushedLSN = _stream.Position;
-            }
+            FlushToLSNCore(targetLSN);
         }
         finally
         {
@@ -254,18 +273,29 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
+    private void FlushToLSNCore(long targetLSN)
+    {
+        if (targetLSN >= _flushedLSN)
+        {
+            _stream!.Flush(true);
+            _flushedLSN = _stream.Position;
+        }
+    }
+
     public async Task FlushLogAsync(CancellationToken cancellationToken = default)
     {
         if (!IsEnabled || !_hasPendingEntries) return;
 
+        if (_synchronizationDepth.Value > 0)
+        {
+            FlushLogCore();
+            return;
+        }
+
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_hasPendingEntries)
-            {
-                _stream!.Flush(true);
-                _flushedLSN = _stream.Position;
-            }
+            FlushLogCore();
         }
         finally
         {
@@ -277,18 +307,29 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled || !_hasPendingEntries) return;
 
+        if (_synchronizationDepth.Value > 0)
+        {
+            FlushLogCore();
+            return;
+        }
+
         _mutex.Wait();
         try
         {
-            if (_hasPendingEntries)
-            {
-                _stream!.Flush(true);
-                _flushedLSN = _stream.Position;
-            }
+            FlushLogCore();
         }
         finally
         {
             _mutex.Release();
+        }
+    }
+
+    private void FlushLogCore()
+    {
+        if (_hasPendingEntries)
+        {
+            _stream!.Flush(true);
+            _flushedLSN = _stream.Position;
         }
     }
 
@@ -298,7 +339,15 @@ public sealed class WriteAheadLog : IDisposable
 
         if (!IsEnabled)
         {
-            flushData();
+            _synchronizationDepth.Value++;
+            try
+            {
+                flushData();
+            }
+            finally
+            {
+                _synchronizationDepth.Value--;
+            }
             return;
         }
 
@@ -313,7 +362,15 @@ public sealed class WriteAheadLog : IDisposable
                 _flushedLSN = stream.Position;
             }
 
-            flushData();
+            _synchronizationDepth.Value++;
+            try
+            {
+                flushData();
+            }
+            finally
+            {
+                _synchronizationDepth.Value--;
+            }
 
             if (_hasPendingEntries)
             {
@@ -336,7 +393,15 @@ public sealed class WriteAheadLog : IDisposable
 
         if (!IsEnabled)
         {
-            await flushDataAsync(cancellationToken).ConfigureAwait(false);
+            _synchronizationDepth.Value++;
+            try
+            {
+                await flushDataAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _synchronizationDepth.Value--;
+            }
             return;
         }
 
@@ -351,7 +416,15 @@ public sealed class WriteAheadLog : IDisposable
                 _flushedLSN = stream.Position;
             }
 
-            await flushDataAsync(cancellationToken).ConfigureAwait(false);
+            _synchronizationDepth.Value++;
+            try
+            {
+                await flushDataAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _synchronizationDepth.Value--;
+            }
 
             if (_hasPendingEntries)
             {
@@ -458,10 +531,12 @@ public sealed class WriteAheadLog : IDisposable
             if (lastSuccessfulPosition < stream.Length)
             {
                 stream.SetLength(lastSuccessfulPosition);
+                stream.Flush(true);
             }
             else if (lastSuccessfulPosition > 0)
             {
                 stream.SetLength(0);
+                stream.Flush(true);
             }
 
             stream.Seek(0, SeekOrigin.End);
@@ -591,11 +666,13 @@ public sealed class WriteAheadLog : IDisposable
             {
                 // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
                 stream.SetLength(lastSuccessfulPosition);
+                stream.Flush(true);
             }
             else if (lastSuccessfulPosition > 0)
             {
                 // 全部重放成功，清空日志
                 stream.SetLength(0);
+                stream.Flush(true);
             }
 
             stream.Seek(0, SeekOrigin.End);

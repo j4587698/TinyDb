@@ -24,6 +24,7 @@ public sealed class PageManager : IDisposable
 
     private Action<long>? _flushLogToLsn;
     private Func<long, CancellationToken, Task>? _flushLogToLsnAsync;
+    private Action<Page>? _appendLogPage;
 
     /// <summary>
     /// 注册 WAL 刷新回调
@@ -45,6 +46,15 @@ public sealed class PageManager : IDisposable
     {
         if (flushLogToLsn == null) throw new ArgumentNullException(nameof(flushLogToLsn));
 
+        _flushLogToLsn = flushLogToLsn;
+    }
+
+    public void RegisterWAL(Action<Page> appendLogPage, Action<long> flushLogToLsn)
+    {
+        if (appendLogPage == null) throw new ArgumentNullException(nameof(appendLogPage));
+        if (flushLogToLsn == null) throw new ArgumentNullException(nameof(flushLogToLsn));
+
+        _appendLogPage = appendLogPage;
         _flushLogToLsn = flushLogToLsn;
     }
 
@@ -401,6 +411,7 @@ public sealed class PageManager : IDisposable
         if (page == null) throw new ArgumentNullException(nameof(page));
 
         // WAL 检查：日志必须先于数据落盘
+        _appendLogPage?.Invoke(page);
         if (_flushLogToLsn != null && page.Header.LSN > 0)
         {
             _flushLogToLsn(page.Header.LSN);
@@ -551,6 +562,7 @@ public sealed class PageManager : IDisposable
 
             var pageOffset = CalculatePageOffset(pageID);
             _diskStream.WritePage(pageOffset, buffer);
+            _diskStream.Flush();
 
             if (_pageCache.TryRemove(pageID, out var cachedPage))
             {
