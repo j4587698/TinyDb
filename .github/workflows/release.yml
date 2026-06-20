@@ -145,6 +145,18 @@ jobs:
         echo "Pushing Git tag..."
         git push origin "v${{ env.current_version }}"
 
+    - name: Create GitHub Release
+      if: env.version_changed == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Creating GitHub release v${{ env.current_version }}..."
+        gh release create "v${{ env.current_version }}" \
+          ./nupkg/TinyDb.${{ env.current_version }}.nupkg \
+          ./nupkg/TinyDb.${{ env.current_version }}.snupkg \
+          --title "TinyDb v${{ env.current_version }}" \
+          --generate-notes
+
     - name: Setup NuGet
       if: env.version_changed == 'true'
       run: |
