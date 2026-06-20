@@ -108,6 +108,30 @@ public sealed class PageManagerCoverageEdgeCasesTests
     }
 
     [Test]
+    public async Task FreePage_Should_Not_Dispose_Removed_PageReference()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"pm_freepage_lifetime_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var stream = new DiskStream(dbPath);
+            using var manager = new PageManager(stream, 4096);
+
+            var page = manager.NewPage(PageType.Data);
+            manager.SavePage(page);
+
+            manager.FreePage(page.PageID);
+
+            await Assert.That(() => page.ReadBytes(0, 1)).ThrowsNothing();
+            await Assert.That(manager.CachedPages).IsEqualTo(0);
+        }
+        finally
+        {
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { }
+        }
+    }
+
+    [Test]
     public async Task PrivateLogMethod_ShouldInvokeConfiguredLogger()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"pm_log_{Guid.NewGuid():N}.db");

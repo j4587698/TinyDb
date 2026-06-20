@@ -488,11 +488,7 @@ public sealed class PageManager : IDisposable
 
                 _firstFreePageID = pageID;
 
-                if (_pageCache.TryRemove(pageID, out var cachedPage))
-                {
-                    _lruCache.Remove(pageID);
-                    cachedPage.Dispose();
-                }
+                RemoveFromCache(pageID);
 
                 return;
             }
@@ -574,11 +570,7 @@ public sealed class PageManager : IDisposable
             _diskStream.WritePage(pageOffset, buffer);
             _diskStream.Flush();
 
-            if (_pageCache.TryRemove(pageID, out var cachedPage))
-            {
-                cachedPage.Dispose();
-                _lruCache.Remove(pageID);
-            }
+            RemoveFromCache(pageID);
 
             _fileSize = Math.Max(_fileSize, pageOffset + _pageSize);
         }
@@ -693,13 +685,18 @@ public sealed class PageManager : IDisposable
                         {
                             SavePage(removedPage);
                         }
-                        removedPage.Dispose();
                         _lruCache.Remove(pageID);
                         return; // 成功驱逐一个，退出
                     }
                 }
             }
         }
+    }
+
+    private void RemoveFromCache(uint pageID)
+    {
+        _pageCache.TryRemove(pageID, out _);
+        _lruCache.Remove(pageID);
     }
 
     /// <summary>
