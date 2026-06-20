@@ -205,7 +205,13 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 
 ## Version History
 
-### v0.4.4 (Current)
+### v0.4.5 (Current)
+- **WAL crash recovery hardening**: appends and flushes WAL before page writes, and replay now validates disk page headers, page IDs, and checksums so latest-LSN half-written pages are restored from WAL.
+- **Page checksum upgrade**: page checksums now use CRC32 instead of the previous additive checksum, improving half-write and silent corruption detection.
+- **Existing database compatibility**: checksum verification accepts both CRC32 and legacy additive checksums, so existing databases do not require migration and pages naturally upgrade to CRC32 when rewritten.
+- **Regression coverage**: added WAL half-write recovery, CRC32 zeroed-range calculation, and legacy checksum compatibility tests.
+
+### v0.4.4
 - **Concurrent initialization fix**: serialized collection registration, collection-state construction, and index-manager creation to prevent `ConcurrentDictionary.GetOrAdd` factories from running side-effectful schema, metadata, and index-page initialization more than once under contention.
 - **Schema write race fix**: `MetadataManager.EnsureSchema()` now uses synchronization and a second existence check to avoid duplicate `__sys_catalog` writes during first concurrent access to the same entity.
 - **ASP.NET metadata compatibility**: `BsonConversion` now natively supports `JsonElement` / `JsonDocument`, recursively converting objects, arrays, numbers, booleans, and `null` values from JSON-backed `Dictionary<string, object>` payloads.

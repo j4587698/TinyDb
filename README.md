@@ -205,7 +205,13 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.4.4 (当前)
+### v0.4.5 (当前)
+- **WAL 崩溃恢复增强**：页写入前先追加并刷新 WAL，重放时会校验磁盘页头、页号和页校验和，即使半写盘页带有最新 LSN 也会从 WAL 恢复。
+- **页校验升级**：页 checksum 从旧累加和升级为 CRC32，提升半写盘和静默损坏检测能力。
+- **旧库兼容**：校验逻辑同时接受 CRC32 和旧累加和 checksum，旧库无需迁移，页面重新写入后自然升级为 CRC32。
+- **回归验证补齐**：新增 WAL 半写盘恢复、CRC32 零区间计算和旧 checksum 兼容测试。
+
+### v0.4.4
 - **并发初始化修复**：串行化集合注册、集合状态构建和索引管理器创建，避免 `ConcurrentDictionary.GetOrAdd` 工厂在并发下重复执行带副作用的 schema、元数据和索引页初始化逻辑。
 - **Schema 写入竞态修复**：`MetadataManager.EnsureSchema()` 增加同步与二次检查，避免首次并发访问同一实体时重复写入 `__sys_catalog`。
 - **ASP.NET 元数据兼容增强**：`BsonConversion` 原生支持 `JsonElement` / `JsonDocument`，可递归转换 `Dictionary<string, object>` 中来自 JSON 请求体的对象、数组、数值、布尔值和 `null`。
