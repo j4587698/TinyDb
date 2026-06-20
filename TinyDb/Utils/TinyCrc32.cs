@@ -18,10 +18,32 @@ internal static class TinyCrc32
         uint crc = 0xFFFFFFFFu;
         foreach (var value in data)
         {
-            crc = (crc >> 8) ^ LookupTable[(int)((crc ^ value) & 0xFF)];
+            crc = Append(crc, value);
         }
 
         return ~crc;
+    }
+
+    public static uint HashToUInt32WithZeroedRange(ReadOnlySpan<byte> data, int zeroStart, int zeroLength)
+    {
+        if (zeroStart < 0 || zeroLength < 0 || zeroStart > data.Length - zeroLength)
+            throw new ArgumentOutOfRangeException(nameof(zeroStart));
+
+        uint crc = 0xFFFFFFFFu;
+        int zeroEnd = zeroStart + zeroLength;
+
+        for (int i = 0; i < data.Length; i++)
+        {
+            var value = i >= zeroStart && i < zeroEnd ? (byte)0 : data[i];
+            crc = Append(crc, value);
+        }
+
+        return ~crc;
+    }
+
+    private static uint Append(uint crc, byte value)
+    {
+        return (crc >> 8) ^ LookupTable[(int)((crc ^ value) & 0xFF)];
     }
 
     private static uint[] CreateLookupTable()

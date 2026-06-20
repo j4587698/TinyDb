@@ -162,6 +162,82 @@ public class TinyDbEngineRecoveryTests : IDisposable
             await Assert.That(collection.FindAll().Any(item => item.Value == "stale-wal")).IsFalse();
         }
     }
+
+    [Test]
+    public async Task Engine_Should_Replay_Wal_When_DataPage_HasLatestLsn_ButInvalidChecksum()
+    {
+        var options = new TinyDbOptions
+        {
+            EnableJournaling = true,
+            WriteConcern = WriteConcern.Journaled,
+            BackgroundFlushInterval = TimeSpan.FromHours(1)
+        };
+
+        var walPath = GetDefaultWalPath(_testDbPath);
+        var walBackupPath = walPath + ".bak";
+
+        using (var engine = new TinyDbEngine(_testDbPath, options))
+        {
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            collection.Insert(new RecoveryDataItem { Id = 1, Value = new string('x', 256) });
+
+            await Assert.That(File.Exists(walPath)).IsTrue();
+            File.Copy(walPath, walBackupPath, overwrite: true);
+        }
+
+        await Assert.That(new FileInfo(walBackupPath).Length).IsGreaterThan(0);
+
+        var dataPageId = FindFirstDataPageWithItems(_testDbPath, (int)TinyDbOptions.DefaultPageSize);
+        CorruptFirstDocumentSize(_testDbPath, (int)dataPageId, (int)TinyDbOptions.DefaultPageSize);
+        File.Copy(walBackupPath, walPath, overwrite: true);
+
+        using (var recoveredEngine = new TinyDbEngine(_testDbPath, options))
+        {
+            var collection = recoveredEngine.GetCollection<RecoveryDataItem>();
+            var recovered = collection.FindById(1);
+
+            await Assert.That(recovered).IsNotNull();
+            await Assert.That(recovered!.Value).IsEqualTo(new string('x', 256));
+        }
+    }
+
+    private static string GetDefaultWalPath(string dbPath)
+    {
+        var directory = Path.GetDirectoryName(dbPath)!;
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(dbPath);
+        var ext = Path.GetExtension(dbPath).TrimStart('.');
+        return Path.Combine(directory, $"{fileNameNoExt}-wal.{ext}");
+    }
+
+    private static uint FindFirstDataPageWithItems(string dbPath, int pageSize)
+    {
+        using var stream = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        var buffer = new byte[pageSize];
+
+        for (long offset = 0; offset + pageSize <= stream.Length; offset += pageSize)
+        {
+            stream.Position = offset;
+            stream.ReadExactly(buffer);
+
+            var header = PageHeader.FromByteArray(buffer);
+            if (header.PageType == PageType.Data && header.ItemCount > 0)
+            {
+                return header.PageID;
+            }
+        }
+
+        throw new InvalidOperationException("No data page with items was found.");
+    }
+
+    private static void CorruptFirstDocumentSize(string dbPath, int pageId, int pageSize)
+    {
+        using var stream = new FileStream(dbPath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        var documentSizeOffset = ((long)pageId - 1) * pageSize + Page.DataStartOffset + sizeof(int);
+
+        stream.Position = documentSizeOffset;
+        stream.WriteByte(0xFF);
+        stream.Flush(flushToDisk: true);
+    }
 }
 
 [Entity("data")]
