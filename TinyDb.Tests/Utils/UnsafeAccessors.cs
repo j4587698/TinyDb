@@ -38,5 +38,10 @@ internal static class UnsafeAccessors
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_flushedLSN")]
         internal static extern ref long FlushedLsn(WriteAheadLog wal);
     }
-}
 
+    internal static class PageManagerAccessor
+    {
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_allocationLock")]
+        internal static extern ref object AllocationLock(PageManager pageManager);
+    }
+}

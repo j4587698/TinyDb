@@ -49,6 +49,65 @@ public sealed class PageManagerCoverageEdgeCasesTests
     }
 
     [Test]
+    public async Task FreePage_Should_Not_Hold_AllocationLock_While_Waiting_For_Wal()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"pm_freepage_wal_lock_{Guid.NewGuid():N}.db");
+        var appendStarted = new ManualResetEventSlim(false);
+
+        try
+        {
+            using var stream = new DiskStream(dbPath);
+            using var manager = new PageManager(stream, 4096);
+            using var wal = new WriteAheadLog(dbPath, 4096, enabled: true);
+
+            manager.RegisterWAL(
+                page =>
+                {
+                    appendStarted.Set();
+                    wal.AppendPage(page);
+                },
+                lsn => wal.FlushToLSN(lsn));
+
+            var page = manager.NewPage(PageType.Data);
+            manager.SavePage(page);
+            appendStarted.Reset();
+
+            var mutex = UnsafeAccessors.WriteAheadLogAccessor.Mutex(wal);
+            mutex.Wait();
+
+            Task? freeTask = null;
+            bool enteredAllocationLock = false;
+
+            try
+            {
+                freeTask = Task.Run(() => manager.FreePage(page.PageID));
+
+                await Assert.That(appendStarted.Wait(TimeSpan.FromSeconds(5))).IsTrue();
+
+                var allocationLock = UnsafeAccessors.PageManagerAccessor.AllocationLock(manager);
+                enteredAllocationLock = Monitor.TryEnter(allocationLock);
+                if (enteredAllocationLock)
+                {
+                    Monitor.Exit(allocationLock);
+                }
+            }
+            finally
+            {
+                mutex.Release();
+            }
+
+            await freeTask!.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.That(enteredAllocationLock).IsTrue();
+        }
+        finally
+        {
+            appendStarted.Dispose();
+            try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { }
+            try { if (File.Exists(Path.ChangeExtension(dbPath, ".wal"))) File.Delete(Path.ChangeExtension(dbPath, ".wal")); } catch { }
+        }
+    }
+
+    [Test]
     public async Task PrivateLogMethod_ShouldInvokeConfiguredLogger()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"pm_log_{Guid.NewGuid():N}.db");
