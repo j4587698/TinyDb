@@ -137,6 +137,13 @@ public interface ITinyCollection<T> where T : class
     (UpdateType UpdateType, int Count) Upsert(T entity);
 
     /// <summary>
+    /// 插入或更新多个文档
+    /// </summary>
+    /// <param name="entities">要插入或更新的实体集合</param>
+    /// <returns>插入和更新的文档数量</returns>
+    (int InsertedCount, int UpdatedCount) Upsert(IEnumerable<T> entities);
+
+    /// <summary>
     /// 获取数据库引擎实例
     /// </summary>
     /// <returns>数据库引擎实例</returns>
@@ -257,6 +264,14 @@ public interface ITinyCollection<T> where T : class
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>操作类型和影响的文档数量</returns>
     Task<(UpdateType UpdateType, int Count)> UpsertAsync(T entity, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 异步插入或更新多个文档
+    /// </summary>
+    /// <param name="entities">要插入或更新的实体集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入和更新的文档数量</returns>
+    Task<(int InsertedCount, int UpdatedCount)> UpsertAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default);
 
     #endregion
 }

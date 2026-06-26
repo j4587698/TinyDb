@@ -495,7 +495,7 @@ public class DocumentCollectionEdgeCaseTests
     [Test]
     public async Task Upsert_WithNullEntity_ShouldThrowArgumentNullException()
     {
-        await Assert.That(() => _collection.Upsert(null!))
+        await Assert.That(() => _collection.Upsert((TestEntity)null!))
             .Throws<ArgumentNullException>();
     }
 

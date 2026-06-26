@@ -972,61 +972,21 @@ public sealed class TinyDbEngine : IDisposable
 
     internal int UpdateDocument(string col, BsonDocument doc)
     {
-        if (!doc.TryGetValue("_id", out var id)) return 0;
-
-        // Ensure _collection field matches the target collection name
-        // This is critical for AOT-generated documents where _collection might be derived from [Entity] attribute
-        // but stored in a differently named collection (e.g. metadata tables)
-        if (!doc.TryGetValue("_collection", out var docCol) || docCol.ToString() != col)
-        {
-            doc = doc.Set("_collection", col);
-        }
+        doc = PrepareDocumentForUpdate(col, doc, out var id);
+        if (id == null || id.IsNull) return 0;
 
         _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
-        PageDocumentEntry old = default;
+        bool updated;
 
         lock (st.WriteSyncRoot)
         {
-            lock (st.PageState.SyncRoot)
-            {
-                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-                if (i >= e.Count) return 0;
-                old = e[i];
-
-                var bs = BsonSerializer.SerializeDocument(doc);
-                if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
-                {
-                    var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
-                    doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
-                    bs = BsonSerializer.SerializeDocument(doc);
-                }
-
-                e[i] = new PageDocumentEntry(doc, bs);
-
-                if (!_dataPageAccess.CanFitInPage(p, e))
-                {
-                    e[i] = old;
-                    e.RemoveAt(i);
-                    st.Index.Remove(id);
-
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-
-                    var pr = PrepareDocumentForInsert(col, doc, out _);
-                    InsertPreparedDocument(col, pr, id, st, idxMgr, false);
-                }
-                else
-                {
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-                }
-
-                if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
-            }
-
-            idxMgr.UpdateDocument(old.Document, doc, id);
+            updated = TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr);
         }
+
+        if (!updated) return 0;
 
         EnsureWriteDurability();
         return 1;
@@ -1041,62 +1001,229 @@ public sealed class TinyDbEngine : IDisposable
     /// <returns>更新的文档数量</returns>
     internal async Task<int> UpdateDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
-        if (!doc.TryGetValue("_id", out var id)) return 0;
-
-        // Ensure _collection field matches the target collection name
-        if (!doc.TryGetValue("_collection", out var docCol) || docCol.ToString() != col)
-        {
-            doc = doc.Set("_collection", col);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        doc = PrepareDocumentForUpdate(col, doc, out var id);
+        if (id == null || id.IsNull) return 0;
 
         _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
 
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
-        PageDocumentEntry old = default;
+        bool updated;
 
         lock (st.WriteSyncRoot)
         {
-            lock (st.PageState.SyncRoot)
-            {
-                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-                if (i >= e.Count) return 0;
-                old = e[i];
-
-                var bs = BsonSerializer.SerializeDocument(doc);
-                if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
-                {
-                    var lId = _largeDocumentStorage.StoreLargeDocument(bs, col);
-                    doc = CreateLargeDocumentIndexDocument(id, col, lId, bs.Length);
-                    bs = BsonSerializer.SerializeDocument(doc);
-                }
-
-                e[i] = new PageDocumentEntry(doc, bs);
-
-                if (!_dataPageAccess.CanFitInPage(p, e))
-                {
-                    e[i] = old;
-                    e.RemoveAt(i);
-                    st.Index.Remove(id);
-
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-
-                    var pr = PrepareDocumentForInsert(col, doc, out _);
-                    InsertPreparedDocument(col, pr, id, st, idxMgr, false);
-                }
-                else
-                {
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-                }
-
-                if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
-            }
-
-            idxMgr.UpdateDocument(old.Document, doc, id);
+            updated = TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr);
         }
+
+        if (!updated) return 0;
 
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
+    }
+
+    internal int UpdateDocuments(string col, IReadOnlyList<BsonDocument> docs)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (docs == null) throw new ArgumentNullException(nameof(docs));
+        if (docs.Count == 0) return 0;
+
+        var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
+        foreach (var d in docs)
+        {
+            if (d == null) continue;
+
+            var doc = PrepareDocumentForUpdate(col, d, out var id);
+            if (id == null || id.IsNull) continue;
+
+            _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
+            prepared.Add((doc, id));
+        }
+
+        if (prepared.Count == 0) return 0;
+
+        var st = GetCollectionState(col);
+        var idxMgr = GetIndexManager(col);
+        var updatedCount = 0;
+
+        lock (st.WriteSyncRoot)
+        {
+            foreach (var (doc, id) in prepared)
+            {
+                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                {
+                    updatedCount++;
+                }
+            }
+        }
+
+        if (updatedCount > 0)
+        {
+            EnsureWriteDurability();
+        }
+
+        return updatedCount;
+    }
+
+    internal async Task<int> UpdateDocumentsAsync(string col, IReadOnlyList<BsonDocument> docs, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (docs == null) throw new ArgumentNullException(nameof(docs));
+        if (docs.Count == 0) return 0;
+
+        var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
+        foreach (var d in docs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (d == null) continue;
+
+            var doc = PrepareDocumentForUpdate(col, d, out var id);
+            if (id == null || id.IsNull) continue;
+
+            _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
+            prepared.Add((doc, id));
+        }
+
+        if (prepared.Count == 0) return 0;
+
+        var st = GetCollectionState(col);
+        var idxMgr = GetIndexManager(col);
+        var updatedCount = 0;
+
+        lock (st.WriteSyncRoot)
+        {
+            foreach (var (doc, id) in prepared)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                {
+                    updatedCount++;
+                }
+            }
+        }
+
+        if (updatedCount > 0)
+        {
+            await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return updatedCount;
+    }
+
+    internal (UpdateType UpdateType, int Count) UpsertDocument(string col, BsonDocument doc)
+    {
+        var result = UpsertDocuments(col, new[] { doc });
+        return result.InsertedCount > 0
+            ? (UpdateType.Insert, result.InsertedCount)
+            : (UpdateType.Update, result.UpdatedCount);
+    }
+
+    internal async Task<(UpdateType UpdateType, int Count)> UpsertDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
+    {
+        var result = await UpsertDocumentsAsync(col, new[] { doc }, cancellationToken).ConfigureAwait(false);
+        return result.InsertedCount > 0
+            ? (UpdateType.Insert, result.InsertedCount)
+            : (UpdateType.Update, result.UpdatedCount);
+    }
+
+    internal (int InsertedCount, int UpdatedCount) UpsertDocuments(string col, IReadOnlyList<BsonDocument> docs)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (docs == null) throw new ArgumentNullException(nameof(docs));
+        if (docs.Count == 0) return (0, 0);
+
+        var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
+        foreach (var d in docs)
+        {
+            if (d == null) continue;
+
+            var doc = PrepareDocumentForInsert(col, d, out var id);
+            _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
+            prepared.Add((doc, id));
+        }
+
+        if (prepared.Count == 0) return (0, 0);
+
+        var st = GetCollectionState(col);
+        var idxMgr = GetIndexManager(col);
+        var insertedCount = 0;
+        var updatedCount = 0;
+
+        lock (st.WriteSyncRoot)
+        {
+            foreach (var (doc, id) in prepared)
+            {
+                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                {
+                    updatedCount++;
+                }
+                else
+                {
+                    InsertPreparedDocument(col, doc, id, st, idxMgr, true);
+                    insertedCount++;
+                }
+            }
+        }
+
+        if (insertedCount + updatedCount > 0)
+        {
+            EnsureWriteDurability();
+        }
+
+        return (insertedCount, updatedCount);
+    }
+
+    internal async Task<(int InsertedCount, int UpdatedCount)> UpsertDocumentsAsync(string col, IReadOnlyList<BsonDocument> docs, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (docs == null) throw new ArgumentNullException(nameof(docs));
+        if (docs.Count == 0) return (0, 0);
+
+        var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
+        foreach (var d in docs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (d == null) continue;
+
+            var doc = PrepareDocumentForInsert(col, d, out var id);
+            _metadataManager.ValidateDocumentForWrite(col, doc, _options.SchemaValidationMode);
+            prepared.Add((doc, id));
+        }
+
+        if (prepared.Count == 0) return (0, 0);
+
+        var st = GetCollectionState(col);
+        var idxMgr = GetIndexManager(col);
+        var insertedCount = 0;
+        var updatedCount = 0;
+
+        lock (st.WriteSyncRoot)
+        {
+            foreach (var (doc, id) in prepared)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                {
+                    updatedCount++;
+                }
+                else
+                {
+                    InsertPreparedDocument(col, doc, id, st, idxMgr, true);
+                    insertedCount++;
+                }
+            }
+        }
+
+        if (insertedCount + updatedCount > 0)
+        {
+            await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return (insertedCount, updatedCount);
     }
 
     internal int DeleteDocument(string col, BsonValue id)
@@ -1537,6 +1664,12 @@ public sealed class TinyDbEngine : IDisposable
     internal async Task<BsonDocument?> FindByIdAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var tx = GetCurrentTransaction();
+        if (tx != null && TryGetTransactionDocument(tx, col, id, out var transactionDocument))
+        {
+            return transactionDocument;
+        }
+
         var st = GetCollectionState(col);
         lock (st.PageState.SyncRoot)
         {
@@ -1778,6 +1911,70 @@ public sealed class TinyDbEngine : IDisposable
         {
             buffer.Dispose();
         }
+    }
+
+    private bool TryUpdatePreparedDocumentLocked(string col, BsonDocument doc, BsonValue id, CollectionState st, IndexManager idxMgr)
+    {
+        PageDocumentEntry old;
+        var updatedDocument = doc;
+
+        lock (st.PageState.SyncRoot)
+        {
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return false;
+            if (i >= e.Count) return false;
+            old = e[i];
+
+            var bs = BsonSerializer.SerializeDocument(updatedDocument);
+            if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+            {
+                var largeDocumentPageId = _largeDocumentStorage.StoreLargeDocument(bs, col);
+                updatedDocument = CreateLargeDocumentIndexDocument(id, col, largeDocumentPageId, bs.Length);
+                bs = BsonSerializer.SerializeDocument(updatedDocument);
+            }
+
+            e[i] = new PageDocumentEntry(updatedDocument, bs);
+
+            if (!_dataPageAccess.CanFitInPage(p, e))
+            {
+                e[i] = old;
+                e.RemoveAt(i);
+                st.Index.Remove(id);
+
+                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+
+                var prepared = PrepareDocumentForInsert(col, updatedDocument, out _);
+                InsertPreparedDocument(col, prepared, id, st, idxMgr, false);
+            }
+            else
+            {
+                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+            }
+
+            if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
+        }
+
+        idxMgr.UpdateDocument(old.Document, updatedDocument, id);
+        return true;
+    }
+
+    private static BsonDocument PrepareDocumentForUpdate(string col, BsonDocument doc, out BsonValue id)
+    {
+        if (!doc.TryGetValue("_id", out var existingId) || existingId == null || existingId.IsNull)
+        {
+            id = BsonNull.Value;
+            return doc;
+        }
+
+        id = existingId;
+
+        // Ensure _collection field matches the target collection name.
+        // This is critical for AOT-generated documents where _collection might differ from the runtime collection.
+        if (!doc.TryGetValue("_collection", out var docCol) || docCol.ToString() != col)
+        {
+            doc = doc.Set("_collection", col);
+        }
+
+        return doc;
     }
 
     private BsonDocument PrepareDocumentForInsert(string col, BsonDocument doc, out BsonValue id)

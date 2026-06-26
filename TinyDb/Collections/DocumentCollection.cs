@@ -70,20 +70,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 确保实体有ID
-        EnsureEntityHasId(entity);
-
-        // 转换为BSON文档（AOT兼容）
-        var document = AotBsonMapper.ToDocument(entity);
-
-        // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
-        if (!document.ContainsKey("_id"))
-        {
-            var newId = ObjectId.NewObjectId();
-            document = document.Set("_id", newId);
-            // 尝试更新实体ID（如果是可变实体）
-            UpdateEntityId(entity, newId);
-        }
+        var document = PrepareDocumentForInsert(entity);
 
         // 检查是否在事务中
         var currentTransaction = _engine.GetCurrentTransaction();
@@ -128,20 +115,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         {
             if (entity == null) continue;
 
-            // 确保实体有ID
-            EnsureEntityHasId(entity);
-
-            // 转换为BSON文档（AOT兼容）
-            var document = AotBsonMapper.ToDocument(entity);
-            
-            // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
-            if (!document.ContainsKey("_id"))
-            {
-                var newId = ObjectId.NewObjectId();
-                document = document.Set("_id", newId);
-                // 尝试更新实体ID（如果是可变实体）
-                UpdateEntityId(entity, newId);
-            }
+            var document = PrepareDocumentForInsert(entity);
             
             entityBatch.Add(entity);
             docBatch.Add(document);
@@ -169,21 +143,47 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         // 批量插入到数据库
         var insertedCount = _engine.InsertDocuments(_name, documents);
 
-        // 更新实体的ID
-        for (int i = 0; i < Math.Min(insertedCount, entities.Count); i++)
-        {
-            var entity = entities[i];
-            if (entity != null && documents.Count > i)
-            {
-                var document = documents[i];
-                if (document.TryGetValue("_id", out var id))
-                {
-                    UpdateEntityId(entity, id);
-                }
-            }
-        }
+        UpdateEntityIds(entities, documents, insertedCount);
 
         return insertedCount;
+    }
+
+    private BsonDocument PrepareDocumentForInsert(T entity)
+    {
+        EnsureEntityHasId(entity);
+
+        var document = AotBsonMapper.ToDocument(entity);
+        if (!document.ContainsKey("_id"))
+        {
+            var newId = ObjectId.NewObjectId();
+            document = document.Set("_id", newId);
+            UpdateEntityId(entity, newId);
+        }
+
+        return document;
+    }
+
+    private BsonDocument PrepareDocumentForUpdate(T entity, out BsonValue id)
+    {
+        if (!AotIdAccessor<T>.HasValidId(entity))
+        {
+            throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
+        }
+
+        id = AotIdAccessor<T>.GetId(entity);
+        return AotBsonMapper.ToDocument(entity);
+    }
+
+    private void UpdateEntityIds(List<T> entities, List<BsonDocument> documents, int count)
+    {
+        for (int i = 0; i < Math.Min(count, entities.Count); i++)
+        {
+            var entity = entities[i];
+            if (entity != null && documents.Count > i && documents[i].TryGetValue("_id", out var id))
+            {
+                UpdateEntityId(entity, id);
+            }
+        }
     }
 
     /// <summary>
@@ -196,17 +196,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 确保实体有ID - 使用AOT兼容的访问器
-        var hasValidId = AotIdAccessor<T>.HasValidId(entity);
-        if (!hasValidId)
-        {
-                        throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
-        }
-
-        var id = AotIdAccessor<T>.GetId(entity);
-
-        // 转换为BSON文档（AOT兼容）
-        var document = AotBsonMapper.ToDocument(entity);
+        var document = PrepareDocumentForUpdate(entity, out var id);
 
         // 检查是否在事务中
         var currentTransaction = _engine.GetCurrentTransaction();
@@ -244,13 +234,43 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
-        var updatedCount = 0;
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            var transactionUpdatedCount = 0;
+            foreach (var entity in entities)
+            {
+                if (entity != null)
+                {
+                    transactionUpdatedCount += Update(entity);
+                }
+            }
+
+            return transactionUpdatedCount;
+        }
+
+        int updatedCount = 0;
+        const int BatchSize = 1000;
+        var docBatch = new List<BsonDocument>(BatchSize);
+
         foreach (var entity in entities)
         {
             if (entity != null)
             {
-                updatedCount += Update(entity);
+                var document = PrepareDocumentForUpdate(entity, out _);
+                docBatch.Add(document);
+
+                if (docBatch.Count >= BatchSize)
+                {
+                    updatedCount += _engine.UpdateDocuments(_name, docBatch);
+                    docBatch.Clear();
+                }
             }
+        }
+
+        if (docBatch.Count > 0)
+        {
+            updatedCount += _engine.UpdateDocuments(_name, docBatch);
         }
 
         return updatedCount;
@@ -578,31 +598,92 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        var id = GetEntityId(entity);
-
-        if (id == null || id.IsNull)
+        var document = PrepareDocumentForInsert(entity);
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
         {
-            // 插入新文档
-            Insert(entity);
-            return (UpdateType.Insert, 1);
-        }
-        else
-        {
-            // 检查文档是否存在
-            var existingDocument = FindById(id);
+            var id = document.TryGetValue("_id", out var documentId) ? documentId : BsonNull.Value;
+            var existingDocument = id.IsNull ? null : _engine.FindById(_name, id);
             if (existingDocument == null)
             {
-                // 文档不存在，插入新文档
-                Insert(entity);
+                ((Transaction)currentTransaction).RecordInsert(_name, document);
                 return (UpdateType.Insert, 1);
             }
-            else
+
+            ((Transaction)currentTransaction).RecordUpdate(_name, existingDocument, document);
+            return (UpdateType.Update, 1);
+        }
+
+        return _engine.UpsertDocument(_name, document);
+    }
+
+    /// <summary>
+    /// 插入或更新多个文档
+    /// </summary>
+    /// <param name="entities">要插入或更新的实体集合</param>
+    /// <returns>插入和更新的文档数量</returns>
+    public (int InsertedCount, int UpdatedCount) Upsert(IEnumerable<T> entities)
+    {
+        ThrowIfDisposed();
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            var transactionInsertedCount = 0;
+            var transactionUpdatedCount = 0;
+            foreach (var entity in entities)
             {
-                // 文档存在，更新
-                var updateCount = Update(entity);
-                return (UpdateType.Update, updateCount);
+                if (entity == null) continue;
+
+                var (updateType, count) = Upsert(entity);
+                if (updateType == UpdateType.Insert)
+                {
+                    transactionInsertedCount += count;
+                }
+                else
+                {
+                    transactionUpdatedCount += count;
+                }
+            }
+
+            return (transactionInsertedCount, transactionUpdatedCount);
+        }
+
+        const int BatchSize = 1000;
+        var insertedCount = 0;
+        var updatedCount = 0;
+        var entityBatch = new List<T>(BatchSize);
+        var docBatch = new List<BsonDocument>(BatchSize);
+
+        foreach (var entity in entities)
+        {
+            if (entity == null) continue;
+
+            var document = PrepareDocumentForInsert(entity);
+            entityBatch.Add(entity);
+            docBatch.Add(document);
+
+            if (docBatch.Count >= BatchSize)
+            {
+                var result = _engine.UpsertDocuments(_name, docBatch);
+                UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
+                insertedCount += result.InsertedCount;
+                updatedCount += result.UpdatedCount;
+                entityBatch.Clear();
+                docBatch.Clear();
             }
         }
+
+        if (docBatch.Count > 0)
+        {
+            var result = _engine.UpsertDocuments(_name, docBatch);
+            UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
+            insertedCount += result.InsertedCount;
+            updatedCount += result.UpdatedCount;
+        }
+
+        return (insertedCount, updatedCount);
     }
 
     /// <summary>
@@ -728,20 +809,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        // 确保实体有ID
-        EnsureEntityHasId(entity);
-
-        // 转换为BSON文档（AOT兼容）
-        var document = AotBsonMapper.ToDocument(entity);
-
-        // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
-        if (!document.ContainsKey("_id"))
-        {
-            var newId = ObjectId.NewObjectId();
-            document = document.Set("_id", newId);
-            // 尝试更新实体ID（如果是可变实体）
-            UpdateEntityId(entity, newId);
-        }
+        var document = PrepareDocumentForInsert(entity);
 
         // 检查是否在事务中
         var currentTransaction = _engine.GetCurrentTransaction();
@@ -782,17 +850,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             if (entity == null) continue;
             cancellationToken.ThrowIfCancellationRequested();
 
-            EnsureEntityHasId(entity);
-            var document = AotBsonMapper.ToDocument(entity);
-            
-            // 如果文档没有ID（可能是因为它是不可变的BsonDocument），我们需要在这里生成一个新的文档带ID
-            if (!document.ContainsKey("_id"))
-            {
-                var newId = ObjectId.NewObjectId();
-                document = document.Set("_id", newId);
-                // 尝试更新实体ID（如果是可变实体）
-                UpdateEntityId(entity, newId);
-            }
+            var document = PrepareDocumentForInsert(entity);
             
             entityBatch.Add(entity);
             docBatch.Add(document);
@@ -819,18 +877,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         var insertedCount = await _engine.InsertDocumentsAsync(_name, documents, cancellationToken).ConfigureAwait(false);
 
-        for (int i = 0; i < Math.Min(insertedCount, entities.Count); i++)
-        {
-            var entity = entities[i];
-            if (entity != null && documents.Count > i)
-            {
-                var document = documents[i];
-                if (document.TryGetValue("_id", out var id))
-                {
-                    UpdateEntityId(entity, id);
-                }
-            }
-        }
+        UpdateEntityIds(entities, documents, insertedCount);
 
         return insertedCount;
     }
@@ -846,14 +893,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        var hasValidId = AotIdAccessor<T>.HasValidId(entity);
-        if (!hasValidId)
-        {
-            throw new ArgumentException("Entity must have a valid ID for update", nameof(entity));
-        }
-
-        var id = AotIdAccessor<T>.GetId(entity);
-        var document = AotBsonMapper.ToDocument(entity);
+        var document = PrepareDocumentForUpdate(entity, out var id);
 
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
@@ -887,14 +927,45 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
-        var updatedCount = 0;
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            var transactionUpdatedCount = 0;
+            foreach (var entity in entities)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (entity != null)
+                {
+                    transactionUpdatedCount += await UpdateAsync(entity, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            return transactionUpdatedCount;
+        }
+
+        int updatedCount = 0;
+        const int BatchSize = 1000;
+        var docBatch = new List<BsonDocument>(BatchSize);
+
         foreach (var entity in entities)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (entity != null)
             {
-                updatedCount += await UpdateAsync(entity, cancellationToken).ConfigureAwait(false);
+                var document = PrepareDocumentForUpdate(entity, out _);
+                docBatch.Add(document);
+
+                if (docBatch.Count >= BatchSize)
+                {
+                    updatedCount += await _engine.UpdateDocumentsAsync(_name, docBatch, cancellationToken).ConfigureAwait(false);
+                    docBatch.Clear();
+                }
             }
+        }
+
+        if (docBatch.Count > 0)
+        {
+            updatedCount += await _engine.UpdateDocumentsAsync(_name, docBatch, cancellationToken).ConfigureAwait(false);
         }
 
         return updatedCount;
@@ -1180,27 +1251,98 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
-        var id = GetEntityId(entity);
-
-        if (id == null || id.IsNull)
+        cancellationToken.ThrowIfCancellationRequested();
+        var document = PrepareDocumentForInsert(entity);
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
         {
-            await InsertAsync(entity, cancellationToken).ConfigureAwait(false);
-            return (UpdateType.Insert, 1);
-        }
-        else
-        {
-            var existingDocument = await FindByIdAsync(id, cancellationToken).ConfigureAwait(false);
+            var id = document.TryGetValue("_id", out var documentId) ? documentId : BsonNull.Value;
+            var existingDocument = id.IsNull
+                ? null
+                : await _engine.FindByIdAsync(_name, id, cancellationToken).ConfigureAwait(false);
             if (existingDocument == null)
             {
-                await InsertAsync(entity, cancellationToken).ConfigureAwait(false);
+                ((Transaction)currentTransaction).RecordInsert(_name, document);
                 return (UpdateType.Insert, 1);
             }
-            else
+
+            ((Transaction)currentTransaction).RecordUpdate(_name, existingDocument, document);
+            return (UpdateType.Update, 1);
+        }
+
+        return await _engine.UpsertDocumentAsync(_name, document, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 异步插入或更新多个文档
+    /// </summary>
+    /// <param name="entities">要插入或更新的实体集合</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>插入和更新的文档数量</returns>
+    public async Task<(int InsertedCount, int UpdatedCount)> UpsertAsync(IEnumerable<T> entities, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            var transactionInsertedCount = 0;
+            var transactionUpdatedCount = 0;
+            foreach (var entity in entities)
             {
-                var updateCount = await UpdateAsync(entity, cancellationToken).ConfigureAwait(false);
-                return (UpdateType.Update, updateCount);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (entity == null) continue;
+
+                var (updateType, count) = await UpsertAsync(entity, cancellationToken).ConfigureAwait(false);
+                if (updateType == UpdateType.Insert)
+                {
+                    transactionInsertedCount += count;
+                }
+                else
+                {
+                    transactionUpdatedCount += count;
+                }
+            }
+
+            return (transactionInsertedCount, transactionUpdatedCount);
+        }
+
+        const int BatchSize = 1000;
+        var insertedCount = 0;
+        var updatedCount = 0;
+        var entityBatch = new List<T>(BatchSize);
+        var docBatch = new List<BsonDocument>(BatchSize);
+
+        foreach (var entity in entities)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entity == null) continue;
+
+            var document = PrepareDocumentForInsert(entity);
+            entityBatch.Add(entity);
+            docBatch.Add(document);
+
+            if (docBatch.Count >= BatchSize)
+            {
+                var result = await _engine.UpsertDocumentsAsync(_name, docBatch, cancellationToken).ConfigureAwait(false);
+                UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
+                insertedCount += result.InsertedCount;
+                updatedCount += result.UpdatedCount;
+                entityBatch.Clear();
+                docBatch.Clear();
             }
         }
+
+        if (docBatch.Count > 0)
+        {
+            var result = await _engine.UpsertDocumentsAsync(_name, docBatch, cancellationToken).ConfigureAwait(false);
+            UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
+            insertedCount += result.InsertedCount;
+            updatedCount += result.UpdatedCount;
+        }
+
+        return (insertedCount, updatedCount);
     }
 
     #endregion
