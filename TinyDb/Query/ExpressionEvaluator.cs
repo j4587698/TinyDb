@@ -272,12 +272,13 @@ public static class ExpressionEvaluator
     {
         switch (nodeType)
         {
-            case ExpressionType.Equal: return Compare(leftValue, rightValue) == 0;
-            case ExpressionType.NotEqual: return Compare(leftValue, rightValue) != 0;
-            case ExpressionType.GreaterThan: return Compare(leftValue, rightValue) > 0;
-            case ExpressionType.GreaterThanOrEqual: return Compare(leftValue, rightValue) >= 0;
-            case ExpressionType.LessThan: return Compare(leftValue, rightValue) < 0;
-            case ExpressionType.LessThanOrEqual: return Compare(leftValue, rightValue) <= 0;
+            case ExpressionType.Equal:
+            case ExpressionType.NotEqual:
+            case ExpressionType.GreaterThan:
+            case ExpressionType.GreaterThanOrEqual:
+            case ExpressionType.LessThan:
+            case ExpressionType.LessThanOrEqual:
+                return QueryValueComparer.EvaluateComparison(leftValue, rightValue, nodeType);
 
             case ExpressionType.Add:
                 // Handle string concatenation
@@ -719,54 +720,7 @@ public static class ExpressionEvaluator
 
     private static int Compare(object? left, object? right)
     {
-        if (left is BsonValue bl) left = bl.RawValue;
-        if (right is BsonValue br) right = br.RawValue;
-
-        if (left == null && right == null) return 0;
-        if (left == null) return -1;
-        if (right == null) return 1;
-
-        if (IsNumericType(left) && IsNumericType(right))
-        {
-            if (left is Decimal128 ld) left = ld.ToDecimal();
-            if (right is Decimal128 rd) right = rd.ToDecimal();
-
-            if (left is decimal || right is decimal)
-            {
-                return ToDecimal(left).CompareTo(ToDecimal(right));
-            }
-            return ToDouble(left).CompareTo(ToDouble(right));
-        }
-
-        if (left is byte[] b1 && right is byte[] b2)
-        {
-            var lenDiff = b1.Length.CompareTo(b2.Length);
-            if (lenDiff != 0) return lenDiff;
-            for (int i = 0; i < b1.Length; i++)
-            {
-                var bDiff = b1[i].CompareTo(b2[i]);
-                if (bDiff != 0) return bDiff;
-            }
-            return 0;
-        }
-
-        if (left is string leftStr && right is string rightStr)
-        {
-            return string.Compare(leftStr, rightStr, StringComparison.Ordinal);
-        }
-
-        if (left is IComparable leftComparable)
-        {
-            try
-            {
-                return leftComparable.CompareTo(right);
-            }
-            catch (ArgumentException)
-            {
-            }
-        }
-
-        return string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal);
+        return QueryValueComparer.Compare(left, right);
     }
 
     private static bool IsNumericType(object value)

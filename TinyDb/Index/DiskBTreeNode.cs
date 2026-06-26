@@ -37,9 +37,6 @@ public sealed class DiskBTreeNode : IDisposable
         _page = page ?? throw new ArgumentNullException(nameof(page));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
         
-        // 锁定页面，防止被 LRU 置换
-        _page.Pin();
-
         Keys = new List<IndexKey>();
         ChildrenIds = new List<uint>();
         Values = new List<BsonValue>();
@@ -60,13 +57,14 @@ public sealed class DiskBTreeNode : IDisposable
         if (_disposed) return;
         _disposed = true;
         
-        // 释放页面锁定
-        _page.Unpin();
+        // 节点由 Page.CachedParsedData 缓存，不拥有页面生命周期。
     }
     public void InitAsRoot()
     {
         IsLeaf = true;
         ParentId = 0;
+        NextSiblingId = 0;
+        PrevSiblingId = 0;
         TreeEntryCount = 0;
         Keys.Clear();
         ChildrenIds.Clear();

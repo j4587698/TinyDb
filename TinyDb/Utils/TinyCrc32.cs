@@ -24,6 +24,23 @@ internal static class TinyCrc32
         return ~crc;
     }
 
+    public static uint HashToUInt32(ReadOnlySpan<byte> first, ReadOnlySpan<byte> second)
+    {
+        uint crc = 0xFFFFFFFFu;
+
+        foreach (var value in first)
+        {
+            crc = Append(crc, value);
+        }
+
+        foreach (var value in second)
+        {
+            crc = Append(crc, value);
+        }
+
+        return ~crc;
+    }
+
     public static uint HashToUInt32WithZeroedRange(ReadOnlySpan<byte> data, int zeroStart, int zeroLength)
     {
         if (zeroStart < 0 || zeroLength < 0 || zeroStart > data.Length - zeroLength)

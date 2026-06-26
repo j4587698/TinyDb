@@ -683,7 +683,13 @@ public sealed class BsonWriter : IDisposable
     public void WriteDateTime(DateTime value)
     {
         var unixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var milliseconds = (long)(value - unixEpoch).TotalMilliseconds;
+        var utcValue = value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+        var milliseconds = (long)(utcValue - unixEpoch).TotalMilliseconds;
         InternalWrite(milliseconds);
     }
 

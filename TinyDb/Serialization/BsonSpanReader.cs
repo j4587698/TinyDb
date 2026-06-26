@@ -69,6 +69,9 @@ public ref struct BsonSpanReader
     {
         int startPos = _position;
         int arrSize = ReadInt32();
+        if (arrSize < 5 || arrSize > _data.Length - startPos)
+            throw new InvalidOperationException($"Invalid array size: {arrSize}");
+
         var array = new BsonArray();
 
         while (true)
@@ -79,6 +82,12 @@ public ref struct BsonSpanReader
             ReadCString(); // 忽略数组索引键
             var value = ReadValue(type);
             array = array.AddValue(value);
+        }
+
+        int actualSize = _position - startPos;
+        if (actualSize != arrSize)
+        {
+            throw new InvalidOperationException($"Array size mismatch. Expected {arrSize}, read {actualSize}");
         }
 
         return array;
@@ -115,31 +124,40 @@ public ref struct BsonSpanReader
     {
         switch (type)
         {
-            case BsonType.Double: _position += 8; break;
+            case BsonType.Double: EnsureAvailable(8); _position += 8; break;
             case BsonType.String:
             case BsonType.JavaScript:
             case BsonType.Symbol:
                 int len = ReadInt32();
+                EnsureAvailableLength(len);
                 _position += len; 
                 break;
             case BsonType.JavaScriptWithScope:
                 int totalSize = ReadInt32();
+                if (totalSize < 4) throw new InvalidOperationException($"Invalid JavaScriptWithScope length: {totalSize}");
+                EnsureAvailableLength(totalSize - 4);
                 _position += (totalSize - 4);
                 break;
             case BsonType.Document:
             case BsonType.Array:
                 int docLen = ReadInt32();
+                if (docLen < 4) throw new InvalidOperationException($"Invalid document length: {docLen}");
+                EnsureAvailableLength(docLen - 4);
                 _position += (docLen - 4); // 减去刚刚读取的长度字节
                 break;
             case BsonType.Binary:
                 int binLen = ReadInt32();
-                _position += (binLen + 1); // +1 subtype
+                if (binLen < 0) throw new InvalidOperationException($"Invalid binary length: {binLen}");
+                EnsureAvailable(1);
+                _position += 1; // subtype
+                EnsureAvailableLength(binLen);
+                _position += binLen;
                 break;
-            case BsonType.ObjectId: _position += 12; break;
-            case BsonType.Boolean: _position += 1; break;
+            case BsonType.ObjectId: EnsureAvailable(12); _position += 12; break;
+            case BsonType.Boolean: EnsureAvailable(1); _position += 1; break;
             case BsonType.DateTime:
             case BsonType.Timestamp:
-            case BsonType.Int64: _position += 8; break;
+            case BsonType.Int64: EnsureAvailable(8); _position += 8; break;
             case BsonType.Null:
             case BsonType.MinKey:
             case BsonType.MaxKey: break;
@@ -147,8 +165,9 @@ public ref struct BsonSpanReader
                 SkipCString();
                 SkipCString();
                 break;
-            case BsonType.Int32: _position += 4; break;
+            case BsonType.Int32: EnsureAvailable(4); _position += 4; break;
             case BsonType.Decimal128: 
+                EnsureAvailable(16);
                 _position += 16;
                 break;
             default: throw new NotSupportedException($"Cannot skip type {type}");
@@ -165,7 +184,7 @@ public ref struct BsonSpanReader
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public int ReadInt32()
     {
-        if (_position + 4 > _data.Length) throw new EndOfStreamException();
+        EnsureAvailable(4);
         var val = BinaryPrimitives.ReadInt32LittleEndian(_data.Slice(_position));
         _position += 4;
         return val;
@@ -174,7 +193,7 @@ public ref struct BsonSpanReader
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public long ReadInt64()
     {
-        if (_position + 8 > _data.Length) throw new EndOfStreamException();
+        EnsureAvailable(8);
         var val = BinaryPrimitives.ReadInt64LittleEndian(_data.Slice(_position));
         _position += 8;
         return val;
@@ -182,7 +201,7 @@ public ref struct BsonSpanReader
 
     public double ReadDouble()
     {
-        if (_position + 8 > _data.Length) throw new EndOfStreamException();
+        EnsureAvailable(8);
         var val = BinaryPrimitives.ReadDoubleLittleEndian(_data.Slice(_position));
         _position += 8;
         return val;
@@ -195,7 +214,7 @@ public ref struct BsonSpanReader
 
     public ObjectId ReadObjectId()
     {
-        if (_position + 12 > _data.Length) throw new EndOfStreamException();
+        EnsureAvailable(12);
         var bytes = _data.Slice(_position, 12);
         _position += 12;
         return new ObjectId(bytes);
@@ -230,7 +249,7 @@ public ref struct BsonSpanReader
     {
         int len = ReadInt32(); // 包含 null
         if (len < 1) throw new InvalidOperationException($"Invalid string length: {len}");
-        if (_position + len > _data.Length) throw new EndOfStreamException();
+        EnsureAvailableLength(len);
 
         // 除去最后的 null
         string s = Encoding.UTF8.GetString(_data.Slice(_position, len - 1));
@@ -241,8 +260,9 @@ public ref struct BsonSpanReader
     public BsonBinary ReadBinary()
     {
         int len = ReadInt32();
+        if (len < 0) throw new InvalidOperationException($"Invalid binary length: {len}");
         byte subType = ReadByte();
-        if (_position + len > _data.Length) throw new EndOfStreamException();
+        EnsureAvailableLength(len);
         
         var bytes = _data.Slice(_position, len).ToArray();
         _position += len;
@@ -258,7 +278,7 @@ public ref struct BsonSpanReader
 
     public BsonDecimal128 ReadDecimal128()
     {
-        if (_position + 16 > _data.Length) throw new EndOfStreamException();
+        EnsureAvailable(16);
         
         ulong lo = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_position));
         ulong hi = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_position + 8));
@@ -273,5 +293,26 @@ public ref struct BsonSpanReader
         string code = ReadString();
         var scope = ReadDocument();
         return new BsonJavaScriptWithScope(code, scope);
+    }
+
+    private void EnsureAvailable(int count)
+    {
+        if (_position < 0 ||
+            _position > _data.Length ||
+            count < 0 ||
+            (uint)count > (uint)(_data.Length - _position))
+        {
+            throw new EndOfStreamException();
+        }
+    }
+
+    private void EnsureAvailableLength(int length)
+    {
+        if (length < 0)
+        {
+            throw new InvalidOperationException($"Invalid BSON value length: {length}");
+        }
+
+        EnsureAvailable(length);
     }
 }

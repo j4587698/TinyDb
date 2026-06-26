@@ -193,13 +193,20 @@ public class LargeDocumentStorage
 
             var header = ReadIndexPageHeader(indexPage);
             var currentPageId = header.FirstDataPageId;
+            var dataPageIds = new List<uint>(header.PageCount);
             for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
             {
                 var dataPage = _pageManager.GetPage(currentPageId);
+                dataPageIds.Add(dataPage.PageID);
                 currentPageId = ReadDataPageHeader(dataPage).NextPageId;
-                _pageManager.FreePage(dataPage.PageID);
             }
+
             _pageManager.FreePage(indexPageId);
+
+            foreach (var dataPageId in dataPageIds)
+            {
+                _pageManager.FreePage(dataPageId);
+            }
         }
         catch (Exception ex)
         {

@@ -90,10 +90,9 @@ public class ExpressionEvaluatorMatrixTests
         await Assert.That(EvalEq(null, 1)).IsFalse();
         await Assert.That(EvalEq(1, null)).IsFalse();
         
-        // Mixed Types (Fallback to ToString)
-        // "1" == 1 -> "1" == "1"
-        await Assert.That(EvalEq("1", 1)).IsTrue();
-        await Assert.That(EvalEq(1, "1")).IsTrue();
+        // Mixed types are not coerced through ToString for predicate equality.
+        await Assert.That(EvalEq("1", 1)).IsFalse();
+        await Assert.That(EvalEq(1, "1")).IsFalse();
         
         // "a" != 1
         await Assert.That(EvalEq("a", 1)).IsFalse();

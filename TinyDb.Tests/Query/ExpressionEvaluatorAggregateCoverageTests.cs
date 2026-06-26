@@ -187,8 +187,14 @@ public class ExpressionEvaluatorAggregateCoverageTests
             new ConstantExpression(new byte[] { 1, 3 }));
         await Assert.That(ExpressionEvaluator.Evaluate(bytesLessByValue, entity)).IsTrue();
 
-        var incompatibleComparable = new BinaryExpression(ExpressionType.Equal, new ConstantExpression(1), new ConstantExpression("1"));
-        await Assert.That(ExpressionEvaluator.Evaluate(incompatibleComparable, entity)).IsTrue();
+        var incompatibleEqual = new BinaryExpression(ExpressionType.Equal, new ConstantExpression(1), new ConstantExpression("1"));
+        await Assert.That(ExpressionEvaluator.Evaluate(incompatibleEqual, entity)).IsFalse();
+
+        var incompatibleNotEqual = new BinaryExpression(ExpressionType.NotEqual, new ConstantExpression(1), new ConstantExpression("1"));
+        await Assert.That(ExpressionEvaluator.Evaluate(incompatibleNotEqual, entity)).IsTrue();
+
+        var incompatibleGreaterThan = new BinaryExpression(ExpressionType.GreaterThan, new ConstantExpression(DateTime.UtcNow), new ConstantExpression("1"));
+        await Assert.That(ExpressionEvaluator.Evaluate(incompatibleGreaterThan, entity)).IsFalse();
     }
 
     [Test]

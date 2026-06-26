@@ -215,6 +215,7 @@ public sealed class IndexManager : IDisposable
         {
             if (_indexes.TryRemove(name, out var index))
             {
+                index.DropStorage();
                 index.Dispose();
                 PersistDefinitions(forceFlush: false);
                 return true;
@@ -380,6 +381,7 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterReadLock();
         try
         {
+            var inserted = new List<(BTreeIndex Index, IndexKey Key)>();
             foreach (var index in _indexes.Values)
             {
                 var key = ExtractIndexKey(index, document);
@@ -391,11 +393,18 @@ public sealed class IndexManager : IDisposable
                         {
                             throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
                         }
+                        inserted.Add((index, key));
                     }
-                    catch (InvalidOperationException) { throw; }
+                    catch (InvalidOperationException ex)
+                    {
+                        ThrowWithRollbackErrors(ex, RollbackInsertedIndexes(inserted, documentId));
+                        throw;
+                    }
                     catch (Exception ex)
                     {
-                        throw new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
+                        var insertException = new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
+                        ThrowWithRollbackErrors(insertException, RollbackInsertedIndexes(inserted, documentId));
+                        throw insertException;
                     }
                 }
             }
@@ -455,20 +464,39 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterReadLock();
         try
         {
+            var applied = new List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)>();
             foreach (var index in _indexes.Values)
             {
                 var oldKey = ExtractIndexKey(index, oldDoc);
                 var newKey = ExtractIndexKey(index, newDoc);
-                
-                if (oldKey != null) index.Delete(oldKey, id);
-                if (newKey != null)
+
+                if (oldKey != null && newKey != null && oldKey.Equals(newKey))
                 {
-                    if (!index.Insert(newKey, id))
+                    continue;
+                }
+
+                try
+                {
+                    if (oldKey != null) index.Delete(oldKey, id);
+                    if (newKey != null)
                     {
-                        // Attempt to rollback delete
-                        if (oldKey != null) index.Insert(oldKey, id);
-                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                        if (!index.Insert(newKey, id))
+                        {
+                            if (oldKey != null && !index.Insert(oldKey, id))
+                            {
+                                throw new InvalidOperationException($"Failed to rollback index '{index.Name}' after duplicate key detection");
+                            }
+
+                            throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                        }
                     }
+
+                    applied.Add((index, oldKey, newKey));
+                }
+                catch (Exception ex)
+                {
+                    ThrowWithRollbackErrors(ex, RollbackUpdatedIndexes(applied, id));
+                    throw;
                 }
             }
         }
@@ -476,6 +504,60 @@ public sealed class IndexManager : IDisposable
         {
             _rwLock.ExitReadLock();
         }
+    }
+
+    private static List<Exception> RollbackInsertedIndexes(List<(BTreeIndex Index, IndexKey Key)> inserted, BsonValue documentId)
+    {
+        var errors = new List<Exception>();
+        for (int i = inserted.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                inserted[i].Index.Delete(inserted[i].Key, documentId);
+            }
+            catch (Exception ex)
+            {
+                errors.Add(new InvalidOperationException(
+                    $"Failed to rollback inserted key in index '{inserted[i].Index.Name}'.",
+                    ex));
+            }
+        }
+
+        return errors;
+    }
+
+    private static List<Exception> RollbackUpdatedIndexes(List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)> applied, BsonValue documentId)
+    {
+        var errors = new List<Exception>();
+        for (int i = applied.Count - 1; i >= 0; i--)
+        {
+            var (index, oldKey, newKey) = applied[i];
+            try
+            {
+                if (newKey != null) index.Delete(newKey, documentId);
+                if (oldKey != null && !index.Insert(oldKey, documentId))
+                {
+                    throw new InvalidOperationException($"Failed to rollback index '{index.Name}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add(new InvalidOperationException(
+                    $"Failed to rollback update in index '{index.Name}'.",
+                    ex));
+            }
+        }
+
+        return errors;
+    }
+
+    private static void ThrowWithRollbackErrors(Exception original, List<Exception> rollbackErrors)
+    {
+        if (rollbackErrors.Count == 0) return;
+
+        var errors = new List<Exception> { original };
+        errors.AddRange(rollbackErrors);
+        throw new AggregateException("Index operation failed and rollback encountered errors.", errors);
     }
 
     /// <summary>

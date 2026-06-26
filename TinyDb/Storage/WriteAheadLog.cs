@@ -14,13 +14,19 @@ namespace TinyDb.Storage;
 public sealed class WriteAheadLog : IDisposable
 {
     private const byte EntryTypePage = 0x1;
+    private const byte EntryTypeTransactionBegin = 0x2;
+    private const byte EntryTypeTransactionPage = 0x3;
+    private const byte EntryTypeTransactionCommit = 0x4;
     private const int HeaderSize = 9;
+    private const int TransactionIdSize = 16;
+    private const int BeforeLengthSize = sizeof(int);
 
     private readonly string _logFilePath;
     private readonly FileStream? _stream;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly AsyncLocal<int> _synchronizationDepth = new();
+    private readonly AsyncLocal<Guid?> _currentTransactionId = new();
     private readonly int _maxRecordSize;
     private bool _disposed;
     private bool _hasPendingEntries;
@@ -41,6 +47,10 @@ public sealed class WriteAheadLog : IDisposable
     /// </summary>
     public bool HasPendingEntries => IsEnabled && _hasPendingEntries;
 
+    internal bool RequiresBeforeImage => IsEnabled && _currentTransactionId.Value.HasValue;
+
+    internal bool IsInTransactionScope => IsEnabled && _currentTransactionId.Value.HasValue;
+
     public WriteAheadLog(
         string databaseFilePath,
         int pageSize,
@@ -52,7 +62,7 @@ public sealed class WriteAheadLog : IDisposable
             throw new ArgumentException("Database file path cannot be null or empty", nameof(databaseFilePath));
 
         _log = logger ?? TinyDbLogging.NoopLogger;
-        _maxRecordSize = Math.Max(pageSize, 0);
+        _maxRecordSize = Math.Max(pageSize * 2 + TransactionIdSize + BeforeLengthSize, pageSize);
         IsEnabled = enabled;
         _logFilePath = GenerateWalFilePath(databaseFilePath, walFileNameFormat ?? "{name}-wal.{ext}");
 
@@ -139,7 +149,7 @@ public sealed class WriteAheadLog : IDisposable
         if (_synchronizationDepth.Value > 0)
         {
             var data = PreparePageRecord(page);
-            await WriteEntryAsync(page.PageID, data, cancellationToken).ConfigureAwait(false);
+            await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
             _hasPendingEntries = true;
             return;
         }
@@ -148,7 +158,7 @@ public sealed class WriteAheadLog : IDisposable
         try
         {
             var data = PreparePageRecord(page);
-            await WriteEntryAsync(page.PageID, data, cancellationToken).ConfigureAwait(false);
+            await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
             _hasPendingEntries = true;
         }
         finally
@@ -159,12 +169,25 @@ public sealed class WriteAheadLog : IDisposable
 
     public void AppendPage(Page page)
     {
+        AppendPage(page, beforeImage: null);
+    }
+
+    public void AppendPage(Page page, byte[]? beforeImage)
+    {
         if (!IsEnabled) return;
 
         if (_synchronizationDepth.Value > 0)
         {
-            var data = PreparePageRecord(page);
-            WriteEntry(page.PageID, data);
+            if (_currentTransactionId.Value is Guid transactionId)
+            {
+                var data = PrepareTransactionPageRecord(transactionId, page, beforeImage);
+                WriteEntry(EntryTypeTransactionPage, page.PageID, data);
+            }
+            else
+            {
+                var data = PreparePageRecord(page);
+                WriteEntry(EntryTypePage, page.PageID, data);
+            }
             _hasPendingEntries = true;
             return;
         }
@@ -173,13 +196,83 @@ public sealed class WriteAheadLog : IDisposable
         try
         {
             var data = PreparePageRecord(page);
-
-            WriteEntry(page.PageID, data);
+            WriteEntry(EntryTypePage, page.PageID, data);
             _hasPendingEntries = true;
         }
         finally
         {
             _mutex.Release();
+        }
+    }
+
+    internal WalTransactionScope BeginTransaction(Guid transactionId)
+    {
+        if (!IsEnabled)
+        {
+            return new WalTransactionScope(this, transactionId, ownsMutex: false);
+        }
+
+        _mutex.Wait();
+        try
+        {
+            _synchronizationDepth.Value++;
+            _currentTransactionId.Value = transactionId;
+            WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
+            _hasPendingEntries = true;
+            return new WalTransactionScope(this, transactionId, ownsMutex: true);
+        }
+        catch
+        {
+            _currentTransactionId.Value = null;
+            _synchronizationDepth.Value--;
+            _mutex.Release();
+            throw;
+        }
+    }
+
+    internal sealed class WalTransactionScope : IDisposable
+    {
+        private readonly WriteAheadLog _wal;
+        private readonly Guid _transactionId;
+        private readonly bool _ownsMutex;
+        private bool _completed;
+        private bool _disposed;
+
+        internal WalTransactionScope(WriteAheadLog wal, Guid transactionId, bool ownsMutex)
+        {
+            _wal = wal;
+            _transactionId = transactionId;
+            _ownsMutex = ownsMutex;
+        }
+
+        public void Commit()
+        {
+            if (_completed) return;
+            if (_wal.IsEnabled)
+            {
+                if (_wal._currentTransactionId.Value != _transactionId)
+                {
+                    throw new InvalidOperationException("WAL transaction scope mismatch.");
+                }
+
+                _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
+                _wal._hasPendingEntries = true;
+                _wal.FlushLogCore();
+            }
+
+            _completed = true;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            if (!_ownsMutex) return;
+
+            _wal._currentTransactionId.Value = null;
+            _wal._synchronizationDepth.Value--;
+            _wal._mutex.Release();
         }
     }
 
@@ -196,35 +289,55 @@ public sealed class WriteAheadLog : IDisposable
         return page.Snapshot(includeUnusedTail: true);
     }
 
-    private void WriteEntry(uint pageId, byte[] data)
+    private byte[] PrepareTransactionPageRecord(Guid transactionId, Page page, byte[]? beforeImage)
+    {
+        var afterImage = PreparePageRecord(page);
+        var beforeLength = beforeImage?.Length ?? -1;
+        var data = new byte[TransactionIdSize + BeforeLengthSize + Math.Max(beforeLength, 0) + afterImage.Length];
+        transactionId.ToByteArray().CopyTo(data, 0);
+        BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(TransactionIdSize, BeforeLengthSize), beforeLength);
+
+        var offset = TransactionIdSize + BeforeLengthSize;
+        if (beforeImage != null)
+        {
+            beforeImage.CopyTo(data.AsSpan(offset));
+            offset += beforeImage.Length;
+        }
+
+        afterImage.CopyTo(data.AsSpan(offset));
+        return data;
+    }
+
+    private static byte[] CreateTransactionControlData(Guid transactionId)
+    {
+        return transactionId.ToByteArray();
+    }
+
+    private void WriteEntry(byte entryType, uint pageId, byte[] data)
     {
         var stream = _stream!;
         
-        // 计算校验和
-        var crc32 = TinyCrc32.HashToUInt32(data);
-        
         // 头部格式: [Type(1)] [PageId(4)] [Length(4)] [CRC32(4)]
         Span<byte> header = stackalloc byte[HeaderSize + 4]; // HeaderSize is 9, +4 for CRC = 13
-        header[0] = EntryTypePage;
+        header[0] = entryType;
         BinaryPrimitives.WriteUInt32LittleEndian(header[1..5], pageId);
         BinaryPrimitives.WriteInt32LittleEndian(header[5..9], data.Length);
+        var crc32 = TinyCrc32.HashToUInt32(header[..HeaderSize], data);
         BinaryPrimitives.WriteUInt32LittleEndian(header[9..13], crc32);
         
         stream.Write(header);
         stream.Write(data, 0, data.Length);
     }
 
-    private async Task WriteEntryAsync(uint pageId, byte[] data, CancellationToken cancellationToken)
+    private async Task WriteEntryAsync(byte entryType, uint pageId, byte[] data, CancellationToken cancellationToken)
     {
         var stream = _stream!;
         
-        // 计算校验和
-        var crc32 = TinyCrc32.HashToUInt32(data);
-        
         byte[] header = new byte[HeaderSize + 4];
-        header[0] = EntryTypePage;
+        header[0] = entryType;
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(1, 4), pageId);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(5, 4), data.Length);
+        var crc32 = TinyCrc32.HashToUInt32(header.AsSpan(0, HeaderSize), data);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(9, 4), crc32);
         
         await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
@@ -441,7 +554,51 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
+    private static bool TryReadTransactionId(byte[] data, out Guid transactionId)
+    {
+        transactionId = default;
+        if (data.Length != TransactionIdSize) return false;
+
+        transactionId = new Guid(data);
+        return true;
+    }
+
+    private static bool TryReadTransactionPage(
+        byte[] data,
+        out Guid transactionId,
+        out byte[]? beforeImage,
+        out byte[] afterImage)
+    {
+        transactionId = default;
+        beforeImage = null;
+        afterImage = Array.Empty<byte>();
+
+        if (data.Length < TransactionIdSize + BeforeLengthSize) return false;
+
+        transactionId = new Guid(data.AsSpan(0, TransactionIdSize));
+        var beforeLength = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(TransactionIdSize, BeforeLengthSize));
+        if (beforeLength < -1) return false;
+
+        var offset = TransactionIdSize + BeforeLengthSize;
+        if (beforeLength >= 0)
+        {
+            if (beforeLength > data.Length - offset) return false;
+            beforeImage = data.AsSpan(offset, beforeLength).ToArray();
+            offset += beforeLength;
+        }
+
+        if (offset >= data.Length) return false;
+
+        afterImage = data.AsSpan(offset).ToArray();
+        return true;
+    }
+
     public void Replay(Action<uint, byte[]> apply)
+    {
+        Replay(apply, restore: null);
+    }
+
+    public void Replay(Action<uint, byte[]> apply, Action<uint, byte[]>? restore)
     {
         if (!IsEnabled) return;
         if (apply == null) throw new ArgumentNullException(nameof(apply));
@@ -456,6 +613,7 @@ public sealed class WriteAheadLog : IDisposable
 
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
             var headerBuffer = new byte[FullHeaderSize];
+            var pendingTransactions = new Dictionary<Guid, List<(uint PageId, byte[]? BeforeImage, byte[] AfterImage)>>();
 
             while (stream.Position < stream.Length)
             {
@@ -467,9 +625,10 @@ public sealed class WriteAheadLog : IDisposable
                     break;
                 }
 
-                if (headerBuffer[0] != EntryTypePage)
+                var entryType = headerBuffer[0];
+                if (entryType is not (EntryTypePage or EntryTypeTransactionBegin or EntryTypeTransactionPage or EntryTypeTransactionCommit))
                 {
-                    Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}.");
+                    Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{entryType:X} at {currentEntryStart}.");
                     break;
                 }
 
@@ -516,24 +675,80 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (expectedCrc.HasValue)
                 {
-                    var actualCrc = TinyCrc32.HashToUInt32(buffer);
-                    if (actualCrc != expectedCrc.Value)
+                    var actualCrc = TinyCrc32.HashToUInt32(headerBuffer.AsSpan(0, HeaderSize), buffer);
+                    var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
+                    if (actualCrc != expectedCrc.Value && legacyDataOnlyCrc != expectedCrc.Value)
                     {
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         break;
                     }
                 }
 
-                apply(pageId, buffer);
+                if (entryType == EntryTypePage)
+                {
+                    apply(pageId, buffer);
+                }
+                else if (entryType == EntryTypeTransactionBegin)
+                {
+                    if (!TryReadTransactionId(buffer, out var transactionId))
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
+                        break;
+                    }
+
+                    pendingTransactions.TryAdd(transactionId, new List<(uint, byte[]?, byte[])>());
+                }
+                else if (entryType == EntryTypeTransactionPage)
+                {
+                    if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
+                        break;
+                    }
+
+                    if (!pendingTransactions.TryGetValue(transactionId, out var records))
+                    {
+                        records = new List<(uint, byte[]?, byte[])>();
+                        pendingTransactions[transactionId] = records;
+                    }
+
+                    records.Add((pageId, beforeImage, afterImage));
+                }
+                else if (entryType == EntryTypeTransactionCommit)
+                {
+                    if (!TryReadTransactionId(buffer, out var transactionId))
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
+                        break;
+                    }
+
+                    if (pendingTransactions.TryGetValue(transactionId, out var records))
+                    {
+                        foreach (var record in records)
+                        {
+                            apply(record.PageId, record.AfterImage);
+                        }
+
+                        pendingTransactions.Remove(transactionId);
+                    }
+                }
+
                 lastSuccessfulPosition = stream.Position;
             }
 
-            if (lastSuccessfulPosition < stream.Length)
+            foreach (var records in pendingTransactions.Values)
             {
-                stream.SetLength(lastSuccessfulPosition);
-                stream.Flush(true);
+                for (int i = records.Count - 1; i >= 0; i--)
+                {
+                    var record = records[i];
+                    if (record.BeforeImage != null)
+                    {
+                        (restore ?? apply)(record.PageId, record.BeforeImage);
+                    }
+                }
             }
-            else if (lastSuccessfulPosition > 0)
+
+            if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 stream.SetLength(0);
                 stream.Flush(true);
@@ -569,7 +784,15 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    public async Task ReplayAsync(Func<uint, byte[], Task> applyAsync, CancellationToken cancellationToken = default)
+    public Task ReplayAsync(Func<uint, byte[], Task> applyAsync, CancellationToken cancellationToken = default)
+    {
+        return ReplayAsync(applyAsync, restoreAsync: null, cancellationToken);
+    }
+
+    public async Task ReplayAsync(
+        Func<uint, byte[], Task> applyAsync,
+        Func<uint, byte[], Task>? restoreAsync,
+        CancellationToken cancellationToken = default)
     {
         if (!IsEnabled) return;
         if (applyAsync == null) throw new ArgumentNullException(nameof(applyAsync));
@@ -584,6 +807,7 @@ public sealed class WriteAheadLog : IDisposable
 
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
             var headerBuffer = new byte[FullHeaderSize];
+            var pendingTransactions = new Dictionary<Guid, List<(uint PageId, byte[]? BeforeImage, byte[] AfterImage)>>();
             
             while (stream.Position < stream.Length)
             {
@@ -598,9 +822,10 @@ public sealed class WriteAheadLog : IDisposable
                     break;
                 }
 
-                if (headerBuffer[0] != EntryTypePage)
+                var entryType = headerBuffer[0];
+                if (entryType is not (EntryTypePage or EntryTypeTransactionBegin or EntryTypeTransactionPage or EntryTypeTransactionCommit))
                 {
-                    Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{headerBuffer[0]:X} at {currentEntryStart}.");
+                    Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{entryType:X} at {currentEntryStart}.");
                     break; // 无效类型，停止重放
                 }
 
@@ -649,23 +874,84 @@ public sealed class WriteAheadLog : IDisposable
                 // 验证校验和 (如果存在)
                 if (expectedCrc.HasValue)
                 {
-                    var actualCrc = TinyCrc32.HashToUInt32(buffer);
-                    if (actualCrc != expectedCrc.Value)
+                    var actualCrc = TinyCrc32.HashToUInt32(headerBuffer.AsSpan(0, HeaderSize), buffer);
+                    var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
+                    if (actualCrc != expectedCrc.Value && legacyDataOnlyCrc != expectedCrc.Value)
                     {
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         break;
                     }
                 }
 
-                await applyAsync(pageId, buffer).ConfigureAwait(false);
+                if (entryType == EntryTypePage)
+                {
+                    await applyAsync(pageId, buffer).ConfigureAwait(false);
+                }
+                else if (entryType == EntryTypeTransactionBegin)
+                {
+                    if (!TryReadTransactionId(buffer, out var transactionId))
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
+                        break;
+                    }
+
+                    pendingTransactions.TryAdd(transactionId, new List<(uint, byte[]?, byte[])>());
+                }
+                else if (entryType == EntryTypeTransactionPage)
+                {
+                    if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
+                        break;
+                    }
+
+                    if (!pendingTransactions.TryGetValue(transactionId, out var records))
+                    {
+                        records = new List<(uint, byte[]?, byte[])>();
+                        pendingTransactions[transactionId] = records;
+                    }
+
+                    records.Add((pageId, beforeImage, afterImage));
+                }
+                else if (entryType == EntryTypeTransactionCommit)
+                {
+                    if (!TryReadTransactionId(buffer, out var transactionId))
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
+                        break;
+                    }
+
+                    if (pendingTransactions.TryGetValue(transactionId, out var records))
+                    {
+                        foreach (var record in records)
+                        {
+                            await applyAsync(record.PageId, record.AfterImage).ConfigureAwait(false);
+                        }
+
+                        pendingTransactions.Remove(transactionId);
+                    }
+                }
+
                 lastSuccessfulPosition = stream.Position;
             }
 
             // 清理或截断日志
-            if (lastSuccessfulPosition < stream.Length)
+            foreach (var records in pendingTransactions.Values)
+            {
+                for (int i = records.Count - 1; i >= 0; i--)
+                {
+                    var record = records[i];
+                    if (record.BeforeImage != null)
+                    {
+                        await (restoreAsync ?? applyAsync)(record.PageId, record.BeforeImage).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
-                stream.SetLength(lastSuccessfulPosition);
+                stream.SetLength(0);
                 stream.Flush(true);
             }
             else if (lastSuccessfulPosition > 0)

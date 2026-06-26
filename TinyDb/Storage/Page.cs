@@ -31,9 +31,15 @@ public sealed class Page : IDisposable
     /// </summary>
     public void Unpin()
     {
-        if (Interlocked.Decrement(ref _pinCount) < 0)
+        while (true)
         {
-            Interlocked.Exchange(ref _pinCount, 0);
+            var current = Volatile.Read(ref _pinCount);
+            if (current <= 0) return;
+
+            if (Interlocked.CompareExchange(ref _pinCount, current - 1, current) == current)
+            {
+                return;
+            }
         }
     }
 
