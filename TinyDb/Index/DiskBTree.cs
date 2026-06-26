@@ -15,6 +15,9 @@ public sealed class DiskBTree : IDisposable
     private readonly ReaderWriterLockSlim _lock = new();
     private bool _disposed;
 
+    [ThreadStatic]
+    private static PageLease? _currentLease;
+
     public void EnterReadLock() => _lock.EnterReadLock();
     public void ExitReadLock() => _lock.ExitReadLock();
     public void EnterWriteLock() => _lock.EnterWriteLock();
@@ -28,7 +31,15 @@ public sealed class DiskBTree : IDisposable
     /// <summary>
     /// 获取根节点实例。
     /// </summary>
-    public DiskBTreeNode RootNode => LoadNode(_rootPageId);
+    public DiskBTreeNode RootNode
+    {
+        get
+        {
+            ThrowIfDisposed();
+            using var lease = BeginPageLease();
+            return LoadNode(_rootPageId);
+        }
+    }
 
     /// <summary>
     /// 获取树中条目的总数。
@@ -37,6 +48,8 @@ public sealed class DiskBTree : IDisposable
     {
         get
         {
+            ThrowIfDisposed();
+            using var lease = BeginPageLease();
             var root = LoadNode(_rootPageId);
             return root.TreeEntryCount;
         }
@@ -45,7 +58,15 @@ public sealed class DiskBTree : IDisposable
     /// <summary>
     /// 获取树中节点的总数。
     /// </summary>
-    public int NodeCount => CountNodes(_rootPageId);
+    public int NodeCount
+    {
+        get
+        {
+            ThrowIfDisposed();
+            using var lease = BeginPageLease();
+            return CountNodes(_rootPageId);
+        }
+    }
 
     /// <summary>
     /// 获取树的高度。
@@ -54,6 +75,8 @@ public sealed class DiskBTree : IDisposable
     {
         get
         {
+            ThrowIfDisposed();
+            using var lease = BeginPageLease();
             var node = LoadNode(_rootPageId);
             int height = 1;
             while (!node.IsLeaf)
@@ -93,6 +116,111 @@ public sealed class DiskBTree : IDisposable
         _maxKeys = maxKeys > 0 ? maxKeys : 200;
     }
 
+    private static PageLease BeginPageLease()
+    {
+        var lease = new PageLease(_currentLease);
+        _currentLease = lease;
+        return lease;
+    }
+
+    private Page GetPage(uint pageId)
+    {
+        return _currentLease?.GetPage(_pm, pageId) ?? _pm.GetPage(pageId);
+    }
+
+    private Page NewIndexPage()
+    {
+        return _currentLease?.NewPage(_pm, PageType.Index) ?? _pm.NewPage(PageType.Index);
+    }
+
+    private void FreePage(uint pageId)
+    {
+        _currentLease?.ReleasePage(pageId);
+        _pm.FreePage(pageId);
+    }
+
+    private sealed class PageLease : IDisposable
+    {
+        private readonly PageLease? _previous;
+        private readonly Dictionary<uint, Page> _pagesById = new();
+        private readonly List<Page> _pages = new();
+        private bool _disposed;
+
+        public PageLease(PageLease? previous)
+        {
+            _previous = previous;
+        }
+
+        public Page GetPage(PageManager pageManager, uint pageId)
+        {
+            if (_pagesById.TryGetValue(pageId, out var page))
+            {
+                return page;
+            }
+
+            page = pageManager.GetPagePinned(pageId);
+            return AddPinnedPage(page);
+        }
+
+        public Page NewPage(PageManager pageManager, PageType pageType)
+        {
+            var page = pageManager.NewPagePinned(pageType);
+            return AddPinnedPage(page);
+        }
+
+        private Page AddPinnedPage(Page page)
+        {
+            if (_disposed)
+            {
+                page.Unpin();
+                throw new ObjectDisposedException(nameof(PageLease));
+            }
+
+            if (_pagesById.TryAdd(page.PageID, page))
+            {
+                _pages.Add(page);
+                return page;
+            }
+
+            page.Unpin();
+            return _pagesById[page.PageID];
+        }
+
+        public void ReleasePage(uint pageId)
+        {
+            if (_disposed) return;
+
+            if (_pagesById.Remove(pageId, out var page))
+            {
+                for (int i = _pages.Count - 1; i >= 0; i--)
+                {
+                    if (_pages[i].PageID == pageId)
+                    {
+                        _pages.RemoveAt(i);
+                        break;
+                    }
+                }
+
+                page.Unpin();
+            }
+
+            _previous?.ReleasePage(pageId);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+
+            for (int i = _pages.Count - 1; i >= 0; i--)
+            {
+                _pages[i].Unpin();
+            }
+
+            _currentLease = _previous;
+            _disposed = true;
+        }
+    }
+
     /// <summary>
     /// 创建一个新的 B 树。
     /// </summary>
@@ -116,10 +244,11 @@ public sealed class DiskBTree : IDisposable
     public void Insert(IndexKey key, BsonValue value)
     {
         ThrowIfDisposed();
+        using var lease = BeginPageLease();
         var root = LoadNode(_rootPageId);
         if (root.IsFull((int)_pm.PageSize) || root.KeyCount >= _maxKeys)
         {
-            var newChildPage = _pm.NewPage(PageType.Index);
+            var newChildPage = NewIndexPage();
             var newChild = new DiskBTreeNode(newChildPage, _pm);
             // Ensure garbage from recycled page is cleared
             newChild.Keys.Clear(); newChild.ChildrenIds.Clear(); newChild.Values.Clear();
@@ -131,7 +260,7 @@ public sealed class DiskBTree : IDisposable
             newChild.SetNext(root.NextSiblingId); 
             newChild.Save(_pm);
 
-            root = new DiskBTreeNode(_pm.GetPage(_rootPageId), _pm);
+            root = new DiskBTreeNode(GetPage(_rootPageId), _pm);
             long currentCount = root.TreeEntryCount;
             
             root.InitAsRoot(); 
@@ -235,7 +364,7 @@ public sealed class DiskBTree : IDisposable
 
     private void SplitChild(DiskBTreeNode parent, int index, DiskBTreeNode child)
     {
-        var newNode = new DiskBTreeNode(_pm.NewPage(PageType.Index), _pm);
+        var newNode = new DiskBTreeNode(NewIndexPage(), _pm);
         // Ensure garbage from recycled page is cleared
         newNode.Keys.Clear(); newNode.ChildrenIds.Clear(); newNode.Values.Clear();
 
@@ -303,20 +432,9 @@ public sealed class DiskBTree : IDisposable
     /// <returns>如果找到并删除成功则为 true。</returns>
     public bool Delete(IndexKey key, BsonValue value)
     {
-        var node = FindLeafNode(key);
-
-        while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
-        {
-             var prev = LoadNode(node.PrevSiblingId);
-             if (prev.KeyCount > 0 && prev.Keys[prev.KeyCount - 1].CompareTo(key) == 0)
-             {
-                 node = prev;
-             }
-             else
-             {
-                 break; 
-             }
-        }
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var node = FindFirstCandidateLeafNode(key);
         
         bool deleted = false;
         DiskBTreeNode? deletionNode = null;
@@ -371,20 +489,9 @@ public sealed class DiskBTree : IDisposable
     /// <returns>值列表。</returns>
     public List<BsonValue> Find(IndexKey key)
     {
-        var node = FindLeafNode(key);
-
-        while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
-        {
-             var prev = LoadNode(node.PrevSiblingId);
-             if (prev.KeyCount > 0 && prev.Keys[prev.KeyCount - 1].CompareTo(key) == 0)
-             {
-                 node = prev;
-             }
-             else
-             {
-                 break; 
-             }
-        }
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var node = FindFirstCandidateLeafNode(key);
 
         var res = new List<BsonValue>();
         bool passed = false;
@@ -420,9 +527,12 @@ public sealed class DiskBTree : IDisposable
     /// <returns>值，如果未找到则为 null。</returns>
     public BsonValue? FindExact(IndexKey key)
     {
-        var node = FindLeafNode(key);
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var node = FindFirstCandidateLeafNode(key);
 
         // 查找精确匹配的第一个值
+        bool passed = false;
         for (int i = 0; i < node.KeyCount; i++)
         {
             int cmp = node.Keys[i].CompareTo(key);
@@ -432,9 +542,30 @@ public sealed class DiskBTree : IDisposable
             }
             if (cmp > 0)
             {
+                passed = true;
                 break; // 已经超过目标键，不可能找到了
             }
         }
+        if (passed) return null;
+
+        while (node.NextSiblingId != 0)
+        {
+            node = LoadNode(node.NextSiblingId);
+            for (int i = 0; i < node.KeyCount; i++)
+            {
+                int cmp = node.Keys[i].CompareTo(key);
+                if (cmp == 0)
+                {
+                    return node.Values[i];
+                }
+
+                if (cmp > 0)
+                {
+                    return null;
+                }
+            }
+        }
+
         return null;
     }
     
@@ -448,7 +579,9 @@ public sealed class DiskBTree : IDisposable
     /// <returns>值的集合。</returns>
     public IEnumerable<BsonValue> FindRange(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
     {
-        var node = FindLeafNode(startKey);
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var node = FindFirstCandidateLeafNode(startKey);
 
         while (node != null)
         {
@@ -487,6 +620,8 @@ public sealed class DiskBTree : IDisposable
     /// <returns>值的集合（降序）。</returns>
     public IEnumerable<BsonValue> FindRangeReverse(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
     {
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
         var node = FindLeafNode(endKey);
 
         while (node != null)
@@ -530,25 +665,32 @@ public sealed class DiskBTree : IDisposable
         return node;
     }
 
+    private DiskBTreeNode FindFirstCandidateLeafNode(IndexKey key)
+    {
+        var node = FindLeafNode(key);
+
+        while (node.PrevSiblingId != 0)
+        {
+            var prev = LoadNode(node.PrevSiblingId);
+            if (prev.KeyCount == 0 || prev.Keys[prev.KeyCount - 1].CompareTo(key) < 0)
+            {
+                break;
+            }
+
+            node = prev;
+        }
+
+        return node;
+    }
+
     /// <summary>
     /// 检查树是否包含某个键。
     /// </summary>
     public bool Contains(IndexKey key)
     {
-        var node = FindLeafNode(key);
-
-        while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
-        {
-            var prev = LoadNode(node.PrevSiblingId);
-            if (prev.KeyCount > 0 && prev.Keys[prev.KeyCount - 1].CompareTo(key) == 0)
-            {
-                node = prev;
-            }
-            else
-            {
-                break;
-            }
-        }
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var node = FindFirstCandidateLeafNode(key);
 
         while (node != null)
         {
@@ -571,20 +713,9 @@ public sealed class DiskBTree : IDisposable
     /// </summary>
     public bool Contains(IndexKey key, BsonValue value)
     {
-        var node = FindLeafNode(key);
-
-        while (node.KeyCount > 0 && node.Keys[0].CompareTo(key) == 0 && node.PrevSiblingId != 0)
-        {
-            var prev = LoadNode(node.PrevSiblingId);
-            if (prev.KeyCount > 0 && prev.Keys[prev.KeyCount - 1].CompareTo(key) == 0)
-            {
-                node = prev;
-            }
-            else
-            {
-                break;
-            }
-        }
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var node = FindFirstCandidateLeafNode(key);
 
         while (node != null)
         {
@@ -607,6 +738,8 @@ public sealed class DiskBTree : IDisposable
     /// </summary>
     public IEnumerable<BsonValue> GetAll()
     {
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf) node = LoadNode(node.ChildrenIds[0]); 
         while (node != null)
@@ -622,6 +755,8 @@ public sealed class DiskBTree : IDisposable
     /// </summary>
     public IEnumerable<BsonValue> GetAllReverse()
     {
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf) node = LoadNode(node.ChildrenIds[^1]);
 
@@ -642,9 +777,75 @@ public sealed class DiskBTree : IDisposable
     /// </summary>
     public void Clear()
     {
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
         var root = LoadNode(_rootPageId);
+        var visited = new HashSet<uint>();
+
+        foreach (var childId in root.ChildrenIds.ToArray())
+        {
+            FreeSubtree(childId, visited);
+        }
+
         root.InitAsRoot();
         root.Save(_pm);
+    }
+
+    internal void DropPages()
+    {
+        if (_disposed) return;
+
+        using var lease = BeginPageLease();
+        var visited = new HashSet<uint>();
+        FreeSubtree(_rootPageId, visited);
+        _disposed = true;
+        _lock.Dispose();
+    }
+
+    private void FreeSubtree(uint pageId, HashSet<uint> visited)
+    {
+        if (pageId == 0 || !visited.Add(pageId)) return;
+
+        Page? page = null;
+        DiskBTreeNode? node = null;
+        uint overflowPageId = 0;
+
+        try
+        {
+            page = GetPage(pageId);
+            overflowPageId = page.Header.NextPageID;
+
+            if (page.PageType == PageType.Index && page.Header.ItemCount > 0)
+            {
+                node = LoadNode(pageId);
+            }
+        }
+        catch
+        {
+            // 损坏的索引页仍应释放；具体损坏会在校验或读取路径暴露。
+        }
+
+        if (node != null && !node.IsLeaf)
+        {
+            foreach (var childId in node.ChildrenIds.ToArray())
+            {
+                FreeSubtree(childId, visited);
+            }
+        }
+
+        FreeOverflowChain(overflowPageId, visited);
+        FreePage(pageId);
+    }
+
+    private void FreeOverflowChain(uint pageId, HashSet<uint> visited)
+    {
+        while (pageId != 0 && visited.Add(pageId))
+        {
+            var page = GetPage(pageId);
+            var nextPageId = page.Header.NextPageID;
+            FreePage(pageId);
+            pageId = nextPageId;
+        }
     }
 
     private void Rebalance(DiskBTreeNode node)
@@ -672,7 +873,7 @@ public sealed class DiskBTree : IDisposable
                 
                 node.MarkDirty();
                 node.Save(_pm);
-                _pm.FreePage(child.PageId);
+                FreePage(child.PageId);
             }
             return;
         }
@@ -762,6 +963,8 @@ public sealed class DiskBTree : IDisposable
     {
         try 
         {
+            ThrowIfDisposed();
+            using var lease = BeginPageLease();
             var root = LoadNode(_rootPageId);
             return ValidateNode(root, null, null);
         }
@@ -920,7 +1123,7 @@ public sealed class DiskBTree : IDisposable
         }
         
         left.MarkDirty(); left.Save(_pm);
-        _pm.FreePage(right.PageId);
+        FreePage(right.PageId);
         parent.MarkDirty(); parent.Save(_pm);
     }
 
@@ -928,7 +1131,7 @@ public sealed class DiskBTree : IDisposable
 
     private DiskBTreeNode LoadNode(uint id)
     {
-        var page = _pm.GetPage(id);
+        var page = GetPage(id);
         if (page.CachedParsedData is DiskBTreeNode node)
         {
             return node;
@@ -941,6 +1144,11 @@ public sealed class DiskBTree : IDisposable
     /// <summary>
     /// 释放 B 树。
     /// </summary>
-    public void Dispose() { _disposed = true; }
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _lock.Dispose();
+    }
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(DiskBTree)); }
 }

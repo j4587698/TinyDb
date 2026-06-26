@@ -104,10 +104,11 @@ public sealed class TransactionManager : IDisposable
                 ValidateOperations(transaction);
 
                 // 应用所有更改到数据库
+                using var durabilityScope = _engine.BeginTransactionDurabilityScope(transaction.TransactionId);
                 ApplyOperationsToDatabase(transaction);
 
                 // 关键：在标记为 Committed 之前，确保所有变更已持久化到磁盘/WAL
-                _engine.CommitTransactionDurability();
+                durabilityScope.Commit();
 
                 transaction.State = TransactionState.Committed;
             }
@@ -179,7 +180,7 @@ public sealed class TransactionManager : IDisposable
                 throw new InvalidOperationException("Transaction is not active");
             }
 
-            var savepoint = new TransactionSavepoint(name, transaction.Operations.Count);
+            var savepoint = new TransactionSavepoint(name, transaction.GetOperationsSnapshot().Length);
             transaction.Savepoints[savepoint.SavepointId] = savepoint;
             return savepoint.SavepointId;
         }
@@ -209,7 +210,10 @@ public sealed class TransactionManager : IDisposable
 
             // 事务采用延迟提交模型：保存点回滚只需丢弃保存点之后的挂起操作，
             // 不应对数据库执行补偿写入。
-            transaction.Operations.RemoveRange(savepoint.OperationCount, transaction.Operations.Count - savepoint.OperationCount);
+            lock (transaction.SyncRoot)
+            {
+                transaction.Operations.RemoveRange(savepoint.OperationCount, transaction.Operations.Count - savepoint.OperationCount);
+            }
 
             // 移除后续的保存点
             var savepointsToRemove = transaction.Savepoints
@@ -263,7 +267,10 @@ public sealed class TransactionManager : IDisposable
                 throw new InvalidOperationException("Transaction is not active");
             }
 
-            transaction.Operations.Add(operation);
+            lock (transaction.SyncRoot)
+            {
+                transaction.Operations.Add(operation);
+            }
         }
     }
 
@@ -273,8 +280,10 @@ public sealed class TransactionManager : IDisposable
     /// <param name="transaction">事务</param>
     private void ValidateOperations(Transaction transaction)
     {
+        var operations = transaction.GetOperationsSnapshot();
+
         // 检查重复的文档ID插入（只检查非null ID的重复）
-        var insertOperations = transaction.Operations
+        var insertOperations = operations
             .Where(op => op.OperationType == TransactionOperationType.Insert && op.DocumentId != null)
             .GroupBy(op => new { op.CollectionName, op.DocumentId })
             .Where(group => group.Count() > 1)
@@ -287,12 +296,13 @@ public sealed class TransactionManager : IDisposable
         }
 
         // 检查外键约束
-        ValidateForeignKeys(transaction);
+        ValidateForeignKeys(operations);
+        ValidateWriteConflicts(operations);
     }
 
-    private void ValidateForeignKeys(Transaction transaction)
+    private void ValidateForeignKeys(IReadOnlyList<TransactionOperation> transactionOperations)
     {
-        var operations = transaction.Operations
+        var operations = transactionOperations
             .Where(op => op.OperationType == TransactionOperationType.Insert || op.OperationType == TransactionOperationType.Update)
             .ToList();
 
@@ -331,6 +341,44 @@ public sealed class TransactionManager : IDisposable
                 {
                     // FK field missing, skip validation (nullable FK)
                 }
+            }
+        }
+    }
+
+    private void ValidateWriteConflicts(IReadOnlyList<TransactionOperation> operations)
+    {
+        var checkedDocuments = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var op in operations)
+        {
+            if (op.DocumentId == null || op.DocumentId.IsNull) continue;
+            if (op.OperationType is not (TransactionOperationType.Insert or TransactionOperationType.Update or TransactionOperationType.Delete)) continue;
+
+            var key = $"{op.CollectionName}\0{op.DocumentId}";
+            if (!checkedDocuments.Add(key)) continue;
+
+            var committedDocument = _engine.FindCommittedById(op.CollectionName, op.DocumentId);
+
+            if (op.OperationType == TransactionOperationType.Insert)
+            {
+                // 插入冲突由提交阶段的主键和唯一索引约束兜底。这里提前读取会和事务内可见性路径互相干扰，
+                // 将未提交插入误判为已提交文档。
+                continue;
+            }
+
+            if (op.OriginalDocument == null)
+            {
+                if (committedDocument != null)
+                {
+                    throw new InvalidOperationException($"Write conflict: document '{op.DocumentId}' changed in collection '{op.CollectionName}'.");
+                }
+
+                continue;
+            }
+
+            if (committedDocument == null || !committedDocument.Equals(op.OriginalDocument))
+            {
+                throw new InvalidOperationException($"Write conflict: document '{op.DocumentId}' changed in collection '{op.CollectionName}'.");
             }
         }
     }
@@ -389,11 +437,12 @@ public sealed class TransactionManager : IDisposable
     private void ApplyOperationsToDatabase(Transaction transaction)
     {
         int appliedCount = 0;
+        var operations = transaction.GetOperationsSnapshot();
         try
         {
-            for (int i = 0; i < transaction.Operations.Count; i++)
+            for (int i = 0; i < operations.Length; i++)
             {
-                ApplySingleOperation(transaction.Operations[i]);
+                ApplySingleOperation(operations[i]);
                 appliedCount++;
             }
         }
@@ -405,9 +454,9 @@ public sealed class TransactionManager : IDisposable
             // 先尝试对“失败的那一条”进行补偿，避免残留半应用状态。
             try
             {
-                if (appliedCount >= 0 && appliedCount < transaction.Operations.Count)
+                if (appliedCount >= 0 && appliedCount < operations.Length)
                 {
-                    RollbackSingleOperation(transaction.Operations[appliedCount]);
+                    RollbackSingleOperation(operations[appliedCount]);
                 }
             }
             catch (Exception compensationEx)
@@ -422,7 +471,7 @@ public sealed class TransactionManager : IDisposable
             {
                 try
                 {
-                    RollbackSingleOperation(transaction.Operations[i]);
+                    RollbackSingleOperation(operations[i]);
                 }
                 catch (Exception rollbackEx)
                 {
@@ -521,7 +570,10 @@ public sealed class TransactionManager : IDisposable
     {
         // 事务采用延迟提交模型：显式回滚仅需丢弃挂起操作。
         // 真正的补偿回滚仅在 Commit 过程中部分应用失败时发生（见 ApplyOperationsToDatabase）。
-        transaction.Operations.Clear();
+        lock (transaction.SyncRoot)
+        {
+            transaction.Operations.Clear();
+        }
         transaction.Savepoints.Clear();
     }
 
@@ -615,13 +667,14 @@ public sealed class TransactionManager : IDisposable
         lock (_lock)
         {
             var transactions = _activeTransactions.Values.ToList();
+            var operationCounts = transactions.Select(t => t.GetOperationsSnapshot().Length).ToList();
             return new TransactionManagerStatistics
             {
                 ActiveTransactionCount = transactions.Count,
                 MaxTransactions = MaxTransactions,
                 TransactionTimeout = TransactionTimeout,
-                AverageOperationCount = transactions.Count > 0 ? transactions.Average(t => t.Operations.Count) : 0,
-                TotalOperations = transactions.Sum(t => t.Operations.Count),
+                AverageOperationCount = operationCounts.Count > 0 ? operationCounts.Average() : 0,
+                TotalOperations = operationCounts.Sum(),
                 AverageTransactionAge = transactions.Count > 0 ?
                     transactions.Average(t => (DateTime.UtcNow - t.StartTime).TotalSeconds) : 0,
                 States = transactions.GroupBy(t => t.State).ToDictionary(g => g.Key, g => g.Count())

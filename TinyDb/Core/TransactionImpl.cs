@@ -10,6 +10,7 @@ internal sealed class Transaction : ITransaction
     private readonly TransactionManager _manager;
     private readonly List<TransactionOperation> _operations;
     private readonly Dictionary<Guid, TransactionSavepoint> _savepoints;
+    private readonly object _syncRoot = new();
     private bool _disposed;
 
     /// <summary>
@@ -31,11 +32,20 @@ internal sealed class Transaction : ITransaction
     /// 操作列表
     /// </summary>
     internal List<TransactionOperation> Operations => _operations;
+    internal object SyncRoot => _syncRoot;
 
     /// <summary>
     /// 保存点列表
     /// </summary>
     internal Dictionary<Guid, TransactionSavepoint> Savepoints => _savepoints;
+
+    internal TransactionOperation[] GetOperationsSnapshot()
+    {
+        lock (_syncRoot)
+        {
+            return _operations.ToArray();
+        }
+    }
 
     /// <summary>
     /// 初始化事务
@@ -198,11 +208,24 @@ internal sealed class Transaction : ITransaction
         }
 
         var documentId = newDocument.TryGetValue("_id", out var id) ? id : originalDocument["_id"];
+        var effectiveOriginalDocument = originalDocument;
+        foreach (var existingOperation in GetOperationsSnapshot())
+        {
+            if (existingOperation.CollectionName == collectionName &&
+                existingOperation.DocumentId != null &&
+                existingOperation.DocumentId.Equals(documentId) &&
+                existingOperation.OriginalDocument != null)
+            {
+                effectiveOriginalDocument = existingOperation.OriginalDocument;
+                break;
+            }
+        }
+
         var operation = new TransactionOperation(
             TransactionOperationType.Update,
             collectionName,
             documentId,
-            originalDocument,
+            effectiveOriginalDocument,
             newDocument);
 
         // 通过管理器添加操作，避免重复添加
@@ -327,7 +350,8 @@ internal sealed class Transaction : ITransaction
         ThrowIfDisposed();
 
         var duration = DateTime.UtcNow - StartTime;
-        var operationCounts = _operations.GroupBy(op => op.OperationType)
+        var operations = GetOperationsSnapshot();
+        var operationCounts = operations.GroupBy(op => op.OperationType)
             .ToDictionary(g => g.Key, g => g.Count());
 
         return new TransactionStatistics
@@ -336,10 +360,10 @@ internal sealed class Transaction : ITransaction
             State = State,
             StartTime = StartTime,
             Duration = duration,
-            OperationCount = _operations.Count,
+            OperationCount = operations.Length,
             SavepointCount = _savepoints.Count,
             OperationCounts = operationCounts,
-            IsReadOnly = _operations.Count == 0
+            IsReadOnly = operations.Length == 0
         };
     }
 
@@ -377,7 +401,10 @@ internal sealed class Transaction : ITransaction
                     }
                 }
 
-                _operations.Clear();
+                lock (_syncRoot)
+                {
+                    _operations.Clear();
+                }
                 _savepoints.Clear();
             }
             catch (Exception ex)
@@ -404,7 +431,7 @@ internal sealed class Transaction : ITransaction
     /// </summary>
     public override string ToString()
     {
-        return $"Transaction[{TransactionId:N}]: {State}, {_operations.Count} operations, {_savepoints.Count} savepoints";
+        return $"Transaction[{TransactionId:N}]: {State}, {GetOperationsSnapshot().Length} operations, {_savepoints.Count} savepoints";
     }
 }
 

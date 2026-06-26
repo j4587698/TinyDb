@@ -183,7 +183,7 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task Dispose_Twice_ShouldUnpinAndReturnEarly()
+    public async Task Dispose_Twice_ShouldReturnEarly()
     {
         using var diskStream = new DiskStream(_testFilePath);
         using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
@@ -191,7 +191,7 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
         var page = pm.NewPage(PageType.Index);
         var node = new DiskBTreeNode(page, pm);
 
-        await Assert.That(page.PinCount).IsGreaterThan(0);
+        await Assert.That(page.PinCount).IsEqualTo(0);
 
         node.Dispose();
         node.Dispose();

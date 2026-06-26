@@ -285,6 +285,19 @@ public sealed class BTreeIndex : IDisposable
         }
     }
 
+    internal void DropStorage()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _tree.DropPages();
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
+        }
+    }
+
     public bool Validate() 
     { 
         _lock.EnterReadLock(); 

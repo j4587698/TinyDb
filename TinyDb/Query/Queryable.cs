@@ -682,6 +682,11 @@ internal static class QueryPipeline
     {
         public int Compare(object? x, object? y)
         {
+            return QueryValueComparer.Compare(x, y);
+        }
+
+        private static int CompareLegacy(object? x, object? y)
+        {
             if (ReferenceEquals(x, y)) return 0;
             if (x is null) return -1;
             if (y is null) return 1;

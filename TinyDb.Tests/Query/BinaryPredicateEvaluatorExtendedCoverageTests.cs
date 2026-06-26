@@ -56,8 +56,9 @@ public sealed class BinaryPredicateEvaluatorExtendedCoverageTests
         await Assert.That(boolEq).IsTrue();
         await Assert.That(boolEqResult).IsTrue();
 
-        var boolUnsupported = BinaryPredicateEvaluator.TryEvaluate(boolBytes, 0, BsonType.Boolean, ExpressionType.GreaterThan, true, null, out _);
-        await Assert.That(boolUnsupported).IsFalse();
+        var boolComparison = BinaryPredicateEvaluator.TryEvaluate(boolBytes, 0, BsonType.Boolean, ExpressionType.GreaterThan, true, null, out var boolComparisonResult);
+        await Assert.That(boolComparison).IsTrue();
+        await Assert.That(boolComparisonResult).IsFalse();
 
         var sourceText = "hello";
         var sourceUtf8 = Encoding.UTF8.GetBytes(sourceText);
@@ -98,11 +99,13 @@ public sealed class BinaryPredicateEvaluatorExtendedCoverageTests
         var intBytes = new byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(intBytes, 10);
 
-        var badTarget = BinaryPredicateEvaluator.TryEvaluate(intBytes, 0, BsonType.Int32, ExpressionType.Equal, "not-an-int", null, out _);
-        await Assert.That(badTarget).IsFalse();
+        var badTarget = BinaryPredicateEvaluator.TryEvaluate(intBytes, 0, BsonType.Int32, ExpressionType.Equal, "not-an-int", null, out var badTargetResult);
+        await Assert.That(badTarget).IsTrue();
+        await Assert.That(badTargetResult).IsFalse();
 
-        var dtBadTarget = BinaryPredicateEvaluator.TryEvaluate(new byte[8], 0, BsonType.DateTime, ExpressionType.Equal, new object(), null, out _);
-        await Assert.That(dtBadTarget).IsFalse();
+        var dtBadTarget = BinaryPredicateEvaluator.TryEvaluate(new byte[8], 0, BsonType.DateTime, ExpressionType.Equal, new object(), null, out var dtBadTargetResult);
+        await Assert.That(dtBadTarget).IsTrue();
+        await Assert.That(dtBadTargetResult).IsFalse();
 
         var oidBadTarget = BinaryPredicateEvaluator.TryEvaluate(new byte[12], 0, BsonType.ObjectId, ExpressionType.Equal, new byte[3], null, out _);
         await Assert.That(oidBadTarget).IsFalse();
@@ -162,17 +165,21 @@ public sealed class BinaryPredicateEvaluatorExtendedCoverageTests
         await Assert.That(nullUnsupported).IsTrue();
         await Assert.That(nullUnsupportedResult).IsFalse();
 
-        var badInt64Convert = BinaryPredicateEvaluator.TryEvaluate(int64Bytes, 0, BsonType.Int64, ExpressionType.Equal, new object(), null, out _);
-        await Assert.That(badInt64Convert).IsFalse();
+        var badInt64Convert = BinaryPredicateEvaluator.TryEvaluate(int64Bytes, 0, BsonType.Int64, ExpressionType.Equal, new object(), null, out var badInt64ConvertResult);
+        await Assert.That(badInt64Convert).IsTrue();
+        await Assert.That(badInt64ConvertResult).IsFalse();
 
-        var badDoubleConvert = BinaryPredicateEvaluator.TryEvaluate(BitConverter.GetBytes(1.25d), 0, BsonType.Double, ExpressionType.Equal, new object(), null, out _);
-        await Assert.That(badDoubleConvert).IsFalse();
+        var badDoubleConvert = BinaryPredicateEvaluator.TryEvaluate(BitConverter.GetBytes(1.25d), 0, BsonType.Double, ExpressionType.Equal, new object(), null, out var badDoubleConvertResult);
+        await Assert.That(badDoubleConvert).IsTrue();
+        await Assert.That(badDoubleConvertResult).IsFalse();
 
-        var badDecimalConvert = BinaryPredicateEvaluator.TryEvaluate(new byte[16], 0, BsonType.Decimal128, ExpressionType.Equal, new object(), null, out _);
-        await Assert.That(badDecimalConvert).IsFalse();
+        var badDecimalConvert = BinaryPredicateEvaluator.TryEvaluate(new byte[16], 0, BsonType.Decimal128, ExpressionType.Equal, new object(), null, out var badDecimalConvertResult);
+        await Assert.That(badDecimalConvert).IsTrue();
+        await Assert.That(badDecimalConvertResult).IsFalse();
 
-        var badBoolConvert = BinaryPredicateEvaluator.TryEvaluate(new byte[] { 1 }, 0, BsonType.Boolean, ExpressionType.Equal, new object(), null, out _);
-        await Assert.That(badBoolConvert).IsFalse();
+        var badBoolConvert = BinaryPredicateEvaluator.TryEvaluate(new byte[] { 1 }, 0, BsonType.Boolean, ExpressionType.Equal, new object(), null, out var badBoolConvertResult);
+        await Assert.That(badBoolConvert).IsTrue();
+        await Assert.That(badBoolConvertResult).IsFalse();
 
         var dateFromString = BinaryPredicateEvaluator.TryEvaluate(new byte[8], 0, BsonType.DateTime, ExpressionType.Equal, "2020-01-01T00:00:00Z", null, out _);
         await Assert.That(dateFromString).IsTrue();

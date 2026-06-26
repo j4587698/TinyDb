@@ -28,53 +28,47 @@ public static class BinaryPredicateEvaluator
             switch (type)
             {
                 case BsonType.Int32:
-                    if (!TryConvertInt32(targetValue, out var iTarget)) return false;
-                    if (offset < 0 || offset + 4 > data.Length) return false;
+                    if (!CanRead(data, offset, 4)) return false;
                     int iValue = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset, 4));
-                    result = Compare(iValue, iTarget, op);
+                    result = Compare(iValue, targetValue, op);
                     return true;
                  
                 case BsonType.Int64:
-                    if (!TryConvertInt64(targetValue, out var lTarget)) return false;
-                    if (offset < 0 || offset + 8 > data.Length) return false;
+                    if (!CanRead(data, offset, 8)) return false;
                     long lValue = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset, 8));
-                    result = Compare(lValue, lTarget, op);
+                    result = Compare(lValue, targetValue, op);
                     return true;
 
                 case BsonType.Timestamp:
-                    if (!TryConvertInt64(targetValue, out var tsTarget)) return false;
-                    if (offset < 0 || offset + 8 > data.Length) return false;
+                    if (!CanRead(data, offset, 8)) return false;
                     long tsValue = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset, 8));
-                    result = Compare(tsValue, tsTarget, op);
+                    result = Compare(tsValue, targetValue, op);
                     return true;
 
                 case BsonType.Double:
-                    if (!TryConvertDouble(targetValue, out var dTarget)) return false;
-                    if (offset < 0 || offset + 8 > data.Length) return false;
+                    if (!CanRead(data, offset, 8)) return false;
                     double dValue = BitConverter.ToDouble(data.Slice(offset, 8));
-                    result = Compare(dValue, dTarget, op);
+                    result = Compare(dValue, targetValue, op);
                     return true;
 
                 case BsonType.DateTime:
-                    if (!TryConvertDateTime(targetValue, out var dtTarget)) return false;
-                    if (offset < 0 || offset + 8 > data.Length) return false;
+                    if (!CanRead(data, offset, 8)) return false;
                     long ms = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset, 8));
                     var dtValue = UnixEpochUtc.AddMilliseconds(ms);
-                    result = Compare(dtValue, dtTarget, op);
+                    result = Compare(dtValue, targetValue, op);
                     return true;
 
                 case BsonType.Decimal128:
-                    if (!TryConvertDecimal(targetValue, out var decTarget)) return false;
-                    if (offset < 0 || offset + 16 > data.Length) return false;
+                    if (!CanRead(data, offset, 16)) return false;
                     var lo = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset, 8));
                     var hi = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset + 8, 8));
                     var dec128 = new Decimal128(lo, hi);
-                    result = Compare(dec128.ToDecimal(), decTarget, op);
+                    result = Compare(dec128.ToDecimal(), targetValue, op);
                     return true;
 
                 case BsonType.ObjectId:
                     if (!TryConvertObjectId(targetValue, out var oidTarget)) return false;
-                    if (offset < 0 || offset + 12 > data.Length) return false;
+                    if (!CanRead(data, offset, 12)) return false;
                     int cmp = CompareBytes(data.Slice(offset, 12), oidTarget.ToByteArray());
                     result = cmp switch
                     {
@@ -89,19 +83,17 @@ public static class BinaryPredicateEvaluator
                     return true;
 
                 case BsonType.Boolean:
-                    if (!TryConvertBoolean(targetValue, out var bTarget)) return false;
-                    if (offset < 0 || offset + 1 > data.Length) return false;
+                    if (!CanRead(data, offset, 1)) return false;
                     bool bValue = data[offset] != 0;
-                    if (op == ExpressionType.Equal) { result = bValue == bTarget; return true; }
-                    if (op == ExpressionType.NotEqual) { result = bValue != bTarget; return true; }
-                    return false;
+                    result = Compare(bValue, targetValue, op);
+                    return true;
 
                 case BsonType.String:
                     if (op != ExpressionType.Equal && op != ExpressionType.NotEqual) return false;
                     if (targetValue == null) return false;
-                    if (offset < 0 || offset + 4 > data.Length) return false;
+                    if (!CanRead(data, offset, 4)) return false;
                     int len = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset, 4));
-                    if (len <= 0 || offset + 4 + len > data.Length) return false;
+                    if (len <= 0 || !CanRead(data, offset + 4, len)) return false;
 
                     // 直接比较 UTF8 字节，避免中间 string 分配
                     var targetBytes = targetStringUtf8Bytes
@@ -137,19 +129,17 @@ public static class BinaryPredicateEvaluator
         return TryEvaluate(data, offset, type, op, targetValue, null, out var result) && result;
     }
 
-    private static bool Compare<T>(T left, T right, ExpressionType op) where T : IComparable<T>
+    private static bool Compare(object? left, object? right, ExpressionType op)
     {
-        int res = left.CompareTo(right);
-        return op switch
-        {
-            ExpressionType.Equal => res == 0,
-            ExpressionType.NotEqual => res != 0,
-            ExpressionType.GreaterThan => res > 0,
-            ExpressionType.GreaterThanOrEqual => res >= 0,
-            ExpressionType.LessThan => res < 0,
-            ExpressionType.LessThanOrEqual => res <= 0,
-            _ => false
-        };
+        return QueryValueComparer.EvaluateComparison(left, right, op);
+    }
+
+    private static bool CanRead(ReadOnlySpan<byte> data, int offset, int count)
+    {
+        return offset >= 0 &&
+               offset <= data.Length &&
+               count >= 0 &&
+               (uint)count <= (uint)(data.Length - offset);
     }
 
     private static bool EvaluateNullComparison(ExpressionType op, object? targetValue)

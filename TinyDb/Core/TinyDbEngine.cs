@@ -140,7 +140,10 @@ public sealed class TinyDbEngine : IDisposable
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log);
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log);
         
-        _pageManager.RegisterWAL(page => _writeAheadLog.AppendPage(page), lsn => _writeAheadLog.FlushToLSN(lsn));
+        _pageManager.RegisterWAL(
+            (page, beforeImage) => _writeAheadLog.AppendPage(page, beforeImage),
+            lsn => _writeAheadLog.FlushToLSN(lsn),
+            () => _writeAheadLog.RequiresBeforeImage);
         _pageManager.RegisterWAL((lsn, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ct));
 
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), _log);
@@ -305,7 +308,7 @@ public sealed class TinyDbEngine : IDisposable
                             }
 
                             _pageManager.RestorePage(id, data);
-                        });
+                        }, (id, data) => _pageManager.RestorePage(id, data));
                     }
                 }
 
@@ -455,6 +458,11 @@ public sealed class TinyDbEngine : IDisposable
         // 强制刷新 WAL 缓冲区到磁盘。
         // 对于最高安全级别 (WriteConcern.Journaled)，这将等待磁盘确认。
         _writeAheadLog.FlushLog();
+    }
+
+    internal WriteAheadLog.WalTransactionScope BeginTransactionDurabilityScope(Guid transactionId)
+    {
+        return _writeAheadLog.BeginTransaction(transactionId);
     }
 
     internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;
@@ -1431,6 +1439,7 @@ public sealed class TinyDbEngine : IDisposable
 
                 if (exceptions.Count > 0)
                 {
+                    RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 
@@ -1585,6 +1594,7 @@ public sealed class TinyDbEngine : IDisposable
 
                 if (exceptions.Count > 0)
                 {
+                    RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
             }
@@ -1647,6 +1657,11 @@ public sealed class TinyDbEngine : IDisposable
             return transactionDocument;
         }
 
+        return FindCommittedById(col, id);
+    }
+
+    internal BsonDocument? FindCommittedById(string col, BsonValue id)
+    {
         var st = GetCollectionState(col);
         lock (st.PageState.SyncRoot)
         {
@@ -1899,7 +1914,18 @@ public sealed class TinyDbEngine : IDisposable
 
                 _dataPageAccess.PersistPage(p!);
 
-                if (u) idx.InsertDocument(doc, id);
+                if (u)
+                {
+                    try
+                    {
+                        idx.InsertDocument(doc, id);
+                    }
+                    catch
+                    {
+                        DeleteDocument(col, id);
+                        throw;
+                    }
+                }
                 return id;
             }
             finally
@@ -1917,6 +1943,7 @@ public sealed class TinyDbEngine : IDisposable
     {
         PageDocumentEntry old;
         var updatedDocument = doc;
+        uint newLargeDocumentPageId = 0;
 
         lock (st.PageState.SyncRoot)
         {
@@ -1928,6 +1955,7 @@ public sealed class TinyDbEngine : IDisposable
             if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
             {
                 var largeDocumentPageId = _largeDocumentStorage.StoreLargeDocument(bs, col);
+                newLargeDocumentPageId = largeDocumentPageId;
                 updatedDocument = CreateLargeDocumentIndexDocument(id, col, largeDocumentPageId, bs.Length);
                 bs = BsonSerializer.SerializeDocument(updatedDocument);
             }
@@ -1949,12 +1977,63 @@ public sealed class TinyDbEngine : IDisposable
             {
                 _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
             }
-
-            if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
         }
 
-        idxMgr.UpdateDocument(old.Document, updatedDocument, id);
+        try
+        {
+            idxMgr.UpdateDocument(old.Document, updatedDocument, id);
+        }
+        catch
+        {
+            RestoreDocumentDataWithoutIndexUpdate(col, st, id, old);
+            if (newLargeDocumentPageId != 0)
+            {
+                DeleteLargeDocumentOrThrow(newLargeDocumentPageId);
+            }
+            throw;
+        }
+
+        if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
         return true;
+    }
+
+    private void RestoreDocumentDataWithoutIndexUpdate(string col, CollectionState st, BsonValue id, PageDocumentEntry oldEntry)
+    {
+        lock (st.PageState.SyncRoot)
+        {
+            if (TryResolveDocumentLocation(col, st, id, out var currentPage, out var currentEntries, out var currentIndex) &&
+                currentIndex < currentEntries.Count)
+            {
+                currentEntries.RemoveAt(currentIndex);
+                st.Index.Remove(id);
+
+                if (currentEntries.Count == 0)
+                {
+                    st.OwnedPages.TryRemove(currentPage.PageID, out _);
+                    if (st.PageState.PageId == currentPage.PageID) st.PageState.PageId = 0;
+                    _pageManager.FreePage(currentPage.PageID);
+                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, currentPage, currentEntries, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+            }
+
+            var requiredSize = DataPageAccess.GetEntrySize(oldEntry.RawBytes.Length);
+            var (page, isNewPage) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, requiredSize);
+            st.OwnedPages.TryAdd(page.PageID, 0);
+
+            if (isNewPage)
+            {
+                lock (_lock) { _header.UsedPages++; WriteHeader(); }
+            }
+
+            var entryIndex = page.Header.ItemCount;
+            _dataPageAccess.AppendDocumentToPage(page, oldEntry.RawBytes);
+            st.Index.Set(id, new DocumentLocation(page.PageID, entryIndex));
+            _dataPageAccess.PersistPage(page);
+        }
     }
 
     private static BsonDocument PrepareDocumentForUpdate(string col, BsonDocument doc, out BsonValue id)
@@ -1975,6 +2054,21 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         return doc;
+    }
+
+    private void RollbackInsertedDocuments(string collectionName, IEnumerable<BsonValue> documentIds, List<Exception> exceptions)
+    {
+        foreach (var id in documentIds.Where(id => id != null && !id.IsNull).Distinct().Reverse().ToArray())
+        {
+            try
+            {
+                DeleteDocument(collectionName, id);
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(new InvalidOperationException($"Failed to rollback inserted document '{id}' in collection '{collectionName}'.", ex));
+            }
+        }
     }
 
     private BsonDocument PrepareDocumentForInsert(string col, BsonDocument doc, out BsonValue id)
@@ -2090,10 +2184,15 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
-    private void EnsureWriteDurability() { _flushScheduler.EnsureDurability(_options.WriteConcern); }
+    private void EnsureWriteDurability()
+    {
+        if (_writeAheadLog.IsInTransactionScope) return;
+        _flushScheduler.EnsureDurability(_options.WriteConcern);
+    }
 
     private Task EnsureWriteDurabilityAsync(CancellationToken cancellationToken = default) 
     { 
+        if (_writeAheadLog.IsInTransactionScope) return Task.CompletedTask;
         return _flushScheduler.EnsureDurabilityAsync(_options.WriteConcern, cancellationToken); 
     }
 
@@ -2109,7 +2208,7 @@ public sealed class TinyDbEngine : IDisposable
             }
         }
 
-        foreach (var op in tx.Operations.Where(o => o.CollectionName == col))
+        foreach (var op in tx.GetOperationsSnapshot().Where(o => o.CollectionName == col))
         {
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
 
@@ -2129,11 +2228,12 @@ public sealed class TinyDbEngine : IDisposable
     private static bool TryGetTransactionDocument(Transaction tx, string collectionName, BsonValue id, out BsonDocument? document)
     {
         document = null;
-        if (tx.Operations.Count == 0) return false;
+        var operations = tx.GetOperationsSnapshot();
+        if (operations.Length == 0) return false;
 
-        for (int i = tx.Operations.Count - 1; i >= 0; i--)
+        for (int i = operations.Length - 1; i >= 0; i--)
         {
-            var op = tx.Operations[i];
+            var op = operations[i];
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
             if (!op.DocumentId.Equals(id)) continue;

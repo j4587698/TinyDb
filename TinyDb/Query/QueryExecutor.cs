@@ -27,6 +27,16 @@ public sealed class QueryExecutor
         _queryOptimizer = new QueryOptimizer(engine);
     }
 
+    private sealed class BsonValueSortComparer : IComparer<BsonValue>
+    {
+        public static readonly BsonValueSortComparer Instance = new();
+
+        public int Compare(BsonValue? x, BsonValue? y)
+        {
+            return QueryValueComparer.Compare(x, y);
+        }
+    }
+
     public IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
         where T : class, new()
     {
@@ -60,6 +70,10 @@ public sealed class QueryExecutor
         if (shape.Sort.Count == 0)
         {
             var result = Execute<T>(collectionName, shape.Predicate);
+            if (skip > 0 || take.HasValue)
+            {
+                result = result.OrderBy(static item => AotIdAccessor<T>.GetId(item), BsonValueSortComparer.Instance);
+            }
 
             bool skipPushed = false;
             bool takePushed = false;
@@ -344,7 +358,7 @@ public sealed class QueryExecutor
             if (tx != null)
             {
                 txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
-                foreach (var op in tx.Operations)
+                foreach (var op in tx.GetOperationsSnapshot())
                 {
                     if (op.CollectionName != collectionName) continue;
                     var key = op.DocumentId?.ToString() ?? string.Empty;
@@ -561,7 +575,7 @@ public sealed class QueryExecutor
         }
 
         var txOverlay = new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
-        foreach (var op in tx.Operations)
+        foreach (var op in tx.GetOperationsSnapshot())
         {
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
@@ -765,7 +779,7 @@ public sealed class QueryExecutor
             if (tx != null)
             {
                 txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
-                foreach (var op in tx.Operations)
+                foreach (var op in tx.GetOperationsSnapshot())
                 {
                     if (op.CollectionName != collectionName) continue;
                     var key = op.DocumentId?.ToString() ?? "";
@@ -907,7 +921,14 @@ public sealed class QueryExecutor
                     return;
                 }
 
-                var row = new TopKRow(idValue, keys, seq, transactionDocument: null);
+                var rowDocument = doc;
+                if (rowDocument == null)
+                {
+                    rowDocument = DeserializeDocumentOrThrow(slice);
+                    rowDocument = _engine.ResolveLargeDocument(rowDocument);
+                }
+
+                var row = new TopKRow(idValue, keys, seq, rowDocument);
                 ConsiderRow(row);
             }
 
@@ -1473,11 +1494,12 @@ public sealed class QueryExecutor
     private static bool TryGetTransactionDocument(Transaction tx, string collectionName, BsonValue id, out BsonDocument? document)
     {
         document = null;
-        if (tx.Operations.Count == 0) return false;
+        var operations = tx.GetOperationsSnapshot();
+        if (operations.Length == 0) return false;
 
-        for (int i = tx.Operations.Count - 1; i >= 0; i--)
+        for (int i = operations.Length - 1; i >= 0; i--)
         {
-            var op = tx.Operations[i];
+            var op = operations[i];
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
             if (!op.DocumentId.Equals(id)) continue;
@@ -1505,7 +1527,7 @@ public sealed class QueryExecutor
     {
         Dictionary<BsonValue, BsonDocument?>? overlay = null;
 
-        foreach (var op in tx.Operations)
+        foreach (var op in tx.GetOperationsSnapshot())
         {
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
