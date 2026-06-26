@@ -53,6 +53,27 @@ public class DocumentCollectionTests : IDisposable
     }
 
     [Test]
+    public async Task Upsert_Batch_Should_Insert_And_Update()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+        collection.Insert(new DocumentCollectionItem { Id = 1, Name = "Old" });
+
+        var items = new[]
+        {
+            new DocumentCollectionItem { Id = 1, Name = "Updated" },
+            new DocumentCollectionItem { Id = 2, Name = "New2" },
+            new DocumentCollectionItem { Id = 3, Name = "New3" }
+        };
+
+        var result = collection.Upsert(items);
+
+        await Assert.That(result.InsertedCount).IsEqualTo(2);
+        await Assert.That(result.UpdatedCount).IsEqualTo(1);
+        await Assert.That(collection.Count()).IsEqualTo(3);
+        await Assert.That(collection.FindById(1)!.Name).IsEqualTo("Updated");
+    }
+
+    [Test]
     public async Task DeleteMany_Should_Delete_Matching_Documents()
     {
         var collection = _engine.GetCollection<DocumentCollectionItem>();
@@ -95,6 +116,31 @@ public class DocumentCollectionTests : IDisposable
         await Assert.That(updated).IsEqualTo(2);
 
         await Assert.That(collection.FindById(1)!.Name).IsEqualTo("1_U");
+    }
+
+    [Test]
+    public async Task Update_Batch_Should_Skip_Missing_Documents()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+        collection.Insert(new[]
+        {
+            new DocumentCollectionItem { Id = 1, Name = "1" },
+            new DocumentCollectionItem { Id = 2, Name = "2" }
+        });
+
+        var items = new[]
+        {
+            new DocumentCollectionItem { Id = 1, Name = "1_U" },
+            new DocumentCollectionItem { Id = 2, Name = "2_U" },
+            new DocumentCollectionItem { Id = 3, Name = "3_U" }
+        };
+
+        var updated = collection.Update(items);
+
+        await Assert.That(updated).IsEqualTo(2);
+        await Assert.That(collection.Count()).IsEqualTo(2);
+        await Assert.That(collection.FindById(1)!.Name).IsEqualTo("1_U");
+        await Assert.That(collection.FindById(3)).IsNull();
     }
 
     [Test]

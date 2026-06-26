@@ -354,6 +354,29 @@ public class AsyncCollectionTests : IDisposable
         await Assert.That(collection.FindAll().All(e => e.Name.EndsWith("_Updated"))).IsTrue();
     }
 
+    [Test]
+    public async Task UpdateAsync_Multiple_Should_Skip_Missing_Documents()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var existing = new[]
+        {
+            new AsyncTestEntity { Name = "One" },
+            new AsyncTestEntity { Name = "Two" }
+        };
+        collection.Insert(existing);
+
+        existing[0].Name = "One_Updated";
+        existing[1].Name = "Two_Updated";
+        var missing = new AsyncTestEntity { Name = "Missing" };
+
+        var count = await collection.UpdateAsync(new[] { existing[0], existing[1], missing });
+
+        await Assert.That(count).IsEqualTo(2);
+        await Assert.That(collection.Count()).IsEqualTo(2);
+        await Assert.That(collection.FindById(existing[0].Id)!.Name).IsEqualTo("One_Updated");
+        await Assert.That(collection.FindById(missing.Id)).IsNull();
+    }
+
     // 注意：UpdateAsync_Without_Valid_Id_Should_Throw 测试已被移除
     // 因为在 TUnit SourceGenerated 模式下，对于测试项目中定义的实体类，
     // AOT 适配器可能无法正确生成，导致回退到反射路径时行为不一致。
@@ -549,6 +572,25 @@ public class AsyncCollectionTests : IDisposable
         
         var loaded = collection.FindById(entity.Id);
         await Assert.That(loaded!.Name).IsEqualTo("Updated");
+    }
+
+    [Test]
+    public async Task UpsertAsync_Multiple_Should_Insert_And_Update()
+    {
+        var collection = _engine.GetCollection<AsyncTestEntity>();
+        var existing = new AsyncTestEntity { Name = "Original" };
+        collection.Insert(existing);
+
+        existing.Name = "Updated";
+        var newEntity = new AsyncTestEntity { Name = "New" };
+
+        var result = await collection.UpsertAsync(new[] { existing, newEntity });
+
+        await Assert.That(result.InsertedCount).IsEqualTo(1);
+        await Assert.That(result.UpdatedCount).IsEqualTo(1);
+        await Assert.That(collection.Count()).IsEqualTo(2);
+        await Assert.That(collection.FindById(existing.Id)!.Name).IsEqualTo("Updated");
+        await Assert.That(collection.FindById(newEntity.Id)).IsNotNull();
     }
 
     #endregion
