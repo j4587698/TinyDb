@@ -52,7 +52,7 @@ public class DatabaseSecurityTests : IDisposable
         using var engine = new TinyDbEngine(_testDbPath);
         DatabaseSecurity.CreateSecureDatabase(engine, "password123");
 
-        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, "newpass"))
+        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, "newpass123"))
             .Throws<DatabaseAlreadyProtectedException>();
     }
 
@@ -62,7 +62,7 @@ public class DatabaseSecurityTests : IDisposable
         using var engine = new TinyDbEngine(_testDbPath);
         DatabaseSecurity.CreateSecureDatabase(engine, "password123");
 
-        var result = DatabaseSecurity.ChangePassword(engine, "wrong", "newpass");
+        var result = DatabaseSecurity.ChangePassword(engine, "wrong", "newpass123");
         await Assert.That(result).IsFalse();
     }
 

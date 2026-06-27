@@ -23,10 +23,7 @@ public sealed class BsonDouble : BsonValue
 
     public override int CompareTo(BsonValue? other)
     {
-        if (other is null) return 1;
-        if (other is BsonDouble otherDouble) return Value.CompareTo(otherDouble.Value);
-        if (other.IsNumeric) return Value.CompareTo(other.ToDouble(CultureInfo.InvariantCulture));
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public override bool Equals(BsonValue? other)

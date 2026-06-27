@@ -552,11 +552,7 @@ internal static class QueryPipeline
             decimal sum = 0;
             foreach (var item in _elements)
             {
-                var value = selector(item);
-                if (value != null)
-                {
-                    sum += Convert.ToDecimal(value);
-                }
+                sum = AddAggregateValue(sum, selector(item));
             }
             return sum;
         }
@@ -574,7 +570,7 @@ internal static class QueryPipeline
             {
                 var value = selector(item);
                 if (value == null) continue;
-                if (min == null || Comparer<object>.Default.Compare(value, min) < 0)
+                if (min == null || QueryValueComparer.Compare(value, min) < 0)
                     min = value;
             }
             return min;
@@ -587,10 +583,35 @@ internal static class QueryPipeline
             {
                 var value = selector(item);
                 if (value == null) continue;
-                if (max == null || Comparer<object>.Default.Compare(value, max) > 0)
+                if (max == null || QueryValueComparer.Compare(value, max) > 0)
                     max = value;
             }
             return max;
+        }
+    }
+
+    private readonly struct GroupKey : IEquatable<GroupKey>
+    {
+        public GroupKey(object value)
+        {
+            Value = value;
+        }
+
+        public object Value { get; }
+
+        public bool Equals(GroupKey other)
+        {
+            return QueryValueComparer.Compare(Value, other.Value) == 0;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is GroupKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return QueryValueComparer.GetHashCode(Value);
         }
     }
 
@@ -601,12 +622,12 @@ internal static class QueryPipeline
         var parser = new ExpressionParser();
         var keyExpr = parser.ParseExpression(lambda.Body);
 
-        var groups = new Dictionary<object, List<object>>();
+        var groups = new Dictionary<GroupKey, List<object>>();
 
         foreach (var item in source)
         {
             if (item == null) continue;
-            var key = ExpressionEvaluator.EvaluateValue<T>(keyExpr, item) ?? "";
+            var key = new GroupKey(ExpressionEvaluator.EvaluateValue<T>(keyExpr, item) ?? "");
 
             if (!groups.TryGetValue(key, out var list))
             {
@@ -618,7 +639,7 @@ internal static class QueryPipeline
 
         foreach (var kvp in groups)
         {
-            yield return new AotGrouping(kvp.Key, kvp.Value);
+            yield return new AotGrouping(kvp.Key.Value, kvp.Value);
         }
     }
 
@@ -628,12 +649,12 @@ internal static class QueryPipeline
         var parser = new ExpressionParser();
         var keyExpr = parser.ParseExpression(lambda.Body);
 
-        var groups = new Dictionary<object, List<object>>();
+        var groups = new Dictionary<GroupKey, List<object>>();
 
         foreach (var item in source)
         {
             if (item == null) continue;
-            var key = ExpressionEvaluator.EvaluateValue(keyExpr, item) ?? "";
+            var key = new GroupKey(ExpressionEvaluator.EvaluateValue(keyExpr, item) ?? "");
 
             if (!groups.TryGetValue(key, out var list))
             {
@@ -645,7 +666,7 @@ internal static class QueryPipeline
 
         foreach (var kvp in groups)
         {
-            yield return new AotGrouping(kvp.Key, kvp.Value);
+            yield return new AotGrouping(kvp.Key.Value, kvp.Value);
         }
     }
 
@@ -670,12 +691,69 @@ internal static class QueryPipeline
 
         return m.Method.Name switch
         {
-            "Sum" => items.Sum(x => Convert.ToDecimal(selector(x))),
-            "Average" => items.Count > 0 ? items.Average(x => Convert.ToDecimal(selector(x))) : 0m,
-            "Min" => items.Count > 0 ? items.Min(selector) : null,
-            "Max" => items.Count > 0 ? items.Max(selector) : null,
+            "Sum" => Sum(items, selector),
+            "Average" => Average(items, selector),
+            "Min" => Min(items, selector),
+            "Max" => Max(items, selector),
             _ => throw new NotSupportedException($"Aggregation {m.Method.Name} is not supported")
         };
+    }
+
+    private static decimal Sum(IEnumerable<object> items, Func<object, object> selector)
+    {
+        decimal sum = 0;
+        foreach (var item in items)
+        {
+            sum = AddAggregateValue(sum, selector(item));
+        }
+
+        return sum;
+    }
+
+    private static decimal Average(IReadOnlyCollection<object> items, Func<object, object> selector)
+    {
+        if (items.Count == 0) return 0m;
+        return Sum(items, selector) / items.Count;
+    }
+
+    private static object? Min(IEnumerable<object> items, Func<object, object> selector)
+    {
+        object? min = null;
+        foreach (var item in items)
+        {
+            var value = selector(item);
+            if (value == null) continue;
+            if (min == null || QueryValueComparer.Compare(value, min) < 0) min = value;
+        }
+
+        return min;
+    }
+
+    private static object? Max(IEnumerable<object> items, Func<object, object> selector)
+    {
+        object? max = null;
+        foreach (var item in items)
+        {
+            var value = selector(item);
+            if (value == null) continue;
+            if (max == null || QueryValueComparer.Compare(value, max) > 0) max = value;
+        }
+
+        return max;
+    }
+
+    private static decimal AddAggregateValue(decimal current, object? value)
+    {
+        if (value == null) return current;
+
+        try
+        {
+            return checked(current + Convert.ToDecimal(value));
+        }
+        catch (Exception ex) when (ex is OverflowException or InvalidCastException or FormatException)
+        {
+            throw new InvalidOperationException("Numeric aggregate could not be evaluated without overflow or conversion loss.", ex);
+        }
     }
 
     private sealed class ObjectComparer : IComparer<object>

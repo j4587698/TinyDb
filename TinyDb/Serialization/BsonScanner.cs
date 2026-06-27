@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.IO;
 using System.Text;
 using TinyDb.Bson;
 
@@ -7,6 +8,8 @@ namespace TinyDb.Serialization;
 
 public static class BsonScanner
 {
+    private const int MaxBsonValueLength = 64 * 1024 * 1024;
+
     /// <summary>
     /// 在原始 BSON 中定位字段。使用 UTF8 字节直接比较，零分配。
     /// </summary>
@@ -74,8 +77,16 @@ public static class BsonScanner
 
             if (string.Equals(currentName, fieldName, StringComparison.OrdinalIgnoreCase))
             {
-                value = ReadValue(type, document, ref offset);
-                return true;
+                try
+                {
+                    value = ReadValue(type, document, ref offset);
+                    return true;
+                }
+                catch (Exception ex) when (IsMalformedBsonException(ex))
+                {
+                    value = null;
+                    return false;
+                }
             }
             else
             {
@@ -95,32 +106,45 @@ public static class BsonScanner
         switch (type)
         {
             case BsonType.Double:
+                EnsureAvailable(data, offset, 8);
                 var d = BitConverter.ToDouble(data.Slice(offset, 8));
                 offset += 8;
                 return new BsonDouble(d);
             case BsonType.String:
-                int len = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
+                if (!TryReadInt32(data, offset, out int len) ||
+                    len < 1 ||
+                    len > MaxBsonValueLength ||
+                    !HasAvailable(data, offset + 4, len))
+                {
+                    throw new InvalidDataException($"Invalid BSON string length at offset {offset}.");
+                }
+
                 var s = Encoding.UTF8.GetString(data.Slice(offset + 4, len - 1));
                 offset += 4 + len;
                 return new BsonString(s);
             case BsonType.Int32:
+                EnsureAvailable(data, offset, 4);
                 var i = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset));
                 offset += 4;
                 return new BsonInt32(i);
             case BsonType.Int64:
+                EnsureAvailable(data, offset, 8);
                 var l = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset));
                 offset += 8;
                 return new BsonInt64(l);
             case BsonType.Boolean:
+                EnsureAvailable(data, offset, 1);
                 var b = data[offset] != 0;
                 offset += 1;
                 return new BsonBoolean(b);
             case BsonType.DateTime:
+                EnsureAvailable(data, offset, 8);
                 var ms = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset));
                 offset += 8;
                 var dt = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(ms);
                 return new BsonDateTime(dt);
             case BsonType.Decimal128:
+                EnsureAvailable(data, offset, 16);
                 var lo = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset));
                 var hi = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset + 8));
                 offset += 16;
@@ -128,9 +152,23 @@ public static class BsonScanner
             case BsonType.Null:
                 return BsonNull.Value;
             case BsonType.ObjectId:
+                EnsureAvailable(data, offset, 12);
                 var oidBytes = data.Slice(offset, 12);
                 offset += 12;
                 return new BsonObjectId(new ObjectId(oidBytes));
+            case BsonType.Binary:
+                if (!TryReadInt32(data, offset, out int binLen) ||
+                    binLen < 0 ||
+                    binLen > MaxBsonValueLength ||
+                    !HasAvailable(data, offset + 4, 1 + binLen))
+                {
+                    throw new InvalidDataException($"Invalid BSON binary length at offset {offset}.");
+                }
+
+                var subType = data[offset + 4];
+                var binary = data.Slice(offset + 5, binLen).ToArray();
+                offset += 5 + binLen;
+                return new BsonBinary(binary, (BsonBinary.BinarySubType)subType);
             default:
                 // Fallback for complex types or others
                 int start = offset;
@@ -139,10 +177,8 @@ public static class BsonScanner
                     if (!IsKnownType(type)) throw new NotSupportedException($"Unknown BSON type {type} at offset {offset}");
                     return BsonNull.Value;
                 }
-                var valueData = data.Slice(start, offset - start).ToArray();
                 return type switch
                 {
-                    BsonType.Binary => new BsonBinary(valueData.Skip(5).ToArray(), (BsonBinary.BinarySubType)valueData[4]),
                     _ => BsonNull.Value
                 };
         }
@@ -158,17 +194,17 @@ public static class BsonScanner
             case BsonType.String:
             case BsonType.JavaScript:
             case BsonType.Symbol:
-                if (!TryReadInt32(data, offset, out int len) || len < 0) return false;
+                if (!TryReadInt32(data, offset, out int len) || len < 1 || len > MaxBsonValueLength) return false;
                 return TryAdvance(data.Length, ref offset, 4 + len);
 
             case BsonType.Document:
             case BsonType.Array:
             case BsonType.JavaScriptWithScope:
-                if (!TryReadInt32(data, offset, out int size) || size < 0) return false;
+                if (!TryReadInt32(data, offset, out int size) || size < 5 || size > MaxBsonValueLength) return false;
                 return TryAdvance(data.Length, ref offset, size);
 
             case BsonType.Binary:
-                if (!TryReadInt32(data, offset, out int binLen) || binLen < 0) return false;
+                if (!TryReadInt32(data, offset, out int binLen) || binLen < 0 || binLen > MaxBsonValueLength) return false;
                 return TryAdvance(data.Length, ref offset, 4 + 1 + binLen);
 
             case BsonType.ObjectId:
@@ -215,9 +251,34 @@ public static class BsonScanner
     private static bool TryReadInt32(ReadOnlySpan<byte> data, int offset, out int value)
     {
         value = default;
-        if (offset < 0 || offset + 4 > data.Length) return false;
+        if (offset < 0 || offset > data.Length - 4) return false;
         value = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset, 4));
         return true;
+    }
+
+    private static bool HasAvailable(ReadOnlySpan<byte> data, int offset, int count)
+    {
+        return offset >= 0 &&
+               count >= 0 &&
+               offset <= data.Length &&
+               count <= data.Length - offset;
+    }
+
+    private static void EnsureAvailable(ReadOnlySpan<byte> data, int offset, int count)
+    {
+        if (!HasAvailable(data, offset, count))
+        {
+            throw new EndOfStreamException();
+        }
+    }
+
+    private static bool IsMalformedBsonException(Exception ex)
+    {
+        return ex is InvalidDataException ||
+               ex is EndOfStreamException ||
+               ex is ArgumentException ||
+               ex is ArgumentOutOfRangeException ||
+               ex is OverflowException;
     }
 
     private static bool TrySkipCString(ReadOnlySpan<byte> data, ref int offset)

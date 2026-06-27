@@ -57,13 +57,13 @@ public class PasswordManagerTests : IDisposable
     [Test]
     public async Task ChangePassword_Should_Work()
     {
-        PasswordManager.CreateSecureDatabase(_testDbPath, "oldpass").Dispose();
+        PasswordManager.CreateSecureDatabase(_testDbPath, "oldpass123").Dispose();
         
-        var changed = PasswordManager.ChangePassword(_testDbPath, "oldpass", "newpass");
+        var changed = PasswordManager.ChangePassword(_testDbPath, "oldpass123", "newpass123");
         await Assert.That(changed).IsTrue();
         
-        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "newpass")).IsTrue();
-        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "oldpass")).IsFalse();
+        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "newpass123")).IsTrue();
+        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "oldpass123")).IsFalse();
     }
 
     [Test]

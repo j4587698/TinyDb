@@ -63,52 +63,12 @@ public sealed class BsonDecimal128 : BsonValue, IComparable<BsonDecimal128>, IEq
     public int CompareTo(BsonDecimal128? other)
     {
         if (other == null) return 1;
-        return Value.CompareTo(other.Value);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public override int CompareTo(BsonValue? other)
     {
-        if (other == null) return 1;
-        if (other is BsonDecimal128 otherDec) return CompareTo(otherDec);
-
-        if (!TryGetComparableDecimal(out var thisValue))
-        {
-            return BsonType.CompareTo(other.BsonType);
-        }
-
-        if (other is BsonInt32 i32) return thisValue.CompareTo((decimal)i32.Value);
-        if (other is BsonInt64 i64) return thisValue.CompareTo((decimal)i64.Value);
-        if (other is BsonDouble dbl)
-        {
-            if (double.IsNaN(dbl.Value) || double.IsInfinity(dbl.Value))
-            {
-                return BsonType.CompareTo(other.BsonType);
-            }
-
-            if (dbl.Value < (double)decimal.MinValue || dbl.Value > (double)decimal.MaxValue)
-            {
-                return BsonType.CompareTo(other.BsonType);
-            }
-
-            return thisValue.CompareTo((decimal)dbl.Value);
-        }
-
-        return BsonType.CompareTo(other.BsonType);
-    }
-
-    private bool TryGetComparableDecimal(out decimal value)
-    {
-        try
-        {
-            value = Value.ToDecimal();
-            return true;
-        }
-        catch (OverflowException)
-        {
-        }
-
-        value = default;
-        return false;
+        return BsonValueComparer.Compare(this, other);
     }
 
     public bool Equals(BsonDecimal128? other)

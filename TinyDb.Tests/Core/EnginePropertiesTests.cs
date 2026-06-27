@@ -26,7 +26,7 @@ public class EnginePropertiesTests : IDisposable
     {
         await Assert.That(_engine.FilePath).IsEqualTo(Path.GetFullPath(_testDbPath));
         await Assert.That(_engine.IsInitialized).IsTrue();
-        await Assert.That(_engine.GetWalEnabled()).IsFalse();
+        await Assert.That(_engine.GetWalEnabled()).IsTrue();
         await Assert.That(_engine.CollectionCount).IsEqualTo(0);
         await Assert.That(_engine.Options).IsNotNull();
         

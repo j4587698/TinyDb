@@ -13,6 +13,7 @@ public sealed class PageManager : IDisposable
     private readonly uint _pageSize;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
     private readonly object _allocationLock = new(); // 用于分配新页面的锁
+    private readonly object _freeListLock = new();
     private readonly object[] _pageLocks; // 分段锁，用于页面级别的同步
     private readonly LRUCache<uint, Page> _lruCache;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
@@ -169,7 +170,8 @@ public sealed class PageManager : IDisposable
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to scan free page {i}.", ex);
+                // Corrupted pages are not safe to add to the free list during recovery scanning.
+                _log(TinyDbLogLevel.Warning, $"Skipping page {i} while rebuilding the free list.", ex);
             }
         }
     }
@@ -259,6 +261,7 @@ public sealed class PageManager : IDisposable
             }
 
             var page = new Page(pageID, pageData);
+            ValidateLoadedPage(page, pageData, pageOffset);
 
             // 如果是空页面，初始化为 Empty 类型
             if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
@@ -277,6 +280,19 @@ public sealed class PageManager : IDisposable
         catch (Exception ex)
         {
             throw new InvalidDataException($"Failed to load page {pageID} at offset {pageOffset}.", ex);
+        }
+    }
+
+    private static void ValidateLoadedPage(Page page, byte[] pageData, long pageOffset)
+    {
+        if (!page.Header.IsValid())
+        {
+            throw new InvalidDataException($"Invalid page header for page {page.PageID} at offset {pageOffset}.");
+        }
+
+        if (!page.Header.VerifyChecksum(pageData))
+        {
+            throw new InvalidDataException($"Page checksum verification failed for page {page.PageID} at offset {pageOffset}.");
         }
     }
 
@@ -314,6 +330,7 @@ public sealed class PageManager : IDisposable
             }
 
             var page = new Page(pageID, pageData);
+            ValidateLoadedPage(page, pageData, pageOffset);
             page.Pin();
 
             if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
@@ -370,6 +387,7 @@ public sealed class PageManager : IDisposable
             }
 
             var page = new Page(pageID, pageData);
+            ValidateLoadedPage(page, pageData, pageOffset);
 
             // 如果是空页面，初始化为 Empty 类型
             if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
@@ -410,29 +428,32 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_allocationLock)
+        lock (_freeListLock)
         {
-            uint pageID;
-
-            // 尝试从空闲页面链表获取
-            if (_firstFreePageID != 0)
+            lock (_allocationLock)
             {
-                pageID = _firstFreePageID;
-                // 读取该页面以获取下一个空闲页面ID
-                var freePage = GetPage(pageID);
-                _firstFreePageID = freePage.Header.NextPageID;
-                
-                // 重置页面状态
-                freePage.ClearData();
-                freePage.UpdatePageType(pageType);
-                freePage.SetLinks(0, 0); 
-                
-                return freePage;
-            }
+                uint pageID;
 
-            // 分配新页面
-            pageID = ++_nextPageID;
-            return CreateNewPage(pageID, pageType);
+                // 尝试从空闲页面链表获取
+                if (_firstFreePageID != 0)
+                {
+                    pageID = _firstFreePageID;
+                    // 读取该页面以获取下一个空闲页面ID
+                    var freePage = GetPage(pageID);
+                    _firstFreePageID = freePage.Header.NextPageID;
+
+                    // 重置页面状态
+                    freePage.ClearData();
+                    freePage.UpdatePageType(pageType);
+                    freePage.SetLinks(0, 0);
+
+                    return freePage;
+                }
+
+                // 分配新页面
+                pageID = ++_nextPageID;
+                return CreateNewPage(pageID, pageType);
+            }
         }
     }
 
@@ -440,25 +461,28 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_allocationLock)
+        lock (_freeListLock)
         {
-            uint pageID;
-
-            if (_firstFreePageID != 0)
+            lock (_allocationLock)
             {
-                pageID = _firstFreePageID;
-                var freePage = GetPagePinned(pageID);
-                _firstFreePageID = freePage.Header.NextPageID;
+                uint pageID;
 
-                freePage.ClearData();
-                freePage.UpdatePageType(pageType);
-                freePage.SetLinks(0, 0);
+                if (_firstFreePageID != 0)
+                {
+                    pageID = _firstFreePageID;
+                    var freePage = GetPagePinned(pageID);
+                    _firstFreePageID = freePage.Header.NextPageID;
 
-                return freePage;
+                    freePage.ClearData();
+                    freePage.UpdatePageType(pageType);
+                    freePage.SetLinks(0, 0);
+
+                    return freePage;
+                }
+
+                pageID = ++_nextPageID;
+                return CreateNewPage(pageID, pageType, pinned: true);
             }
-
-            pageID = ++_nextPageID;
-            return CreateNewPage(pageID, pageType, pinned: true);
         }
     }
 
@@ -552,6 +576,21 @@ public sealed class PageManager : IDisposable
         return Task.CompletedTask;
     }
 
+    private void WritePageToDisk(Page page, bool forceFlush)
+    {
+        page.UpdateChecksum();
+
+        var pageOffset = CalculatePageOffset(page.PageID);
+        _diskStream.WritePage(pageOffset, page.Buffer);
+
+        if (forceFlush)
+        {
+            _diskStream.Flush();
+        }
+
+        page.MarkClean();
+    }
+
     private byte[]? ReadPageSnapshotForWal(uint pageID)
     {
         var pageOffset = CalculatePageOffset(pageID);
@@ -572,37 +611,37 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
-        while (true)
-        {
-            Page page;
-            uint nextFreePageID;
+        Page page;
+        byte[]? beforeImage = null;
 
+        lock (_freeListLock)
+        {
             lock (_allocationLock)
             {
                 page = GetPage(pageID);
-                nextFreePageID = _firstFreePageID;
+                if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
+                {
+                    beforeImage = ReadPageSnapshotForWal(pageID);
+                }
+
+                page.ClearData();
+                page.UpdatePageType(PageType.Empty);
+                page.SetLinks(0, _firstFreePageID);
+                page.Header.ItemCount = 0;
+                page.Header.FreeBytes = (ushort)(page.DataSize);
             }
 
-            page.ClearData();
-            page.UpdatePageType(PageType.Empty);
-            page.SetLinks(0, nextFreePageID);
-            page.Header.ItemCount = 0;
-            page.Header.FreeBytes = (ushort)(page.DataSize);
-
-            SavePage(page, forceFlush: false);
+            _appendLogPage?.Invoke(page, beforeImage);
+            if (_flushLogToLsn != null && page.Header.LSN >= 0)
+            {
+                _flushLogToLsn(page.Header.LSN);
+            }
 
             lock (_allocationLock)
             {
-                if (_firstFreePageID != nextFreePageID)
-                {
-                    continue;
-                }
-
+                WritePageToDisk(page, forceFlush: false);
                 _firstFreePageID = pageID;
-
                 RemoveFromCache(pageID);
-
-                return;
             }
         }
     }
@@ -677,6 +716,10 @@ public sealed class PageManager : IDisposable
             {
                 throw new ArgumentException($"Page data length must be less or equal to {(int)_pageSize} bytes", nameof(pageData));
             }
+
+            var restoredPage = new Page(pageID, buffer);
+            restoredPage.UpdateChecksum();
+            buffer = restoredPage.Buffer;
 
             var pageOffset = CalculatePageOffset(pageID);
             _diskStream.WritePage(pageOffset, buffer);

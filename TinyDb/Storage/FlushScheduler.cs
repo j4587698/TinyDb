@@ -17,7 +17,8 @@ public sealed class FlushScheduler : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Task? _backgroundTask;
     private readonly object _flushLock = new();
-    private bool _disposed;
+    private int _disposed;
+    private Exception? _backgroundFailure;
     
     private TaskCompletionSource _journalBatchTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _journalRequests = 0;
@@ -71,13 +72,17 @@ public sealed class FlushScheduler : IDisposable
             }
             catch (Exception ex)
             {
+                RecordBackgroundFailure(ex);
                 Log(TinyDbLogLevel.Warning, "Background flush loop failed.", ex);
+                break;
             }
         }
     }
 
     public async Task EnsureDurabilityAsync(WriteConcern concern, CancellationToken cancellationToken = default)
     {
+        ThrowIfBackgroundFailed();
+
         switch (concern)
         {
             case WriteConcern.None:
@@ -95,6 +100,8 @@ public sealed class FlushScheduler : IDisposable
 
     public void EnsureDurability(WriteConcern concern)
     {
+        ThrowIfBackgroundFailed();
+
         switch (concern)
         {
             case WriteConcern.None:
@@ -112,11 +119,13 @@ public sealed class FlushScheduler : IDisposable
 
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfBackgroundFailed();
         return _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken);
     }
 
     public void Flush()
     {
+        ThrowIfBackgroundFailed();
         _wal.Synchronize(() => _pageManager.FlushDirtyPages());
     }
 
@@ -136,10 +145,12 @@ public sealed class FlushScheduler : IDisposable
 
         lock (_flushLock)
         {
-            if (_disposed)
+            if (Volatile.Read(ref _disposed) != 0)
             {
                 throw new ObjectDisposedException(nameof(FlushScheduler));
             }
+
+            ThrowIfBackgroundFailed();
 
             if (_journalBatchTcs.Task.IsCompleted)
             {
@@ -221,6 +232,7 @@ public sealed class FlushScheduler : IDisposable
             }
             catch (Exception ex)
             {
+                RecordBackgroundFailure(ex);
                 tcsToComplete.TrySetException(ex);
             }
         }
@@ -228,20 +240,21 @@ public sealed class FlushScheduler : IDisposable
 
     public async Task FlushPendingAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfBackgroundFailed();
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken).ConfigureAwait(false);
     }
 
     public void FlushPending()
     {
+        ThrowIfBackgroundFailed();
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         _wal.Synchronize(() => _pageManager.FlushDirtyPages());
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
 
         Exception? journalWaitException = null;
@@ -286,6 +299,20 @@ public sealed class FlushScheduler : IDisposable
             if (backgroundWaitException != null) exceptions.Add(backgroundWaitException);
             if (flushException != null) exceptions.Add(flushException);
             throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+        }
+    }
+
+    private void RecordBackgroundFailure(Exception exception)
+    {
+        Interlocked.CompareExchange(ref _backgroundFailure, exception, null);
+    }
+
+    private void ThrowIfBackgroundFailed()
+    {
+        var failure = Volatile.Read(ref _backgroundFailure);
+        if (failure != null)
+        {
+            throw new InvalidOperationException("A background flush operation failed.", failure);
         }
     }
 }

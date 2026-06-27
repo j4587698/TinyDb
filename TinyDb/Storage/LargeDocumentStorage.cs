@@ -21,6 +21,7 @@ public class LargeDocumentStorage
 
     private const int DataPageHeaderSize =
         sizeof(int) + sizeof(uint);
+    private const int MaxLargeDocumentBytes = 256 * 1024 * 1024;
 
     /// <summary>
     /// 初始化大文档存储管理器。
@@ -87,6 +88,9 @@ public class LargeDocumentStorage
     public uint StoreLargeDocument(ReadOnlySpan<byte> documentBytes, string collectionName)
     {
         var totalLength = documentBytes.Length;
+        if (totalLength > MaxLargeDocumentBytes)
+            throw new InvalidOperationException($"Large document size exceeds {MaxLargeDocumentBytes} bytes.");
+
         var requiredPages = CalculateRequiredPages(totalLength);
 
         var indexPage = _pageManager.NewPage(PageType.LargeDocumentIndex);
@@ -116,6 +120,7 @@ public class LargeDocumentStorage
             throw new InvalidOperationException($"Page {indexPageId} is not a large document index page");
 
         var header = ReadIndexPageHeader(indexPage);
+        ValidateIndexHeader(header, indexPageId);
         var result = new byte[header.TotalLength];
         var offset = 0;
 
@@ -124,6 +129,8 @@ public class LargeDocumentStorage
         for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
         {
             var dataPage = _pageManager.GetPage(currentPageId);
+            if (dataPage.PageType != PageType.LargeDocumentData)
+                throw new InvalidOperationException($"Page {currentPageId} is not a large document data page");
             var dataHeader = ReadDataPageHeader(dataPage);
 
             if (dataHeader.PageNumber != i)
@@ -141,6 +148,9 @@ public class LargeDocumentStorage
             visitedPages++;
         }
 
+        if (offset != header.TotalLength || visitedPages != header.PageCount)
+            throw new InvalidOperationException($"Large document chain is incomplete for index page {indexPageId}.");
+
         return result;
     }
 
@@ -151,8 +161,10 @@ public class LargeDocumentStorage
             throw new InvalidOperationException($"Page {indexPageId} is not a large document index page");
 
         var header = ReadIndexPageHeader(indexPage);
+        ValidateIndexHeader(header, indexPageId);
         var result = new byte[header.TotalLength];
         var offset = 0;
+        var visitedPages = 0;
 
         var currentPageId = header.FirstDataPageId;
         for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
@@ -160,6 +172,8 @@ public class LargeDocumentStorage
             cancellationToken.ThrowIfCancellationRequested();
 
             var dataPage = await _pageManager.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (dataPage.PageType != PageType.LargeDocumentData)
+                throw new InvalidOperationException($"Page {currentPageId} is not a large document data page");
             var dataHeader = ReadDataPageHeader(dataPage);
 
             if (dataHeader.PageNumber != i)
@@ -172,7 +186,11 @@ public class LargeDocumentStorage
             offset += dataToRead;
 
             currentPageId = dataHeader.NextPageId;
+            visitedPages++;
         }
+
+        if (offset != header.TotalLength || visitedPages != header.PageCount)
+            throw new InvalidOperationException($"Large document chain is incomplete for index page {indexPageId}.");
 
         return result;
     }
@@ -192,21 +210,32 @@ public class LargeDocumentStorage
             }
 
             var header = ReadIndexPageHeader(indexPage);
+            ValidateIndexHeader(header, indexPageId);
             var currentPageId = header.FirstDataPageId;
             var dataPageIds = new List<uint>(header.PageCount);
             for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
             {
                 var dataPage = _pageManager.GetPage(currentPageId);
+                if (dataPage.PageType != PageType.LargeDocumentData)
+                    throw new InvalidOperationException($"Page {currentPageId} is not a large document data page.");
+
+                var dataHeader = ReadDataPageHeader(dataPage);
+                if (dataHeader.PageNumber != i)
+                    throw new InvalidOperationException("Data page number mismatch.");
+
                 dataPageIds.Add(dataPage.PageID);
-                currentPageId = ReadDataPageHeader(dataPage).NextPageId;
+                currentPageId = dataHeader.NextPageId;
             }
 
-            _pageManager.FreePage(indexPageId);
+            if (dataPageIds.Count != header.PageCount || currentPageId != 0)
+                throw new InvalidOperationException($"Large document chain is incomplete for index page {indexPageId}.");
 
             foreach (var dataPageId in dataPageIds)
             {
                 _pageManager.FreePage(dataPageId);
             }
+
+            _pageManager.FreePage(indexPageId);
         }
         catch (Exception ex)
         {
@@ -315,7 +344,34 @@ public class LargeDocumentStorage
 
     private int CalculateRequiredPages(int documentSize)
     {
-        return (documentSize + _dataPayloadSize - 1) / _dataPayloadSize;
+        if (documentSize < 0) throw new ArgumentOutOfRangeException(nameof(documentSize));
+        if (documentSize == 0) return 0;
+
+        long requiredPages = ((long)documentSize + _dataPayloadSize - 1) / _dataPayloadSize;
+        if (requiredPages > int.MaxValue)
+            throw new InvalidOperationException("Large document requires too many pages.");
+
+        return (int)requiredPages;
+    }
+
+    private void ValidateIndexHeader(LargeDocumentIndexHeader header, uint indexPageId)
+    {
+        if (header.DocumentIdentifier != -1)
+            throw new InvalidOperationException($"Invalid large document marker on index page {indexPageId}.");
+        if (header.TotalLength < 0 || header.TotalLength > MaxLargeDocumentBytes)
+            throw new InvalidOperationException($"Invalid large document length {header.TotalLength} on index page {indexPageId}.");
+        if (header.PageCount < 0)
+            throw new InvalidOperationException($"Invalid large document page count {header.PageCount} on index page {indexPageId}.");
+
+        var expectedPages = CalculateRequiredPages(header.TotalLength);
+        if (header.PageCount != expectedPages)
+            throw new InvalidOperationException($"Large document page count mismatch on index page {indexPageId}.");
+        if (header.PageCount > 0 && header.FirstDataPageId == 0)
+            throw new InvalidOperationException($"Large document data chain is missing on index page {indexPageId}.");
+        if (header.PageCount == 0 && header.FirstDataPageId != 0)
+            throw new InvalidOperationException($"Empty large document cannot reference data pages on index page {indexPageId}.");
+        if ((uint)header.PageCount > _pageManager.TotalPages)
+            throw new InvalidOperationException($"Large document page count exceeds database page count on index page {indexPageId}.");
     }
 
     private void WriteIndexPageHeader(Page page, int totalLength, int pageCount, uint firstDataPageId)

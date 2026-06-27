@@ -70,12 +70,16 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     {
         value = default;
 
-        if (_cacheMap.TryGetValue(key, out var node))
+        lock (_lruList)
         {
-            value = node.Value.Value;
-            TouchInternal(key);
-            Interlocked.Increment(ref _hits);
-            return true;
+            if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
+            {
+                value = node.Value.Value;
+                _lruList.Remove(node);
+                _lruList.AddFirst(node);
+                Interlocked.Increment(ref _hits);
+                return true;
+            }
         }
 
         Interlocked.Increment(ref _misses);
@@ -167,9 +171,13 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <param name="key">键</param>
     public void Touch(TKey key)
     {
-        if (_cacheMap.ContainsKey(key))
+        lock (_lruList)
         {
-            TouchInternal(key);
+            if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
+            {
+                _lruList.Remove(node);
+                _lruList.AddFirst(node);
+            }
         }
     }
 
@@ -302,7 +310,7 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     {
         lock (_lruList)
         {
-            if (_cacheMap.TryGetValue(key, out var node))
+            if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
             {
                 _lruList.Remove(node);
                 _lruList.AddFirst(node);

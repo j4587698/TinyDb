@@ -5,6 +5,7 @@ using TinyDb.Index;
 using TinyDb.Query;
 using TinyDb.Serialization;
 using TinyDb.Storage;
+using TinyDb.Security;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using ExpressionType = System.Linq.Expressions.ExpressionType;
@@ -49,10 +50,207 @@ public sealed class ReviewReportRegressionTests : IDisposable
     public async Task BsonSpanReader_ShouldRejectOverflowingLengths()
     {
         var hugeStringLength = new byte[] { 0x7F, 0xFF, 0xFF, 0x7F };
-        await Assert.That(() => new BsonSpanReader(hugeStringLength).ReadString()).Throws<EndOfStreamException>();
+        await Assert.That(() => new BsonSpanReader(hugeStringLength).ReadString()).Throws<InvalidOperationException>();
 
         var negativeBinaryLength = new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
         await Assert.That(() => new BsonSpanReader(negativeBinaryLength).ReadBinary()).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task AutoIncrementInt64Ids_ShouldPersistHighWatermarkAcrossReopen()
+    {
+        var path = Path.Combine(_directory, "identity-persist.db");
+
+        using (var engine = new TinyDbEngine(path))
+        {
+            var collection = engine.GetCollection<AutoIdentityDocument>();
+            var first = new AutoIdentityDocument { Name = "first" };
+            var second = new AutoIdentityDocument { Name = "second" };
+
+            collection.Insert(first);
+            collection.Insert(second);
+            collection.Delete(second.Id);
+
+            await Assert.That(first.Id).IsEqualTo(1);
+            await Assert.That(second.Id).IsEqualTo(2);
+        }
+
+        using (var reopened = new TinyDbEngine(path))
+        {
+            var collection = reopened.GetCollection<AutoIdentityDocument>();
+            var third = new AutoIdentityDocument { Name = "third" };
+
+            collection.Insert(third);
+
+            await Assert.That(third.Id).IsEqualTo(3);
+        }
+    }
+
+    [Test]
+    public async Task BsonComparer_ShouldUseOrdinalStringsAndPreciseNumericComparison()
+    {
+        var upper = new BsonString("Z");
+        var lower = new BsonString("a");
+
+        await Assert.That(Math.Sign(upper.CompareTo(lower)))
+            .IsEqualTo(Math.Sign(new IndexKey(upper).CompareTo(new IndexKey(lower))));
+
+        var preciseLong = new BsonInt64(9_007_199_254_740_993L);
+        var roundedDouble = new BsonDouble(9_007_199_254_740_992d);
+
+        await Assert.That(preciseLong.CompareTo(roundedDouble)).IsGreaterThan(0);
+        await Assert.That(roundedDouble.CompareTo(preciseLong)).IsLessThan(0);
+    }
+
+    [Test]
+    public async Task BsonAndQueryComparers_ShouldUseSameStableNumericOrdering()
+    {
+        await Assert.That(new IndexKey(new BsonInt32(1)).CompareTo(new IndexKey(new BsonInt64(1))))
+            .IsEqualTo(0);
+        await Assert.That(new IndexKey(new BsonInt32(1)).Equals(new IndexKey(new BsonInt64(1))))
+            .IsTrue();
+        await Assert.That(new IndexKey(new BsonInt32(1)).GetHashCode())
+            .IsEqualTo(new IndexKey(new BsonInt64(1)).GetHashCode());
+        await Assert.That(QueryValueComparer.Compare(new BsonInt32(1), new BsonInt64(1)))
+            .IsEqualTo(0);
+        await Assert.That(QueryValueComparer.GetHashCode(1))
+            .IsEqualTo(QueryValueComparer.GetHashCode(1L));
+
+        object?[] values =
+        [
+            double.PositiveInfinity,
+            decimal.MaxValue,
+            1L,
+            1,
+            double.NaN,
+            "x",
+            null
+        ];
+
+        var sorted = values.OrderBy(v => v, Comparer<object?>.Create(QueryValueComparer.Compare)).ToArray();
+        await Assert.That(sorted.Length).IsEqualTo(values.Length);
+    }
+
+    [Test]
+    public async Task DiskBTree_DeleteAndContains_ShouldUseComparerConsistentNumericValueEquality()
+    {
+        var path = Path.Combine(_directory, "btree-numeric-value-equality.db");
+        using var disk = new DiskStream(path);
+        using var pageManager = new PageManager(disk, 4096, 8);
+        using var tree = DiskBTree.Create(pageManager, maxKeys: 3);
+
+        var insertedKey = new IndexKey(new BsonInt32(5));
+        var lookupKey = new IndexKey(new BsonInt64(5));
+
+        tree.Insert(insertedKey, new BsonInt32(42));
+
+        await Assert.That(tree.Contains(lookupKey, new BsonInt64(42))).IsTrue();
+        await Assert.That(tree.Delete(lookupKey, new BsonInt64(42))).IsTrue();
+        await Assert.That(tree.Contains(insertedKey, new BsonInt32(42))).IsFalse();
+    }
+
+    [Test]
+    public async Task BsonReader_ShouldRejectJavaScriptWithScopeSizeMismatch()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BsonWriter(stream, leaveOpen: true))
+        {
+            writer.WriteJavaScriptWithScope("code", new BsonDocument().Set("v", 1));
+        }
+
+        var data = stream.ToArray();
+        var totalSize = BitConverter.ToInt32(data, 0);
+        BitConverter.GetBytes(totalSize + 1).CopyTo(data, 0);
+
+        using var reader = new BsonReader(new MemoryStream(data));
+        await Assert.That(() => reader.ReadValue(BsonType.JavaScriptWithScope))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task BsonScanner_ShouldReturnFalseForMalformedMatchedValue()
+    {
+        var malformed = new byte[]
+        {
+            12, 0, 0, 0,
+            (byte)BsonType.String,
+            (byte)'x', 0,
+            0, 0, 0, 0,
+            0
+        };
+
+        await Assert.That(BsonScanner.TryGetValue(malformed, "x", out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task ExpressionEvaluator_ShouldRejectExcessiveExpressionDepth()
+    {
+        QueryExpression expression = new ConstantExpression(true);
+        for (var i = 0; i < 300; i++)
+        {
+            expression = new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(true), expression);
+        }
+
+        await Assert.That(() => ExpressionEvaluator.Evaluate(expression, new BsonDocument()))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task TinyDbOptions_ShouldRejectUnsupportedEncryptionMode()
+    {
+        var options = new TinyDbOptions
+        {
+            EnableEncryption = true,
+            EncryptionKey = new byte[32]
+        };
+
+        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+    }
+
+    [Test]
+    public async Task SecurityMetadataTamper_ShouldFailHeaderChecksum()
+    {
+        var path = Path.Combine(_directory, "security-tamper.db");
+
+        using (var engine = PasswordManager.CreateSecureDatabase(path, "pass1234"))
+        {
+            engine.GetCollection<AutoIdentityDocument>().Insert(new AutoIdentityDocument { Name = "secure" });
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        var markerOffset = IndexOf(bytes.AsSpan(0, DatabaseHeader.Size), new byte[] { (byte)'S', (byte)'E', (byte)'C', (byte)'1' });
+        await Assert.That(markerOffset).IsGreaterThanOrEqualTo(0);
+
+        bytes[markerOffset] = 0;
+        File.WriteAllBytes(path, bytes);
+
+        await Assert.That(() => new TinyDbEngine(path)).Throws<InvalidDataException>();
+    }
+
+    [Test]
+    public async Task PageChecksumCorruption_ShouldFailOnRead()
+    {
+        var path = Path.Combine(_directory, "page-checksum.db");
+        uint pageId;
+
+        using (var disk = new DiskStream(path))
+        using (var pageManager = new PageManager(disk, TinyDbOptions.DefaultPageSize))
+        {
+            var page = pageManager.NewPage(PageType.Data);
+            pageId = page.PageID;
+            page.WriteData(0, new byte[] { 1, 2, 3, 4 });
+            pageManager.SavePage(page, forceFlush: true);
+        }
+
+        var bytes = File.ReadAllBytes(path);
+        var corruptionOffset = 80;
+        await Assert.That(bytes.Length).IsGreaterThan(corruptionOffset);
+        bytes[corruptionOffset] ^= 0x5A;
+        File.WriteAllBytes(path, bytes);
+
+        using var reopenedDisk = new DiskStream(path);
+        using var reopenedPageManager = new PageManager(reopenedDisk, TinyDbOptions.DefaultPageSize);
+        await Assert.That(() => reopenedPageManager.GetPage(pageId)).Throws<InvalidDataException>();
     }
 
     [Test]
@@ -157,6 +355,48 @@ public sealed class ReviewReportRegressionTests : IDisposable
         {
             await Assert.That(tree.FindExact(new IndexKey(new BsonInt32(i)))).IsEqualTo(new BsonInt32(i));
         }
+    }
+
+    [Test]
+    public async Task FreePage_WalAfterImage_ShouldMatchDiskFreeListLink()
+    {
+        var path = Path.Combine(_directory, "freepage-wal-link.db");
+
+        using var disk = new DiskStream(path);
+        using var pageManager = new PageManager(disk, 4096, 8);
+
+        var page = pageManager.NewPage(PageType.Data);
+        var existingFreeHead = pageManager.NewPage(PageType.Data);
+        var competingPage = pageManager.NewPage(PageType.Data);
+
+        pageManager.SavePage(page);
+        pageManager.SavePage(existingFreeHead);
+        pageManager.SavePage(competingPage);
+        pageManager.FreePage(existingFreeHead.PageID);
+
+        Task? competingFree = null;
+        uint walNextPageId = uint.MaxValue;
+
+        pageManager.RegisterWAL(
+            (walPage, _) =>
+            {
+                if (walPage.PageID != page.PageID || competingFree != null) return;
+
+                competingFree = Task.Run(() => pageManager.FreePage(competingPage.PageID));
+                Thread.Sleep(100);
+                walNextPageId = walPage.Header.NextPageID;
+            },
+            _ => { });
+
+        pageManager.FreePage(page.PageID);
+
+        if (competingFree != null)
+        {
+            await competingFree.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        var reloaded = pageManager.GetPage(page.PageID, useCache: false);
+        await Assert.That(reloaded.Header.NextPageID).IsEqualTo(walNextPageId);
     }
 
     [Test]
@@ -316,6 +556,19 @@ public sealed class ReviewReportRegressionTests : IDisposable
         return new TinyDbEngine(Path.Combine(_directory, fileName));
     }
 
+    private static int IndexOf(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)
+    {
+        for (int i = 0; i <= haystack.Length - needle.Length; i++)
+        {
+            if (haystack.Slice(i, needle.Length).SequenceEqual(needle))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private static bool UpdateInTransaction(TinyDbEngine engine, int value, Barrier ready)
     {
         var collection = engine.GetCollection<TransactionDocument>();
@@ -337,6 +590,13 @@ public sealed class ReviewReportRegressionTests : IDisposable
             return false;
         }
     }
+}
+
+[Entity("AutoIdentityDocuments")]
+public sealed class AutoIdentityDocument
+{
+    public long Id { get; set; }
+    public string Name { get; set; } = string.Empty;
 }
 
 [Entity("QueryObjectValueDocuments")]

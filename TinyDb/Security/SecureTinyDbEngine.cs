@@ -9,6 +9,7 @@ namespace TinyDb.Security;
 /// </summary>
 public sealed class SecureTinyDbEngine : IDisposable
 {
+    private const int MinimumPasswordLength = 8;
     private readonly TinyDbEngine _engine;
     private readonly string? _password;
     private bool _isAuthenticated;
@@ -42,8 +43,8 @@ public sealed class SecureTinyDbEngine : IDisposable
         if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("密码不能为空", nameof(password));
 
-        if (password.Length < 4)
-            throw new ArgumentException("密码长度至少4位", nameof(password));
+        if (password.Length < MinimumPasswordLength)
+            throw new ArgumentException($"密码长度至少{MinimumPasswordLength}位", nameof(password));
 
         FilePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _password = password;

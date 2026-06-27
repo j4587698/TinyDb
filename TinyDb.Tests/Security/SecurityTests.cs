@@ -96,9 +96,9 @@ public class SecurityTests
     public async Task CreateSecureDatabase_WhenAlreadyProtected_ShouldThrow()
     {
         using var engine = new TinyDbEngine(_testFile);
-        DatabaseSecurity.CreateSecureDatabase(engine, "pass1");
-        
-        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, "pass2"))
+        DatabaseSecurity.CreateSecureDatabase(engine, "pass12345");
+
+        await Assert.That(() => DatabaseSecurity.CreateSecureDatabase(engine, "pass67890"))
             .Throws<DatabaseAlreadyProtectedException>();
     }
 }

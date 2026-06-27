@@ -28,7 +28,7 @@ public class SecurityEdgeCasesTests : IDisposable
     public async Task ChangePassword_Unprotected_ShouldFail()
     {
         // Unprotected DB
-        var result = DatabaseSecurity.ChangePassword(_engine, "old", "newpass");
+        var result = DatabaseSecurity.ChangePassword(_engine, "old", "newpass123");
         await Assert.That(result).IsFalse();
     }
 

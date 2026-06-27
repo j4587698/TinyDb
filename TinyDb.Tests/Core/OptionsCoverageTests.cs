@@ -67,16 +67,16 @@ public class OptionsCoverageTests
     public async Task Validate_Encryption_ShouldCheckKey()
     {
         var options = new TinyDbOptions { EnableEncryption = true, EncryptionKey = null };
-        await Assert.ThrowsAsync<ArgumentException>(() => { options.Validate(); return Task.CompletedTask; });
+        await Assert.ThrowsAsync<NotSupportedException>(() => { options.Validate(); return Task.CompletedTask; });
 
         options.EncryptionKey = Array.Empty<byte>();
-        await Assert.ThrowsAsync<ArgumentException>(() => { options.Validate(); return Task.CompletedTask; });
+        await Assert.ThrowsAsync<NotSupportedException>(() => { options.Validate(); return Task.CompletedTask; });
 
         options.EncryptionKey = new byte[15]; // < 16
-        await Assert.ThrowsAsync<ArgumentException>(() => { options.Validate(); return Task.CompletedTask; });
+        await Assert.ThrowsAsync<NotSupportedException>(() => { options.Validate(); return Task.CompletedTask; });
 
         options.EncryptionKey = new byte[16];
-        options.Validate();
+        await Assert.ThrowsAsync<NotSupportedException>(() => { options.Validate(); return Task.CompletedTask; });
     }
 
     [Test]

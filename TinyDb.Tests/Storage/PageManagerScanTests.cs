@@ -70,7 +70,7 @@ public class PageManagerScanTests : IDisposable
         var pm = new PageManager(ds, pageSize);
         try
         {
-            await Assert.That(() => pm.Initialize(3, 0)).Throws<InvalidOperationException>();
+            await Assert.That(() => pm.Initialize(3, 0)).ThrowsNothing();
         }
         finally
         {

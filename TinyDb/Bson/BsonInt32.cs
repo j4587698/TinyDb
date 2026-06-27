@@ -60,10 +60,7 @@ public sealed class BsonInt32 : BsonValue
 
     public override int CompareTo(BsonValue? other)
     {
-        if (other is null) return 1;
-        if (other is BsonInt32 otherInt) return Value.CompareTo(otherInt.Value);
-        if (other.IsNumeric) return Convert.ToDouble(Value).CompareTo(other.ToDouble(CultureInfo.InvariantCulture));
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public override bool Equals(BsonValue? other)

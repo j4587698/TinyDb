@@ -11,7 +11,8 @@ namespace TinyDb.Security;
 /// </summary>
 public static class DatabaseSecurity
 {
-    private const int Iterations = 10000;
+    private const int Iterations = 600000;
+    private const int MinimumPasswordLength = 8;
     private const int KeySize = 32;
     private const int SaltSize = 16;
 
@@ -25,8 +26,8 @@ public static class DatabaseSecurity
         if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("密码不能为空", nameof(password));
 
-        if (password.Length < 4)
-            throw new ArgumentException("密码长度至少4位", nameof(password));
+        if (password.Length < MinimumPasswordLength)
+            throw new ArgumentException($"密码长度至少{MinimumPasswordLength}位", nameof(password));
 
         if (engine.TryGetSecurityMetadata(out _))
             throw new DatabaseAlreadyProtectedException();
@@ -67,8 +68,8 @@ public static class DatabaseSecurity
         if (string.IsNullOrWhiteSpace(newPassword))
             throw new ArgumentException("新密码不能为空", nameof(newPassword));
 
-        if (newPassword.Length < 4)
-            throw new ArgumentException("新密码长度至少4位", nameof(newPassword));
+        if (newPassword.Length < MinimumPasswordLength)
+            throw new ArgumentException($"新密码长度至少{MinimumPasswordLength}位", nameof(newPassword));
 
         if (!engine.TryGetSecurityMetadata(out _))
             return false;

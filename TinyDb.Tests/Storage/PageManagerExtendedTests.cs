@@ -86,7 +86,7 @@ public class PageManagerExtendedTests : IDisposable
         pm.RestorePage(p1.PageID, newData);
 
         var p1Reloaded = pm.GetPage(p1.PageID, useCache: false);
-        // Compare the full data
-        await Assert.That(p1Reloaded.FullData.ToArray().SequenceEqual(newData)).IsTrue();
+        await Assert.That(p1Reloaded.ReadBytes(0, 3).SequenceEqual(new byte[] { 0xAA, 0xBB, 0xCC })).IsTrue();
+        await Assert.That(p1Reloaded.Header.VerifyChecksum(p1Reloaded.FullData.ToArray())).IsTrue();
     }
 }

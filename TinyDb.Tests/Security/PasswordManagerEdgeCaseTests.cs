@@ -30,8 +30,11 @@ public class PasswordManagerEdgeCaseTests : IDisposable
     #region GenerateStrongPassword Tests
 
     [Test]
-    public async Task GenerateStrongPassword_WithLengthLessThan4_ShouldThrowArgumentException()
+    public async Task GenerateStrongPassword_WithLengthLessThan8_ShouldThrowArgumentException()
     {
+        await Assert.That(() => PasswordManager.GenerateStrongPassword(7))
+            .Throws<ArgumentException>();
+
         await Assert.That(() => PasswordManager.GenerateStrongPassword(3))
             .Throws<ArgumentException>();
         
@@ -46,10 +49,10 @@ public class PasswordManagerEdgeCaseTests : IDisposable
     }
 
     [Test]
-    public async Task GenerateStrongPassword_WithLength4_ShouldSucceed()
+    public async Task GenerateStrongPassword_WithLength8_ShouldSucceed()
     {
-        var pwd = PasswordManager.GenerateStrongPassword(4);
-        await Assert.That(pwd.Length).IsEqualTo(4);
+        var pwd = PasswordManager.GenerateStrongPassword(8);
+        await Assert.That(pwd.Length).IsEqualTo(8);
     }
 
     [Test]
@@ -178,8 +181,7 @@ public class PasswordManagerEdgeCaseTests : IDisposable
         // Create a database first
         using (new TinyDbEngine(_testDbPath)) { }
         
-        // 4 characters is the minimum
-        PasswordManager.SetPassword(_testDbPath, "abcd");
+        PasswordManager.SetPassword(_testDbPath, "abcd1234");
         
         await Assert.That(PasswordManager.IsPasswordProtected(_testDbPath)).IsTrue();
     }
@@ -251,18 +253,18 @@ public class PasswordManagerEdgeCaseTests : IDisposable
     [Test]
     public async Task ChangePassword_WithEmptyNewPassword_ShouldThrowArgumentException()
     {
-        PasswordManager.CreateSecureDatabase(_testDbPath, "oldpass").Dispose();
+        PasswordManager.CreateSecureDatabase(_testDbPath, "oldpass123").Dispose();
         
-        await Assert.That(() => PasswordManager.ChangePassword(_testDbPath, "oldpass", ""))
+        await Assert.That(() => PasswordManager.ChangePassword(_testDbPath, "oldpass123", ""))
             .Throws<ArgumentException>();
     }
 
     [Test]
     public async Task ChangePassword_WithShortNewPassword_ShouldThrowArgumentException()
     {
-        PasswordManager.CreateSecureDatabase(_testDbPath, "oldpass").Dispose();
+        PasswordManager.CreateSecureDatabase(_testDbPath, "oldpass123").Dispose();
         
-        await Assert.That(() => PasswordManager.ChangePassword(_testDbPath, "oldpass", "abc"))
+        await Assert.That(() => PasswordManager.ChangePassword(_testDbPath, "oldpass123", "abc"))
             .Throws<ArgumentException>();
     }
 
@@ -273,17 +275,17 @@ public class PasswordManagerEdgeCaseTests : IDisposable
     [Test]
     public async Task VerifyPassword_WithWrongPassword_ShouldReturnFalse()
     {
-        PasswordManager.CreateSecureDatabase(_testDbPath, "correct").Dispose();
+        PasswordManager.CreateSecureDatabase(_testDbPath, "correct123").Dispose();
         
-        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "wrong")).IsFalse();
+        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "wrongpass")).IsFalse();
     }
 
     [Test]
     public async Task VerifyPassword_WithCorrectPassword_ShouldReturnTrue()
     {
-        PasswordManager.CreateSecureDatabase(_testDbPath, "correct").Dispose();
+        PasswordManager.CreateSecureDatabase(_testDbPath, "correct123").Dispose();
         
-        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "correct")).IsTrue();
+        await Assert.That(PasswordManager.VerifyPassword(_testDbPath, "correct123")).IsTrue();
     }
 
     #endregion

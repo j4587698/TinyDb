@@ -36,7 +36,7 @@ public sealed class TinyDbOptions
     /// <summary>
     /// 是否启用日志（WAL）
     /// </summary>
-    public bool EnableJournaling { get; set; } = false;
+    public bool EnableJournaling { get; set; } = true;
 
     /// <summary>
     /// WAL文件名格式，支持占位符：{name} = 数据库名称，{ext} = 原扩展名
@@ -171,11 +171,7 @@ public sealed class TinyDbOptions
         // 验证加密配置
         if (EnableEncryption)
         {
-            if (EncryptionKey == null || EncryptionKey.Length == 0)
-                throw new ArgumentException("Encryption key is required when encryption is enabled", nameof(EncryptionKey));
-
-            if (EncryptionKey.Length < 16)
-                throw new ArgumentException("Encryption key must be at least 16 bytes", nameof(EncryptionKey));
+            throw new NotSupportedException("TinyDb does not currently implement encrypted storage. Leave EnableEncryption disabled to avoid a false security guarantee.");
         }
 
         // 验证事务大小
