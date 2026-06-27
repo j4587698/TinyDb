@@ -381,7 +381,12 @@ public sealed class DiskStream : IDiskStream
                 if (read == 0) break;
                 bytesRead += read;
             }
-            
+
+            if (bytesRead != pageSize)
+            {
+                throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
+            }
+
             return buffer;
         }
         finally
@@ -431,6 +436,10 @@ public sealed class DiskStream : IDiskStream
                 var read = await _fileStream.ReadAsync(buffer, bytesRead, pageSize - bytesRead, cancellationToken);
                 if (read == 0) break;
                 bytesRead += read;
+            }
+            if (bytesRead != pageSize)
+            {
+                throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
             }
             return buffer;
         }

@@ -44,6 +44,12 @@ internal static class QueryValueComparer
 
     public static bool TryCompare(object? left, object? right, out int comparison)
     {
+        if (left is BsonValue leftBson && right is BsonValue rightBson)
+        {
+            comparison = BsonValueComparer.Compare(leftBson, rightBson);
+            return true;
+        }
+
         left = UnwrapBsonValue(left);
         right = UnwrapBsonValue(right);
         comparison = 0;
@@ -111,6 +117,35 @@ internal static class QueryValueComparer
         return false;
     }
 
+    public static int GetHashCode(object? value)
+    {
+        if (value is BsonValue bsonValue)
+        {
+            return BsonValueComparer.GetHashCode(bsonValue);
+        }
+
+        value = UnwrapBsonValue(value);
+        if (value == null) return 0;
+
+        if (IsNumericType(value))
+        {
+            if (TryToDecimal(value, out var decimalValue)) return decimalValue.GetHashCode();
+            if (TryToDouble(value, out var doubleValue)) return double.IsNaN(doubleValue) ? int.MinValue : doubleValue.GetHashCode();
+            return HashCode.Combine(value.GetType().FullName, value.ToString());
+        }
+
+        if (value is DateTime dateTime) return NormalizeDateTime(dateTime).GetHashCode();
+        if (value is byte[] bytes)
+        {
+            var hash = new HashCode();
+            foreach (var b in bytes) hash.Add(b);
+            return hash.ToHashCode();
+        }
+        if (value is string str) return StringComparer.Ordinal.GetHashCode(str);
+
+        return HashCode.Combine(value.GetType().FullName, value.ToString());
+    }
+
     private static object? UnwrapBsonValue(object? value)
     {
         return value is BsonValue bsonValue ? bsonValue.RawValue : value;
@@ -168,7 +203,19 @@ internal static class QueryValueComparer
             return leftDecimal.CompareTo(rightDecimal);
         }
 
-        return ToDouble(left).CompareTo(ToDouble(right));
+        if (TryToDouble(left, out var leftDouble) &&
+            TryToDouble(right, out var rightDouble))
+        {
+            return leftDouble.CompareTo(rightDouble);
+        }
+
+        var typeComparison = string.Compare(
+            left.GetType().FullName,
+            right.GetType().FullName,
+            StringComparison.Ordinal);
+        if (typeComparison != 0) return typeComparison;
+
+        return string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal);
     }
 
     private static bool TryToDecimal(object value, out decimal result)
@@ -203,9 +250,17 @@ internal static class QueryValueComparer
         }
     }
 
-    private static double ToDouble(object value)
+    private static bool TryToDouble(object value, out double result)
     {
-        if (value is Decimal128 d128) return (double)d128.ToDecimal();
-        return Convert.ToDouble(value);
+        try
+        {
+            result = value is Decimal128 d128 ? (double)d128.ToDecimal() : Convert.ToDouble(value);
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
+        {
+            result = default;
+            return false;
+        }
     }
 }

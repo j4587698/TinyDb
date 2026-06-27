@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using TinyDb.Core;
 using TinyDb.Metadata;
 
@@ -8,6 +9,8 @@ namespace TinyDb.Security;
 /// </summary>
 public static class PasswordManager
 {
+    private const int MinimumPasswordLength = 8;
+
     /// <summary>
     /// 为现有数据库设置密码保护
     /// </summary>
@@ -175,8 +178,8 @@ public static class PasswordManager
     /// <returns>生成的密码</returns>
     public static string GenerateStrongPassword(int length = 12, bool includeSpecialChars = true)
     {
-        if (length < 4)
-            throw new ArgumentException("密码长度至少4位", nameof(length));
+        if (length < MinimumPasswordLength)
+            throw new ArgumentException($"密码长度至少{MinimumPasswordLength}位", nameof(length));
 
         const string lowerChars = "abcdefghijklmnopqrstuvwxyz";
         const string upperChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -187,28 +190,27 @@ public static class PasswordManager
         if (includeSpecialChars)
             chars += specialChars;
 
-        var random = new Random();
         var password = new char[length];
 
         // 确保包含各种字符类型
-        password[0] = lowerChars[random.Next(lowerChars.Length)];
-        password[1] = upperChars[random.Next(upperChars.Length)];
-        password[2] = numbers[random.Next(numbers.Length)];
+        password[0] = lowerChars[RandomNumberGenerator.GetInt32(lowerChars.Length)];
+        password[1] = upperChars[RandomNumberGenerator.GetInt32(upperChars.Length)];
+        password[2] = numbers[RandomNumberGenerator.GetInt32(numbers.Length)];
         if (includeSpecialChars && length > 3)
         {
-            password[3] = specialChars[random.Next(specialChars.Length)];
+            password[3] = specialChars[RandomNumberGenerator.GetInt32(specialChars.Length)];
         }
 
         // 填充剩余位置
         for (int i = includeSpecialChars ? 4 : 3; i < length; i++)
         {
-            password[i] = chars[random.Next(chars.Length)];
+            password[i] = chars[RandomNumberGenerator.GetInt32(chars.Length)];
         }
 
         // 打乱字符顺序
-        for (int i = 0; i < length; i++)
+        for (int i = length - 1; i > 0; i--)
         {
-            int j = random.Next(length);
+            int j = RandomNumberGenerator.GetInt32(i + 1);
             (password[i], password[j]) = (password[j], password[i]);
         }
 
@@ -257,7 +259,7 @@ public static class PasswordManager
         if (string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("密码不能为空", nameof(password));
 
-        if (password.Length < 4)
-            throw new ArgumentException("密码长度至少4位", nameof(password));
+        if (password.Length < MinimumPasswordLength)
+            throw new ArgumentException($"密码长度至少{MinimumPasswordLength}位", nameof(password));
     }
 }

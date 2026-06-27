@@ -13,7 +13,7 @@ public class TinyDbOptionsTests
         options.Validate();
         
         await Assert.That(options.PageSize).IsEqualTo(TinyDbOptions.DefaultPageSize);
-        await Assert.That(options.EnableJournaling).IsFalse();
+        await Assert.That(options.EnableJournaling).IsTrue();
     }
 
     [Test]

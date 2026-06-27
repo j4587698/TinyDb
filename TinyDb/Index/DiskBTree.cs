@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using TinyDb.Bson;
 using TinyDb.Serialization;
@@ -445,7 +446,7 @@ public sealed class DiskBTree : IDisposable
             for (int i = 0; i < node.Keys.Count; i++)
             {
                 int cmp = node.Keys[i].CompareTo(key);
-                if (cmp == 0 && node.Values[i].Equals(value))
+                if (cmp == 0 && ValuesEqual(node.Values[i], value))
                 {
                     node.Keys.RemoveAt(i);
                     node.Values.RemoveAt(i);
@@ -722,7 +723,7 @@ public sealed class DiskBTree : IDisposable
             for (int i = 0; i < node.KeyCount; i++)
             {
                 int cmp = node.Keys[i].CompareTo(key);
-                if (cmp == 0 && node.Values[i].Equals(value)) return true;
+                if (cmp == 0 && ValuesEqual(node.Values[i], value)) return true;
                 if (cmp > 0) return false;
             }
 
@@ -878,21 +879,11 @@ public sealed class DiskBTree : IDisposable
             return;
         }
 
-        int minKeys = _maxKeys / 2;
+        int minKeys = Math.Max(1, _maxKeys / 2);
         if (node.KeyCount >= minKeys) return;
 
-        var parent = LoadNode(node.ParentId);
-        int childIndex = -1;
-        for(int i=0; i<parent.ChildrenIds.Count; i++)
-        {
-            if (parent.ChildrenIds[i] == node.PageId)
-            {
-                childIndex = i;
-                break;
-            }
-        }
-        
-        if (childIndex == -1) return;
+        if (!TryResolveParent(node, out var parent, out var childIndex))
+            throw new InvalidDataException($"Unable to locate parent for B+Tree node {node.PageId}.");
 
         if (childIndex > 0)
         {
@@ -938,6 +929,73 @@ public sealed class DiskBTree : IDisposable
         }
     }
 
+    private bool TryResolveParent(DiskBTreeNode node, [NotNullWhen(true)] out DiskBTreeNode? parent, out int childIndex)
+    {
+        parent = null;
+        childIndex = -1;
+
+        if (node.ParentId != 0)
+        {
+            var candidate = LoadNode(node.ParentId);
+            childIndex = candidate.ChildrenIds.IndexOf(node.PageId);
+            if (childIndex >= 0)
+            {
+                parent = candidate;
+                return true;
+            }
+        }
+
+        if (TryFindParent(_rootPageId, node.PageId, new HashSet<uint>(), depth: 0, out parent, out childIndex))
+        {
+            node.SetParent(parent.PageId);
+            node.Save(_pm);
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryFindParent(
+        uint currentPageId,
+        uint childPageId,
+        HashSet<uint> visited,
+        int depth,
+        [NotNullWhen(true)] out DiskBTreeNode? parent,
+        out int childIndex)
+    {
+        parent = null;
+        childIndex = -1;
+        if (depth > _maxKeys + 64 || !visited.Add(currentPageId))
+        {
+            return false;
+        }
+
+        var current = LoadNode(currentPageId);
+        if (current.IsLeaf) return false;
+
+        childIndex = current.ChildrenIds.IndexOf(childPageId);
+        if (childIndex >= 0)
+        {
+            parent = current;
+            return true;
+        }
+
+        foreach (var nextChildId in current.ChildrenIds)
+        {
+            if (TryFindParent(nextChildId, childPageId, visited, depth + 1, out parent, out childIndex))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ValuesEqual(BsonValue left, BsonValue right)
+    {
+        return BsonValueComparer.Compare(left, right) == 0;
+    }
+
     private bool CanMerge(DiskBTreeNode left, DiskBTreeNode right, DiskBTreeNode parent, int separatorIndex, int capacity)
     {
         // Estimate the size of the merged node
@@ -952,7 +1010,38 @@ public sealed class DiskBTree : IDisposable
         // Let's be conservative: sum of sizes should be less than capacity.
         // Note: CalculateSize() returns the byte size of the node content.
         
-        return (leftSize + rightSize) <= capacity;
+        int separatorSize = left.IsLeaf ? 0 : EstimateIndexKeySize(parent.Keys[separatorIndex]);
+        return leftSize + rightSize + separatorSize <= capacity;
+    }
+
+    private static int EstimateIndexKeySize(IndexKey key)
+    {
+        int size = 4;
+        var values = key.ValuesSpan;
+        for (int i = 0; i < values.Length; i++)
+        {
+            size += 1 + EstimateBsonValueSize(values[i]);
+        }
+
+        return size;
+    }
+
+    private static int EstimateBsonValueSize(BsonValue value)
+    {
+        if (value == null || value.IsNull) return 0;
+
+        return value.BsonType switch
+        {
+            BsonType.Double => 8,
+            BsonType.String => ((BsonString)value).Value.Length * 2 + 4,
+            BsonType.Int32 => 4,
+            BsonType.Int64 => 8,
+            BsonType.Boolean => 1,
+            BsonType.DateTime => 8,
+            BsonType.ObjectId => 12,
+            BsonType.Decimal128 => 16,
+            _ => 20
+        };
     }
     
     /// <summary>
@@ -1059,7 +1148,7 @@ public sealed class DiskBTree : IDisposable
             node.Values.Add(val);
             
             // 更新父节点的分隔符为右兄弟新的第一个键
-            parent.Keys[nodeIndex] = rightSibling.Keys[0];
+            parent.Keys[nodeIndex] = rightSibling.KeyCount > 0 ? rightSibling.Keys[0] : key;
         }
         else
         {

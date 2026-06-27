@@ -20,7 +20,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     private readonly TinyDbEngine _engine;
     private readonly string _name;
     private readonly QueryExecutor _queryExecutor;
-    private bool _disposed;
+    private int _disposed;
 
     /// <summary>
     /// 集合名称
@@ -692,6 +692,17 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// <param name="entity">实体</param>
     private void EnsureEntityHasId(T entity)
     {
+        var idProperty = TinyDb.Serialization.EntityMetadata<T>.IdProperty;
+        if (idProperty != null &&
+            (idProperty.PropertyType == typeof(int) || idProperty.PropertyType == typeof(long)) &&
+            !AotIdAccessor<T>.HasValidId(entity))
+        {
+            var identityId = _engine.AllocateIdentityId(_name, idProperty.Name, idProperty.PropertyType);
+            AotIdAccessor<T>.SetId(entity, identityId);
+            EnsureIdIndex();
+            return;
+        }
+
         // 尝试使用新的ID生成系统
         if (AotIdAccessor<T>.GenerateIdIfNeeded(entity))
         {
@@ -1352,7 +1363,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// </summary>
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(nameof(DocumentCollection<T>));
     }
 
@@ -1361,10 +1372,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
-        {
-            _disposed = true;
-        }
+        Interlocked.Exchange(ref _disposed, 1);
     }
 
     /// <summary>

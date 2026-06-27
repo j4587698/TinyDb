@@ -809,7 +809,10 @@ public sealed class BsonReader : IDisposable
     private readonly Stream _stream;
     private readonly BinaryReader _reader;
     private readonly bool _leaveOpen;
+    private int _depth;
     private bool _disposed;
+    private const int MaxBsonDepth = 128;
+    private const int MaxBsonValueLength = 64 * 1024 * 1024;
 
     /// <summary>
     /// 初始化 BSON 读取器
@@ -876,35 +879,42 @@ public sealed class BsonReader : IDisposable
     public BsonDocument ReadDocument()
     {
         ThrowIfDisposed();
+        EnterContainer();
 
-        var documentSize = _reader.ReadInt32();
-        var startPosition = _stream.Position;
-        var document = new BsonDocument();
-
-        while (true)
+        try
         {
-            var type = (BsonType)_reader.ReadByte();
+            var documentSize = ReadContainerLength("document");
+            var startPosition = _stream.Position;
+            var document = new BsonDocument();
 
-            if (type == BsonType.End)
-                break;
+            while (true)
+            {
+                var type = (BsonType)_reader.ReadByte();
 
-            var key = ReadCString();
-            var value = ReadTypedValue(type);
+                if (type == BsonType.End)
+                    break;
 
-            document = document.Set(key, value);
+                var key = ReadCString();
+                var value = ReadTypedValue(type);
+
+                document = document.Set(key, value);
+            }
+
+            var endPosition = _stream.Position;
+            var expectedContentSize = documentSize - 4;
+            var actualContentSize = (int)(endPosition - startPosition);
+
+            if (actualContentSize != expectedContentSize)
+            {
+                throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+            }
+
+            return document;
         }
-
-        var endPosition = _stream.Position;
-        // BSON文档大小包含开头4字节的大小字段，所以实际内容大小应该是文档大小-4
-        var expectedContentSize = documentSize - 4;
-        var actualContentSize = (int)(endPosition - startPosition);
-
-        if (actualContentSize != expectedContentSize)
+        finally
         {
-            throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+            ExitContainer();
         }
-
-        return document;
     }
 
     /// <summary>
@@ -915,43 +925,51 @@ public sealed class BsonReader : IDisposable
     public BsonDocument ReadDocument(HashSet<string> fields)
     {
         ThrowIfDisposed();
+        EnterContainer();
 
-        var documentSize = _reader.ReadInt32();
-        var startPosition = _stream.Position;
-        var document = new BsonDocument();
-
-        while (true)
+        try
         {
-            var type = (BsonType)_reader.ReadByte();
+            var documentSize = ReadContainerLength("document");
+            var startPosition = _stream.Position;
+            var document = new BsonDocument();
 
-            if (type == BsonType.End)
-                break;
+            while (true)
+            {
+                var type = (BsonType)_reader.ReadByte();
 
-            var key = ReadCString();
-            
-            // 检查字段是否需要加载
-            if (fields == null || fields.Contains(key))
-            {
-                var value = ReadTypedValue(type);
-                document = document.Set(key, value);
+                if (type == BsonType.End)
+                    break;
+
+                var key = ReadCString();
+
+                // 检查字段是否需要加载
+                if (fields == null || fields.Contains(key))
+                {
+                    var value = ReadTypedValue(type);
+                    document = document.Set(key, value);
+                }
+                else
+                {
+                    SkipValue(type);
+                }
             }
-            else
+
+            var endPosition = _stream.Position;
+            var expectedContentSize = documentSize - 4;
+            var actualContentSize = (int)(endPosition - startPosition);
+
+            // 如果我们跳过了某些值，Position 应该是正确的，因为 SkipValue 也会消耗流
+            if (actualContentSize != expectedContentSize)
             {
-                SkipValue(type);
+                throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
             }
+
+            return document;
         }
-
-        var endPosition = _stream.Position;
-        var expectedContentSize = documentSize - 4;
-        var actualContentSize = (int)(endPosition - startPosition);
-
-        // 如果我们跳过了某些值，Position 应该是正确的，因为 SkipValue 也会消耗流
-        if (actualContentSize != expectedContentSize)
+        finally
         {
-            throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+            ExitContainer();
         }
-
-        return document;
     }
 
     /// <summary>
@@ -985,6 +1003,7 @@ public sealed class BsonReader : IDisposable
             case BsonType.JavaScript:
             case BsonType.Symbol:
                 var strLen = _reader.ReadInt32();
+                ValidateLength(strLen, 1, "string");
                 SkipBytes(strLen); // strLen includes null terminator
                 break;
             case BsonType.Decimal128:
@@ -994,10 +1013,12 @@ public sealed class BsonReader : IDisposable
             case BsonType.Array:
             case BsonType.JavaScriptWithScope:
                 var docLen = _reader.ReadInt32();
+                ValidateLength(docLen, 5, "document");
                 SkipBytes(docLen - 4); // docLen includes the int32 size itself
                 break;
             case BsonType.Binary:
                 var binLen = _reader.ReadInt32();
+                ValidateLength(binLen, 0, "binary");
                 SkipBytes(1 + binLen); // subtype (1) + data
                 break;
             case BsonType.RegularExpression:
@@ -1033,6 +1054,36 @@ public sealed class BsonReader : IDisposable
         }
     }
 
+    private int ReadContainerLength(string containerName)
+    {
+        var length = _reader.ReadInt32();
+        ValidateLength(length, 5, containerName);
+        return length;
+    }
+
+    private void ValidateLength(int length, int minimum, string valueName)
+    {
+        if (length < minimum || length > MaxBsonValueLength)
+        {
+            throw new InvalidDataException($"Invalid BSON {valueName} length: {length}.");
+        }
+
+    }
+
+    private void EnterContainer()
+    {
+        if (++_depth > MaxBsonDepth)
+        {
+            _depth--;
+            throw new InvalidDataException($"BSON nesting depth exceeds {MaxBsonDepth}.");
+        }
+    }
+
+    private void ExitContainer()
+    {
+        _depth--;
+    }
+
     /// <summary>
     /// 读取 BSON 数组
     /// </summary>
@@ -1040,35 +1091,42 @@ public sealed class BsonReader : IDisposable
     public BsonArray ReadArray()
     {
         ThrowIfDisposed();
+        EnterContainer();
 
-        var arraySize = _reader.ReadInt32();
-        var startPosition = _stream.Position;
-        var array = new BsonArray();
-
-        while (true)
+        try
         {
-            var type = (BsonType)_reader.ReadByte();
+            var arraySize = ReadContainerLength("array");
+            var startPosition = _stream.Position;
+            var array = new BsonArray();
 
-            if (type == BsonType.End)
-                break;
+            while (true)
+            {
+                var type = (BsonType)_reader.ReadByte();
 
-            var key = ReadCString(); // 数组索引
-            var value = ReadTypedValue(type);
+                if (type == BsonType.End)
+                    break;
 
-            array = array.AddValue(value);
+                var key = ReadCString(); // 数组索引
+                var value = ReadTypedValue(type);
+
+                array = array.AddValue(value);
+            }
+
+            var endPosition = _stream.Position;
+            var expectedContentSize = arraySize - 4;
+            var actualContentSize = (int)(endPosition - startPosition);
+
+            if (actualContentSize != expectedContentSize)
+            {
+                throw new InvalidOperationException($"Array size mismatch: expected {arraySize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+            }
+
+            return array;
         }
-
-        var endPosition = _stream.Position;
-        // BSON数组大小包含开头4字节的大小字段，所以实际内容大小应该是数组大小-4
-        var expectedContentSize = arraySize - 4;
-        var actualContentSize = (int)(endPosition - startPosition);
-
-        if (actualContentSize != expectedContentSize)
+        finally
         {
-            throw new InvalidOperationException($"Array size mismatch: expected {arraySize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+            ExitContainer();
         }
-
-        return array;
     }
 
     /// <summary>
@@ -1123,7 +1181,10 @@ public sealed class BsonReader : IDisposable
         ThrowIfDisposed();
 
         var length = _reader.ReadInt32();
+        ValidateLength(length, 1, "string");
         var bytes = _reader.ReadBytes(length - 1); // 不包含 null 终止符
+        if (bytes.Length != length - 1)
+            throw new EndOfStreamException("Unexpected end of stream while reading BSON string.");
         var nullTerminator = _reader.ReadByte();
 
         if (nullTerminator != 0)
@@ -1220,8 +1281,11 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
         var length = _reader.ReadInt32();
+        ValidateLength(length, 0, "binary");
         var subType = (BsonBinary.BinarySubType)_reader.ReadByte();
         var bytes = _reader.ReadBytes(length);
+        if (bytes.Length != length)
+            throw new EndOfStreamException("Unexpected end of stream while reading BSON binary data.");
         return new BsonBinary(bytes, subType);
     }
 
@@ -1265,9 +1329,17 @@ public sealed class BsonReader : IDisposable
     public BsonJavaScriptWithScope ReadJavaScriptWithScope()
     {
         ThrowIfDisposed();
+        var startPosition = _stream.Position;
         var totalSize = _reader.ReadInt32();
+        ValidateLength(totalSize, 5, "JavaScriptWithScope");
         var code = ReadString().Value;
         var scope = ReadDocument();
+        var actualSize = (int)(_stream.Position - startPosition);
+        if (actualSize != totalSize)
+        {
+            throw new InvalidOperationException($"JavaScriptWithScope size mismatch: expected {totalSize}, actual {actualSize}.");
+        }
+
         return new BsonJavaScriptWithScope(code, scope);
     }
 

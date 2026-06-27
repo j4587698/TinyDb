@@ -68,7 +68,7 @@ public class SecureEngineExtendedTests
         using (var engine = new TinyDbEngine(_testFile)) { }
         
         using var secureEngine = new SecureTinyDbEngine(_testFile);
-        secureEngine.SetPassword("newpass"); // Should work
+        secureEngine.SetPassword("newpass123"); // Should work
         
         await Assert.That(() => secureEngine.SetPassword("another"))
             .Throws<InvalidOperationException>();

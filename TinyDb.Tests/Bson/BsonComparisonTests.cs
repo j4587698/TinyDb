@@ -48,10 +48,8 @@ public class BsonComparisonTests
         BsonValue v1 = 10;
         BsonValue v2 = "10";
         
-        // Comparison between different types follows BsonType order
-        // Int32 (0x10) > String (0x02)
+        // Comparison between different non-numeric types follows the shared BSON comparer order.
         await Assert.That(v1.CompareTo(v2)).IsNotEqualTo(0);
-        await Assert.That(v1.BsonType > v2.BsonType).IsTrue();
-        await Assert.That(v1.CompareTo(v2)).IsGreaterThan(0);
+        await Assert.That(v1.CompareTo(v2)).IsLessThan(0);
     }
 }

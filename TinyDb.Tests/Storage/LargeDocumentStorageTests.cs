@@ -217,8 +217,8 @@ public class LargeDocumentStorageTests : IDisposable
         indexPage.WriteData(8, BitConverter.GetBytes(stats.PageCount + 1));
         _pageManager.SavePage(indexPage);
 
-        var replayed = await storage.ReadLargeDocumentAsync(indexPageId);
-        await Assert.That(replayed.SequenceEqual(largeData)).IsTrue();
+        await Assert.That(async () => { await storage.ReadLargeDocumentAsync(indexPageId); })
+            .Throws<InvalidOperationException>();
     }
 
     [Test]

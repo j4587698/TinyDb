@@ -52,14 +52,16 @@ public sealed class TinyDbEngine : IDisposable
     private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
     private readonly object _collectionRegistryLock = new();
     private readonly object _collectionStateInitLock = new();
+    private readonly object _identitySequenceLock = new();
     private readonly ConcurrentDictionary<string, object> _indexCreationLocks;
+    private readonly ConcurrentDictionary<string, long> _identitySequences;
     private LargeDocumentStorage _largeDocumentStorage = null!;
     private DataPageAccess _dataPageAccess = null!;
     private readonly object _lock = new();
     private readonly AsyncLocal<ITransaction?> _currentTransaction = new();
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private DatabaseHeader _header;
-    private bool _disposed;
+    private int _disposed;
     private bool _isInitialized;
 
     private const int DocumentLengthPrefixSize = sizeof(int);
@@ -118,6 +120,7 @@ public sealed class TinyDbEngine : IDisposable
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
         _collectionStates = new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal);
         _indexCreationLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
+        _identitySequences = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
 
         InitializeComponents(ds);
     }
@@ -373,12 +376,22 @@ public sealed class TinyDbEngine : IDisposable
     {
         var p = _pageManager.GetPage(1);
         _header = DatabaseHeader.FromByteArray(p.ReadBytes(0, DatabaseHeader.Size));
+        if (!_header.IsValid())
+        {
+            throw new InvalidOperationException(CreateInvalidHeaderMessage(_header));
+        }
+
+        if (_header.Checksum != 0 && !_header.VerifyChecksum())
+        {
+            throw new InvalidDataException("Database header checksum verification failed.");
+        }
     }
 
     private void WriteHeader(bool forceFlush = false)
     {
         _header.TotalPages = _pageManager.TotalPages;
         _header.FirstFreePage = _pageManager.FirstFreePageID;
+        _header.UpdateModification();
         var p = _pageManager.GetPage(1);
         p.WriteData(0, _header.ToByteArray());
         _pageManager.SavePage(p, forceFlush);
@@ -463,6 +476,16 @@ public sealed class TinyDbEngine : IDisposable
     internal WriteAheadLog.WalTransactionScope BeginTransactionDurabilityScope(Guid transactionId)
     {
         return _writeAheadLog.BeginTransaction(transactionId);
+    }
+
+    private WriteAheadLog.WalTransactionScope? BeginImplicitWalTransaction()
+    {
+        if (!_writeAheadLog.IsEnabled || _writeAheadLog.IsInTransactionScope)
+        {
+            return null;
+        }
+
+        return _writeAheadLog.BeginTransaction(Guid.NewGuid());
     }
 
     internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;
@@ -589,6 +612,11 @@ public sealed class TinyDbEngine : IDisposable
     public void Flush()
     {
         ThrowIfDisposed();
+        FlushCore();
+    }
+
+    private void FlushCore()
+    {
         if (!_isInitialized) return;
         _flushScheduler.Flush();
         _collectionMetaStore.SaveCollections(true);
@@ -901,6 +929,84 @@ public sealed class TinyDbEngine : IDisposable
 
     private void RegisterCollection(string n) => _collectionMetaStore.RegisterCollection(n, _options.WriteConcern == WriteConcern.Synced);
 
+    internal BsonValue AllocateIdentityId(string collectionName, string idFieldName, Type idType)
+    {
+        if (string.IsNullOrWhiteSpace(collectionName)) throw new ArgumentException("Collection name cannot be empty.", nameof(collectionName));
+        if (string.IsNullOrWhiteSpace(idFieldName)) throw new ArgumentException("ID field name cannot be empty.", nameof(idFieldName));
+
+        bool isInt32 = idType == typeof(int);
+        bool isInt64 = idType == typeof(long);
+        if (!isInt32 && !isInt64)
+        {
+            throw new NotSupportedException($"Identity ID type '{idType.FullName}' is not supported.");
+        }
+
+        var metadataKey = isInt32 ? $"__identity_int32_{idFieldName}" : $"__identity_int64_{idFieldName}";
+        var cacheKey = $"{collectionName}\0{metadataKey}";
+
+        lock (_identitySequenceLock)
+        {
+            if (!_identitySequences.TryGetValue(cacheKey, out var current))
+            {
+                current = Math.Max(ReadPersistedIdentityValue(collectionName, metadataKey), ScanMaxIdentityValue(collectionName));
+            }
+
+            var next = checked(current + 1);
+            if (isInt32 && next > int.MaxValue)
+            {
+                throw new InvalidOperationException($"Identity sequence for '{collectionName}.{idFieldName}' exceeded Int32.MaxValue.");
+            }
+
+            _identitySequences[cacheKey] = next;
+            PersistIdentityValue(collectionName, metadataKey, next);
+            return isInt32 ? new BsonInt32((int)next) : new BsonInt64(next);
+        }
+    }
+
+    private long ReadPersistedIdentityValue(string collectionName, string metadataKey)
+    {
+        var metadata = _collectionMetaStore.GetMetadata(collectionName, includeInternal: true);
+        return TryGetInt64(metadata, metadataKey, out var value) ? value : 0;
+    }
+
+    private void PersistIdentityValue(string collectionName, string metadataKey, long value)
+    {
+        var metadata = _collectionMetaStore.GetMetadata(collectionName, includeInternal: true);
+        metadata = metadata.Set(metadataKey, new BsonInt64(value));
+        _collectionMetaStore.UpdateMetadata(collectionName, metadata, _options.WriteConcern == WriteConcern.Synced);
+    }
+
+    private long ScanMaxIdentityValue(string collectionName)
+    {
+        var state = GetCollectionState(collectionName);
+        long max = 0;
+        foreach (var document in ReadAllDocumentsSnapshot(collectionName, state))
+        {
+            if (document.TryGetValue("_id", out var id) && TryConvertIdentityValue(id, out var value) && value > max)
+            {
+                max = value;
+            }
+        }
+
+        return max;
+    }
+
+    private static bool TryConvertIdentityValue(BsonValue? value, out long result)
+    {
+        result = 0;
+        switch (value)
+        {
+            case BsonInt32 int32:
+                result = int32.Value;
+                return result > 0;
+            case BsonInt64 int64:
+                result = int64.Value;
+                return result > 0;
+            default:
+                return false;
+        }
+    }
+
     private void EnsureDatabaseSecurity()
     {
         var p = _options.Password;
@@ -910,7 +1016,7 @@ public sealed class TinyDbEngine : IDisposable
             if (isS) throw new UnauthorizedAccessException();
             return;
         }
-        if (p.Length < 4) throw new ArgumentException();
+        if (p.Length < 8) throw new ArgumentException();
         if (isS)
         {
             if (!DatabaseSecurity.AuthenticateDatabase(this, p)) throw new UnauthorizedAccessException();
@@ -950,7 +1056,9 @@ public sealed class TinyDbEngine : IDisposable
         BsonValue res;
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             res = InsertPreparedDocument(col, pr, id, st, idx, true);
+            durabilityScope?.Commit();
         }
         EnsureWriteDurability();
         return res;
@@ -972,7 +1080,9 @@ public sealed class TinyDbEngine : IDisposable
         BsonValue res;
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             res = InsertPreparedDocument(col, pr, id, st, idx, true);
+            durabilityScope?.Commit();
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
@@ -991,7 +1101,9 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             updated = TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr);
+            if (updated) durabilityScope?.Commit();
         }
 
         if (!updated) return 0;
@@ -1021,7 +1133,9 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             updated = TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr);
+            if (updated) durabilityScope?.Commit();
         }
 
         if (!updated) return 0;
@@ -1057,6 +1171,7 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
                 if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
@@ -1064,6 +1179,7 @@ public sealed class TinyDbEngine : IDisposable
                     updatedCount++;
                 }
             }
+            if (updatedCount > 0) durabilityScope?.Commit();
         }
 
         if (updatedCount > 0)
@@ -1102,6 +1218,7 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1110,6 +1227,7 @@ public sealed class TinyDbEngine : IDisposable
                     updatedCount++;
                 }
             }
+            if (updatedCount > 0) durabilityScope?.Commit();
         }
 
         if (updatedCount > 0)
@@ -1162,6 +1280,7 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
                 if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
@@ -1174,6 +1293,7 @@ public sealed class TinyDbEngine : IDisposable
                     insertedCount++;
                 }
             }
+            if (insertedCount + updatedCount > 0) durabilityScope?.Commit();
         }
 
         if (insertedCount + updatedCount > 0)
@@ -1211,6 +1331,7 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (st.WriteSyncRoot)
         {
+            using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1224,6 +1345,7 @@ public sealed class TinyDbEngine : IDisposable
                     insertedCount++;
                 }
             }
+            if (insertedCount + updatedCount > 0) durabilityScope?.Commit();
         }
 
         if (insertedCount + updatedCount > 0)
@@ -1244,6 +1366,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
                 if (i >= e.Count) return 0;
+                using var durabilityScope = BeginImplicitWalTransaction();
                 var entry = e[i];
                 e.RemoveAt(i);
                 st.Index.Remove(id);
@@ -1261,6 +1384,7 @@ public sealed class TinyDbEngine : IDisposable
                 }
                 if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
                 idxMgr.DeleteDocument(entry.Document, id);
+                durabilityScope?.Commit();
             }
         }
         EnsureWriteDurability();
@@ -1284,6 +1408,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
                 if (i >= e.Count) return 0;
+                using var durabilityScope = BeginImplicitWalTransaction();
                 var entry = e[i];
                 e.RemoveAt(i);
                 st.Index.Remove(id);
@@ -1300,6 +1425,7 @@ public sealed class TinyDbEngine : IDisposable
                 }
                 if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
                 idxMgr.DeleteDocument(entry.Document, id);
+                durabilityScope?.Commit();
             }
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
@@ -1338,6 +1464,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             lock (st.WriteSyncRoot)
             {
+                using var durabilityScope = BeginImplicitWalTransaction();
                 lock (st.PageState.SyncRoot)
                 {
                     Page? currentPage = null;
@@ -1435,16 +1562,17 @@ public sealed class TinyDbEngine : IDisposable
                     }
                 }
 
-                EnsureWriteDurability();
-
                 if (exceptions.Count > 0)
                 {
                     RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 
-                return insertedCount;
+                durabilityScope?.Commit();
             }
+
+            EnsureWriteDurability();
+            return insertedCount;
         }
         finally
         {
@@ -1494,6 +1622,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             lock (st.WriteSyncRoot)
             {
+                using var durabilityScope = BeginImplicitWalTransaction();
                 lock (st.PageState.SyncRoot)
                 {
                     Page? currentPage = null;
@@ -1597,6 +1726,8 @@ public sealed class TinyDbEngine : IDisposable
                     RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
+
+                durabilityScope?.Commit();
             }
 
             await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
@@ -1862,7 +1993,10 @@ public sealed class TinyDbEngine : IDisposable
         var pr = PrepareDocumentForInsert(col, d, out var id);
         lock (st.WriteSyncRoot)
         {
-            return InsertPreparedDocument(col, pr, id, st, idx, true);
+            using var durabilityScope = BeginImplicitWalTransaction();
+            var result = InsertPreparedDocument(col, pr, id, st, idx, true);
+            durabilityScope?.Commit();
+            return result;
         }
     }
 
@@ -2273,13 +2407,13 @@ public sealed class TinyDbEngine : IDisposable
 
     private void EnsureInitialized() { if (!_isInitialized) throw new InvalidOperationException(); }
 
-    private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(TinyDbEngine)); }
+    private void ThrowIfDisposed() { if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(TinyDbEngine)); }
 
     private static string? GetCollectionNameFromEntityAttribute<T>() where T : class => typeof(T).GetCustomAttribute<EntityAttribute>()?.Name;
 
     public void Dispose()
     {
-        if (!_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             Exception? flushException = null;
             Exception? metadataException = null;
@@ -2299,7 +2433,7 @@ public sealed class TinyDbEngine : IDisposable
 
             try
             {
-                Flush();
+                FlushCore();
             }
             catch (Exception ex)
             {
@@ -2321,7 +2455,6 @@ public sealed class TinyDbEngine : IDisposable
             finally
             {
                 DisposeComponents();
-                _disposed = true;
                 _isInitialized = false;
             }
 

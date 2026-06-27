@@ -64,40 +64,6 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     }
 
     /// <summary>
-    /// 获取 BSON 类型的比较顺序
-    /// 基于 MongoDB 的类型比较顺序
-    /// </summary>
-    /// <param name="bsonType">BSON 类型</param>
-    /// <returns>类型顺序</returns>
-    private static int GetTypeOrder(BsonType bsonType)
-    {
-        return bsonType switch
-        {
-            BsonType.MinKey => 0,
-            BsonType.Null => 1,
-            BsonType.Boolean => 2,
-            BsonType.Int32 => 3,
-            BsonType.Int64 => 4,
-            BsonType.Double => 5,
-            BsonType.Decimal128 => 6,
-            BsonType.String => 7,
-            BsonType.ObjectId => 8,
-            BsonType.DateTime => 9,
-            BsonType.Binary => 10,
-            BsonType.Array => 11,
-            BsonType.Document => 12,
-            BsonType.RegularExpression => 13,
-            BsonType.JavaScript => 14,
-            BsonType.JavaScriptWithScope => 15,
-            BsonType.Timestamp => 16,
-            BsonType.Symbol => 17,
-            BsonType.Undefined => 18,
-            BsonType.MaxKey => 19,
-            _ => 20 // 未知类型
-        };
-    }
-
-    /// <summary>
     /// 比较两个 BSON 值
     /// </summary>
     /// <param name="left">左值</param>
@@ -105,74 +71,7 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// <returns>比较结果</returns>
     private static int CompareValues(BsonValue left, BsonValue right)
     {
-        // 处理 null 值
-        if (left.IsNull && right.IsNull) return 0;
-        if (left.IsNull) return -1;
-        if (right.IsNull) return 1;
-
-        // 处理不同类型的比较
-        var leftType = left.BsonType;
-        var rightType = right.BsonType;
-
-        if (leftType != rightType)
-        {
-            // 特殊处理数值类型之间的比较：如果数值不相等，按数值排序
-            if (IsNumeric(left) &&
-                IsNumeric(right) &&
-                TryGetComparableDecimal(left, out var lVal) &&
-                TryGetComparableDecimal(right, out var rVal))
-            {
-                var numComp = lVal.CompareTo(rVal);
-                if (numComp != 0) return numComp;
-                // 如果数值相等但类型不同，降级到按类型顺序排序
-            }
-            
-            return GetTypeOrder(leftType).CompareTo(GetTypeOrder(rightType));
-        }
-
-        // 同类型比较
-        return leftType switch
-        {
-            BsonType.String => string.Compare(((BsonString)left).Value, ((BsonString)right).Value, StringComparison.Ordinal),
-            BsonType.Int32 => ((BsonInt32)left).Value.CompareTo(((BsonInt32)right).Value),
-            BsonType.Int64 => ((BsonInt64)left).Value.CompareTo(((BsonInt64)right).Value),
-            BsonType.Double => ((BsonDouble)left).Value.CompareTo(((BsonDouble)right).Value),
-            BsonType.Boolean => ((BsonBoolean)left).Value.CompareTo(((BsonBoolean)right).Value),
-            BsonType.DateTime => ((BsonDateTime)left).Value.CompareTo(((BsonDateTime)right).Value),       
-            BsonType.ObjectId => ((BsonObjectId)left).Value.CompareTo(((BsonObjectId)right).Value),       
-            BsonType.Binary => ((BsonBinary)left).CompareTo((BsonBinary)right),
-            BsonType.Decimal128 => ((BsonDecimal128)left).Value.CompareTo(((BsonDecimal128)right).Value), 
-            _ => string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal)
-        };
-    }
-
-    private static bool IsNumeric(BsonValue val)
-    {
-        return val.BsonType == BsonType.Int32 ||
-               val.BsonType == BsonType.Int64 ||
-               val.BsonType == BsonType.Double ||
-               val.BsonType == BsonType.Decimal128;
-    }
-
-    private static bool TryGetComparableDecimal(BsonValue value, out decimal result)
-    {
-        try
-        {
-            result = value.ToDecimal(null);
-            return true;
-        }
-        catch (InvalidCastException)
-        {
-        }
-        catch (FormatException)
-        {
-        }
-        catch (OverflowException)
-        {
-        }
-
-        result = default;
-        return false;
+        return BsonValueComparer.Compare(left, right);
     }
 
     /// <summary>
@@ -189,7 +88,7 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
 
         for (int i = 0; i < _values.Length; i++)
         {
-            if (!Equals(_values[i], other._values[i])) return false;
+            if (CompareValues(_values[i], other._values[i]) != 0) return false;
         }
 
         return true;
@@ -223,7 +122,7 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
         var hash = 17;
         foreach (var value in _values)
         {
-            hash = hash * 31 + (value?.GetHashCode() ?? 0);
+            hash = hash * 31 + BsonValueComparer.GetHashCode(value);
         }
         return hash;
     }

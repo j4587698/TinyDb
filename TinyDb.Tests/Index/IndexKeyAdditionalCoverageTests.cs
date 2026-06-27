@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Index;
 using TUnit.Assertions;
@@ -13,7 +12,7 @@ public sealed class IndexKeyAdditionalCoverageTests
     public async Task CompareTo_NumericCrossType_ShouldCoverBranches()
     {
         var equalDifferentTypes = new IndexKey(new BsonInt32(1)).CompareTo(new IndexKey(new BsonInt64(1)));
-        await Assert.That(equalDifferentTypes).IsNegative();
+        await Assert.That(equalDifferentTypes).IsEqualTo(0);
 
         var differentValues = new IndexKey(new BsonInt32(1)).CompareTo(new IndexKey(new BsonInt64(2)));
         await Assert.That(differentValues).IsNegative();
@@ -23,11 +22,8 @@ public sealed class IndexKeyAdditionalCoverageTests
     }
 
     [Test]
-    public async Task GetTypeOrder_AllCases_ShouldCoverSwitchArms()
+    public async Task BsonValueComparer_GetTypeOrder_AllCases_ShouldCoverSwitchArms()
     {
-        var method = typeof(IndexKey).GetMethod("GetTypeOrder", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         var types = new[]
         {
             BsonType.MinKey,
@@ -55,7 +51,7 @@ public sealed class IndexKeyAdditionalCoverageTests
 
         foreach (var t in types)
         {
-            var order = (int)method!.Invoke(null, new object[] { t })!;
+            var order = BsonValueComparer.GetTypeOrder(t);
             await Assert.That(order).IsGreaterThanOrEqualTo(0);
         }
     }
@@ -106,7 +102,7 @@ public sealed class IndexKeyAdditionalCoverageTests
     }
 
     [Test]
-    public async Task CompareTo_Numeric_WhenToDecimalThrowsInvalidCastOrFormat_ShouldFallbackToTypeOrder()
+    public async Task CompareTo_Numeric_WhenConversionThrows_ShouldFallbackToStableStringOrdering()
     {
         var invalidCastLeft = new IndexKey(new ThrowingNumericBsonValue(new InvalidCastException("bad cast")));
         var formatRight = new IndexKey(new ThrowingNumericBsonValue(new FormatException("bad format")));
@@ -115,8 +111,8 @@ public sealed class IndexKeyAdditionalCoverageTests
         var invalidCastComparison = invalidCastLeft.CompareTo(reference);
         var formatComparison = formatRight.CompareTo(reference);
 
-        await Assert.That(invalidCastComparison).IsGreaterThan(0);
-        await Assert.That(formatComparison).IsGreaterThan(0);
+        await Assert.That(invalidCastComparison).IsLessThan(0);
+        await Assert.That(formatComparison).IsLessThan(0);
     }
 
     private sealed class ThrowingNumericBsonValue : BsonValue

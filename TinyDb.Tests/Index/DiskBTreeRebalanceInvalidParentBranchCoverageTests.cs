@@ -11,7 +11,7 @@ namespace TinyDb.Tests.Index;
 public class DiskBTreeRebalanceInvalidParentBranchCoverageTests
 {
     [Test]
-    public async Task Rebalance_WhenChildNotFoundInParent_ShouldReturn()
+    public async Task Rebalance_WhenChildNotFoundInParent_ShouldThrow()
     {
         using var pm = new PageManager(new MockDiskStream());
         using var tree = DiskBTree.Create(pm, maxKeys: 4);
@@ -29,8 +29,7 @@ public class DiskBTreeRebalanceInvalidParentBranchCoverageTests
         var rebalance = typeof(DiskBTree).GetMethod("Rebalance", BindingFlags.NonPublic | BindingFlags.Instance);
         await Assert.That(rebalance).IsNotNull();
 
-        // Should not throw, should just return (childIndex == -1)
-        rebalance!.Invoke(tree, new object[] { child });
+        await Assert.That(() => rebalance!.Invoke(tree, new object[] { child }))
+            .Throws<TargetInvocationException>();
     }
 }
-

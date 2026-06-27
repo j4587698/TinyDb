@@ -294,7 +294,13 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         if (_bytes == null) return 0;
         // 使用简单的哈希算法，或者直接取前4字节（时间戳）
-        return BinaryPrimitives.ReadInt32LittleEndian(_bytes); // HashCode endianness doesn't strictly matter for correctness, just distribution
+        var hash = new HashCode();
+        for (int i = 0; i < ObjectIdSize; i++)
+        {
+            hash.Add(_bytes[i]);
+        }
+
+        return hash.ToHashCode();
     }
 
     /// <summary>

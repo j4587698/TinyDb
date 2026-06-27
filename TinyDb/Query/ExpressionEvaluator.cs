@@ -10,35 +10,55 @@ namespace TinyDb.Query;
 
 public static class ExpressionEvaluator
 {
+    private const int MaxExpressionEvaluationDepth = 256;
+    [ThreadStatic]
+    private static int _evaluationDepth;
+
     public static bool Evaluate<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
         where T : class, new()
     {
-        return expression switch
+        EnterEvaluation();
+        try
         {
-            ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
-            BinaryExpression binaryExpr => (bool?)EvaluateBinaryExpression(binaryExpr, entity) ?? false,
-            MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, entity),
-            UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, entity),
-            ParameterExpression paramExpr => true,
-            FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, entity) ?? false,
-            ConditionalQueryExpression conditionalExpr => EvaluateConditionalBoolean(conditionalExpr, entity),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
-        };
+            return expression switch
+            {
+                ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
+                BinaryExpression binaryExpr => (bool?)EvaluateBinaryExpression(binaryExpr, entity) ?? false,
+                MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, entity),
+                UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, entity),
+                ParameterExpression => true,
+                FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, entity) ?? false,
+                ConditionalQueryExpression conditionalExpr => EvaluateConditionalBoolean(conditionalExpr, entity),
+                _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
+            };
+        }
+        finally
+        {
+            ExitEvaluation();
+        }
     }
 
     public static bool Evaluate(QueryExpression expression, BsonDocument document)
     {
-        return expression switch
+        EnterEvaluation();
+        try
         {
-            ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
-            BinaryExpression binaryExpr => (bool?)EvaluateBinaryExpression(binaryExpr, document) ?? false,
-            MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, document),
-            UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, document),
-            ParameterExpression paramExpr => true,
-            FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, document) ?? false,
-            ConditionalQueryExpression conditionalExpr => EvaluateConditionalBoolean(conditionalExpr, (object)document),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
-        };
+            return expression switch
+            {
+                ConstantExpression constExpr => EvaluateConstantExpression(constExpr),
+                BinaryExpression binaryExpr => (bool?)EvaluateBinaryExpression(binaryExpr, document) ?? false,
+                MemberExpression memberExpr => EvaluateMemberExpression(memberExpr, document),
+                UnaryExpression unaryExpr => EvaluateUnaryBooleanExpression(unaryExpr, document),
+                ParameterExpression => true,
+                FunctionExpression funcExpr => (bool?)EvaluateFunctionExpression(funcExpr, document) ?? false,
+                ConditionalQueryExpression conditionalExpr => EvaluateConditionalBoolean(conditionalExpr, (object)document),
+                _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported")
+            };
+        }
+        finally
+        {
+            ExitEvaluation();
+        }
     }
 
     private static bool EvaluateConstantExpression(ConstantExpression expression)
@@ -53,55 +73,93 @@ public static class ExpressionEvaluator
     public static object? EvaluateValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
         where T : class, new()
     {
-        return expression switch
+        EnterEvaluation();
+        try
         {
-            ConstantExpression constExpr => constExpr.Value,
-            MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
-            UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, entity),
-            ParameterExpression => entity,
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
-            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
-            ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, entity),
-            MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, entity),
-            ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, entity),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
-        };
+            return expression switch
+            {
+                ConstantExpression constExpr => constExpr.Value,
+                MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
+                UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, entity),
+                ParameterExpression => entity,
+                BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
+                FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
+                ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, entity),
+                MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, entity),
+                ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, entity),
+                _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
+            };
+        }
+        finally
+        {
+            ExitEvaluation();
+        }
     }
 
     public static object? EvaluateValue(QueryExpression expression, BsonDocument document)
     {
-        return expression switch
+        EnterEvaluation();
+        try
         {
-            ConstantExpression constExpr => constExpr.Value,
-            MemberExpression memberExpr => GetMemberValue(memberExpr, (object)document),
-            UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, (object)document),
-            ParameterExpression => document,
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, (object)document),
-            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, (object)document),
-            ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, (object)document),
-            MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, (object)document),
-            ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, (object)document),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
-        };
+            return expression switch
+            {
+                ConstantExpression constExpr => constExpr.Value,
+                MemberExpression memberExpr => GetMemberValue(memberExpr, (object)document),
+                UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, (object)document),
+                ParameterExpression => document,
+                BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, (object)document),
+                FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, (object)document),
+                ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, (object)document),
+                MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, (object)document),
+                ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, (object)document),
+                _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
+            };
+        }
+        finally
+        {
+            ExitEvaluation();
+        }
     }
 
     public static object? EvaluateValue(QueryExpression expression, object entity)
     {
-        if (entity is BsonDocument doc) return EvaluateValue(expression, doc);
-
-        return expression switch
+        EnterEvaluation();
+        try
         {
-            ConstantExpression constExpr => constExpr.Value,
-            MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
-            UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, entity),
-            ParameterExpression => entity,
-            BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
-            FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
-            ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, entity),
-            MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, entity),
-            ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, entity),
-            _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
-        };
+            if (entity is BsonDocument doc) return EvaluateValue(expression, doc);
+
+            return expression switch
+            {
+                ConstantExpression constExpr => constExpr.Value,
+                MemberExpression memberExpr => GetMemberValue(memberExpr, entity),
+                UnaryExpression unaryExpr => EvaluateUnaryExpression(unaryExpr, entity),
+                ParameterExpression => entity,
+                BinaryExpression binaryExpr => EvaluateBinaryExpression(binaryExpr, entity),
+                FunctionExpression funcExpr => EvaluateFunctionExpression(funcExpr, entity),
+                ConstructorExpression ctorExpr => EvaluateConstructorExpression(ctorExpr, entity),
+                MemberInitQueryExpression memberInitExpr => EvaluateMemberInitExpression(memberInitExpr, entity),
+                ConditionalQueryExpression conditionalExpr => EvaluateConditionalValue(conditionalExpr, entity),
+                _ => throw new NotSupportedException($"Expression type {expression.GetType().Name} is not supported for value evaluation")
+            };
+        }
+        finally
+        {
+            ExitEvaluation();
+        }
+    }
+
+    private static void EnterEvaluation()
+    {
+        if (++_evaluationDepth > MaxExpressionEvaluationDepth)
+        {
+            _evaluationDepth--;
+            throw new InvalidOperationException($"Expression evaluation depth exceeds {MaxExpressionEvaluationDepth}.");
+        }
+    }
+
+    private static void ExitEvaluation()
+    {
+        _evaluationDepth--;
     }
 
 
@@ -649,8 +707,7 @@ public static class ExpressionEvaluator
             decimal sum = 0m;
             foreach (var item in items)
             {
-                var value = selector(item);
-                if (value != null) sum += Convert.ToDecimal(value);
+                sum = AddAggregateValue(sum, selector(item));
             }
             return sum;
         }
@@ -660,8 +717,7 @@ public static class ExpressionEvaluator
             decimal sum = 0m;
             foreach (var item in items)
             {
-                var value = selector(item);
-                if (value != null) sum += Convert.ToDecimal(value);
+                sum = AddAggregateValue(sum, selector(item));
             }
             return sum / items.Count;
         }
@@ -672,7 +728,7 @@ public static class ExpressionEvaluator
             {
                 var value = selector(item);
                 if (value == null) continue;
-                if (min == null || Comparer<object>.Default.Compare(value, min) < 0) min = value;
+                if (min == null || Compare(value, min) < 0) min = value;
             }
             return min;
         }
@@ -683,7 +739,7 @@ public static class ExpressionEvaluator
             {
                 var value = selector(item);
                 if (value == null) continue;
-                if (max == null || Comparer<object>.Default.Compare(value, max) > 0) max = value;
+                if (max == null || Compare(value, max) > 0) max = value;
             }
             return max;
         }
@@ -721,6 +777,20 @@ public static class ExpressionEvaluator
     private static int Compare(object? left, object? right)
     {
         return QueryValueComparer.Compare(left, right);
+    }
+
+    private static decimal AddAggregateValue(decimal current, object? value)
+    {
+        if (value == null) return current;
+
+        try
+        {
+            return checked(current + Convert.ToDecimal(value));
+        }
+        catch (Exception ex) when (ex is OverflowException or InvalidCastException or FormatException)
+        {
+            throw new InvalidOperationException("Numeric aggregate could not be evaluated without overflow or conversion loss.", ex);
+        }
     }
 
     private static bool IsNumericType(object value)

@@ -276,7 +276,7 @@ public struct DatabaseHeader
     public bool IsValid()
     {
         return Magic == MagicNumber &&
-               DatabaseVersion >= Version &&
+               DatabaseVersion == Version &&
                PageSize >= 4096 &&
                TotalPages >= 1 &&
                UsedPages <= TotalPages &&

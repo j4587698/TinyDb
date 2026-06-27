@@ -13,6 +13,9 @@ public ref struct BsonSpanReader
 {
     private ReadOnlySpan<byte> _data;
     private int _position;
+    private int _depth;
+    private const int MaxBsonDepth = 128;
+    private const int MaxBsonValueLength = 64 * 1024 * 1024;
 
     public int Remaining => _data.Length - _position;
 
@@ -20,10 +23,14 @@ public ref struct BsonSpanReader
     {
         _data = data;
         _position = 0;
+        _depth = 0;
     }
 
     public BsonDocument ReadDocument(HashSet<string>? fields = null)
     {
+        EnterContainer();
+        try
+        {
         // 检查剩余长度是否至少包含大小(4) + 结束符(1)
         if (_data.Length < 5) throw new EndOfStreamException();
 
@@ -63,10 +70,18 @@ public ref struct BsonSpanReader
         }
 
         return document;
+        }
+        finally
+        {
+            ExitContainer();
+        }
     }
 
     public BsonArray ReadArray()
     {
+        EnterContainer();
+        try
+        {
         int startPos = _position;
         int arrSize = ReadInt32();
         if (arrSize < 5 || arrSize > _data.Length - startPos)
@@ -91,6 +106,11 @@ public ref struct BsonSpanReader
         }
 
         return array;
+        }
+        finally
+        {
+            ExitContainer();
+        }
     }
 
     public BsonValue ReadValue(BsonType type)
@@ -129,25 +149,26 @@ public ref struct BsonSpanReader
             case BsonType.JavaScript:
             case BsonType.Symbol:
                 int len = ReadInt32();
+                ValidateLength(len, 1, "string");
                 EnsureAvailableLength(len);
                 _position += len; 
                 break;
             case BsonType.JavaScriptWithScope:
                 int totalSize = ReadInt32();
-                if (totalSize < 4) throw new InvalidOperationException($"Invalid JavaScriptWithScope length: {totalSize}");
+                ValidateLength(totalSize, 5, "JavaScriptWithScope");
                 EnsureAvailableLength(totalSize - 4);
                 _position += (totalSize - 4);
                 break;
             case BsonType.Document:
             case BsonType.Array:
                 int docLen = ReadInt32();
-                if (docLen < 4) throw new InvalidOperationException($"Invalid document length: {docLen}");
+                ValidateLength(docLen, 5, "document");
                 EnsureAvailableLength(docLen - 4);
                 _position += (docLen - 4); // 减去刚刚读取的长度字节
                 break;
             case BsonType.Binary:
                 int binLen = ReadInt32();
-                if (binLen < 0) throw new InvalidOperationException($"Invalid binary length: {binLen}");
+                ValidateLength(binLen, 0, "binary");
                 EnsureAvailable(1);
                 _position += 1; // subtype
                 EnsureAvailableLength(binLen);
@@ -248,7 +269,7 @@ public ref struct BsonSpanReader
     public string ReadString()
     {
         int len = ReadInt32(); // 包含 null
-        if (len < 1) throw new InvalidOperationException($"Invalid string length: {len}");
+        ValidateLength(len, 1, "string");
         EnsureAvailableLength(len);
 
         // 除去最后的 null
@@ -260,7 +281,7 @@ public ref struct BsonSpanReader
     public BsonBinary ReadBinary()
     {
         int len = ReadInt32();
-        if (len < 0) throw new InvalidOperationException($"Invalid binary length: {len}");
+        ValidateLength(len, 0, "binary");
         byte subType = ReadByte();
         EnsureAvailableLength(len);
         
@@ -290,8 +311,15 @@ public ref struct BsonSpanReader
     public BsonJavaScriptWithScope ReadJavaScriptWithScope()
     {
         int totalSize = ReadInt32();
+        ValidateLength(totalSize, 5, "JavaScriptWithScope");
+        int startPosition = _position - sizeof(int);
         string code = ReadString();
         var scope = ReadDocument();
+        int actualSize = _position - startPosition;
+        if (actualSize != totalSize)
+        {
+            throw new InvalidOperationException($"JavaScriptWithScope size mismatch. Expected {totalSize}, read {actualSize}");
+        }
         return new BsonJavaScriptWithScope(code, scope);
     }
 
@@ -308,11 +336,36 @@ public ref struct BsonSpanReader
 
     private void EnsureAvailableLength(int length)
     {
-        if (length < 0)
+        ValidateLength(length, 0, "BSON value");
+        EnsureAvailable(length);
+    }
+
+    private void ValidateLength(int length, int minimum, string valueName)
+    {
+        if (length < minimum)
         {
-            throw new InvalidOperationException($"Invalid BSON value length: {length}");
+            throw new InvalidOperationException($"Invalid {valueName} length: {length}");
         }
 
-        EnsureAvailable(length);
+        if (length > MaxBsonValueLength)
+        {
+            throw new InvalidOperationException($"{valueName} length exceeds {MaxBsonValueLength} bytes: {length}");
+        }
+    }
+
+    private void EnterContainer()
+    {
+        if (++_depth > MaxBsonDepth)
+        {
+            throw new InvalidOperationException($"BSON nesting depth exceeds {MaxBsonDepth}.");
+        }
+    }
+
+    private void ExitContainer()
+    {
+        if (_depth > 0)
+        {
+            _depth--;
+        }
     }
 }

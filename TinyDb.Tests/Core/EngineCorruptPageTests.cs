@@ -48,7 +48,8 @@ public class EngineCorruptPageTests : IDisposable
                 fs.Write(garbage, 0, garbage.Length);
             }
             
-            await Assert.That(() => new TinyDbEngine(_testDbPath))
+            using var reopened = new TinyDbEngine(_testDbPath);
+            await Assert.That(() => reopened.FindAll(colName).ToList())
                 .Throws<InvalidOperationException>();
         }
         finally
