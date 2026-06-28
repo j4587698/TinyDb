@@ -11,7 +11,8 @@ namespace TinyDb.Security;
 /// </summary>
 public static class DatabaseSecurity
 {
-    private const int Iterations = 600000;
+    internal const int EncryptionPbkdf2Iterations = 600000;
+    private const int Iterations = EncryptionPbkdf2Iterations;
     private const int MinimumPasswordLength = 8;
     private const int KeySize = 32;
     private const int SaltSize = 16;
@@ -29,7 +30,7 @@ public static class DatabaseSecurity
         if (password.Length < MinimumPasswordLength)
             throw new ArgumentException($"密码长度至少{MinimumPasswordLength}位", nameof(password));
 
-        if (engine.TryGetSecurityMetadata(out _))
+        if (engine.IsEncrypted || engine.TryGetSecurityMetadata(out _))
             throw new DatabaseAlreadyProtectedException();
 
         var metadata = BuildSecurityMetadata(password);
@@ -45,6 +46,9 @@ public static class DatabaseSecurity
     public static bool AuthenticateDatabase(TinyDbEngine engine, string password)
     {
         if (password == null) throw new ArgumentNullException(nameof(password));
+
+        if (engine.IsEncrypted)
+            return engine.VerifyEncryptionPassword(password);
 
         if (!engine.TryGetSecurityMetadata(out var metadata))
             return true;
@@ -71,8 +75,14 @@ public static class DatabaseSecurity
         if (newPassword.Length < MinimumPasswordLength)
             throw new ArgumentException($"新密码长度至少{MinimumPasswordLength}位", nameof(newPassword));
 
-        if (!engine.TryGetSecurityMetadata(out _))
+        if (!engine.TryGetSecurityMetadata(out _) && !engine.IsEncrypted)
             return false;
+
+        if (engine.IsEncrypted)
+        {
+            engine.RewrapEncryptionPassword(newPassword);
+            return true;
+        }
 
         var metadata = BuildSecurityMetadata(newPassword);
         engine.SetSecurityMetadata(metadata);
@@ -87,6 +97,14 @@ public static class DatabaseSecurity
     /// <returns>如果成功移除则为 true；否则为 false。</returns>
     public static bool RemovePassword(TinyDbEngine engine, string password)
     {
+        if (engine.IsEncrypted)
+        {
+            if (!AuthenticateDatabase(engine, password))
+                return false;
+
+            throw new InvalidOperationException("Cannot remove password protection from an encrypted database without an explicit decrypt migration.");
+        }
+
         if (!AuthenticateDatabase(engine, password))
             return false;
 
@@ -104,7 +122,7 @@ public static class DatabaseSecurity
     /// <returns>如果受保护则为 true。</returns>
     public static bool IsDatabaseSecure(TinyDbEngine engine)
     {
-        return engine.TryGetSecurityMetadata(out _);
+        return engine.IsEncrypted || engine.TryGetSecurityMetadata(out _);
     }
 
     /// <summary>

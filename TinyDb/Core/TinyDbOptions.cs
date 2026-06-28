@@ -171,7 +171,23 @@ public sealed class TinyDbOptions
         // 验证加密配置
         if (EnableEncryption)
         {
-            throw new NotSupportedException("TinyDb does not currently implement encrypted storage. Leave EnableEncryption disabled to avoid a false security guarantee.");
+            var hasPassword = !string.IsNullOrWhiteSpace(Password);
+            var hasKey = EncryptionKey != null;
+
+            if (!hasPassword && !hasKey)
+            {
+                throw new ArgumentException("Encryption requires Password or a 32-byte EncryptionKey.", nameof(EnableEncryption));
+            }
+
+            if (hasPassword && Password!.Length < 8)
+            {
+                throw new ArgumentException("Encryption password must be at least 8 characters.", nameof(Password));
+            }
+
+            if (hasKey && EncryptionKey!.Length != 32)
+            {
+                throw new ArgumentException("EncryptionKey must be exactly 32 bytes.", nameof(EncryptionKey));
+            }
         }
 
         // 验证事务大小

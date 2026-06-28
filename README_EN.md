@@ -114,11 +114,17 @@ var count = users.Query().Where(u => u.Age > 20).Count();
 var exists = users.Query().Any(u => u.Email.Contains("@gmail.com"));
 ```
 
-### Password Protection
+### Password Protection and Page Encryption
+
+`Password` can still be used for compatible database password protection. To encrypt data pages and WAL payloads, set `EnableEncryption = true` when creating a new database. Existing plaintext databases are not encrypted implicitly when `EnableEncryption = true`; TinyDb throws instead, so migrate explicitly or compact into a new encrypted database.
 
 ```csharp
 // Create encrypted database
-var options = new TinyDbOptions { Password = "MySecurePassword123!" };
+var options = new TinyDbOptions
+{
+    EnableEncryption = true,
+    Password = "MySecurePassword123!"
+};
 using var secureDb = new TinyDbEngine("secure.db", options);
 
 // Access encrypted database
@@ -174,6 +180,7 @@ catch
 var options = new TinyDbOptions
 {
     Password = "password",          // Database password (optional)
+    EnableEncryption = true,        // Encrypt data pages and WAL for new databases
     PageSize = 8192,               // Page size (default 8KB)
     CacheSize = 1000,              // Cache pages count
     EnableJournaling = true,       // Enable WAL journaling

@@ -196,7 +196,7 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
-    public async Task TinyDbOptions_ShouldRejectUnsupportedEncryptionMode()
+    public async Task TinyDbOptions_ShouldAcceptEncryptionWithValidKey()
     {
         var options = new TinyDbOptions
         {
@@ -204,7 +204,8 @@ public sealed class ReviewReportRegressionTests : IDisposable
             EncryptionKey = new byte[32]
         };
 
-        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+        options.Validate();
+        await Assert.That(options.EnableEncryption).IsTrue();
     }
 
     [Test]

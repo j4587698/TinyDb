@@ -24,6 +24,7 @@ public sealed class WriteAheadLog : IDisposable
     private readonly string _logFilePath;
     private readonly FileStream? _stream;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
+    private readonly IWalCodec _walCodec;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly AsyncLocal<int> _synchronizationDepth = new();
     private readonly AsyncLocal<Guid?> _currentTransactionId = new();
@@ -57,12 +58,24 @@ public sealed class WriteAheadLog : IDisposable
         bool enabled,
         string? walFileNameFormat = null,
         Action<TinyDbLogLevel, string, Exception?>? logger = null)
+        : this(databaseFilePath, pageSize, enabled, walFileNameFormat, logger, null)
+    {
+    }
+
+    internal WriteAheadLog(
+        string databaseFilePath,
+        int pageSize,
+        bool enabled,
+        string? walFileNameFormat,
+        Action<TinyDbLogLevel, string, Exception?>? logger,
+        IWalCodec? walCodec)
     {
         if (string.IsNullOrWhiteSpace(databaseFilePath))
             throw new ArgumentException("Database file path cannot be null or empty", nameof(databaseFilePath));
 
         _log = logger ?? TinyDbLogging.NoopLogger;
-        _maxRecordSize = Math.Max(pageSize * 2 + TransactionIdSize + BeforeLengthSize, pageSize);
+        _walCodec = walCodec ?? new NoOpWalCodec();
+        _maxRecordSize = Math.Max(pageSize * 2 + TransactionIdSize + BeforeLengthSize, pageSize) + _walCodec.MaxOverhead;
         IsEnabled = enabled;
         _logFilePath = GenerateWalFilePath(databaseFilePath, walFileNameFormat ?? "{name}-wal.{ext}");
 
@@ -316,32 +329,36 @@ public sealed class WriteAheadLog : IDisposable
     private void WriteEntry(byte entryType, uint pageId, byte[] data)
     {
         var stream = _stream!;
+        var recordOffset = stream.Position;
+        var payload = _walCodec.Encode(entryType, pageId, recordOffset, data);
         
         // 头部格式: [Type(1)] [PageId(4)] [Length(4)] [CRC32(4)]
         Span<byte> header = stackalloc byte[HeaderSize + 4]; // HeaderSize is 9, +4 for CRC = 13
         header[0] = entryType;
         BinaryPrimitives.WriteUInt32LittleEndian(header[1..5], pageId);
-        BinaryPrimitives.WriteInt32LittleEndian(header[5..9], data.Length);
-        var crc32 = TinyCrc32.HashToUInt32(header[..HeaderSize], data);
+        BinaryPrimitives.WriteInt32LittleEndian(header[5..9], payload.Length);
+        var crc32 = TinyCrc32.HashToUInt32(header[..HeaderSize], payload);
         BinaryPrimitives.WriteUInt32LittleEndian(header[9..13], crc32);
         
         stream.Write(header);
-        stream.Write(data, 0, data.Length);
+        stream.Write(payload, 0, payload.Length);
     }
 
     private async Task WriteEntryAsync(byte entryType, uint pageId, byte[] data, CancellationToken cancellationToken)
     {
         var stream = _stream!;
+        var recordOffset = stream.Position;
+        var payload = _walCodec.Encode(entryType, pageId, recordOffset, data);
         
         byte[] header = new byte[HeaderSize + 4];
         header[0] = entryType;
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(1, 4), pageId);
-        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(5, 4), data.Length);
-        var crc32 = TinyCrc32.HashToUInt32(header.AsSpan(0, HeaderSize), data);
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(5, 4), payload.Length);
+        var crc32 = TinyCrc32.HashToUInt32(header.AsSpan(0, HeaderSize), payload);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(9, 4), crc32);
         
         await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
-        await stream.WriteAsync(data, 0, data.Length, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task FlushToLSNAsync(long targetLSN, CancellationToken cancellationToken = default)
@@ -679,10 +696,17 @@ public sealed class WriteAheadLog : IDisposable
                     var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value && legacyDataOnlyCrc != expectedCrc.Value)
                     {
+                        if (_walCodec.IsEncrypted)
+                        {
+                            throw new InvalidDataException($"Encrypted WAL CRC mismatch at {currentEntryStart}.");
+                        }
+
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         break;
                     }
                 }
+
+                buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
 
                 if (entryType == EntryTypePage)
                 {
@@ -878,10 +902,17 @@ public sealed class WriteAheadLog : IDisposable
                     var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
                     if (actualCrc != expectedCrc.Value && legacyDataOnlyCrc != expectedCrc.Value)
                     {
+                        if (_walCodec.IsEncrypted)
+                        {
+                            throw new InvalidDataException($"Encrypted WAL CRC mismatch at {currentEntryStart}.");
+                        }
+
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         break;
                     }
                 }
+
+                buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
 
                 if (entryType == EntryTypePage)
                 {

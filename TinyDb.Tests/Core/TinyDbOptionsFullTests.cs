@@ -67,10 +67,10 @@ public class TinyDbOptionsFullTests
         options.DatabaseName = "valid";
         options.EnableEncryption = true;
         options.EncryptionKey = null;
-        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+        await Assert.That(() => options.Validate()).Throws<ArgumentException>();
         
         options.EncryptionKey = new byte[8]; // Too short
-        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+        await Assert.That(() => options.Validate()).Throws<ArgumentException>();
     }
 
     [Test]
