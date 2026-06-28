@@ -61,6 +61,7 @@ public sealed class TinyDbEngine : IDisposable
     private readonly AsyncLocal<ITransaction?> _currentTransaction = new();
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private DatabaseHeader _header;
+    private EncryptionContext? _encryptionContext;
     private int _disposed;
     private bool _isInitialized;
 
@@ -138,10 +139,19 @@ public sealed class TinyDbEngine : IDisposable
             _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.ReadWrite);
         }
 
-        _options.PageSize = ResolvePageSize(_diskStream, _options.PageSize);
+        var isNewDatabase = _diskStream.Size == 0;
+        var hasBootstrapHeader = TryReadBootstrapHeader(_diskStream, out var bootstrapHeader);
+        if (hasBootstrapHeader && bootstrapHeader.Magic == DatabaseHeader.MagicNumber && IsSupportedPageSize(bootstrapHeader.PageSize))
+        {
+            _options.PageSize = bootstrapHeader.PageSize;
+        }
 
-        _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log);
-        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log);
+        _encryptionContext = ResolveEncryptionContext(isNewDatabase, hasBootstrapHeader, bootstrapHeader);
+        var pageCodec = _encryptionContext?.PageCodec ?? new NoOpPageCodec(_options.PageSize);
+        var walCodec = _encryptionContext?.WalCodec ?? new NoOpWalCodec();
+
+        _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log, pageCodec);
+        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log, walCodec);
         
         _pageManager.RegisterWAL(
             (page, beforeImage) => _writeAheadLog.AppendPage(page, beforeImage),
@@ -179,6 +189,57 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         return configuredPageSize;
+    }
+
+    private static bool TryReadBootstrapHeader(IDiskStream diskStream, out DatabaseHeader header)
+    {
+        header = default;
+        if (diskStream.Size < Page.DataStartOffset + DatabaseHeader.Size)
+        {
+            return false;
+        }
+
+        try
+        {
+            var headerBytes = diskStream.ReadPage(Page.DataStartOffset, DatabaseHeader.Size);
+            header = DatabaseHeader.FromByteArray(headerBytes);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private EncryptionContext? ResolveEncryptionContext(bool isNewDatabase, bool hasBootstrapHeader, DatabaseHeader bootstrapHeader)
+    {
+        if (hasBootstrapHeader &&
+            bootstrapHeader.Magic == DatabaseHeader.MagicNumber &&
+            IsSupportedPageSize(bootstrapHeader.PageSize) &&
+            EncryptionMetadataStore.TryReadFromDisk(_diskStream, bootstrapHeader.PageSize, out var metadata) &&
+            metadata != null)
+        {
+            if (metadata.LogicalPageSize != bootstrapHeader.PageSize)
+            {
+                throw new SecurityCorruptedException("Encryption metadata page size does not match database header.");
+            }
+
+            _options.PageSize = metadata.LogicalPageSize;
+            _options.EnableEncryption = true;
+            return EncryptionContext.OpenExisting(metadata, _options);
+        }
+
+        if (isNewDatabase)
+        {
+            return _options.EnableEncryption ? EncryptionContext.CreateNew(_options) : null;
+        }
+
+        if (_options.EnableEncryption)
+        {
+            throw new InvalidOperationException("Existing unencrypted databases are not encrypted implicitly. Use an explicit migration or compact-to-encrypted workflow.");
+        }
+
+        return null;
     }
 
     private static bool IsSupportedPageSize(uint pageSize)
@@ -296,10 +357,8 @@ public sealed class TinyDbEngine : IDisposable
                     {
                         _writeAheadLog.Replay((id, data) =>
                         {
-                            var pageOffset = (id - 1) * _options.PageSize;
-                            if (_diskStream.Size >= pageOffset + _options.PageSize)
+                            if (_pageManager.TryReadLogicalPageSnapshot(id, out var diskData))
                             {
-                                var diskData = _diskStream.ReadPage(pageOffset, (int)_options.PageSize);
                                 var diskHeader = PageHeader.FromByteArray(diskData);
                                 var walHeader = PageHeader.FromByteArray(data);
 
@@ -323,6 +382,10 @@ public sealed class TinyDbEngine : IDisposable
                     _header.Initialize(_options.PageSize, _options.DatabaseName, _options.EnableJournaling);
                     var p1 = _pageManager.NewPage(PageType.Header);
                     p1.WriteData(0, _header.ToByteArray());
+                    if (_encryptionContext != null)
+                    {
+                        EncryptionMetadataStore.WriteToPage(p1, _encryptionContext.Metadata);
+                    }
                     _pageManager.SavePage(p1, true);
                     // 初始化 PageManager (新数据库)
                     _pageManager.Initialize(1, 0);
@@ -909,6 +972,18 @@ public sealed class TinyDbEngine : IDisposable
 
     internal bool TryGetSecurityMetadata(out DatabaseSecurityMetadata m) => _header.TryGetSecurityMetadata(out m);
 
+    internal bool IsEncrypted => _encryptionContext != null;
+
+    internal bool VerifyEncryptionPassword(string password)
+    {
+        if (_encryptionContext == null)
+        {
+            throw new InvalidOperationException("Database is not encrypted.");
+        }
+
+        return _encryptionContext.VerifyPassword(password);
+    }
+
     internal void SetSecurityMetadata(DatabaseSecurityMetadata m)
     {
         lock (_lock)
@@ -924,6 +999,27 @@ public sealed class TinyDbEngine : IDisposable
         {
             _header.ClearSecurityMetadata();
             WriteHeader();
+        }
+    }
+
+    internal void RewrapEncryptionPassword(string newPassword)
+    {
+        if (_encryptionContext == null)
+        {
+            return;
+        }
+
+        if (_encryptionContext.Metadata.CredentialKind != EncryptionCredentialKind.Password)
+        {
+            throw new InvalidOperationException("Password changes are only supported for password-encrypted databases.");
+        }
+
+        lock (_lock)
+        {
+            _encryptionContext.RewrapWithPassword(newPassword);
+            var p = _pageManager.GetPage(1);
+            EncryptionMetadataStore.WriteToPage(p, _encryptionContext.Metadata);
+            _pageManager.SavePage(p, true);
         }
     }
 
@@ -1009,15 +1105,20 @@ public sealed class TinyDbEngine : IDisposable
 
     private void EnsureDatabaseSecurity()
     {
+        if (IsEncrypted)
+        {
+            return;
+        }
+
         var p = _options.Password;
-        var isS = DatabaseSecurity.IsDatabaseSecure(this);
+        var hasSecurityMetadata = TryGetSecurityMetadata(out _);
         if (string.IsNullOrEmpty(p))
         {
-            if (isS) throw new UnauthorizedAccessException();
+            if (hasSecurityMetadata) throw new UnauthorizedAccessException();
             return;
         }
         if (p.Length < 8) throw new ArgumentException();
-        if (isS)
+        if (hasSecurityMetadata)
         {
             if (!DatabaseSecurity.AuthenticateDatabase(this, p)) throw new UnauthorizedAccessException();
             return;

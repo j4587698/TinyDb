@@ -11,6 +11,8 @@ public sealed class PageManager : IDisposable
 {
     private readonly IDiskStream _diskStream;
     private readonly uint _pageSize;
+    private readonly uint _physicalPageSize;
+    private readonly IPageCodec _pageCodec;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
     private readonly object _allocationLock = new(); // 用于分配新页面的锁
     private readonly object _freeListLock = new();
@@ -85,7 +87,7 @@ public sealed class PageManager : IDisposable
     /// <summary>
     /// 总页面数量
     /// </summary>
-    public uint TotalPages => (uint)(_fileSize / _pageSize);
+    public uint TotalPages => (uint)(_fileSize / _physicalPageSize);
 
     /// <summary>
     /// 最大缓存页面数
@@ -103,6 +105,16 @@ public sealed class PageManager : IDisposable
         uint pageSize = 8192,
         int maxCacheSize = 1000,
         Action<TinyDbLogLevel, string, Exception?>? logger = null)
+        : this(diskStream, pageSize, maxCacheSize, logger, null)
+    {
+    }
+
+    internal PageManager(
+        IDiskStream diskStream,
+        uint pageSize,
+        int maxCacheSize,
+        Action<TinyDbLogLevel, string, Exception?>? logger,
+        IPageCodec? pageCodec)
     {
         _diskStream = diskStream ?? throw new ArgumentNullException(nameof(diskStream));
         if (pageSize <= PageHeader.Size) throw new ArgumentException($"Page size must be larger than {PageHeader.Size}", nameof(pageSize));
@@ -110,6 +122,12 @@ public sealed class PageManager : IDisposable
 
         _log = logger ?? TinyDbLogging.NoopLogger;
         _pageSize = pageSize;
+        _pageCodec = pageCodec ?? new NoOpPageCodec(pageSize);
+        if (_pageCodec.LogicalPageSize != pageSize)
+        {
+            throw new ArgumentException("Page codec logical page size must match PageManager page size.", nameof(pageCodec));
+        }
+        _physicalPageSize = _pageCodec.PhysicalPageSize;
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
         _lruCache = new LRUCache<uint, Page>(maxCacheSize);
@@ -135,7 +153,7 @@ public sealed class PageManager : IDisposable
         lock (_allocationLock)
         {
             // 如果文件大小不匹配 TotalPages，优先信任文件大小
-            var calculatedTotal = (uint)(_fileSize / _pageSize);
+            var calculatedTotal = (uint)(_fileSize / _physicalPageSize);
             _nextPageID = Math.Max(totalPages, calculatedTotal);
             _firstFreePageID = firstFreePageID;
 
@@ -198,7 +216,7 @@ public sealed class PageManager : IDisposable
                 freeCount++;
                 try { 
                     var pOffset = CalculatePageOffset(current);
-                    var pData = _diskStream.ReadPage(pOffset, (int)_pageSize);
+                    var pData = ReadLogicalPageData(current, pOffset);
                     var header = PageHeader.FromByteArray(pData);
                     current = header.NextPageID;
                 }
@@ -246,7 +264,7 @@ public sealed class PageManager : IDisposable
         var pageOffset = CalculatePageOffset(pageID);
 
         // 检查是否超出文件大小
-        if (pageOffset + _pageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > _fileSize)
         {
             // 文件不存在该页面，创建新页面
             return CreateNewPage(pageID, PageType.Empty);
@@ -254,12 +272,13 @@ public sealed class PageManager : IDisposable
 
         try
         {
-            var pageData = _diskStream.ReadPage(pageOffset, (int)_pageSize);
-            if (IsZeroFilledPage(pageData))
+            var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+            if (IsZeroFilledPage(frame))
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
 
+            var pageData = _pageCodec.Decode(pageID, frame);
             var page = new Page(pageID, pageData);
             ValidateLoadedPage(page, pageData, pageOffset);
 
@@ -296,6 +315,29 @@ public sealed class PageManager : IDisposable
         }
     }
 
+    internal bool TryReadLogicalPageSnapshot(uint pageID, out byte[] pageData)
+    {
+        ThrowIfDisposed();
+        if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
+
+        var pageOffset = CalculatePageOffset(pageID);
+        if (pageOffset + _physicalPageSize > _fileSize)
+        {
+            pageData = Array.Empty<byte>();
+            return false;
+        }
+
+        var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+        if (IsZeroFilledPage(frame))
+        {
+            pageData = Array.Empty<byte>();
+            return false;
+        }
+
+        pageData = _pageCodec.Decode(pageID, frame);
+        return true;
+    }
+
     internal Page GetPagePinned(uint pageID, bool useCache = true)
     {
         ThrowIfDisposed();
@@ -316,19 +358,20 @@ public sealed class PageManager : IDisposable
         }
 
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _pageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > _fileSize)
         {
             return CreateNewPage(pageID, PageType.Empty, pinned: true);
         }
 
         try
         {
-            var pageData = _diskStream.ReadPage(pageOffset, (int)_pageSize);
-            if (IsZeroFilledPage(pageData))
+            var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+            if (IsZeroFilledPage(frame))
             {
                 return CreateNewPage(pageID, PageType.Empty, pinned: true);
             }
 
+            var pageData = _pageCodec.Decode(pageID, frame);
             var page = new Page(pageID, pageData);
             ValidateLoadedPage(page, pageData, pageOffset);
             page.Pin();
@@ -372,20 +415,21 @@ public sealed class PageManager : IDisposable
 
         // 从磁盘异步读取
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _pageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > _fileSize)
         {
             return CreateNewPage(pageID, PageType.Empty);
         }
 
-        var pageData = await _diskStream.ReadPageAsync(pageOffset, (int)_pageSize, cancellationToken);
+        var frame = await _diskStream.ReadPageAsync(pageOffset, (int)_physicalPageSize, cancellationToken);
 
         try
         {
-            if (IsZeroFilledPage(pageData))
+            if (IsZeroFilledPage(frame))
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
 
+            var pageData = _pageCodec.Decode(pageID, frame);
             var page = new Page(pageID, pageData);
             ValidateLoadedPage(page, pageData, pageOffset);
 
@@ -417,6 +461,18 @@ public sealed class PageManager : IDisposable
         }
 
         return true;
+    }
+
+    private byte[] ReadLogicalPageData(uint pageID, long pageOffset)
+    {
+        var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+        if (IsZeroFilledPage(frame))
+        {
+            var page = new Page(pageID, (int)_pageSize, PageType.Empty);
+            return page.Buffer;
+        }
+
+        return _pageCodec.Decode(pageID, frame);
     }
 
     /// <summary>
@@ -503,7 +559,7 @@ public sealed class PageManager : IDisposable
         AddToCache(page);
 
         // 计算新的文件大小
-        var newFileSize = CalculatePageOffset(pageID) + _pageSize;
+        var newFileSize = CalculatePageOffset(pageID) + _physicalPageSize;
 
         // 只有当新文件大小大于当前大小时才更新
         if (newFileSize > _fileSize)
@@ -548,7 +604,7 @@ public sealed class PageManager : IDisposable
             page.UpdateChecksum();
 
             var pageOffset = CalculatePageOffset(page.PageID);
-            _diskStream.WritePage(pageOffset, page.Buffer);
+            _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, page.Buffer));
 
             if (forceFlush)
             {
@@ -581,7 +637,7 @@ public sealed class PageManager : IDisposable
         page.UpdateChecksum();
 
         var pageOffset = CalculatePageOffset(page.PageID);
-        _diskStream.WritePage(pageOffset, page.Buffer);
+        _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, page.Buffer));
 
         if (forceFlush)
         {
@@ -594,12 +650,18 @@ public sealed class PageManager : IDisposable
     private byte[]? ReadPageSnapshotForWal(uint pageID)
     {
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _pageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > _fileSize)
         {
             return null;
         }
 
-        return _diskStream.ReadPage(pageOffset, (int)_pageSize);
+        var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+        if (IsZeroFilledPage(frame))
+        {
+            return null;
+        }
+
+        return _pageCodec.Decode(pageID, frame);
     }
 
     /// <summary>
@@ -722,12 +784,12 @@ public sealed class PageManager : IDisposable
             buffer = restoredPage.Buffer;
 
             var pageOffset = CalculatePageOffset(pageID);
-            _diskStream.WritePage(pageOffset, buffer);
+            _diskStream.WritePage(pageOffset, _pageCodec.Encode(pageID, buffer));
             _diskStream.Flush();
 
             RemoveFromCache(pageID);
 
-            _fileSize = Math.Max(_fileSize, pageOffset + _pageSize);
+            _fileSize = Math.Max(_fileSize, pageOffset + _physicalPageSize);
         }
     }
 
@@ -798,7 +860,7 @@ public sealed class PageManager : IDisposable
     /// <returns>偏移量</returns>
     private long CalculatePageOffset(uint pageID)
     {
-        return (pageID - 1) * _pageSize;
+        return (pageID - 1) * _physicalPageSize;
     }
 
     /// <summary>

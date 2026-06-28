@@ -114,11 +114,17 @@ var count = users.Query().Where(u => u.Age > 20).Count();
 var exists = users.Query().Any(u => u.Email.Contains("@gmail.com"));
 ```
 
-### 密码保护
+### 密码保护与数据页加密
+
+`Password` 可用于兼容的数据库密码保护。创建新库时同时设置 `EnableEncryption = true`，会启用数据页和 WAL payload 加密。已有明文库设置 `EnableEncryption = true` 不会被隐式迁移，会抛出异常；请显式导出或 compact 到新的加密库。
 
 ```csharp
 // 创建加密数据库
-var options = new TinyDbOptions { Password = "MySecurePassword123!" };
+var options = new TinyDbOptions
+{
+    EnableEncryption = true,
+    Password = "MySecurePassword123!"
+};
 using var secureDb = new TinyDbEngine("secure.db", options);
 
 // 访问加密数据库
@@ -174,6 +180,7 @@ catch
 var options = new TinyDbOptions
 {
     Password = "密码",           // 数据库密码（可选）
+    EnableEncryption = true,    // 创建新库时启用数据页和 WAL 加密
     PageSize = 8192,            // 页面大小（默认 8KB）
     CacheSize = 1000,           // 缓存页数
     EnableJournaling = true,    // 启用 WAL 日志

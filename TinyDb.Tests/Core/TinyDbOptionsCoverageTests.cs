@@ -51,13 +51,13 @@ public class TinyDbOptionsCoverageTests
     public async Task Validate_Encryption_ShouldWork()
     {
         var options = new TinyDbOptions { EnableEncryption = true, EncryptionKey = null };
-        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+        await Assert.That(() => options.Validate()).Throws<ArgumentException>();
         
         options.EncryptionKey = new byte[10]; // Wrong length
-        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+        await Assert.That(() => options.Validate()).Throws<ArgumentException>();
         
         options.EncryptionKey = new byte[32]; // Correct AES-256 length
-        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+        options.Validate();
     }
 
     [Test]
