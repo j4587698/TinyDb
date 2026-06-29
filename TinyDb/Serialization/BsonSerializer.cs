@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Text;
 using System.Globalization;
 using System.Collections.Frozen;
@@ -885,7 +886,7 @@ public sealed class BsonReader : IDisposable
         {
             var documentSize = ReadContainerLength("document");
             var startPosition = _stream.Position;
-            var document = new BsonDocument();
+            var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
 
             while (true)
             {
@@ -897,7 +898,7 @@ public sealed class BsonReader : IDisposable
                 var key = ReadCString();
                 var value = ReadTypedValue(type);
 
-                document = document.Set(key, value);
+                builder[key] = value;
             }
 
             var endPosition = _stream.Position;
@@ -909,7 +910,7 @@ public sealed class BsonReader : IDisposable
                 throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
             }
 
-            return document;
+            return new BsonDocument(builder);
         }
         finally
         {
@@ -931,7 +932,7 @@ public sealed class BsonReader : IDisposable
         {
             var documentSize = ReadContainerLength("document");
             var startPosition = _stream.Position;
-            var document = new BsonDocument();
+            var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
 
             while (true)
             {
@@ -946,7 +947,7 @@ public sealed class BsonReader : IDisposable
                 if (fields == null || fields.Contains(key))
                 {
                     var value = ReadTypedValue(type);
-                    document = document.Set(key, value);
+                    builder[key] = value;
                 }
                 else
                 {
@@ -964,7 +965,7 @@ public sealed class BsonReader : IDisposable
                 throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
             }
 
-            return document;
+            return new BsonDocument(builder);
         }
         finally
         {

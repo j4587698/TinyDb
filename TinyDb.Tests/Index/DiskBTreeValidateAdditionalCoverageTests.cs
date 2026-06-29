@@ -132,6 +132,38 @@ public sealed class DiskBTreeValidateAdditionalCoverageTests
         }
     }
 
+    [Test]
+    public async Task Validate_WhenNonRootLeafUnderflows_ShouldReturnFalse()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_validate_underflow_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            var tree = CreatePopulatedTree(pm, count: 60);
+
+            await Assert.That(tree.Validate()).IsTrue();
+
+            var root = tree.RootNode;
+            await Assert.That(root.IsLeaf).IsFalse();
+
+            var leaf = LoadLeftmostLeaf(tree, root);
+            await Assert.That(leaf.PageId).IsNotEqualTo(root.PageId);
+
+            leaf.Keys.Clear();
+            leaf.Values.Clear();
+            leaf.MarkDirty();
+            leaf.Save(pm);
+
+            await Assert.That(tree.Validate()).IsFalse();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
     private static DiskBTree CreatePopulatedTree(PageManager pm, int count)
     {
         var tree = DiskBTree.Create(pm, maxKeys: 3);
@@ -142,10 +174,19 @@ public sealed class DiskBTreeValidateAdditionalCoverageTests
         return tree;
     }
 
+    private static DiskBTreeNode LoadLeftmostLeaf(DiskBTree tree, DiskBTreeNode node)
+    {
+        while (!node.IsLeaf)
+        {
+            node = LoadNode(tree, node.ChildrenIds[0]);
+        }
+
+        return node;
+    }
+
     private static DiskBTreeNode LoadNode(DiskBTree tree, uint pageId)
     {
         var method = typeof(DiskBTree).GetMethod("LoadNode", BindingFlags.NonPublic | BindingFlags.Instance);
         return (DiskBTreeNode)method!.Invoke(tree, new object[] { pageId })!;
     }
 }
-

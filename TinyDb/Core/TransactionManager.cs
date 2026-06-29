@@ -99,16 +99,53 @@ public sealed class TransactionManager : IDisposable
             try
             {
                 transaction.State = TransactionState.Committing;
+                var operations = transaction.GetOperationsSnapshot();
+                using var collectionLocks = _engine.EnterCollectionWriteLocks(
+                    operations.Select(static operation => operation.CollectionName));
 
                 // 验证所有操作
                 ValidateOperations(transaction);
 
                 // 应用所有更改到数据库
-                using var durabilityScope = _engine.BeginTransactionDurabilityScope(transaction.TransactionId);
-                ApplyOperationsToDatabase(transaction);
+                var durabilityScope = _engine.BeginTransactionDurabilityScope(transaction.TransactionId);
+                try
+                {
+                    ApplyOperationsToDatabase(operations);
 
-                // 关键：在标记为 Committed 之前，确保所有变更已持久化到磁盘/WAL
-                durabilityScope.Commit();
+                    try
+                    {
+                        // 关键：在标记为 Committed 之前，确保所有变更已持久化到磁盘/WAL
+                        durabilityScope.Commit();
+                    }
+                    catch (Exception commitEx)
+                    {
+                        durabilityScope.Dispose();
+                        durabilityScope = null;
+
+                        var rollbackErrors = RollbackAppliedOperations(operations);
+                        if (rollbackErrors.Count == 0)
+                        {
+                            throw new InvalidOperationException(
+                                "Transaction durability commit failed after applying operations; applied operations were rolled back.",
+                                commitEx);
+                        }
+
+                        var errors = new List<Exception>
+                        {
+                            new InvalidOperationException(
+                                "Transaction durability commit failed after applying operations.",
+                                commitEx)
+                        };
+                        errors.AddRange(rollbackErrors);
+                        throw new AggregateException(
+                            "Transaction durability commit failed and rollback compensation encountered errors.",
+                            errors);
+                    }
+                }
+                finally
+                {
+                    durabilityScope?.Dispose();
+                }
 
                 transaction.State = TransactionState.Committed;
             }
@@ -430,17 +467,21 @@ public sealed class TransactionManager : IDisposable
         });
     }
 
+    internal void ClearForeignKeyCache()
+    {
+        _foreignKeyCache.Clear();
+    }
+
     /// <summary>
     /// 将操作应用到数据库
     /// </summary>
     /// <param name="transaction">事务</param>
-    private void ApplyOperationsToDatabase(Transaction transaction)
+    private void ApplyOperationsToDatabase(IReadOnlyList<TransactionOperation> operations)
     {
         int appliedCount = 0;
-        var operations = transaction.GetOperationsSnapshot();
         try
         {
-            for (int i = 0; i < operations.Length; i++)
+            for (int i = 0; i < operations.Count; i++)
             {
                 ApplySingleOperation(operations[i]);
                 appliedCount++;
@@ -454,7 +495,7 @@ public sealed class TransactionManager : IDisposable
             // 先尝试对“失败的那一条”进行补偿，避免残留半应用状态。
             try
             {
-                if (appliedCount >= 0 && appliedCount < operations.Length)
+                if (appliedCount >= 0 && appliedCount < operations.Count)
                 {
                     RollbackSingleOperation(operations[appliedCount]);
                 }
@@ -493,6 +534,26 @@ public sealed class TransactionManager : IDisposable
             allErrors.AddRange(compensationErrors);
             throw new AggregateException("Transaction apply failed and compensation rollback encountered errors.", allErrors);
         }
+    }
+
+    private List<Exception> RollbackAppliedOperations(IReadOnlyList<TransactionOperation> operations)
+    {
+        var rollbackErrors = new List<Exception>();
+        for (int i = operations.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                RollbackSingleOperation(operations[i]);
+            }
+            catch (Exception rollbackEx)
+            {
+                rollbackErrors.Add(new InvalidOperationException(
+                    $"Rollback compensation failed for operation index {i}.",
+                    rollbackEx));
+            }
+        }
+
+        return rollbackErrors;
     }
 
     /// <summary>

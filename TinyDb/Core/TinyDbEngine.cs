@@ -255,6 +255,14 @@ public sealed class TinyDbEngine : IDisposable
         _diskStream.Dispose();
     }
 
+    private void ResetRuntimeStateForReinitialize()
+    {
+        _collectionStates.Clear();
+        DisposeIndexManagers();
+        _collectionMetaStore = null!;
+        _isInitialized = false;
+    }
+
     /// <summary>
     /// 压缩数据库（碎片整理）
     /// 注意：此操作会阻塞所有其他操作，并重建数据库文件。
@@ -262,48 +270,55 @@ public sealed class TinyDbEngine : IDisposable
     public void CompactDatabase()
     {
         ThrowIfDisposed();
+
+        EnsureInitialized();
+        var tempFile = _filePath + ".compact";
+        var collectionNames = GetCollectionNames(includeSystemCollections: true)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        using var collectionLocks = EnterCollectionWriteLocks(collectionNames);
+
         lock (_lock)
         {
-            EnsureInitialized();
-            
-            // 1. 刷新当前状态
-            Flush();
-            
-            var tempFile = _filePath + ".compact";
-            if (File.Exists(tempFile)) File.Delete(tempFile);
-            
-            // 使用临时引擎写入新文件
-            using (var tempEngine = new TinyDbEngine(tempFile, _options))
+            FlushCore();
+        }
+
+        if (File.Exists(tempFile)) File.Delete(tempFile);
+
+        // 使用临时引擎写入新文件
+        using (var tempEngine = new TinyDbEngine(tempFile, _options))
+        {
+            // 迁移数据
+            foreach (var colName in collectionNames)
             {
-                // 2. 迁移数据
-                foreach (var colName in GetCollectionNames(includeSystemCollections: true))
+                // 获取源数据
+                var docs = FindAll(colName).ToList();
+
+                // 写入目标：避免 GetCollection<T> 的泛型缓存冲突（同名集合可能同时以不同实体类型访问）
+                tempEngine.RegisterCollection(colName);
+
+                // 重建索引（先建索引，再写入，确保索引得到填充）
+                var idxMgr = GetIndexManager(colName);
+                var tempIdxMgr = tempEngine.GetIndexManager(colName);
+                foreach (var stat in idxMgr.GetAllStatistics())
                 {
-                    // 获取源数据
-                    var docs = FindAll(colName).ToList();
+                    tempIdxMgr.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
+                }
 
-                    // 写入目标：避免 GetCollection<T> 的泛型缓存冲突（同名集合可能同时以不同实体类型访问）
-                    tempEngine.RegisterCollection(colName);
-
-                    // 3. 重建索引（先建索引，再写入，确保索引得到填充）
-                    var idxMgr = GetIndexManager(colName);
-                    var tempIdxMgr = tempEngine.GetIndexManager(colName);
-                    foreach (var stat in idxMgr.GetAllStatistics())
-                    {
-                        tempIdxMgr.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
-                    }
-
-                    if (docs.Count > 0)
-                    {
-                        tempEngine.InsertDocuments(colName, docs);
-                    }
+                if (docs.Count > 0)
+                {
+                    tempEngine.InsertDocuments(colName, docs);
                 }
             }
-            
-            // 4. 释放当前组件以解除文件锁定
+        }
+
+        // 释放当前组件以解除文件锁定，并替换文件。
+        lock (_lock)
+        {
             DisposeComponents();
-            
-            // 5. 替换文件
-            // 先备份? 可选，这里直接覆盖
+
             try 
             {
                 File.Move(tempFile, _filePath, overwrite: true);
@@ -311,17 +326,12 @@ public sealed class TinyDbEngine : IDisposable
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // 移动失败，尝试恢复组件
+                ResetRuntimeStateForReinitialize();
                 InitializeComponents(null);
                 throw;
             }
-            
-            // 6. 清理缓存状态
-            _collectionStates.Clear();
-            DisposeIndexManagers(); 
-            _collectionMetaStore = null!;
-            _isInitialized = false;
-            
-            // 7. 重新初始化
+
+            ResetRuntimeStateForReinitialize();
             InitializeComponents(null);
         }
     }
@@ -452,12 +462,15 @@ public sealed class TinyDbEngine : IDisposable
 
     private void WriteHeader(bool forceFlush = false)
     {
-        _header.TotalPages = _pageManager.TotalPages;
-        _header.FirstFreePage = _pageManager.FirstFreePageID;
-        _header.UpdateModification();
-        var p = _pageManager.GetPage(1);
-        p.WriteData(0, _header.ToByteArray());
-        _pageManager.SavePage(p, forceFlush);
+        lock (_lock)
+        {
+            _header.TotalPages = _pageManager.TotalPages;
+            _header.FirstFreePage = _pageManager.FirstFreePageID;
+            _header.UpdateModification();
+            var p = _pageManager.GetPage(1);
+            p.WriteData(0, _header.ToByteArray());
+            _pageManager.SavePage(p, forceFlush);
+        }
     }
 
     private void InitializeSystemPages()
@@ -651,6 +664,8 @@ public sealed class TinyDbEngine : IDisposable
     {
         ThrowIfDisposed();
         EnsureInitialized();
+
+        using var collectionLock = EnterCollectionWriteLocks(new[] { n });
         bool r = _collections.TryRemove(n, out var col);
         if (r)
         {
@@ -660,13 +675,40 @@ public sealed class TinyDbEngine : IDisposable
         if (_collectionMetaStore.IsKnown(n))
         {
             _collectionMetaStore.RemoveCollection(n, true);
-            _collectionStates.TryRemove(n, out _);
             if (_indexManagers.TryRemove(n, out var indexManager)) indexManager.Dispose();
+            ClearCollectionRuntimeCaches(n);
             return true;
         }
 
         if (_indexManagers.TryRemove(n, out var removedIndexManager)) removedIndexManager.Dispose();
+        ClearCollectionRuntimeCaches(n);
         return r;
+    }
+
+    private void ClearCollectionRuntimeCaches(string collectionName)
+    {
+        _collectionStates.TryRemove(collectionName, out _);
+
+        var identityPrefix = collectionName + "\0";
+        foreach (var key in _identitySequences.Keys)
+        {
+            if (key.StartsWith(identityPrefix, StringComparison.Ordinal))
+            {
+                _identitySequences.TryRemove(key, out _);
+            }
+        }
+
+        var indexLockPrefix = collectionName + "\u001F";
+        foreach (var key in _indexCreationLocks.Keys)
+        {
+            if (key.StartsWith(indexLockPrefix, StringComparison.Ordinal))
+            {
+                _indexCreationLocks.TryRemove(key, out _);
+            }
+        }
+
+        _transactionManager.ClearForeignKeyCache();
+        _metadataManager.InvalidateMetadata(collectionName);
     }
 
     /// <summary>
@@ -1145,6 +1187,58 @@ public sealed class TinyDbEngine : IDisposable
             state.MarkCacheInitialized();
             _collectionStates[col] = state;
             return state;
+        }
+    }
+
+    internal IDisposable EnterCollectionWriteLocks(IEnumerable<string> collectionNames)
+    {
+        if (collectionNames == null) throw new ArgumentNullException(nameof(collectionNames));
+
+        var states = collectionNames
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .Select(GetCollectionState)
+            .ToArray();
+
+        return new CollectionWriteLockScope(states);
+    }
+
+    private sealed class CollectionWriteLockScope : IDisposable
+    {
+        private readonly CollectionState[] _states;
+        private int _entered;
+        private bool _disposed;
+
+        public CollectionWriteLockScope(CollectionState[] states)
+        {
+            _states = states;
+            try
+            {
+                for (var i = 0; i < _states.Length; i++)
+                {
+                    Monitor.Enter(_states[i].WriteSyncRoot);
+                    _entered++;
+                }
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            for (var i = _entered - 1; i >= 0; i--)
+            {
+                Monitor.Exit(_states[i].WriteSyncRoot);
+            }
+
+            _entered = 0;
         }
     }
 
@@ -1697,6 +1791,7 @@ public sealed class TinyDbEngine : IDisposable
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return 0;
+        cancellationToken.ThrowIfCancellationRequested();
 
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
@@ -1751,9 +1846,14 @@ public sealed class TinyDbEngine : IDisposable
 
                     for (int docIndex = 0; docIndex < docs.Count; docIndex++)
                     {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            exceptions.Add(new OperationCanceledException(cancellationToken));
+                            break;
+                        }
+
                         var d = docs[docIndex];
                         if (d == null) continue;
-                        cancellationToken.ThrowIfCancellationRequested();
 
                         try
                         {
@@ -1824,7 +1924,15 @@ public sealed class TinyDbEngine : IDisposable
 
                 if (exceptions.Count > 0)
                 {
+                    var cancellationException = exceptions.Count == 1
+                        ? exceptions[0] as OperationCanceledException
+                        : null;
                     RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
+                    if (cancellationException != null && exceptions.Count == 1)
+                    {
+                        throw cancellationException;
+                    }
+
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 

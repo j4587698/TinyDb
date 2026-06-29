@@ -52,6 +52,8 @@ public sealed class WriteAheadLog : IDisposable
 
     internal bool IsInTransactionScope => IsEnabled && _currentTransactionId.Value.HasValue;
 
+    internal Action? BeforeTransactionCommitForTesting { get; set; }
+
     public WriteAheadLog(
         string databaseFilePath,
         int pageSize,
@@ -268,6 +270,7 @@ public sealed class WriteAheadLog : IDisposable
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
 
+                _wal.BeforeTransactionCommitForTesting?.Invoke();
                 _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
                 _wal._hasPendingEntries = true;
                 _wal.FlushLogCore();
