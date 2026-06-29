@@ -110,6 +110,29 @@ public class QueryExecutorCoverageTests
         };
         var rangeNE = (IndexScanRange)method.Invoke(null, new object[] { planNE })!;
         await Assert.That(rangeNE).IsNotNull();
+
+        // Case 6: Bounded range on the same field
+        var planRange = new QueryExecutionPlan
+        {
+            IndexScanKeys = new List<IndexScanKey>
+            {
+                new IndexScanKey
+                {
+                    FieldName = "a",
+                    Value = new BsonInt32(18),
+                    ComparisonType = ComparisonType.Range,
+                    LowerValue = new BsonInt32(18),
+                    UpperValue = new BsonInt32(65),
+                    IncludeLower = false,
+                    IncludeUpper = false
+                }
+            }
+        };
+        var rangeBounded = (IndexScanRange)method.Invoke(null, new object[] { planRange })!;
+        await Assert.That(rangeBounded.MinKey.Values[0].RawValue).IsEqualTo(18);
+        await Assert.That(rangeBounded.MaxKey.Values[0].RawValue).IsEqualTo(65);
+        await Assert.That(rangeBounded.IncludeMin).IsFalse();
+        await Assert.That(rangeBounded.IncludeMax).IsFalse();
     }
 
     [Test]

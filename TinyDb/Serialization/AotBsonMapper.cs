@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
@@ -424,22 +425,21 @@ public static class AotBsonMapper
             throw new ArgumentException("集合类型必须实现 IEnumerable 接口。", nameof(collection));
         }
 
-        BsonArray bsonArray = new BsonArray();
+        var builder = ImmutableList.CreateBuilder<BsonValue>();
 
         foreach (var item in enumerable)
         {
             if (item == null)
             {
-                bsonArray = bsonArray.AddValue(BsonNull.Value);
+                builder.Add(BsonNull.Value);
                 continue;
             }
 
-            var itemType = item.GetType();
             var bsonValue = ConvertToBsonValue(item);
-            bsonArray = bsonArray.AddValue(bsonValue);
+            builder.Add(bsonValue);
         }
 
-        return bsonArray;
+        return new BsonArray(builder);
     }
 
     /// <summary>
@@ -459,7 +459,7 @@ public static class AotBsonMapper
             throw new ArgumentException($"对象 {dictionary.GetType().FullName} 未实现 IDictionary 接口，无法在AOT回退模式下进行序列化。", nameof(dictionary));
         }
 
-        var bsonDocument = new BsonDocument();
+        var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
 
         foreach (DictionaryEntry entry in rawDictionary)
         {
@@ -471,10 +471,10 @@ public static class AotBsonMapper
             var bsonValue = entry.Value != null
                 ? ConvertToBsonValue(entry.Value)
                 : BsonNull.Value;
-            bsonDocument = bsonDocument.Set(key, bsonValue);
+            builder[key] = bsonValue;
         }
 
-        return bsonDocument;
+        return new BsonDocument(builder);
     }
 
     private static object? ConvertDictionary([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type dictionaryType, BsonDocument document)

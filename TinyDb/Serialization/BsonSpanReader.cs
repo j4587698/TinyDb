@@ -83,30 +83,30 @@ public ref struct BsonSpanReader
         EnterContainer();
         try
         {
-        int startPos = _position;
-        int arrSize = ReadInt32();
-        if (arrSize < 5 || arrSize > _data.Length - startPos)
-            throw new InvalidOperationException($"Invalid array size: {arrSize}");
+            int startPos = _position;
+            int arrSize = ReadInt32();
+            if (arrSize < 5 || arrSize > _data.Length - startPos)
+                throw new InvalidOperationException($"Invalid array size: {arrSize}");
 
-        var array = new BsonArray();
+            var builder = ImmutableList.CreateBuilder<BsonValue>();
 
-        while (true)
-        {
-            var type = (BsonType)ReadByte();
-            if (type == BsonType.End) break;
+            while (true)
+            {
+                var type = (BsonType)ReadByte();
+                if (type == BsonType.End) break;
 
-            ReadCString(); // 忽略数组索引键
-            var value = ReadValue(type);
-            array = array.AddValue(value);
-        }
+                ReadCString(); // 忽略数组索引键
+                var value = ReadValue(type);
+                builder.Add(value);
+            }
 
-        int actualSize = _position - startPos;
-        if (actualSize != arrSize)
-        {
-            throw new InvalidOperationException($"Array size mismatch. Expected {arrSize}, read {actualSize}");
-        }
+            int actualSize = _position - startPos;
+            if (actualSize != arrSize)
+            {
+                throw new InvalidOperationException($"Array size mismatch. Expected {arrSize}, read {actualSize}");
+            }
 
-        return array;
+            return new BsonArray(builder);
         }
         finally
         {

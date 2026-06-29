@@ -1625,6 +1625,7 @@ public sealed class QueryExecutor
         bool includeMax = true;
         bool stoppedAtRange = false;
         ComparisonType lastOp = ComparisonType.Equal;
+        bool rangeIncludesUpper = false;
 
         foreach (var key in executionPlan.IndexScanKeys)
         {
@@ -1662,6 +1663,13 @@ public sealed class QueryExecutor
                         maxValues.Add(key.Value);
                         includeMax = true;
                         break;
+                    case ComparisonType.Range:
+                        minValues.Add(key.LowerValue ?? BsonMinKey.Value);
+                        maxValues.Add(key.UpperValue ?? BsonMaxKey.Value);
+                        includeMin = key.IncludeLower;
+                        includeMax = key.IncludeUpper;
+                        rangeIncludesUpper = key.IncludeUpper;
+                        break;
                 }
                 break;
             }
@@ -1677,7 +1685,8 @@ public sealed class QueryExecutor
         {
             // If we ended with LT/LTE, we need to ensure we include children of the boundary
             // e.g. A <= 5 should include (5, 1)
-            if (lastOp == ComparisonType.LessThan || lastOp == ComparisonType.LessThanOrEqual)
+            if (lastOp == ComparisonType.LessThanOrEqual ||
+                (lastOp == ComparisonType.Range && rangeIncludesUpper))
             {
                 maxValues.Add(BsonMaxKey.Value);
             }
