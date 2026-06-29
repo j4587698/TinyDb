@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using TinyDb.Security;
 
 namespace TinyDb.Storage;
@@ -38,6 +39,8 @@ internal sealed class AesGcmWalCodec : IWalCodec
 
     private readonly byte[] _key;
     private readonly byte[] _databaseId;
+    private readonly byte[] _noncePrefix = new byte[8];
+    private long _nonceCounter;
 
     public AesGcmWalCodec(byte[] key, byte[] databaseId)
     {
@@ -53,6 +56,7 @@ internal sealed class AesGcmWalCodec : IWalCodec
 
         _key = key.ToArray();
         _databaseId = databaseId.ToArray();
+        RandomNumberGenerator.Fill(_noncePrefix);
     }
 
     public bool IsEncrypted => true;
@@ -66,13 +70,30 @@ internal sealed class AesGcmWalCodec : IWalCodec
         var frame = new byte[MaxOverhead + payload.Length];
         Magic.CopyTo(frame, 0);
         var nonce = frame.AsSpan(MagicLength, EncryptionMetadata.NonceLength);
-        RandomNumberGenerator.Fill(nonce);
+        FillNonce(nonce);
         var ciphertext = frame.AsSpan(MagicLength + EncryptionMetadata.NonceLength, payload.Length);
         var tag = frame.AsSpan(MagicLength + EncryptionMetadata.NonceLength + payload.Length, EncryptionMetadata.TagLength);
 
         using var aes = new AesGcm(_key, EncryptionMetadata.TagLength);
         aes.Encrypt(nonce, payload, ciphertext, tag, BuildAad(entryType, pageId, recordOffset));
         return frame;
+    }
+
+    private void FillNonce(Span<byte> nonce)
+    {
+        if (nonce.Length != EncryptionMetadata.NonceLength)
+        {
+            throw new ArgumentException("Nonce length does not match codec configuration.", nameof(nonce));
+        }
+
+        var counter = Interlocked.Increment(ref _nonceCounter);
+        if ((ulong)counter > uint.MaxValue)
+        {
+            throw new InvalidOperationException("AES-GCM WAL nonce counter exhausted; rotate the encryption key.");
+        }
+
+        _noncePrefix.CopyTo(nonce);
+        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(_noncePrefix.Length, sizeof(uint)), (uint)counter);
     }
 
     public byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload)

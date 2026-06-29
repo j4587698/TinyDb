@@ -104,6 +104,28 @@ public sealed class QueryExecutorTopKAndSortCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task ExecuteShaped_TopK_WithHighPrecisionDecimal128_ShouldPreserveOrder()
+    {
+        var col = _engine.GetBsonCollection("decimal_sort");
+        col.Insert(new BsonDocument().Set("_id", 2).Set("amount", new BsonDecimal128(10000000000000001m)));
+        col.Insert(new BsonDocument().Set("_id", 1).Set("amount", new BsonDecimal128(10000000000000000m)));
+
+        var shape = new QueryShape<BsonDocument>
+        {
+            Sort = new[] { new QuerySortField("amount", typeof(decimal), false) },
+            Skip = 0,
+            Take = 2
+        };
+
+        var result = _executor.ExecuteShaped("decimal_sort", shape, out _).ToList();
+
+        var ids = result.Select(doc => doc["_id"].ToInt32()).ToArray();
+        await Assert.That(ids.Length).IsEqualTo(2);
+        await Assert.That(ids[0]).IsEqualTo(1);
+        await Assert.That(ids[1]).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task QueryExecutor_InternalSortHelpers_ShouldCoverSortFieldBytesAndSortKeyFromValueBranches()
     {
         var qeType = typeof(QueryExecutor);

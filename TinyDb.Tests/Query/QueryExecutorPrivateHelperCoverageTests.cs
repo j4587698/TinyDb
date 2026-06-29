@@ -683,8 +683,8 @@ public sealed class QueryExecutorPrivateHelperCoverageTests : IDisposable
         var descendingSort = (IReadOnlyList<QuerySortField>)new List<QuerySortField> { new QuerySortField("A", typeof(int), true) };
         _ = (int)compareDocumentToRow!.Invoke(null, new object[] { new BsonDocument().Set("A", 2), row, 1L, descendingSort })!;
 
-        await Assert.That(() => fromBsonValue.Invoke(null, new object?[] { new BsonDecimal128(Decimal128.MaxValue) }))
-            .Throws<TargetInvocationException>();
+        var maxDecimalKey = fromBsonValue.Invoke(null, new object?[] { new BsonDecimal128(Decimal128.MaxValue) });
+        await Assert.That(maxDecimalKey).IsNotNull();
     }
 
     [Test]
@@ -807,13 +807,17 @@ public sealed class QueryExecutorPrivateHelperCoverageTests : IDisposable
         var il = dynamicMethod.GetILGenerator();
         var spanType = typeof(ReadOnlySpan<byte>);
         var spanLocal = il.DeclareLocal(spanType);
+        var decimalLocal = il.DeclareLocal(typeof(Decimal128));
         var keyRefLocal = il.DeclareLocal(sortKeyRefType);
 
         il.Emit(OpCodes.Ldloca_S, spanLocal);
         il.Emit(OpCodes.Initobj, spanType);
+        il.Emit(OpCodes.Ldloca_S, decimalLocal);
+        il.Emit(OpCodes.Initobj, typeof(Decimal128));
         il.Emit(OpCodes.Ldc_I4, (int)BsonType.Array);
         il.Emit(OpCodes.Ldc_R8, 0d);
         il.Emit(OpCodes.Ldc_I8, 0L);
+        il.Emit(OpCodes.Ldloc, decimalLocal);
         il.Emit(OpCodes.Ldloc, spanLocal);
         il.Emit(OpCodes.Newobj, sortKeyRefCtor);
         il.Emit(OpCodes.Stloc, keyRefLocal);
@@ -861,14 +865,18 @@ public sealed class QueryExecutorPrivateHelperCoverageTests : IDisposable
         var il = dynamicMethod.GetILGenerator();
         var spanType = typeof(ReadOnlySpan<byte>);
         var spanLocal = il.DeclareLocal(spanType);
+        var decimalLocal = il.DeclareLocal(typeof(Decimal128));
         var keyRefLocal = il.DeclareLocal(sortKeyRefType);
         var sortKeyLocal = il.DeclareLocal(sortKeyType);
 
         il.Emit(OpCodes.Ldloca_S, spanLocal);
         il.Emit(OpCodes.Initobj, spanType);
+        il.Emit(OpCodes.Ldloca_S, decimalLocal);
+        il.Emit(OpCodes.Initobj, typeof(Decimal128));
         il.Emit(OpCodes.Ldc_I4, (int)BsonType.Int32);
         il.Emit(OpCodes.Ldc_R8, 1d);
         il.Emit(OpCodes.Ldc_I8, 0L);
+        il.Emit(OpCodes.Ldloc, decimalLocal);
         il.Emit(OpCodes.Ldloc, spanLocal);
         il.Emit(OpCodes.Newobj, sortKeyRefCtor);
         il.Emit(OpCodes.Stloc, keyRefLocal);

@@ -23,6 +23,32 @@ public sealed class DiskBTree : IDisposable
     public void ExitReadLock() => _lock.ExitReadLock();
     public void EnterWriteLock() => _lock.EnterWriteLock();
     public void ExitWriteLock() => _lock.ExitWriteLock();
+
+    internal sealed class IndexScanBatch
+    {
+        public IndexScanBatch(
+            List<BsonValue> values,
+            IndexKey? lastKey,
+            BsonValue? lastValue,
+            uint lastPageId,
+            int lastIndex,
+            bool hasMore)
+        {
+            Values = values;
+            LastKey = lastKey;
+            LastValue = lastValue;
+            LastPageId = lastPageId;
+            LastIndex = lastIndex;
+            HasMore = hasMore;
+        }
+
+        public List<BsonValue> Values { get; }
+        public IndexKey? LastKey { get; }
+        public BsonValue? LastValue { get; }
+        public uint LastPageId { get; }
+        public int LastIndex { get; }
+        public bool HasMore { get; }
+    }
     
     /// <summary>
     /// 获取根节点的页面 ID。
@@ -606,6 +632,7 @@ public sealed class DiskBTree : IDisposable
     public IEnumerable<BsonValue> FindRange(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
     {
         ThrowIfDisposed();
+        var results = new List<BsonValue>();
         using var lease = BeginPageLease();
         var node = FindFirstCandidateLeafNode(startKey);
 
@@ -626,7 +653,7 @@ public sealed class DiskBTree : IDisposable
 
                 if (cmpStart > 0 || (cmpStart == 0 && includeStart))
                 {
-                    yield return node.Values[i];
+                    results.Add(node.Values[i]);
                 }
             }
             
@@ -634,6 +661,111 @@ public sealed class DiskBTree : IDisposable
             if (node.NextSiblingId == 0) break;
             node = LoadNode(node.NextSiblingId);
         }
+
+        return results;
+    }
+
+    internal IndexScanBatch FindRangeBatch(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart,
+        bool includeEnd,
+        IndexKey? continuationKey,
+        BsonValue? continuationValue,
+        uint continuationPageId,
+        int continuationIndex,
+        int batchSize)
+    {
+        if (batchSize <= 0) throw new ArgumentOutOfRangeException(nameof(batchSize));
+
+        ThrowIfDisposed();
+        var results = new List<BsonValue>(batchSize);
+        IndexKey? lastKey = null;
+        BsonValue? lastValue = null;
+        uint lastPageId = 0;
+        int lastIndex = -1;
+
+        using var lease = BeginPageLease();
+        DiskBTreeNode node;
+        var startIndex = 0;
+        var waitingForContinuation = continuationKey != null;
+        if (TryResumeFromLeafPosition(continuationPageId, continuationIndex, continuationKey, continuationValue, forward: true, out var resumedNode, out startIndex))
+        {
+            node = resumedNode;
+            waitingForContinuation = false;
+        }
+        else
+        {
+            node = FindFirstCandidateLeafNode(continuationKey ?? startKey);
+        }
+
+        while (node != null)
+        {
+            if (startIndex >= node.KeyCount)
+            {
+                if (node.NextSiblingId == 0) break;
+                node = LoadNode(node.NextSiblingId);
+                startIndex = 0;
+                continue;
+            }
+
+            bool pastEnd = false;
+            for (int i = startIndex; i < node.KeyCount; i++)
+            {
+                var key = node.Keys[i];
+                var value = node.Values[i];
+                int cmpEnd = key.CompareTo(endKey);
+
+                if (cmpEnd > 0 || (cmpEnd == 0 && !includeEnd))
+                {
+                    pastEnd = true;
+                    break;
+                }
+
+                if (waitingForContinuation)
+                {
+                    var cmpContinuation = key.CompareTo(continuationKey!);
+                    if (cmpContinuation < 0)
+                    {
+                        continue;
+                    }
+
+                    if (cmpContinuation == 0)
+                    {
+                        if (continuationValue != null && ValuesEqual(value, continuationValue))
+                        {
+                            waitingForContinuation = false;
+                        }
+
+                        continue;
+                    }
+
+                    waitingForContinuation = false;
+                }
+
+                int cmpStart = key.CompareTo(startKey);
+                if (cmpStart > 0 || (cmpStart == 0 && includeStart))
+                {
+                    results.Add(value);
+                    lastKey = key.Clone();
+                    lastValue = value;
+                    lastPageId = node.PageId;
+                    lastIndex = i;
+
+                    if (results.Count >= batchSize)
+                    {
+                        return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: true);
+                    }
+                }
+            }
+
+            if (pastEnd) break;
+            if (node.NextSiblingId == 0) break;
+            node = LoadNode(node.NextSiblingId);
+            startIndex = 0;
+        }
+
+        return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: false);
     }
 
     /// <summary>
@@ -647,6 +779,7 @@ public sealed class DiskBTree : IDisposable
     public IEnumerable<BsonValue> FindRangeReverse(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
     {
         ThrowIfDisposed();
+        var results = new List<BsonValue>();
         using var lease = BeginPageLease();
         var node = FindLeafNode(endKey);
 
@@ -671,12 +804,159 @@ public sealed class DiskBTree : IDisposable
                     continue;
                 }
 
-                yield return node.Values[i];
+                results.Add(node.Values[i]);
             }
 
             if (pastStart) break;
             if (node.PrevSiblingId == 0) break;
             node = LoadNode(node.PrevSiblingId);
+        }
+
+        return results;
+    }
+
+    internal IndexScanBatch FindRangeReverseBatch(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart,
+        bool includeEnd,
+        IndexKey? continuationKey,
+        BsonValue? continuationValue,
+        uint continuationPageId,
+        int continuationIndex,
+        int batchSize)
+    {
+        if (batchSize <= 0) throw new ArgumentOutOfRangeException(nameof(batchSize));
+
+        ThrowIfDisposed();
+        var results = new List<BsonValue>(batchSize);
+        IndexKey? lastKey = null;
+        BsonValue? lastValue = null;
+        uint lastPageId = 0;
+        int lastIndex = -1;
+
+        using var lease = BeginPageLease();
+        DiskBTreeNode node;
+        var startIndex = -1;
+        var waitingForContinuation = continuationKey != null;
+        if (TryResumeFromLeafPosition(continuationPageId, continuationIndex, continuationKey, continuationValue, forward: false, out var resumedNode, out startIndex))
+        {
+            node = resumedNode;
+            waitingForContinuation = false;
+        }
+        else
+        {
+            node = FindLeafNode(continuationKey ?? endKey);
+            startIndex = node.KeyCount - 1;
+        }
+
+        while (node != null)
+        {
+            if (startIndex < 0)
+            {
+                if (node.PrevSiblingId == 0) break;
+                node = LoadNode(node.PrevSiblingId);
+                startIndex = node.KeyCount - 1;
+                continue;
+            }
+
+            bool pastStart = false;
+
+            for (int i = startIndex; i >= 0; i--)
+            {
+                var key = node.Keys[i];
+                var value = node.Values[i];
+                int cmpStart = key.CompareTo(startKey);
+
+                if (cmpStart < 0 || (cmpStart == 0 && !includeStart))
+                {
+                    pastStart = true;
+                    break;
+                }
+
+                if (waitingForContinuation)
+                {
+                    var cmpContinuation = key.CompareTo(continuationKey!);
+                    if (cmpContinuation > 0)
+                    {
+                        continue;
+                    }
+
+                    if (cmpContinuation == 0)
+                    {
+                        if (continuationValue != null && ValuesEqual(value, continuationValue))
+                        {
+                            waitingForContinuation = false;
+                        }
+
+                        continue;
+                    }
+
+                    waitingForContinuation = false;
+                }
+
+                int cmpEnd = key.CompareTo(endKey);
+                if (cmpEnd > 0 || (cmpEnd == 0 && !includeEnd))
+                {
+                    continue;
+                }
+
+                results.Add(value);
+                lastKey = key.Clone();
+                lastValue = value;
+                lastPageId = node.PageId;
+                lastIndex = i;
+
+                if (results.Count >= batchSize)
+                {
+                    return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: true);
+                }
+            }
+
+            if (pastStart) break;
+            if (node.PrevSiblingId == 0) break;
+            node = LoadNode(node.PrevSiblingId);
+            startIndex = node.KeyCount - 1;
+        }
+
+        return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: false);
+    }
+
+    private bool TryResumeFromLeafPosition(
+        uint pageId,
+        int index,
+        IndexKey? key,
+        BsonValue? value,
+        bool forward,
+        [NotNullWhen(true)] out DiskBTreeNode? node,
+        out int startIndex)
+    {
+        node = null;
+        startIndex = forward ? 0 : -1;
+
+        if (pageId == 0 || index < 0 || key == null || value == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var candidate = LoadNode(pageId);
+            if (!candidate.IsLeaf ||
+                index >= candidate.KeyCount ||
+                candidate.Keys[index].CompareTo(key) != 0 ||
+                !ValuesEqual(candidate.Values[index], value))
+            {
+                return false;
+            }
+
+            node = candidate;
+            startIndex = forward ? index + 1 : index - 1;
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return false;
         }
     }
 
@@ -765,15 +1045,18 @@ public sealed class DiskBTree : IDisposable
     public IEnumerable<BsonValue> GetAll()
     {
         ThrowIfDisposed();
+        var results = new List<BsonValue>();
         using var lease = BeginPageLease();
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf) node = LoadNode(node.ChildrenIds[0]); 
         while (node != null)
         {
-            foreach (var val in node.Values) yield return val;
+            results.AddRange(node.Values);
             if (node.NextSiblingId == 0) break;
             node = LoadNode(node.NextSiblingId);
         }
+
+        return results;
     }
 
     /// <summary>
@@ -782,6 +1065,7 @@ public sealed class DiskBTree : IDisposable
     public IEnumerable<BsonValue> GetAllReverse()
     {
         ThrowIfDisposed();
+        var results = new List<BsonValue>();
         using var lease = BeginPageLease();
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf) node = LoadNode(node.ChildrenIds[^1]);
@@ -790,12 +1074,14 @@ public sealed class DiskBTree : IDisposable
         {
             for (int i = node.Values.Count - 1; i >= 0; i--)
             {
-                yield return node.Values[i];
+                results.Add(node.Values[i]);
             }
 
             if (node.PrevSiblingId == 0) break;
             node = LoadNode(node.PrevSiblingId);
         }
+
+        return results;
     }
 
     /// <summary>

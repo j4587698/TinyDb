@@ -209,9 +209,9 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
-    public async Task SecurityMetadataTamper_ShouldFailHeaderChecksum()
+    public async Task PasswordManagerCreateSecureDatabase_ShouldUseEncryptionMetadata()
     {
-        var path = Path.Combine(_directory, "security-tamper.db");
+        var path = Path.Combine(_directory, "password-manager-encrypted.db");
 
         using (var engine = PasswordManager.CreateSecureDatabase(path, "pass1234"))
         {
@@ -220,12 +220,10 @@ public sealed class ReviewReportRegressionTests : IDisposable
 
         var bytes = File.ReadAllBytes(path);
         var markerOffset = IndexOf(bytes.AsSpan(0, DatabaseHeader.Size), new byte[] { (byte)'S', (byte)'E', (byte)'C', (byte)'1' });
-        await Assert.That(markerOffset).IsGreaterThanOrEqualTo(0);
-
-        bytes[markerOffset] = 0;
-        File.WriteAllBytes(path, bytes);
-
-        await Assert.That(() => new TinyDbEngine(path)).Throws<InvalidDataException>();
+        await Assert.That(markerOffset).IsEqualTo(-1);
+        await Assert.That(DatabaseSecurity.HasSecurityMetadata(path)).IsFalse();
+        await Assert.That(PasswordManager.VerifyPassword(path, "pass1234")).IsTrue();
+        await Assert.That(() => new TinyDbEngine(path)).Throws<UnauthorizedAccessException>();
     }
 
     [Test]

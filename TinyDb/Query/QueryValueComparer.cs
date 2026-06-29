@@ -14,6 +14,13 @@ internal static class QueryValueComparer
         left = UnwrapBsonValue(left);
         right = UnwrapBsonValue(right);
 
+        if (TryGetBsonTypeOrder(left, out var leftTypeOrder) &&
+            TryGetBsonTypeOrder(right, out var rightTypeOrder) &&
+            leftTypeOrder != rightTypeOrder)
+        {
+            return leftTypeOrder.CompareTo(rightTypeOrder);
+        }
+
         var typeComparison = string.Compare(
             left?.GetType().FullName,
             right?.GetType().FullName,
@@ -193,6 +200,37 @@ internal static class QueryValueComparer
         return value is sbyte || value is byte || value is short || value is ushort ||
                value is int || value is uint || value is long || value is ulong ||
                value is float || value is double || value is decimal || value is Decimal128;
+    }
+
+    private static bool TryGetBsonTypeOrder(object? value, out int order)
+    {
+        if (value == null)
+        {
+            order = BsonValueComparer.GetTypeOrder(BsonType.Null);
+            return true;
+        }
+
+        var bsonType = value switch
+        {
+            bool => BsonType.Boolean,
+            sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal or Decimal128 => BsonType.Decimal128,
+            string => BsonType.String,
+            ObjectId => BsonType.ObjectId,
+            DateTime => BsonType.DateTime,
+            byte[] => BsonType.Binary,
+            BsonArray => BsonType.Array,
+            BsonDocument => BsonType.Document,
+            _ => (BsonType?)null
+        };
+
+        if (bsonType == null)
+        {
+            order = 0;
+            return false;
+        }
+
+        order = BsonValueComparer.GetTypeOrder(bsonType.Value);
+        return true;
     }
 
     private static int CompareNumeric(object left, object right)

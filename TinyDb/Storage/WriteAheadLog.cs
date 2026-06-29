@@ -30,7 +30,7 @@ public sealed class WriteAheadLog : IDisposable
     private readonly AsyncLocal<Guid?> _currentTransactionId = new();
     private readonly int _maxRecordSize;
     private bool _disposed;
-    private bool _hasPendingEntries;
+    private int _hasPendingEntries;
     private long _flushedLSN;
 
     /// <summary>
@@ -46,7 +46,14 @@ public sealed class WriteAheadLog : IDisposable
     /// <summary>
     /// 是否有未提交的日志记录
     /// </summary>
-    public bool HasPendingEntries => IsEnabled && _hasPendingEntries;
+    public bool HasPendingEntries => IsEnabled && HasPendingEntriesCore;
+
+    private bool HasPendingEntriesCore => Volatile.Read(ref _hasPendingEntries) != 0;
+
+    private void SetHasPendingEntries(bool value)
+    {
+        Volatile.Write(ref _hasPendingEntries, value ? 1 : 0);
+    }
 
     internal bool RequiresBeforeImage => IsEnabled && _currentTransactionId.Value.HasValue;
 
@@ -102,7 +109,7 @@ public sealed class WriteAheadLog : IDisposable
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         _stream.Seek(0, SeekOrigin.End);
-        _hasPendingEntries = _stream.Length > 0;
+        SetHasPendingEntries(_stream.Length > 0);
     }
 
     /// <summary>
@@ -165,7 +172,7 @@ public sealed class WriteAheadLog : IDisposable
         {
             var data = PreparePageRecord(page);
             await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
-            _hasPendingEntries = true;
+            SetHasPendingEntries(true);
             return;
         }
 
@@ -174,7 +181,7 @@ public sealed class WriteAheadLog : IDisposable
         {
             var data = PreparePageRecord(page);
             await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
-            _hasPendingEntries = true;
+            SetHasPendingEntries(true);
         }
         finally
         {
@@ -203,7 +210,7 @@ public sealed class WriteAheadLog : IDisposable
                 var data = PreparePageRecord(page);
                 WriteEntry(EntryTypePage, page.PageID, data);
             }
-            _hasPendingEntries = true;
+            SetHasPendingEntries(true);
             return;
         }
 
@@ -212,7 +219,7 @@ public sealed class WriteAheadLog : IDisposable
         {
             var data = PreparePageRecord(page);
             WriteEntry(EntryTypePage, page.PageID, data);
-            _hasPendingEntries = true;
+            SetHasPendingEntries(true);
         }
         finally
         {
@@ -233,7 +240,7 @@ public sealed class WriteAheadLog : IDisposable
             _synchronizationDepth.Value++;
             _currentTransactionId.Value = transactionId;
             WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
-            _hasPendingEntries = true;
+            SetHasPendingEntries(true);
             return new WalTransactionScope(this, transactionId, ownsMutex: true);
         }
         catch
@@ -272,7 +279,7 @@ public sealed class WriteAheadLog : IDisposable
 
                 _wal.BeforeTransactionCommitForTesting?.Invoke();
                 _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
-                _wal._hasPendingEntries = true;
+                _wal.SetHasPendingEntries(true);
                 _wal.FlushLogCore();
             }
 
@@ -417,7 +424,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task FlushLogAsync(CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || !_hasPendingEntries) return;
+        if (!IsEnabled || !HasPendingEntriesCore) return;
 
         if (_synchronizationDepth.Value > 0)
         {
@@ -438,7 +445,7 @@ public sealed class WriteAheadLog : IDisposable
 
     public void FlushLog()
     {
-        if (!IsEnabled || !_hasPendingEntries) return;
+        if (!IsEnabled || !HasPendingEntriesCore) return;
 
         if (_synchronizationDepth.Value > 0)
         {
@@ -459,7 +466,7 @@ public sealed class WriteAheadLog : IDisposable
 
     private void FlushLogCore()
     {
-        if (_hasPendingEntries)
+        if (HasPendingEntriesCore)
         {
             _stream!.Flush(true);
             _flushedLSN = _stream.Position;
@@ -489,7 +496,7 @@ public sealed class WriteAheadLog : IDisposable
         {
             var stream = _stream!;
 
-            if (_hasPendingEntries)
+            if (HasPendingEntriesCore)
             {
                 stream.Flush(true);
                 _flushedLSN = stream.Position;
@@ -505,12 +512,12 @@ public sealed class WriteAheadLog : IDisposable
                 _synchronizationDepth.Value--;
             }
 
-            if (_hasPendingEntries)
+            if (HasPendingEntriesCore)
             {
                 stream.SetLength(0);
                 stream.Seek(0, SeekOrigin.End);
                 stream.Flush(true);
-                _hasPendingEntries = false;
+                SetHasPendingEntries(false);
                 _flushedLSN = stream.Position;
             }
         }
@@ -543,7 +550,7 @@ public sealed class WriteAheadLog : IDisposable
         {
             var stream = _stream!;
 
-            if (_hasPendingEntries)
+            if (HasPendingEntriesCore)
             {
                 stream.Flush(true);
                 _flushedLSN = stream.Position;
@@ -559,12 +566,12 @@ public sealed class WriteAheadLog : IDisposable
                 _synchronizationDepth.Value--;
             }
 
-            if (_hasPendingEntries)
+            if (HasPendingEntriesCore)
             {
                 stream.SetLength(0);
                 stream.Seek(0, SeekOrigin.End);
                 stream.Flush(true);
-                _hasPendingEntries = false;
+                SetHasPendingEntries(false);
                 _flushedLSN = stream.Position;
             }
         }
@@ -782,7 +789,7 @@ public sealed class WriteAheadLog : IDisposable
             }
 
             stream.Seek(0, SeekOrigin.End);
-            _hasPendingEntries = stream.Length > 0;
+            SetHasPendingEntries(stream.Length > 0);
         }
         catch (Exception ex)
         {
@@ -996,7 +1003,7 @@ public sealed class WriteAheadLog : IDisposable
             }
 
             stream.Seek(0, SeekOrigin.End);
-            _hasPendingEntries = stream.Length > 0;
+            SetHasPendingEntries(stream.Length > 0);
         }
         catch (Exception ex)
         {
@@ -1037,7 +1044,7 @@ public sealed class WriteAheadLog : IDisposable
             stream.SetLength(0);
             stream.Seek(0, SeekOrigin.End);
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            _hasPendingEntries = false;
+            SetHasPendingEntries(false);
         }
         finally
         {

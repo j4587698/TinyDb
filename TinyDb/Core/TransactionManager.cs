@@ -14,6 +14,7 @@ public sealed class TransactionManager : IDisposable
     internal readonly TinyDbEngine _engine;
     private readonly Dictionary<Guid, Transaction> _activeTransactions;
     private readonly ConcurrentDictionary<string, List<ForeignKeyDefinition>> _foreignKeyCache = new(StringComparer.Ordinal);
+    private readonly object _foreignKeyCacheLock = new();
     private readonly object _lock = new();
     private bool _disposed;
 
@@ -89,6 +90,7 @@ public sealed class TransactionManager : IDisposable
         ThrowIfDisposed();
         if (transaction == null) throw new ArgumentNullException(nameof(transaction));
 
+        TransactionOperation[] operations;
         lock (_lock)
         {
             if (!_activeTransactions.ContainsKey(transaction.TransactionId))
@@ -96,65 +98,79 @@ public sealed class TransactionManager : IDisposable
                 throw new InvalidOperationException("Transaction is not active");
             }
 
-            try
+            lock (transaction.SyncRoot)
             {
                 transaction.State = TransactionState.Committing;
-                var operations = transaction.GetOperationsSnapshot();
-                using var collectionLocks = _engine.EnterCollectionWriteLocks(
-                    operations.Select(static operation => operation.CollectionName));
+                operations = transaction.Operations.ToArray();
+            }
+        }
 
-                // 验证所有操作
-                ValidateOperations(transaction);
+        try
+        {
+            using var collectionLocks = _engine.EnterCollectionWriteLocks(
+                operations.Select(static operation => operation.CollectionName));
 
-                // 应用所有更改到数据库
-                var durabilityScope = _engine.BeginTransactionDurabilityScope(transaction.TransactionId);
+            // 验证所有操作
+            ValidateOperations(operations);
+
+            // 应用所有更改到数据库
+            var durabilityScope = _engine.BeginTransactionDurabilityScope(transaction.TransactionId);
+            try
+            {
+                ApplyOperationsToDatabase(operations);
+
                 try
                 {
-                    ApplyOperationsToDatabase(operations);
-
-                    try
-                    {
-                        // 关键：在标记为 Committed 之前，确保所有变更已持久化到磁盘/WAL
-                        durabilityScope.Commit();
-                    }
-                    catch (Exception commitEx)
-                    {
-                        durabilityScope.Dispose();
-                        durabilityScope = null;
-
-                        var rollbackErrors = RollbackAppliedOperations(operations);
-                        if (rollbackErrors.Count == 0)
-                        {
-                            throw new InvalidOperationException(
-                                "Transaction durability commit failed after applying operations; applied operations were rolled back.",
-                                commitEx);
-                        }
-
-                        var errors = new List<Exception>
-                        {
-                            new InvalidOperationException(
-                                "Transaction durability commit failed after applying operations.",
-                                commitEx)
-                        };
-                        errors.AddRange(rollbackErrors);
-                        throw new AggregateException(
-                            "Transaction durability commit failed and rollback compensation encountered errors.",
-                            errors);
-                    }
+                    // 关键：在标记为 Committed 之前，确保所有变更已持久化到磁盘/WAL
+                    durabilityScope.Commit();
                 }
-                finally
+                catch (Exception commitEx)
                 {
-                    durabilityScope?.Dispose();
-                }
+                    durabilityScope.Dispose();
+                    durabilityScope = null;
 
-                transaction.State = TransactionState.Committed;
-            }
-            catch (Exception ex)
-            {
-                transaction.State = TransactionState.Failed;
-                throw new InvalidOperationException($"Failed to commit transaction: {ex.Message}", ex);
+                    var rollbackErrors = RollbackAppliedOperations(operations);
+                    if (rollbackErrors.Count == 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Transaction durability commit failed after applying operations; applied operations were rolled back.",
+                            commitEx);
+                    }
+
+                    var errors = new List<Exception>
+                    {
+                        new InvalidOperationException(
+                            "Transaction durability commit failed after applying operations.",
+                            commitEx)
+                    };
+                    errors.AddRange(rollbackErrors);
+                    throw new AggregateException(
+                        "Transaction durability commit failed and rollback compensation encountered errors.",
+                        errors);
+                }
             }
             finally
+            {
+                durabilityScope?.Dispose();
+            }
+
+            lock (_lock)
+            {
+                transaction.State = TransactionState.Committed;
+            }
+        }
+        catch (Exception ex)
+        {
+            lock (_lock)
+            {
+                transaction.State = TransactionState.Failed;
+            }
+
+            throw new InvalidOperationException($"Failed to commit transaction: {ex.Message}", ex);
+        }
+        finally
+        {
+            lock (_lock)
             {
                 _activeTransactions.Remove(transaction.TransactionId);
             }
@@ -306,6 +322,11 @@ public sealed class TransactionManager : IDisposable
 
             lock (transaction.SyncRoot)
             {
+                if (transaction.State != TransactionState.Active)
+                {
+                    throw new InvalidOperationException($"Transaction cannot record operations in state {transaction.State}");
+                }
+
                 transaction.Operations.Add(operation);
             }
         }
@@ -314,11 +335,9 @@ public sealed class TransactionManager : IDisposable
     /// <summary>
     /// 验证操作
     /// </summary>
-    /// <param name="transaction">事务</param>
-    private void ValidateOperations(Transaction transaction)
+    /// <param name="operations">事务操作快照</param>
+    private void ValidateOperations(IReadOnlyList<TransactionOperation> operations)
     {
-        var operations = transaction.GetOperationsSnapshot();
-
         // 检查重复的文档ID插入（只检查非null ID的重复）
         var insertOperations = operations
             .Where(op => op.OperationType == TransactionOperationType.Insert && op.DocumentId != null)
@@ -429,42 +448,45 @@ public sealed class TransactionManager : IDisposable
 
     private List<ForeignKeyDefinition> GetForeignKeyDefinitions(string collectionName)
     {
-        return _foreignKeyCache.GetOrAdd(collectionName, name =>
+        lock (_foreignKeyCacheLock)
         {
-            var definitions = new List<ForeignKeyDefinition>();
-            
-            // 扫描所有元数据集合以找到匹配的集合名称
-            var metadataCollectionNames = new List<string> { "__sys_catalog" };
-
-            foreach (var metaColName in metadataCollectionNames)
+            return _foreignKeyCache.GetOrAdd(collectionName, name =>
             {
-                try
+                var definitions = new List<ForeignKeyDefinition>();
+
+                // 扫描所有元数据集合以找到匹配的集合名称
+                var metadataCollectionNames = new List<string> { "__sys_catalog" };
+
+                foreach (var metaColName in metadataCollectionNames)
                 {
-                    var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
-                    var metaDoc = metaCol.FindById(name);
-                    
-                    if (metaDoc != null)
+                    try
                     {
-                        var entityMeta = metaDoc.ToEntityMetadata();
-                        foreach (var prop in entityMeta.Properties)
+                        var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
+                        var metaDoc = metaCol.FindById(name);
+
+                        if (metaDoc != null)
                         {
-                            if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
+                            var entityMeta = metaDoc.ToEntityMetadata();
+                            foreach (var prop in entityMeta.Properties)
                             {
-                                definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
+                                if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
+                                {
+                                    definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
+                                }
                             }
+                            break;
                         }
-                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new InvalidOperationException(
+                            $"Failed to read foreign key metadata for collection '{name}' from '{metaColName}'.", ex);
                     }
                 }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to read foreign key metadata for collection '{name}' from '{metaColName}'.", ex);
-                }
-            }
-            
-            return definitions;
-        });
+
+                return definitions;
+            });
+        }
     }
 
     internal void ClearForeignKeyCache()
