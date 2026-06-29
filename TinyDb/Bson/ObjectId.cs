@@ -13,9 +13,9 @@ namespace TinyDb.Bson;
 public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, IConvertible
 {
     private const int ObjectIdSize = 12;
+    private static readonly DateTime UnixEpoch = DateTime.UnixEpoch;
     private static readonly byte[] EmptyBytes = new byte[ObjectIdSize];
-    private static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
-    private static int _counter = new Random().Next();
+    private static int _counter = RandomNumberGenerator.GetInt32(0x01000000);
 
     private readonly byte[] _bytes;
     private byte[] Bytes => _bytes ?? EmptyBytes;
@@ -28,18 +28,17 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// <summary>
     /// 获取时间戳部分
     /// </summary>
-    public DateTime Timestamp => new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(TimestampSeconds);
+    public DateTime Timestamp => UnixEpoch.AddSeconds(TimestampUnixSeconds);
+
+    /// <summary>
+    /// 获取无符号 Unix 时间戳秒数。
+    /// </summary>
+    public uint TimestampUnixSeconds => BinaryPrimitives.ReadUInt32BigEndian(Bytes);
 
     /// <summary>
     /// 获取时间戳秒数
     /// </summary>
-    public int TimestampSeconds
-    {
-        get
-        {
-            return BinaryPrimitives.ReadInt32BigEndian(Bytes);
-        }
-    }
+    public int TimestampSeconds => unchecked((int)TimestampUnixSeconds);
 
     /// <summary>
     /// 获取机器标识
@@ -146,9 +145,9 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         _bytes = new byte[ObjectIdSize];
 
-        var timestampSeconds = (int)(timestamp - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
+        var timestampSeconds = GetObjectIdTimestampSeconds(timestamp);
 
-        BinaryPrimitives.WriteInt32BigEndian(_bytes.AsSpan(0, 4), timestampSeconds);
+        BinaryPrimitives.WriteUInt32BigEndian(_bytes.AsSpan(0, 4), timestampSeconds);
         
         // Machine (3 bytes)
         _bytes[4] = (byte)(machine >> 16);
@@ -173,8 +172,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         var bytes = new byte[ObjectIdSize];
 
         // 时间戳 (4 bytes)
-        var timestamp = (int)DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
-        BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(0, 4), timestamp);
+        var timestamp = GetObjectIdTimestampSeconds(DateTime.UtcNow);
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(0, 4), timestamp);
 
         // 机器标识 (3 bytes)
         var machineBytes = GetMachineHash();
@@ -203,6 +202,17 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         var machineName = Environment.MachineName;
         var hash = MD5.HashData(Encoding.UTF8.GetBytes(machineName));
         return new[] { hash[0], hash[1], hash[2] };
+    }
+
+    private static uint GetObjectIdTimestampSeconds(DateTime timestamp)
+    {
+        var unixSeconds = (long)(timestamp.ToUniversalTime() - UnixEpoch).TotalSeconds;
+        if (unixSeconds < uint.MinValue || unixSeconds > uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timestamp), "ObjectId timestamp must be between 1970-01-01 and 2106-02-07 UTC.");
+        }
+
+        return (uint)unixSeconds;
     }
 
     private static short GetCurrentProcessId()

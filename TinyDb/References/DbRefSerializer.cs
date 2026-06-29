@@ -164,30 +164,85 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
             return;
         }
 
-        var type = typeof(T);
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for Include reference loading.");
+        }
         
         foreach (var includePath in _includes)
         {
-            var property = type.GetProperty(includePath);
-            if (property == null) continue;
+            var reference = adapter.ForeignKeyReferences.FirstOrDefault(r =>
+                r.ForeignKeyPropertyName == includePath ||
+                r.TargetPropertyName == includePath);
+            if (reference == null) continue;
 
-            var foreignKeyAttr = property.GetCustomAttribute<ForeignKeyAttribute>();
-            if (foreignKeyAttr == null) continue;
-
-            // 获取当前属性值（可能是 DbRef 文档或已加载的对象）
-            var currentValue = property.GetValue(entity);
+            // 获取当前属性值（可能是外键值或 DbRef 文档）
+            var currentValue = adapter.GetPropertyValueUntyped(entity, reference.ForeignKeyPropertyName);
             if (currentValue == null) continue;
 
-            // 如果已经是正确类型的对象，跳过
-            if (property.PropertyType.IsAssignableFrom(currentValue.GetType()) && 
-                currentValue.GetType() != typeof(BsonDocument))
+            if (!TryGetReferenceId(currentValue, out var referenceId)) continue;
+
+            var referencedDocument = _engine.FindById(reference.CollectionName, referenceId);
+            if (referencedDocument == null) continue;
+
+            if (reference.TargetPropertyName == null || reference.TargetPropertyType == null) continue;
+
+            var loadedValue = ConvertReferenceDocument(referencedDocument, reference.TargetPropertyType);
+            if (!adapter.TrySetPropertyValueUntyped(entity, reference.TargetPropertyName, loadedValue))
             {
-                continue;
+                throw new InvalidOperationException(
+                    $"Type '{typeof(T).FullName}' cannot set Include target property '{reference.TargetPropertyName}'.");
+            }
+        }
+    }
+
+    private static bool TryGetReferenceId(object value, out BsonValue id)
+    {
+        if (value is BsonDocument dbRef && dbRef.ContainsKey("$id"))
+        {
+            id = dbRef["$id"];
+            return true;
+        }
+
+        if (value is BsonValue bsonValue)
+        {
+            if (bsonValue.IsDocument &&
+                bsonValue.RawValue is BsonDocument wrappedDbRef &&
+                wrappedDbRef.ContainsKey("$id"))
+            {
+                id = wrappedDbRef["$id"];
+                return true;
             }
 
-            // 从 DbRef 加载实际对象
-            // 这里需要根据实际情况实现引用解析逻辑
-            // 目前保留为基本实现
+            id = bsonValue;
+            return !id.IsNull;
         }
+
+        id = BsonConversion.ToBsonValue(value);
+        return !id.IsNull;
+    }
+
+    private static object? ConvertReferenceDocument(BsonDocument document, Type targetType)
+    {
+        targetType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+        if (targetType == typeof(object) || targetType == typeof(BsonDocument))
+        {
+            return document;
+        }
+
+        if (typeof(BsonValue).IsAssignableFrom(targetType))
+        {
+            return document;
+        }
+
+        if (AotHelperRegistry.TryGetAdapter(targetType, out var adapter))
+        {
+            return adapter.FromDocumentUntyped(document);
+        }
+
+        throw new InvalidOperationException(
+            $"Type '{targetType.FullName}' must have [Entity] attribute for Include reference loading.");
     }
 }

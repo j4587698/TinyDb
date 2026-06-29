@@ -685,6 +685,36 @@ public class DocumentCollectionEdgeCaseTests
     }
 
     [Test]
+    public async Task InsertBatch_InTransaction_ShouldRollback()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_txn_batch_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath);
+            var collection = (DocumentCollection<TestEntity>)engine.GetCollection<TestEntity>();
+
+            using var transaction = engine.BeginTransaction();
+
+            var inserted = collection.Insert(new[]
+            {
+                new TestEntity { Name = "BatchOne" },
+                new TestEntity { Name = "BatchTwo" }
+            });
+
+            await Assert.That(inserted).IsEqualTo(2);
+            await Assert.That(collection.Count()).IsEqualTo(2);
+
+            transaction.Rollback();
+
+            await Assert.That(collection.Count()).IsEqualTo(0);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Test]
     public async Task Delete_InTransaction_ShouldRecordOperation()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_txn_del_{Guid.NewGuid():N}.db");

@@ -45,16 +45,23 @@ public class SecureTinyDbEngineCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task Constructor_PasswordProvided_ButDbNotSecure_ShouldAutoSecure()
+    public async Task Constructor_PasswordProvided_ButDbNotSecure_ShouldThrow()
     {
         var path = GetDbPath();
         // Create normal db first
         using (var engine = new TinyDbEngine(path)) { }
-        
-        // SecureTinyDbEngine should auto-secure it because TinyDbEngine does so
-        using var secureEngine = new SecureTinyDbEngine(path, "password123");
-        await Assert.That(secureEngine.IsAuthenticated).IsTrue();
-        await Assert.That(secureEngine.IsPasswordProtected()).IsTrue();
+
+        await Assert.That(() => new SecureTinyDbEngine(path, "password123"))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task Constructor_PasswordProvided_ButDbMissingAndCreateDisabled_ShouldThrow()
+    {
+        var path = GetDbPath();
+
+        await Assert.That(() => new SecureTinyDbEngine(path, "password123"))
+            .Throws<FileNotFoundException>();
     }
 
     [Test]

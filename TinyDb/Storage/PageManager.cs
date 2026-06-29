@@ -291,7 +291,7 @@ public sealed class PageManager : IDisposable
             // 添加到缓存
             if (useCache)
             {
-                AddToCache(page);
+                return AddToCache(page);
             }
 
             return page;
@@ -374,7 +374,6 @@ public sealed class PageManager : IDisposable
             var pageData = _pageCodec.Decode(pageID, frame);
             var page = new Page(pageID, pageData);
             ValidateLoadedPage(page, pageData, pageOffset);
-            page.Pin();
 
             if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
             {
@@ -383,9 +382,10 @@ public sealed class PageManager : IDisposable
 
             if (useCache)
             {
-                AddToCache(page);
+                page = AddToCache(page);
             }
 
+            page.Pin();
             return page;
         }
         catch (Exception ex)
@@ -442,7 +442,7 @@ public sealed class PageManager : IDisposable
             // 添加到缓存
             if (useCache)
             {
-                AddToCache(page);
+                return AddToCache(page);
             }
 
             return page;
@@ -552,11 +552,11 @@ public sealed class PageManager : IDisposable
     {
         var page = new Page(pageID, (int)_pageSize, pageType);
         page.UpdateStats((ushort)Math.Min(page.DataSize, ushort.MaxValue), 0);
+        page = AddToCache(page);
         if (pinned)
         {
             page.Pin();
         }
-        AddToCache(page);
 
         // 计算新的文件大小
         var newFileSize = CalculatePageOffset(pageID) + _physicalPageSize;
@@ -868,16 +868,28 @@ public sealed class PageManager : IDisposable
     /// 添加页面到缓存
     /// </summary>
     /// <param name="page">页面</param>
-    private void AddToCache(Page page)
+    private Page AddToCache(Page page)
     {
-        // 如果缓存已满，移除最少使用的页面
-        if (_pageCache.Count >= MaxCacheSize && !_pageCache.ContainsKey(page.PageID))
+        while (true)
         {
-            EvictLeastRecentlyUsed();
-        }
+            if (_pageCache.TryGetValue(page.PageID, out var cachedPage))
+            {
+                _lruCache.Touch(page.PageID);
+                return cachedPage;
+            }
 
-        _pageCache[page.PageID] = page;
-        _lruCache.Put(page.PageID, page);
+            // 如果缓存已满，移除最少使用的页面
+            if (_pageCache.Count >= MaxCacheSize)
+            {
+                EvictLeastRecentlyUsed();
+            }
+
+            if (_pageCache.TryAdd(page.PageID, page))
+            {
+                _lruCache.Put(page.PageID, page);
+                return page;
+            }
+        }
     }
 
     /// <summary>

@@ -1523,7 +1523,7 @@ public sealed class DiskBTree : IDisposable
 
 
 
-    private DiskBTreeNode LoadNode(uint id)
+    internal DiskBTreeNode LoadNode(uint id)
     {
         var page = GetPage(id);
         if (page.CachedParsedData is DiskBTreeNode node)

@@ -168,6 +168,21 @@ public static class BsonScanner
                 var binary = data.Slice(offset + 5, binLen).ToArray();
                 offset += 5 + binLen;
                 return new BsonBinary(binary, (BsonBinary.BinarySubType)subType);
+            case BsonType.Document:
+            case BsonType.Array:
+            case BsonType.JavaScriptWithScope:
+                if (!TryReadInt32(data, offset, out int size) ||
+                    size < 5 ||
+                    size > MaxBsonValueLength ||
+                    !HasAvailable(data, offset, size))
+                {
+                    throw new InvalidDataException($"Invalid BSON container length at offset {offset}.");
+                }
+
+                var reader = new BsonSpanReader(data.Slice(offset, size));
+                var nestedValue = reader.ReadValue(type);
+                offset += size;
+                return nestedValue;
             default:
                 // Fallback for complex types or others
                 int start = offset;

@@ -21,23 +21,15 @@ public static class QueryableCountExtensions
             ? query.Provider.CreateQuery<T>(unpagedExpression)
             : query;
 
-        var allItems = unpagedQuery.ToList();
-        totalCount = allItems.LongCount();
-
         if (operations.Count == 0)
         {
-            return allItems;
+            var items = query.ToList();
+            totalCount = items.Count;
+            return items;
         }
 
-        IEnumerable<T> paged = allItems;
-        foreach (var operation in operations)
-        {
-            paged = operation.IsSkip
-                ? paged.Skip(operation.Count)
-                : paged.Take(operation.Count);
-        }
-
-        return paged.ToList();
+        totalCount = unpagedQuery.LongCount();
+        return query.ToList();
     }
 
     private static bool TryStripPagination(

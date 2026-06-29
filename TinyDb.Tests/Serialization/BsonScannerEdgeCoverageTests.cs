@@ -21,7 +21,7 @@ public sealed class BsonScannerEdgeCoverageTests
         await Assert.That(((BsonInt32)val!).Value).IsEqualTo(123);
 
         await Assert.That(BsonScanner.TryGetValue(bytes, "skipDoc", out var docVal)).IsTrue();
-        await Assert.That(docVal).IsTypeOf<BsonNull>();
+        await Assert.That(docVal).IsTypeOf<BsonDocument>();
     }
 
     [Test]

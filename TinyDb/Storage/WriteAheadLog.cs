@@ -714,7 +714,9 @@ public sealed class WriteAheadLog : IDisposable
                     {
                         if (_walCodec.IsEncrypted)
                         {
-                            throw new InvalidDataException($"Encrypted WAL CRC mismatch at {currentEntryStart}.");
+                            Log(TinyDbLogLevel.Warning, $"Encrypted WAL CRC mismatch at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
                         }
 
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
@@ -723,7 +725,16 @@ public sealed class WriteAheadLog : IDisposable
                     }
                 }
 
-                buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
+                try
+                {
+                    buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
+                }
+                catch (InvalidDataException ex) when (_walCodec.IsEncrypted)
+                {
+                    Log(TinyDbLogLevel.Warning, $"Encrypted WAL record is invalid at {currentEntryStart}.", ex);
+                    replayStoppedAtInvalidRecord = true;
+                    break;
+                }
 
                 if (entryType == EntryTypePage)
                 {
@@ -935,7 +946,9 @@ public sealed class WriteAheadLog : IDisposable
                     {
                         if (_walCodec.IsEncrypted)
                         {
-                            throw new InvalidDataException($"Encrypted WAL CRC mismatch at {currentEntryStart}.");
+                            Log(TinyDbLogLevel.Warning, $"Encrypted WAL CRC mismatch at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
                         }
 
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
@@ -944,7 +957,16 @@ public sealed class WriteAheadLog : IDisposable
                     }
                 }
 
-                buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
+                try
+                {
+                    buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
+                }
+                catch (InvalidDataException ex) when (_walCodec.IsEncrypted)
+                {
+                    Log(TinyDbLogLevel.Warning, $"Encrypted WAL record is invalid at {currentEntryStart}.", ex);
+                    replayStoppedAtInvalidRecord = true;
+                    break;
+                }
 
                 if (entryType == EntryTypePage)
                 {

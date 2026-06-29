@@ -15,7 +15,7 @@ public sealed class BsonScannerIsKnownTypeCoverageTests
     private static readonly IsKnownTypeDelegate IsKnownType = CreateIsKnownTypeDelegate();
 
     [Test]
-    public async Task TryGetValue_KnownComplexTypeMalformed_ShouldReturnBsonNull()
+    public async Task TryGetValue_KnownComplexTypeMalformed_ShouldReturnFalse()
     {
         var bytes = new byte[12];
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(0, 4), bytes.Length);
@@ -26,9 +26,8 @@ public sealed class BsonScannerIsKnownTypeCoverageTests
         bytes[11] = 0;
 
         var found = BsonScanner.TryGetValue(bytes, "x", out var value);
-        await Assert.That(found).IsTrue();
-        await Assert.That(value).IsNotNull();
-        await Assert.That(value!.IsNull).IsTrue();
+        await Assert.That(found).IsFalse();
+        await Assert.That(value).IsNull();
     }
 
     [Test]

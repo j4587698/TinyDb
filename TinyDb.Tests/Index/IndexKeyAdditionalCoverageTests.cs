@@ -74,6 +74,13 @@ public sealed class IndexKeyAdditionalCoverageTests
     }
 
     [Test]
+    public async Task MinAndMaxValue_ShouldReuseCachedInstances()
+    {
+        await Assert.That(object.ReferenceEquals(IndexKey.MinValue, IndexKey.MinValue)).IsTrue();
+        await Assert.That(object.ReferenceEquals(IndexKey.MaxValue, IndexKey.MaxValue)).IsTrue();
+    }
+
+    [Test]
     public async Task ToStringAndHashCode_WhenContainsNull_ShouldCoverNullBranches()
     {
         var key = new IndexKey(new BsonValue[] { null!, new BsonInt32(1) });

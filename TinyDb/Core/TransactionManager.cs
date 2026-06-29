@@ -728,12 +728,14 @@ public sealed class TransactionManager : IDisposable
         lock (_lock)
         {
             var expiredTransactions = _activeTransactions
-                .Where(kvp => DateTime.UtcNow - kvp.Value.StartTime > TransactionTimeout)
+                .Where(kvp => kvp.Value.State == TransactionState.Active &&
+                              DateTime.UtcNow - kvp.Value.StartTime > TransactionTimeout)
                 .Select(kvp => kvp.Value)
                 .ToList();
 
             foreach (var expiredTransaction in expiredTransactions)
             {
+                if (expiredTransaction.State != TransactionState.Active) continue;
                 expiredTransaction.State = TransactionState.Failed;
                 _activeTransactions.Remove(expiredTransaction.TransactionId);
             }

@@ -51,6 +51,11 @@ public sealed class SecureTinyDbEngine : IDisposable
 
         if (!File.Exists(filePath))
         {
+            if (!createIfNotExists)
+            {
+                throw new FileNotFoundException("数据库文件不存在", filePath);
+            }
+
             _engine = PasswordManager.CreateSecureDatabase(filePath, password);
             _isAuthenticated = true;
             return;
@@ -58,7 +63,7 @@ public sealed class SecureTinyDbEngine : IDisposable
 
         if (!PasswordManager.IsPasswordProtected(filePath))
         {
-            PasswordManager.SetPassword(filePath, password);
+            throw new InvalidOperationException("数据库未受密码保护，请显式调用 SetPassword 或 PasswordManager.SetPassword 完成迁移");
         }
 
         var options = new TinyDbOptions { Password = password };

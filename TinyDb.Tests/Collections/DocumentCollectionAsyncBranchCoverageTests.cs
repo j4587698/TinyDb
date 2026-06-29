@@ -77,4 +77,25 @@ public sealed class DocumentCollectionAsyncBranchCoverageTests : IDisposable
             await Assert.That(count).IsEqualTo(2);
         }
     }
+
+    [Test]
+    public async Task InsertAsyncBatch_InTransaction_ShouldRollback()
+    {
+        var col = _engine.GetCollection<AsyncTestEntity>();
+
+        using var tx = _engine.BeginTransaction();
+
+        var inserted = await col.InsertAsync(new[]
+        {
+            new AsyncTestEntity { Name = "batch-one" },
+            new AsyncTestEntity { Name = "batch-two" }
+        });
+
+        await Assert.That(inserted).IsEqualTo(2);
+        await Assert.That(await col.CountAsync()).IsEqualTo(2);
+
+        tx.Rollback();
+
+        await Assert.That(await col.CountAsync()).IsEqualTo(0);
+    }
 }

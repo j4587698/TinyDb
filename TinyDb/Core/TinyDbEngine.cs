@@ -470,6 +470,20 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private void DecrementUsedPagesAndWriteHeader()
+    {
+        lock (_lock)
+        {
+            if (_header.UsedPages <= 1)
+            {
+                throw new InvalidOperationException("Database header used-page count cannot be decremented below the header page.");
+            }
+
+            _header.UsedPages--;
+            WriteHeader();
+        }
+    }
+
     private void InitializeSystemPages()
     {
         var headerChanged = false;
@@ -612,8 +626,15 @@ public sealed class TinyDbEngine : IDisposable
                 return (ITinyCollection<T>)existing;
             }
 
+            var isKnownCollection = _collectionMetaStore.IsKnown(name);
             _metadataManager.EnsureSchema(name, typeof(T));
             RegisterCollection(name);
+            if (!isKnownCollection)
+            {
+                var state = CreateEmptyCollectionState();
+                state.MarkCacheInitialized();
+                _collectionStates.TryAdd(name, state);
+            }
 
             var collection = new DocumentCollection<T>(this, name);
             _collections[name] = collection;
@@ -1255,12 +1276,17 @@ public sealed class TinyDbEngine : IDisposable
                 return existing;
             }
 
-            var state = new CollectionState { Index = new MemoryDocumentIndex() };
+            var state = CreateEmptyCollectionState();
             BuildDocumentLocationCache(col, state);
             state.MarkCacheInitialized();
             _collectionStates[col] = state;
             return state;
         }
+    }
+
+    private static CollectionState CreateEmptyCollectionState()
+    {
+        return new CollectionState { Index = new MemoryDocumentIndex() };
     }
 
     internal IDisposable EnterCollectionWriteLocks(IEnumerable<string> collectionNames)
@@ -1644,7 +1670,7 @@ public sealed class TinyDbEngine : IDisposable
                     if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
 
                     _pageManager.FreePage(p.PageID);
-                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                    DecrementUsedPagesAndWriteHeader();
                 }
                 else
                 {
@@ -1685,7 +1711,7 @@ public sealed class TinyDbEngine : IDisposable
                     st.OwnedPages.TryRemove(p.PageID, out _);
                     if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
                     _pageManager.FreePage(p.PageID);
-                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                    DecrementUsedPagesAndWriteHeader();
                 }
                 else
                 {
@@ -2428,7 +2454,7 @@ public sealed class TinyDbEngine : IDisposable
                     st.OwnedPages.TryRemove(currentPage.PageID, out _);
                     if (st.PageState.PageId == currentPage.PageID) st.PageState.PageId = 0;
                     _pageManager.FreePage(currentPage.PageID);
-                    lock (_lock) { _header.UsedPages--; WriteHeader(); }
+                    DecrementUsedPagesAndWriteHeader();
                 }
                 else
                 {

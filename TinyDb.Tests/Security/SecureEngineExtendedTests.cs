@@ -49,16 +49,13 @@ public class SecureEngineExtendedTests
     }
 
     [Test]
-    public async Task Constructor_UnprotectedButPasswordProvided_ShouldProtectIt()
+    public async Task Constructor_UnprotectedButPasswordProvided_ShouldThrow()
     {
         // Setup unprotected DB
         using (var engine = new TinyDbEngine(_testFile)) { }
 
-        // Should NOT throw, but protect it (TinyDbEngine behavior)
-        using var secureEngine = new SecureTinyDbEngine(_testFile, "password");
-        
-        await Assert.That(secureEngine.IsAuthenticated).IsTrue();
-        await Assert.That(secureEngine.IsPasswordProtected()).IsTrue();
+        await Assert.That(() => new SecureTinyDbEngine(_testFile, "password"))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
