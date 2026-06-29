@@ -586,10 +586,7 @@ public sealed class ExpressionParser
                 if (member.Member is System.Reflection.FieldInfo field)
                     value = field.GetValue(container);
                 else if (member.Member is System.Reflection.PropertyInfo prop)
-                    value = EvaluateKnownProperty(container, prop);
-                
-                if (member.Member is System.Reflection.PropertyInfo && value == null)
-                    throw new InvalidOperationException("Constant folding is not supported for this property in AOT-only mode.");
+                    value = EvaluateProperty(container, prop);
 
                 return new ConstantExpression(value);
             }
@@ -628,6 +625,23 @@ public sealed class ExpressionParser
         }
 
         return null;
+    }
+
+    private static object? EvaluateProperty(object? container, System.Reflection.PropertyInfo prop)
+    {
+        var known = EvaluateKnownProperty(container, prop);
+        if (known != null)
+        {
+            return known;
+        }
+
+        var value = prop.GetValue(container);
+        if (value == null)
+        {
+            return null;
+        }
+
+        throw new InvalidOperationException("Constant folding is not supported for this property in AOT-only mode.");
     }
 
     /// <summary>

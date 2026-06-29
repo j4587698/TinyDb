@@ -22,8 +22,21 @@ public static class PasswordManager
     {
         ValidatePassword(password);
 
-        var options = new TinyDbOptions { Password = password };
-        using var engine = new TinyDbEngine(filePath, options);
+        if (string.IsNullOrWhiteSpace(filePath))
+            throw new ArgumentException("Database file path cannot be empty", nameof(filePath));
+
+        if (!System.IO.File.Exists(filePath))
+        {
+            using var _ = CreateSecureDatabase(filePath, password);
+            return;
+        }
+
+        if (IsPasswordProtected(filePath))
+        {
+            throw new DatabaseAlreadyProtectedException();
+        }
+
+        EncryptExistingDatabase(filePath, password);
     }
 
     /// <summary>
@@ -34,11 +47,17 @@ public static class PasswordManager
     /// <returns>验证是否成功</returns>
     public static bool VerifyPassword(string filePath, string password)
     {
+        if (!IsPasswordProtected(filePath))
+        {
+            return false;
+        }
+
         try
         {
             var options = new TinyDbOptions { Password = password };
             using var engine = new TinyDbEngine(filePath, options);
-            return true;
+            return DatabaseSecurity.IsDatabaseSecure(engine) &&
+                   DatabaseSecurity.AuthenticateDatabase(engine, password);
         }
         catch (UnauthorizedAccessException)
         {
@@ -81,6 +100,11 @@ public static class PasswordManager
     /// <returns>是否受保护</returns>
     public static bool IsPasswordProtected(string filePath)
     {
+        if (!System.IO.File.Exists(filePath))
+        {
+            return false;
+        }
+
         if (DatabaseSecurity.HasSecurityMetadata(filePath))
         {
             return true;
@@ -116,10 +140,23 @@ public static class PasswordManager
             System.IO.File.Delete(filePath);
         }
 
-        var dbOptions = options ?? new TinyDbOptions();
-        dbOptions.Password = password;
+        var walPath = GetWalPath(filePath);
+        if (System.IO.File.Exists(walPath))
+        {
+            System.IO.File.Delete(walPath);
+        }
 
+        var dbOptions = CreateEncryptedPasswordOptions(options, password);
         return new TinyDbEngine(filePath, dbOptions);
+    }
+
+    private static TinyDbOptions CreateEncryptedPasswordOptions(TinyDbOptions? options, string password)
+    {
+        var dbOptions = options?.Clone() ?? new TinyDbOptions();
+        dbOptions.Password = password;
+        dbOptions.EnableEncryption = true;
+
+        return dbOptions;
     }
 
     /// <summary>
@@ -168,6 +205,43 @@ public static class PasswordManager
         }
 
         return new TinyDbEngine(filePath, dbOptions);
+    }
+
+    private static void EncryptExistingDatabase(string filePath, string password)
+    {
+        var tempFile = filePath + ".encrypting";
+        var walFile = GetWalPath(filePath);
+        var tempWalFile = GetWalPath(tempFile);
+        if (System.IO.File.Exists(tempFile)) System.IO.File.Delete(tempFile);
+        if (System.IO.File.Exists(tempWalFile)) System.IO.File.Delete(tempWalFile);
+
+        try
+        {
+            using (var source = new TinyDbEngine(filePath))
+            using (var target = new TinyDbEngine(tempFile, CreateEncryptedPasswordOptions(null, password)))
+            {
+                source.CopyCollectionsTo(target);
+                target.Flush();
+            }
+
+            System.IO.File.Move(tempFile, filePath, overwrite: true);
+            if (System.IO.File.Exists(walFile)) System.IO.File.Delete(walFile);
+            if (System.IO.File.Exists(tempWalFile)) System.IO.File.Delete(tempWalFile);
+        }
+        catch
+        {
+            if (System.IO.File.Exists(tempFile)) System.IO.File.Delete(tempFile);
+            if (System.IO.File.Exists(tempWalFile)) System.IO.File.Delete(tempWalFile);
+            throw;
+        }
+    }
+
+    private static string GetWalPath(string dbPath)
+    {
+        var directory = Path.GetDirectoryName(dbPath) ?? string.Empty;
+        var fileNameNoExt = Path.GetFileNameWithoutExtension(dbPath);
+        var ext = Path.GetExtension(dbPath).TrimStart('.');
+        return Path.Combine(directory, $"{fileNameNoExt}-wal.{ext}");
     }
 
     /// <summary>

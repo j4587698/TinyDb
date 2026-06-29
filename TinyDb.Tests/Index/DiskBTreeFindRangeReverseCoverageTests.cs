@@ -187,4 +187,50 @@ public sealed class DiskBTreeFindRangeReverseCoverageTests
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
     }
+
+    [Test]
+    public async Task BTreeIndex_BatchedIterators_ShouldPreserveOrderAcrossBatchBoundaries()
+    {
+        using var index = new BTreeIndex("batched", new[] { "score" }, unique: false, maxKeys: 8);
+
+        const int count = 2500;
+        for (int i = 1; i <= count; i++)
+        {
+            index.Insert(new IndexKey(new BsonInt32(i)), new BsonInt32(i));
+        }
+
+        var ascending = index.GetAll().Cast<BsonInt32>().Select(x => x.Value).ToArray();
+        var descending = index.GetAllReverse().Cast<BsonInt32>().Select(x => x.Value).ToArray();
+        var range = index
+            .FindRange(new IndexKey(new BsonInt32(1000)), new IndexKey(new BsonInt32(1600)))
+            .Cast<BsonInt32>()
+            .Select(x => x.Value)
+            .ToArray();
+
+        await Assert.That(ascending.SequenceEqual(Enumerable.Range(1, count))).IsTrue();
+        await Assert.That(descending.SequenceEqual(Enumerable.Range(1, count).Reverse())).IsTrue();
+        await Assert.That(range.SequenceEqual(Enumerable.Range(1000, 601))).IsTrue();
+    }
+
+    [Test]
+    public async Task BTreeIndex_BatchedFind_ShouldReturnAllDuplicateKeysAcrossBatchBoundaries()
+    {
+        using var index = new BTreeIndex("duplicates", new[] { "score" }, unique: false, maxKeys: 8);
+        var key = new IndexKey(new BsonInt32(7));
+
+        const int count = 1500;
+        for (int i = 1; i <= count; i++)
+        {
+            index.Insert(key, new BsonInt32(i));
+        }
+
+        var ids = index.Find(key)
+            .Cast<BsonInt32>()
+            .Select(x => x.Value)
+            .OrderBy(static x => x)
+            .ToArray();
+
+        await Assert.That(ids.Length).IsEqualTo(count);
+        await Assert.That(ids.SequenceEqual(Enumerable.Range(1, count))).IsTrue();
+    }
 }

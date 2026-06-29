@@ -54,7 +54,7 @@ public sealed class TinyDbEngine : IDisposable
     private readonly object _collectionStateInitLock = new();
     private readonly object _identitySequenceLock = new();
     private readonly ConcurrentDictionary<string, object> _indexCreationLocks;
-    private readonly ConcurrentDictionary<string, long> _identitySequences;
+    private readonly ConcurrentDictionary<string, IdentitySequenceState> _identitySequences;
     private LargeDocumentStorage _largeDocumentStorage = null!;
     private DataPageAccess _dataPageAccess = null!;
     private readonly object _lock = new();
@@ -73,6 +73,7 @@ public sealed class TinyDbEngine : IDisposable
     private const string IndexUniqueKey = "u";
     private const string IndexRootPageKey = "r";
     private const string IndexMaxKeysKey = "m";
+    private const int IdentitySequenceReservationSize = 1024;
 
     /// <summary>
     /// 获取数据库文件路径。
@@ -121,7 +122,7 @@ public sealed class TinyDbEngine : IDisposable
         _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
         _collectionStates = new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal);
         _indexCreationLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
-        _identitySequences = new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        _identitySequences = new ConcurrentDictionary<string, IdentitySequenceState>(StringComparer.Ordinal);
 
         InitializeComponents(ds);
     }
@@ -247,6 +248,23 @@ public sealed class TinyDbEngine : IDisposable
         return pageSize >= 4096 && pageSize <= int.MaxValue && (pageSize & (pageSize - 1)) == 0;
     }
 
+    private sealed class IdentitySequenceState
+    {
+        public IdentitySequenceState(string collectionName, string metadataKey, long current)
+        {
+            CollectionName = collectionName;
+            MetadataKey = metadataKey;
+            Current = current;
+            ReservedUntil = current;
+        }
+
+        public string CollectionName { get; }
+        public string MetadataKey { get; }
+        public long Current { get; set; }
+        public long ReservedUntil { get; set; }
+        public bool HasUnflushedExactValue { get; set; }
+    }
+
     private void DisposeComponents()
     {
         _flushScheduler.Dispose();
@@ -287,31 +305,9 @@ public sealed class TinyDbEngine : IDisposable
 
         if (File.Exists(tempFile)) File.Delete(tempFile);
 
-        // 使用临时引擎写入新文件
         using (var tempEngine = new TinyDbEngine(tempFile, _options))
         {
-            // 迁移数据
-            foreach (var colName in collectionNames)
-            {
-                // 获取源数据
-                var docs = FindAll(colName).ToList();
-
-                // 写入目标：避免 GetCollection<T> 的泛型缓存冲突（同名集合可能同时以不同实体类型访问）
-                tempEngine.RegisterCollection(colName);
-
-                // 重建索引（先建索引，再写入，确保索引得到填充）
-                var idxMgr = GetIndexManager(colName);
-                var tempIdxMgr = tempEngine.GetIndexManager(colName);
-                foreach (var stat in idxMgr.GetAllStatistics())
-                {
-                    tempIdxMgr.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
-                }
-
-                if (docs.Count > 0)
-                {
-                    tempEngine.InsertDocuments(colName, docs);
-                }
-            }
+            CopyCollectionsTo(tempEngine, collectionNames);
         }
 
         // 释放当前组件以解除文件锁定，并替换文件。
@@ -724,6 +720,7 @@ public sealed class TinyDbEngine : IDisposable
     {
         if (!_isInitialized) return;
         _flushScheduler.Flush();
+        FlushIdentitySequenceExactValues();
         _collectionMetaStore.SaveCollections(true);
         WriteHeader();
         _diskStream.Flush();
@@ -1065,7 +1062,35 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
-    private void RegisterCollection(string n) => _collectionMetaStore.RegisterCollection(n, _options.WriteConcern == WriteConcern.Synced);
+    internal void RegisterCollection(string n) => _collectionMetaStore.RegisterCollection(n, _options.WriteConcern == WriteConcern.Synced);
+
+    internal void CopyCollectionsTo(TinyDbEngine target, IReadOnlyList<string>? collectionNames = null)
+    {
+        if (target == null) throw new ArgumentNullException(nameof(target));
+
+        var names = collectionNames ?? GetCollectionNames(includeSystemCollections: true)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var collectionName in names)
+        {
+            var documents = FindAll(collectionName).ToList();
+            target.RegisterCollection(collectionName);
+
+            var sourceIndexManager = GetIndexManager(collectionName);
+            var targetIndexManager = target.GetIndexManager(collectionName);
+            foreach (var stat in sourceIndexManager.GetAllStatistics())
+            {
+                targetIndexManager.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
+            }
+
+            if (documents.Count > 0)
+            {
+                target.InsertDocuments(collectionName, documents);
+            }
+        }
+    }
 
     internal BsonValue AllocateIdentityId(string collectionName, string idFieldName, Type idType)
     {
@@ -1084,21 +1109,42 @@ public sealed class TinyDbEngine : IDisposable
 
         lock (_identitySequenceLock)
         {
-            if (!_identitySequences.TryGetValue(cacheKey, out var current))
+            if (!_identitySequences.TryGetValue(cacheKey, out var sequence))
             {
-                current = Math.Max(ReadPersistedIdentityValue(collectionName, metadataKey), ScanMaxIdentityValue(collectionName));
+                var current = Math.Max(ReadPersistedIdentityValue(collectionName, metadataKey), ScanMaxIdentityValue(collectionName));
+                sequence = new IdentitySequenceState(collectionName, metadataKey, current);
+                _identitySequences[cacheKey] = sequence;
             }
 
-            var next = checked(current + 1);
-            if (isInt32 && next > int.MaxValue)
+            var next = checked(sequence.Current + 1);
+            var maxValue = isInt32 ? int.MaxValue : long.MaxValue;
+            if (next > maxValue)
             {
-                throw new InvalidOperationException($"Identity sequence for '{collectionName}.{idFieldName}' exceeded Int32.MaxValue.");
+                throw new InvalidOperationException($"Identity sequence for '{collectionName}.{idFieldName}' exceeded {idType.Name}.MaxValue.");
             }
 
-            _identitySequences[cacheKey] = next;
-            PersistIdentityValue(collectionName, metadataKey, next);
+            if (next > sequence.ReservedUntil)
+            {
+                var reservedUntil = ReserveIdentityRangeEnd(next, maxValue);
+                PersistIdentityValue(collectionName, metadataKey, reservedUntil);
+                sequence.ReservedUntil = reservedUntil;
+            }
+
+            sequence.Current = next;
+            sequence.HasUnflushedExactValue = true;
             return isInt32 ? new BsonInt32((int)next) : new BsonInt64(next);
         }
+    }
+
+    private static long ReserveIdentityRangeEnd(long next, long maxValue)
+    {
+        var remaining = maxValue - next;
+        if (remaining < IdentitySequenceReservationSize - 1)
+        {
+            return maxValue;
+        }
+
+        return next + IdentitySequenceReservationSize - 1;
     }
 
     private long ReadPersistedIdentityValue(string collectionName, string metadataKey)
@@ -1112,6 +1158,30 @@ public sealed class TinyDbEngine : IDisposable
         var metadata = _collectionMetaStore.GetMetadata(collectionName, includeInternal: true);
         metadata = metadata.Set(metadataKey, new BsonInt64(value));
         _collectionMetaStore.UpdateMetadata(collectionName, metadata, _options.WriteConcern == WriteConcern.Synced);
+    }
+
+    private void FlushIdentitySequenceExactValues()
+    {
+        lock (_identitySequenceLock)
+        {
+            foreach (var sequence in _identitySequences.Values)
+            {
+                if (!sequence.HasUnflushedExactValue)
+                {
+                    continue;
+                }
+
+                if (sequence.Current >= sequence.ReservedUntil)
+                {
+                    sequence.HasUnflushedExactValue = false;
+                    continue;
+                }
+
+                PersistIdentityValue(sequence.CollectionName, sequence.MetadataKey, sequence.Current);
+                sequence.ReservedUntil = sequence.Current;
+                sequence.HasUnflushedExactValue = false;
+            }
+        }
     }
 
     private long ScanMaxIdentityValue(string collectionName)

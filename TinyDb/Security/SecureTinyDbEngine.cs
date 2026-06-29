@@ -10,8 +10,8 @@ namespace TinyDb.Security;
 public sealed class SecureTinyDbEngine : IDisposable
 {
     private const int MinimumPasswordLength = 8;
-    private readonly TinyDbEngine _engine;
-    private readonly string? _password;
+    private TinyDbEngine _engine;
+    private string? _password;
     private bool _isAuthenticated;
     private bool _disposed;
 
@@ -49,6 +49,18 @@ public sealed class SecureTinyDbEngine : IDisposable
         FilePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _password = password;
 
+        if (!File.Exists(filePath))
+        {
+            _engine = PasswordManager.CreateSecureDatabase(filePath, password);
+            _isAuthenticated = true;
+            return;
+        }
+
+        if (!PasswordManager.IsPasswordProtected(filePath))
+        {
+            PasswordManager.SetPassword(filePath, password);
+        }
+
         var options = new TinyDbOptions { Password = password };
         _engine = new TinyDbEngine(filePath, options);
         _isAuthenticated = true;
@@ -81,7 +93,10 @@ public sealed class SecureTinyDbEngine : IDisposable
         if (DatabaseSecurity.IsDatabaseSecure(_engine))
             throw new InvalidOperationException("数据库已设置密码保护");
 
-        DatabaseSecurity.CreateSecureDatabase(_engine, password);
+        _engine.Dispose();
+        PasswordManager.SetPassword(FilePath, password);
+        _engine = new TinyDbEngine(FilePath, new TinyDbOptions { Password = password });
+        _password = password;
         _isAuthenticated = true;
     }
 

@@ -16,6 +16,11 @@ public class ExpressionParserTests
         public bool Active { get; set; }
     }
 
+    private sealed class ClosureValues
+    {
+        public string? OptionalName { get; init; }
+    }
+
     [Test]
     public async Task Parse_Simple_Equals_Should_Work()
     {
@@ -168,6 +173,19 @@ public class ExpressionParserTests
         query = _parser.Parse<QueryDoc>(x => x.Name.EndsWith("n"));
         func = (TinyDb.Query.FunctionExpression)query;
         await Assert.That(func.FunctionName).IsEqualTo("EndsWith");
+    }
+
+    [Test]
+    public async Task Parse_ClosurePropertyNull_ShouldFoldToNullConstant()
+    {
+        var values = new ClosureValues { OptionalName = null };
+
+        Expression<Func<QueryDoc, bool>> expr = x => x.Name == values.OptionalName;
+        var query = _parser.Parse(expr);
+        var binary = (TinyDb.Query.BinaryExpression)query;
+
+        await Assert.That(binary.Right).IsTypeOf<TinyDb.Query.ConstantExpression>();
+        await Assert.That(((TinyDb.Query.ConstantExpression)binary.Right).Value).IsNull();
     }
 
     [Test]

@@ -25,6 +25,7 @@ public sealed class BTreeIndex : IDisposable
     private readonly PageManager? _tempPm;
     private readonly int _maxKeys;
     private readonly ReaderWriterLockSlim _lock = new();
+    private const int DefaultScanBatchSize = 1024;
 
     public string Name => _name;
     public IReadOnlyList<string> Fields => _fields;
@@ -47,7 +48,7 @@ public sealed class BTreeIndex : IDisposable
         get 
         { 
             _lock.EnterReadLock(); 
-            try { return (int)_tree.EntryCount; } 
+            try { return ClampEntryCount(_tree.EntryCount); }
             finally { _lock.ExitReadLock(); } 
         } 
     }
@@ -171,9 +172,7 @@ public sealed class BTreeIndex : IDisposable
     public IEnumerable<BsonValue> Find(IndexKey key)
     {
         if (key == null) throw new ArgumentNullException(nameof(key));
-        _lock.EnterReadLock();
-        try { return _tree.Find(key); }
-        finally { _lock.ExitReadLock(); }
+        return ScanRangeIterator(key, key, includeStart: true, includeEnd: true, descending: false);
     }
 
     public BsonValue? FindExact(IndexKey key) 
@@ -187,14 +186,14 @@ public sealed class BTreeIndex : IDisposable
     {
         if (startKey == null) throw new ArgumentNullException(nameof(startKey));
         if (endKey == null) throw new ArgumentNullException(nameof(endKey));
-        return FindRangeIterator(startKey, endKey, includeStart, includeEnd);
+        return ScanRangeIterator(startKey, endKey, includeStart, includeEnd, descending: false);
     }
 
     public IEnumerable<BsonValue> FindRangeReverse(IndexKey startKey, IndexKey endKey, bool includeStart = true, bool includeEnd = true)
     {
         if (startKey == null) throw new ArgumentNullException(nameof(startKey));
         if (endKey == null) throw new ArgumentNullException(nameof(endKey));
-        return FindRangeReverseIterator(startKey, endKey, includeStart, includeEnd);
+        return ScanRangeIterator(startKey, endKey, includeStart, includeEnd, descending: true);
     }
 
     public IEnumerable<BsonValue> GetAll() 
@@ -207,67 +206,62 @@ public sealed class BTreeIndex : IDisposable
         return GetAllReverseIterator();
     }
 
-    private IEnumerable<BsonValue> FindRangeIterator(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
-    {
-        _lock.EnterReadLock();
-        try
-        {
-            foreach (var id in _tree.FindRange(startKey, endKey, includeStart, includeEnd))
-            {
-                yield return id;
-            }
-        }
-        finally
-        {
-            _lock.ExitReadLock();
-        }
-    }
-
-    private IEnumerable<BsonValue> FindRangeReverseIterator(IndexKey startKey, IndexKey endKey, bool includeStart, bool includeEnd)
-    {
-        _lock.EnterReadLock();
-        try
-        {
-            foreach (var id in _tree.FindRangeReverse(startKey, endKey, includeStart, includeEnd))
-            {
-                yield return id;
-            }
-        }
-        finally
-        {
-            _lock.ExitReadLock();
-        }
-    }
-
     private IEnumerable<BsonValue> GetAllIterator()
     {
-        _lock.EnterReadLock();
-        try
-        {
-            foreach (var id in _tree.GetAll())
-            {
-                yield return id;
-            }
-        }
-        finally
-        {
-            _lock.ExitReadLock();
-        }
+        return ScanRangeIterator(IndexKey.MinValue, IndexKey.MaxValue, includeStart: true, includeEnd: true, descending: false);
     }
 
     private IEnumerable<BsonValue> GetAllReverseIterator()
     {
-        _lock.EnterReadLock();
-        try
+        return ScanRangeIterator(IndexKey.MinValue, IndexKey.MaxValue, includeStart: true, includeEnd: true, descending: true);
+    }
+
+    private IEnumerable<BsonValue> ScanRangeIterator(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart,
+        bool includeEnd,
+        bool descending)
+    {
+        IndexKey? continuationKey = null;
+        BsonValue? continuationValue = null;
+        uint continuationPageId = 0;
+        int continuationIndex = -1;
+
+        while (true)
         {
-            foreach (var id in _tree.GetAllReverse())
+            DiskBTree.IndexScanBatch batch;
+            _lock.EnterReadLock();
+            try
             {
-                yield return id;
+                batch = descending
+                    ? _tree.FindRangeReverseBatch(startKey, endKey, includeStart, includeEnd, continuationKey, continuationValue, continuationPageId, continuationIndex, DefaultScanBatchSize)
+                    : _tree.FindRangeBatch(startKey, endKey, includeStart, includeEnd, continuationKey, continuationValue, continuationPageId, continuationIndex, DefaultScanBatchSize);
             }
-        }
-        finally
-        {
-            _lock.ExitReadLock();
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+
+            if (batch.Values.Count == 0)
+            {
+                yield break;
+            }
+
+            foreach (var value in batch.Values)
+            {
+                yield return value;
+            }
+
+            if (!batch.HasMore || batch.LastKey == null || batch.LastValue == null)
+            {
+                yield break;
+            }
+
+            continuationKey = batch.LastKey;
+            continuationValue = batch.LastValue;
+            continuationPageId = batch.LastPageId;
+            continuationIndex = batch.LastIndex;
         }
     }
 
@@ -330,7 +324,7 @@ public sealed class BTreeIndex : IDisposable
         try
         {
             var nodeCount = _tree.NodeCount;
-            var entryCount = (int)_tree.EntryCount;
+            var entryCount = ClampEntryCount(_tree.EntryCount);
             return new IndexStatistics
             {
                 Name = Name,
@@ -351,6 +345,11 @@ public sealed class BTreeIndex : IDisposable
     }
 
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(BTreeIndex)); }
+
+    private static int ClampEntryCount(long entryCount)
+    {
+        return entryCount > int.MaxValue ? int.MaxValue : (int)entryCount;
+    }
 
     public override string ToString()
     {

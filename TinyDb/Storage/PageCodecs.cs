@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using TinyDb.Security;
 
 namespace TinyDb.Storage;
@@ -55,6 +56,8 @@ internal sealed class AesGcmPageCodec : IPageCodec
     private static readonly byte[] AadPrefix = Encoding.UTF8.GetBytes("TinyDb.Page.v1");
     private readonly byte[] _key;
     private readonly byte[] _databaseId;
+    private readonly byte[] _noncePrefix = new byte[8];
+    private long _nonceCounter;
 
     public AesGcmPageCodec(uint logicalPageSize, uint physicalPageSize, byte[] key, byte[] databaseId)
     {
@@ -77,6 +80,7 @@ internal sealed class AesGcmPageCodec : IPageCodec
         PhysicalPageSize = physicalPageSize;
         _key = key.ToArray();
         _databaseId = databaseId.ToArray();
+        RandomNumberGenerator.Fill(_noncePrefix);
     }
 
     public uint LogicalPageSize { get; }
@@ -132,13 +136,30 @@ internal sealed class AesGcmPageCodec : IPageCodec
         }
 
         var nonce = frame.AsSpan(0, EncryptionMetadata.NonceLength);
-        RandomNumberGenerator.Fill(nonce);
+        FillNonce(nonce);
         var ciphertext = frame.AsSpan(EncryptionMetadata.NonceLength, logicalPage.Length);
         var tag = frame.AsSpan(EncryptionMetadata.NonceLength + logicalPage.Length, EncryptionMetadata.TagLength);
 
         using var aes = new AesGcm(_key, EncryptionMetadata.TagLength);
         aes.Encrypt(nonce, logicalPage, ciphertext, tag, BuildAad(pageId));
         return frame;
+    }
+
+    private void FillNonce(Span<byte> nonce)
+    {
+        if (nonce.Length != EncryptionMetadata.NonceLength)
+        {
+            throw new ArgumentException("Nonce length does not match codec configuration.", nameof(nonce));
+        }
+
+        var counter = Interlocked.Increment(ref _nonceCounter);
+        if ((ulong)counter > uint.MaxValue)
+        {
+            throw new InvalidOperationException("AES-GCM page nonce counter exhausted; rotate the encryption key.");
+        }
+
+        _noncePrefix.CopyTo(nonce);
+        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(_noncePrefix.Length, sizeof(uint)), (uint)counter);
     }
 
     private byte[] BuildAad(uint pageId)
