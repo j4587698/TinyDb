@@ -552,9 +552,117 @@ public sealed class ReviewReportRegressionTests : IDisposable
         }
     }
 
+    [Test]
+    public async Task TransactionCommit_WithConcurrentImplicitWriteAndWal_ShouldComplete()
+    {
+        var path = Path.Combine(_directory, "tx-concurrent-wal.db");
+        var options = new TinyDbOptions
+        {
+            EnableJournaling = true,
+            WriteConcern = WriteConcern.Journaled
+        };
+
+        using var engine = new TinyDbEngine(path, options);
+        var collection = engine.GetCollection<TransactionDocument>();
+        collection.Insert(new TransactionDocument { Id = 1, Value = 0 });
+
+        using var tx = engine.BeginTransaction();
+        var document = collection.FindById(1)!;
+        document.Value = 100;
+        collection.Update(document);
+
+        var commitTask = Task.Run(() => tx.Commit());
+        Task insertTask;
+        using (ExecutionContext.SuppressFlow())
+        {
+            insertTask = Task.Run(() =>
+            {
+                var implicitCollection = engine.GetCollection<TransactionDocument>();
+                implicitCollection.Insert(new TransactionDocument { Id = 2, Value = 200 });
+            });
+        }
+
+        await Task.WhenAll(commitTask, insertTask).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(collection.FindById(1)!.Value).IsEqualTo(100);
+        await Assert.That(collection.FindById(2)!.Value).IsEqualTo(200);
+    }
+
+    [Test]
+    public async Task DropCollection_ShouldClearIdentitySequenceCache()
+    {
+        using var engine = CreateEngine("drop-identity-cache.db");
+        var collection = engine.GetCollection<AutoIdentityDocument>();
+
+        var first = new AutoIdentityDocument { Name = "first" };
+        collection.Insert(first);
+        await Assert.That(first.Id).IsEqualTo(1);
+
+        await Assert.That(engine.DropCollection("AutoIdentityDocuments")).IsTrue();
+
+        var recreated = engine.GetCollection<AutoIdentityDocument>();
+        var second = new AutoIdentityDocument { Name = "second" };
+        recreated.Insert(second);
+
+        await Assert.That(second.Id).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task TransactionCommit_WhenDurabilityCommitFails_ShouldRollbackAppliedDocuments()
+    {
+        var path = Path.Combine(_directory, "tx-durability-commit-failure.db");
+        var options = new TinyDbOptions
+        {
+            EnableJournaling = true,
+            WriteConcern = WriteConcern.Journaled
+        };
+
+        using var engine = new TinyDbEngine(path, options);
+        var collection = engine.GetCollection<TransactionDocument>();
+        collection.Insert(new TransactionDocument { Id = 1, Value = 10 });
+
+        var wal = GetWriteAheadLog(engine);
+        var commitAttempts = 0;
+        wal.BeforeTransactionCommitForTesting = () =>
+        {
+            if (Interlocked.Increment(ref commitAttempts) == 1)
+            {
+                throw new IOException("Injected WAL commit failure.");
+            }
+        };
+
+        try
+        {
+            using var tx = engine.BeginTransaction();
+            collection.Insert(new TransactionDocument { Id = 2, Value = 20 });
+
+            var updated = collection.FindById(1)!;
+            updated.Value = 30;
+            collection.Update(updated);
+
+            await Assert.That(() => tx.Commit()).Throws<InvalidOperationException>();
+        }
+        finally
+        {
+            wal.BeforeTransactionCommitForTesting = null;
+        }
+
+        await Assert.That(collection.FindById(1)!.Value).IsEqualTo(10);
+        await Assert.That(collection.FindById(2)).IsNull();
+    }
+
     private TinyDbEngine CreateEngine(string fileName)
     {
         return new TinyDbEngine(Path.Combine(_directory, fileName));
+    }
+
+    private static WriteAheadLog GetWriteAheadLog(TinyDbEngine engine)
+    {
+        var field = typeof(TinyDbEngine).GetField(
+            "_writeAheadLog",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        return (WriteAheadLog)field!.GetValue(engine)!;
     }
 
     private static int IndexOf(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)

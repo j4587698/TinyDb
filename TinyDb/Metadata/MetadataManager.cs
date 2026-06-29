@@ -225,6 +225,12 @@ public class MetadataManager
         _validationProfiles.TryRemove(tableName, out _);
     }
 
+    internal void InvalidateMetadata(string tableName)
+    {
+        _cache.TryRemove(tableName, out _);
+        _validationProfiles.TryRemove(tableName, out _);
+    }
+
     /// <summary>
     /// 获取所有已注册的表名
     /// </summary>

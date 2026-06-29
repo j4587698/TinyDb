@@ -142,7 +142,7 @@ public sealed class DiskBTree : IDisposable
 
     private sealed class PageLease : IDisposable
     {
-        private readonly PageLease? _previous;
+        private PageLease? _previous;
         private readonly Dictionary<uint, Page> _pagesById = new();
         private readonly List<Page> _pages = new();
         private bool _disposed;
@@ -217,8 +217,33 @@ public sealed class DiskBTree : IDisposable
                 _pages[i].Unpin();
             }
 
-            _currentLease = _previous;
+            RemoveFromCurrentChain(this);
             _disposed = true;
+        }
+
+        private static void RemoveFromCurrentChain(PageLease lease)
+        {
+            if (_currentLease == lease)
+            {
+                _currentLease = lease._previous;
+                lease._previous = null;
+                return;
+            }
+
+            var current = _currentLease;
+            while (current != null)
+            {
+                if (current._previous == lease)
+                {
+                    current._previous = lease._previous;
+                    lease._previous = null;
+                    return;
+                }
+
+                current = current._previous;
+            }
+
+            lease._previous = null;
         }
     }
 
@@ -879,7 +904,7 @@ public sealed class DiskBTree : IDisposable
             return;
         }
 
-        int minKeys = Math.Max(1, _maxKeys / 2);
+        int minKeys = GetMinimumKeyCount(node);
         if (node.KeyCount >= minKeys) return;
 
         if (!TryResolveParent(node, out var parent, out var childIndex))
@@ -905,22 +930,21 @@ public sealed class DiskBTree : IDisposable
             }
         }
 
-        int pageCapacity = (int)_pm.PageSize - 41;
-
         if (childIndex > 0)
         {
             var leftSibling = LoadNode(parent.ChildrenIds[childIndex - 1]);
-            if (CanMerge(leftSibling, node, parent, childIndex - 1, pageCapacity))
+            if (CanMerge(leftSibling, node))
             {
                 MergeNodes(parent, leftSibling, node, childIndex - 1);
                 Rebalance(parent);
                 return;
             }
         }
-        else if (childIndex < parent.ChildrenIds.Count - 1)
+
+        if (childIndex < parent.ChildrenIds.Count - 1)
         {
             var rightSibling = LoadNode(parent.ChildrenIds[childIndex + 1]);
-            if (CanMerge(node, rightSibling, parent, childIndex, pageCapacity))
+            if (CanMerge(node, rightSibling))
             {
                 MergeNodes(parent, node, rightSibling, childIndex);
                 Rebalance(parent);
@@ -996,52 +1020,17 @@ public sealed class DiskBTree : IDisposable
         return BsonValueComparer.Compare(left, right) == 0;
     }
 
-    private bool CanMerge(DiskBTreeNode left, DiskBTreeNode right, DiskBTreeNode parent, int separatorIndex, int capacity)
+    private bool CanMerge(DiskBTreeNode left, DiskBTreeNode right)
     {
-        // Estimate the size of the merged node
-        // It will contain all keys/values from left, all from right, plus the separator from parent.
-        int leftSize = left.CalculateSize();
-        int rightSize = right.CalculateSize();
-        
-        // Rough estimate for the separator key size being added
-        // Since we don't have easy access to BsonValue size here without the helper, 
-        // we'll assume it's comparable to the average key size in the nodes or just safely check sum.
-        // Actually, CalculateSize includes overhead. Merging removes one node overhead but adds separator.
-        // Let's be conservative: sum of sizes should be less than capacity.
-        // Note: CalculateSize() returns the byte size of the node content.
-        
-        int separatorSize = left.IsLeaf ? 0 : EstimateIndexKeySize(parent.Keys[separatorIndex]);
-        return leftSize + rightSize + separatorSize <= capacity;
+        // DiskBTreeNode.Save stores oversized node payloads in an overflow chain, so
+        // single-page byte capacity must not block a logically valid merge.
+        var mergedKeyCount = left.KeyCount + right.KeyCount + (left.IsLeaf ? 0 : 1);
+        return mergedKeyCount <= _maxKeys;
     }
 
-    private static int EstimateIndexKeySize(IndexKey key)
+    private int GetMinimumKeyCount(DiskBTreeNode node)
     {
-        int size = 4;
-        var values = key.ValuesSpan;
-        for (int i = 0; i < values.Length; i++)
-        {
-            size += 1 + EstimateBsonValueSize(values[i]);
-        }
-
-        return size;
-    }
-
-    private static int EstimateBsonValueSize(BsonValue value)
-    {
-        if (value == null || value.IsNull) return 0;
-
-        return value.BsonType switch
-        {
-            BsonType.Double => 8,
-            BsonType.String => ((BsonString)value).Value.Length * 2 + 4,
-            BsonType.Int32 => 4,
-            BsonType.Int64 => 8,
-            BsonType.Boolean => 1,
-            BsonType.DateTime => 8,
-            BsonType.ObjectId => 12,
-            BsonType.Decimal128 => 16,
-            _ => 20
-        };
+        return Math.Max(1, node.IsLeaf ? _maxKeys / 2 : (_maxKeys - 1) / 2);
     }
     
     /// <summary>
@@ -1065,6 +1054,14 @@ public sealed class DiskBTree : IDisposable
 
     private bool ValidateNode(DiskBTreeNode node, IndexKey? minKey, IndexKey? maxKey)
     {
+        if (node.PageId != _rootPageId)
+        {
+            int minKeys = GetMinimumKeyCount(node);
+            if (node.KeyCount < minKeys) return false;
+        }
+
+        if (node.KeyCount > _maxKeys) return false;
+
         // 1. Validate keys are sorted
         for (int i = 0; i < node.KeyCount - 1; i++)
         {
@@ -1081,6 +1078,8 @@ public sealed class DiskBTree : IDisposable
         // 3. Recursively validate children
         if (!node.IsLeaf)
         {
+            if (node.ChildrenIds.Count != node.KeyCount + 1) return false;
+
             for (int i = 0; i < node.ChildrenIds.Count; i++)
             {
                 var child = LoadNode(node.ChildrenIds[i]);

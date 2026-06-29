@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Text;
 using TinyDb.Bson;
 
@@ -31,45 +32,45 @@ public ref struct BsonSpanReader
         EnterContainer();
         try
         {
-        // 检查剩余长度是否至少包含大小(4) + 结束符(1)
-        if (_data.Length < 5) throw new EndOfStreamException();
+            // 检查剩余长度是否至少包含大小(4) + 结束符(1)
+            if (_data.Length < 5) throw new EndOfStreamException();
 
-        int startPos = _position;
-        int docSize = ReadInt32();
-        
-        if (docSize < 5 || docSize > _data.Length - startPos)
-            throw new InvalidOperationException($"Invalid document size: {docSize}");
+            int startPos = _position;
+            int docSize = ReadInt32();
 
-        var document = new BsonDocument();
+            if (docSize < 5 || docSize > _data.Length - startPos)
+                throw new InvalidOperationException($"Invalid document size: {docSize}");
 
-        // 循环读取元素直到遇到结束符
-        while (true)
-        {
-            var type = (BsonType)ReadByte();
-            if (type == BsonType.End) break;
+            var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
 
-            // 优化：直接扫描 CString 长度
-            var key = ReadCString();
-
-            // 投影过滤
-            if (fields == null || fields.Contains(key))
+            // 循环读取元素直到遇到结束符
+            while (true)
             {
-                var value = ReadValue(type);
-                document = document.Set(key, value);
+                var type = (BsonType)ReadByte();
+                if (type == BsonType.End) break;
+
+                // 优化：直接扫描 CString 长度
+                var key = ReadCString();
+
+                // 投影过滤
+                if (fields == null || fields.Contains(key))
+                {
+                    var value = ReadValue(type);
+                    builder[key] = value;
+                }
+                else
+                {
+                    SkipValue(type);
+                }
             }
-            else
+
+            int actualSize = _position - startPos;
+            if (actualSize != docSize)
             {
-                SkipValue(type);
+                throw new InvalidOperationException($"Document size mismatch. Expected {docSize}, read {actualSize}");
             }
-        }
 
-        int actualSize = _position - startPos;
-        if (actualSize != docSize)
-        {
-            throw new InvalidOperationException($"Document size mismatch. Expected {docSize}, read {actualSize}");
-        }
-
-        return document;
+            return new BsonDocument(builder);
         }
         finally
         {

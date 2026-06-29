@@ -145,4 +145,46 @@ public sealed class DiskBTreeFindRangeReverseCoverageTests
             try { if (File.Exists(wal)) File.Delete(wal); } catch { }
         }
     }
+
+    [Test]
+    public async Task InterleavedEnumerators_DisposeOutOfOrder_ShouldClearCurrentPageLease()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"btree_interleaved_lease_{Guid.NewGuid():N}.db");
+        var currentLeaseField = typeof(DiskBTree).GetField(
+            "_currentLease",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        try
+        {
+            currentLeaseField!.SetValue(null, null);
+
+            using var ds = new DiskStream(path);
+            using var pm = new PageManager(ds, 4096);
+            using var tree = DiskBTree.Create(pm, maxKeys: 2);
+
+            for (int i = 1; i <= 20; i++)
+            {
+                tree.Insert(new IndexKey(new BsonInt32(i)), new BsonInt32(i));
+            }
+
+            using var first = tree.GetAll().GetEnumerator();
+            using var second = tree.GetAll().GetEnumerator();
+
+            var firstMoved = first.MoveNext();
+            var secondMoved = second.MoveNext();
+
+            first.Dispose();
+            second.Dispose();
+            var currentLease = currentLeaseField!.GetValue(null);
+
+            await Assert.That(firstMoved).IsTrue();
+            await Assert.That(secondMoved).IsTrue();
+            await Assert.That(currentLease).IsNull();
+        }
+        finally
+        {
+            currentLeaseField?.SetValue(null, null);
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
 }

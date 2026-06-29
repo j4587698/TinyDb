@@ -475,27 +475,66 @@ public sealed class IndexManager : IDisposable
                     continue;
                 }
 
+                var oldDeleted = false;
+                var newInserted = false;
                 try
                 {
-                    if (oldKey != null) index.Delete(oldKey, id);
+                    if (oldKey != null)
+                    {
+                        oldDeleted = index.Delete(oldKey, id);
+                    }
+
                     if (newKey != null)
                     {
                         if (!index.Insert(newKey, id))
                         {
-                            if (oldKey != null && !index.Insert(oldKey, id))
-                            {
-                                throw new InvalidOperationException($"Failed to rollback index '{index.Name}' after duplicate key detection");
-                            }
-
                             throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
                         }
+
+                        newInserted = true;
                     }
 
                     applied.Add((index, oldKey, newKey));
+
+                    oldDeleted = false;
+                    newInserted = false;
                 }
                 catch (Exception ex)
                 {
-                    ThrowWithRollbackErrors(ex, RollbackUpdatedIndexes(applied, id));
+                    var rollbackErrors = new List<Exception>();
+                    if (newInserted && newKey != null)
+                    {
+                        try
+                        {
+                            index.Delete(newKey, id);
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            rollbackErrors.Add(new InvalidOperationException(
+                                $"Failed to rollback inserted key in index '{index.Name}'.",
+                                rollbackEx));
+                        }
+                    }
+
+                    if (oldDeleted && oldKey != null)
+                    {
+                        try
+                        {
+                            if (!index.Insert(oldKey, id))
+                            {
+                                throw new InvalidOperationException($"Failed to restore old key in index '{index.Name}'.");
+                            }
+                        }
+                        catch (Exception rollbackEx)
+                        {
+                            rollbackErrors.Add(new InvalidOperationException(
+                                $"Failed to rollback deleted key in index '{index.Name}'.",
+                                rollbackEx));
+                        }
+                    }
+
+                    rollbackErrors.AddRange(RollbackUpdatedIndexes(applied, id));
+                    ThrowWithRollbackErrors(ex, rollbackErrors);
                     throw;
                 }
             }
