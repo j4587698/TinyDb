@@ -39,7 +39,7 @@ public sealed class QueryOptimizer
             var value = ExtractConstantValue(binaryExpr.Right);
             if (value != null)
             {
-                comparisons.TryAdd(leftMember.MemberName, new FieldComparison(value, ToComparisonType(binaryExpr.NodeType, reversed: false)));
+                AddComparison(comparisons, leftMember.MemberName, value, ToComparisonType(binaryExpr.NodeType, reversed: false));
             }
             return;
         }
@@ -49,9 +49,24 @@ public sealed class QueryOptimizer
             var value = ExtractConstantValue(binaryExpr.Left);
             if (value != null)
             {
-                comparisons.TryAdd(rightMember.MemberName, new FieldComparison(value, ToComparisonType(binaryExpr.NodeType, reversed: true)));
+                AddComparison(comparisons, rightMember.MemberName, value, ToComparisonType(binaryExpr.NodeType, reversed: true));
             }
         }
+    }
+
+    private static void AddComparison(
+        Dictionary<string, FieldComparison> comparisons,
+        string fieldName,
+        BsonValue value,
+        ComparisonType comparisonType)
+    {
+        if (!comparisons.TryGetValue(fieldName, out var comparison))
+        {
+            comparison = new FieldComparison();
+            comparisons[fieldName] = comparison;
+        }
+
+        comparison.Add(value, comparisonType);
     }
 
     private static bool IsComparisonNode(System.Linq.Expressions.ExpressionType nodeType)
@@ -90,7 +105,128 @@ public sealed class QueryOptimizer
         };
     }
 
-    private sealed record FieldComparison(BsonValue Value, ComparisonType ComparisonType);
+    private sealed class FieldComparison
+    {
+        private BsonValue? _equalValue;
+        private BsonValue? _notEqualValue;
+        private BsonValue? _lowerValue;
+        private BsonValue? _upperValue;
+        private bool _includeLower;
+        private bool _includeUpper;
+
+        public void Add(BsonValue value, ComparisonType comparisonType)
+        {
+            switch (comparisonType)
+            {
+                case ComparisonType.Equal:
+                    _equalValue ??= value;
+                    break;
+                case ComparisonType.NotEqual:
+                    _notEqualValue ??= value;
+                    break;
+                case ComparisonType.GreaterThan:
+                    SetLower(value, include: false);
+                    break;
+                case ComparisonType.GreaterThanOrEqual:
+                    SetLower(value, include: true);
+                    break;
+                case ComparisonType.LessThan:
+                    SetUpper(value, include: false);
+                    break;
+                case ComparisonType.LessThanOrEqual:
+                    SetUpper(value, include: true);
+                    break;
+            }
+        }
+
+        public IndexScanKey ToIndexScanKey(string fieldName)
+        {
+            if (_equalValue != null)
+            {
+                return new IndexScanKey
+                {
+                    FieldName = fieldName,
+                    Value = _equalValue,
+                    ComparisonType = ComparisonType.Equal
+                };
+            }
+
+            if (_lowerValue != null && _upperValue != null)
+            {
+                return new IndexScanKey
+                {
+                    FieldName = fieldName,
+                    Value = _lowerValue,
+                    ComparisonType = ComparisonType.Range,
+                    LowerValue = _lowerValue,
+                    UpperValue = _upperValue,
+                    IncludeLower = _includeLower,
+                    IncludeUpper = _includeUpper
+                };
+            }
+
+            if (_lowerValue != null)
+            {
+                return new IndexScanKey
+                {
+                    FieldName = fieldName,
+                    Value = _lowerValue,
+                    ComparisonType = _includeLower ? ComparisonType.GreaterThanOrEqual : ComparisonType.GreaterThan
+                };
+            }
+
+            if (_upperValue != null)
+            {
+                return new IndexScanKey
+                {
+                    FieldName = fieldName,
+                    Value = _upperValue,
+                    ComparisonType = _includeUpper ? ComparisonType.LessThanOrEqual : ComparisonType.LessThan
+                };
+            }
+
+            return new IndexScanKey
+            {
+                FieldName = fieldName,
+                Value = _notEqualValue ?? BsonNull.Value,
+                ComparisonType = ComparisonType.NotEqual
+            };
+        }
+
+        private void SetLower(BsonValue value, bool include)
+        {
+            if (_lowerValue == null)
+            {
+                _lowerValue = value;
+                _includeLower = include;
+                return;
+            }
+
+            var comparison = BsonValueComparer.Compare(value, _lowerValue);
+            if (comparison > 0 || (comparison == 0 && _includeLower && !include))
+            {
+                _lowerValue = value;
+                _includeLower = include;
+            }
+        }
+
+        private void SetUpper(BsonValue value, bool include)
+        {
+            if (_upperValue == null)
+            {
+                _upperValue = value;
+                _includeUpper = include;
+                return;
+            }
+
+            var comparison = BsonValueComparer.Compare(value, _upperValue);
+            if (comparison < 0 || (comparison == 0 && _includeUpper && !include))
+            {
+                _upperValue = value;
+                _includeUpper = include;
+            }
+        }
+    }
 
     /// <summary>
     /// 初始化查询优化器
@@ -364,13 +500,7 @@ public sealed class QueryOptimizer
 
             if (comparisons.TryGetValue(fieldName, out var comparison))
             {
-                // 尝试从查询表达式中提取比较值
-                scanKeys.Add(new IndexScanKey
-                {
-                    FieldName = fieldName,
-                    Value = comparison.Value,
-                    ComparisonType = comparison.ComparisonType
-                });
+                scanKeys.Add(comparison.ToIndexScanKey(fieldName));
             }
             else
             {
@@ -627,6 +757,26 @@ public sealed class IndexScanKey
     public BsonValue Value { get; set; } = BsonNull.Value;
 
     /// <summary>
+    /// 范围下界值，仅在 Range 比较时使用
+    /// </summary>
+    public BsonValue? LowerValue { get; set; }
+
+    /// <summary>
+    /// 范围上界值，仅在 Range 比较时使用
+    /// </summary>
+    public BsonValue? UpperValue { get; set; }
+
+    /// <summary>
+    /// 是否包含范围下界
+    /// </summary>
+    public bool IncludeLower { get; set; } = true;
+
+    /// <summary>
+    /// 是否包含范围上界
+    /// </summary>
+    public bool IncludeUpper { get; set; } = true;
+
+    /// <summary>
     /// 比较类型
     /// </summary>
     public ComparisonType ComparisonType { get; set; } = ComparisonType.Equal;
@@ -665,5 +815,10 @@ public enum ComparisonType
     /// <summary>
     /// 小于等于
     /// </summary>
-    LessThanOrEqual
+    LessThanOrEqual,
+
+    /// <summary>
+    /// 同字段范围
+    /// </summary>
+    Range
 }

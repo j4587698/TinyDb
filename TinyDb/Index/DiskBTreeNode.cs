@@ -465,6 +465,11 @@ public sealed class DiskBTreeNode : IDisposable
     
     public bool IsFull(int pageSize)
     {
+        if (pageSize != _page.PageSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pageSize), "pageSize must match the node page size.");
+        }
+
         // Use _page.DataCapacity if available as it represents the true space on the page
         int limit = _page.DataCapacity;
         return CalculateSize() >= limit;

@@ -181,6 +181,14 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     }
 
     /// <summary>
+    /// 使用 Builder 初始化数组（内部高效使用）
+    /// </summary>
+    internal BsonArray(ImmutableList<BsonValue>.Builder builder)
+    {
+        _elements = builder.ToImmutable();
+    }
+
+    /// <summary>
     /// 创建包含单个元素的数组
     /// </summary>
     public static BsonArray Create(BsonValue value)

@@ -16,7 +16,7 @@ public sealed class TransactionManager : IDisposable
     private readonly ConcurrentDictionary<string, List<ForeignKeyDefinition>> _foreignKeyCache = new(StringComparer.Ordinal);
     private readonly object _foreignKeyCacheLock = new();
     private readonly object _lock = new();
-    private bool _disposed;
+    private int _disposed;
 
     private record ForeignKeyDefinition(string FieldName, string ReferencedCollection);
 
@@ -712,9 +712,10 @@ public sealed class TransactionManager : IDisposable
     /// <returns>任务</returns>
     private async Task StartTimeoutCheckTask()
     {
-        while (!_disposed)
+        while (Volatile.Read(ref _disposed) == 0)
         {
             await Task.Delay(TimeSpan.FromSeconds(30)); // 每30秒检查一次
+            if (Volatile.Read(ref _disposed) != 0) break;
             CheckAndCleanupExpiredTransactions();
         }
     }
@@ -770,7 +771,7 @@ public sealed class TransactionManager : IDisposable
     /// </summary>
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(nameof(TransactionManager));
     }
 
@@ -779,8 +780,7 @@ public sealed class TransactionManager : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
         // 回滚所有活动事务
         lock (_lock)

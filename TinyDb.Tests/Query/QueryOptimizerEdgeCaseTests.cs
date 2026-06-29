@@ -136,6 +136,25 @@ public class QueryOptimizerEdgeCaseTests
         await Assert.That(plan.IndexScanKeys![0].ComparisonType).IsEqualTo(ComparisonType.NotEqual);
     }
 
+    [Test]
+    public async Task CreateExecutionPlan_BoundedRange_ShouldMergeSameFieldComparisons()
+    {
+        _engine.EnsureIndex("TestEntity", "Age", "age_idx");
+
+        var plan = _optimizer.CreateExecutionPlan<TestEntity>("TestEntity", e => e.Age > 18 && e.Age < 65);
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexScan);
+        await Assert.That(plan.IndexScanKeys).Count().IsEqualTo(1);
+
+        var key = plan.IndexScanKeys[0];
+        await Assert.That(key.FieldName).IsEqualTo("age");
+        await Assert.That(key.ComparisonType).IsEqualTo(ComparisonType.Range);
+        await Assert.That(key.LowerValue!.RawValue).IsEqualTo(18);
+        await Assert.That(key.UpperValue!.RawValue).IsEqualTo(65);
+        await Assert.That(key.IncludeLower).IsFalse();
+        await Assert.That(key.IncludeUpper).IsFalse();
+    }
+
     #endregion
 
     #region Value Type Conversion Tests
