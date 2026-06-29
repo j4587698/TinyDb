@@ -2,6 +2,7 @@ using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.References;
+using TinyDb.Serialization;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -147,6 +148,65 @@ public class DbRefSerializerTests
         }
     }
 
+    [Test]
+    public async Task IncludeQueryBuilder_ShouldLoadNavigationPropertyByForeignKey()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"include_ref_navigation_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath);
+            var users = engine.GetCollection<RefUser>("Users");
+            var orders = engine.GetCollection<RefOrderWithUser>("OrdersWithUsers");
+
+            users.Insert(new RefUser { Id = 1, Name = "Alice" });
+            orders.Insert(new RefOrderWithUser { Id = 10, UserId = 1 });
+
+            var order = new IncludeQueryBuilder<RefOrderWithUser>(engine, "OrdersWithUsers")
+                .Include(o => o.UserId)
+                .FindById(new BsonInt32(10));
+
+            await Assert.That(order).IsNotNull();
+            await Assert.That(order!.User).IsNotNull();
+            await Assert.That(order.User!.Name).IsEqualTo("Alice");
+
+            var orderByNavigation = new IncludeQueryBuilder<RefOrderWithUser>(engine, "OrdersWithUsers")
+                .Include(o => o.User)
+                .FindById(new BsonInt32(10));
+
+            await Assert.That(orderByNavigation).IsNotNull();
+            await Assert.That(orderByNavigation!.User).IsNotNull();
+            await Assert.That(orderByNavigation.User!.Name).IsEqualTo("Alice");
+        }
+        finally
+        {
+            CleanupDb(dbPath);
+        }
+    }
+
+    [Test]
+    public async Task AotAdapter_ShouldExposeForeignKeyMetadata_ForInclude()
+    {
+        var found = AotHelperRegistry.TryGetAdapter<RefOrderWithUser>(out var adapter);
+
+        await Assert.That(found).IsTrue();
+        await Assert.That(adapter).IsNotNull();
+
+        var reference = adapter!.ForeignKeyReferences
+            .SingleOrDefault(r => r.ForeignKeyPropertyName == nameof(RefOrderWithUser.UserId));
+
+        await Assert.That(reference).IsNotNull();
+        await Assert.That(reference!.CollectionName).IsEqualTo("Users");
+        await Assert.That(reference.TargetPropertyName).IsEqualTo(nameof(RefOrderWithUser.User));
+        await Assert.That(reference.TargetPropertyType).IsEqualTo(typeof(RefUser));
+
+        var order = new RefOrderWithUser();
+        var user = new RefUser { Id = 99, Name = "Bob" };
+
+        await Assert.That(adapter.TrySetPropertyValueUntyped(order, nameof(RefOrderWithUser.User), user)).IsTrue();
+        await Assert.That(ReferenceEquals(order.User, user)).IsTrue();
+    }
+
     private static void CleanupDb(string dbPath)
     {
         if (File.Exists(dbPath)) File.Delete(dbPath);
@@ -172,5 +232,17 @@ public class DbRefSerializerTests
 
         [ForeignKey("Users")]
         public string UserId { get; set; } = string.Empty;
+    }
+
+    [Entity("OrdersWithUsers")]
+    public class RefOrderWithUser
+    {
+        [Id]
+        public int Id { get; set; }
+
+        [ForeignKey("Users")]
+        public int UserId { get; set; }
+
+        public RefUser? User { get; set; }
     }
 }

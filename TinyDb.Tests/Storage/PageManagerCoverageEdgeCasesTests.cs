@@ -211,6 +211,36 @@ public sealed class PageManagerCoverageEdgeCasesTests
         await Assert.That(async () => { await manager.GetPageAsync(1, useCache: false); }).Throws<InvalidDataException>();
     }
 
+    [Test]
+    public async Task GetPage_WhenCacheEntryAppearsDuringDiskRead_ShouldReturnCachedPage()
+    {
+        using var stream = new BlockingFirstReadDiskStream(size: 4096);
+        var diskPage = new Page(1, 4096, PageType.Data);
+        diskPage.WriteData(0, new byte[] { 1 });
+        diskPage.UpdateChecksum();
+        stream.WritePage(0, diskPage.Buffer);
+
+        using var manager = new PageManager(stream, 4096);
+        var loadingTask = Task.Run(() => manager.GetPage(1));
+
+        await Assert.That(stream.ReadStarted.Wait(TimeSpan.FromSeconds(5))).IsTrue();
+
+        var cachedPage = new Page(1, 4096, PageType.Data);
+        cachedPage.WriteData(0, new byte[] { 9 });
+
+        var addToCache = typeof(PageManager).GetMethod("AddToCache", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingMethodException(typeof(PageManager).FullName, "AddToCache");
+        var addedPage = (Page)addToCache.Invoke(manager, new object[] { cachedPage })!;
+
+        await Assert.That(object.ReferenceEquals(addedPage, cachedPage)).IsTrue();
+
+        stream.AllowRead.Set();
+        var loadedPage = await loadingTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(object.ReferenceEquals(loadedPage, cachedPage)).IsTrue();
+        await Assert.That(loadedPage.ReadBytes(0, 1)[0]).IsEqualTo((byte)9);
+    }
+
     private class FakeDiskStreamBase : IDiskStream
     {
         private readonly Dictionary<long, byte[]> _pages = new();
@@ -307,6 +337,40 @@ public sealed class PageManagerCoverageEdgeCasesTests
         public override void Dispose()
         {
             throw new IOException("Simulated dispose failure.");
+        }
+    }
+
+    private sealed class BlockingFirstReadDiskStream : FakeDiskStreamBase
+    {
+        private int _shouldBlock = 1;
+
+        public BlockingFirstReadDiskStream(long size) : base(size)
+        {
+        }
+
+        public ManualResetEventSlim ReadStarted { get; } = new(false);
+        public ManualResetEventSlim AllowRead { get; } = new(false);
+
+        public override byte[] ReadPage(long pageOffset, int pageSize)
+        {
+            var page = base.ReadPage(pageOffset, pageSize);
+            if (Interlocked.Exchange(ref _shouldBlock, 0) == 1)
+            {
+                ReadStarted.Set();
+                if (!AllowRead.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Timed out while waiting to release blocked page read.");
+                }
+            }
+
+            return page;
+        }
+
+        public override void Dispose()
+        {
+            ReadStarted.Dispose();
+            AllowRead.Dispose();
+            base.Dispose();
         }
     }
 }

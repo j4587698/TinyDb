@@ -63,6 +63,17 @@ public class ObjectIdCoverageTests
     }
 
     [Test]
+    public async Task Timestamp_ShouldSupportDatesAfter2038()
+    {
+        var timestamp = new DateTime(2040, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var oid = new ObjectId(timestamp, 0x123456, 0x1234, 0x112233);
+
+        await Assert.That(oid.Timestamp).IsEqualTo(timestamp);
+        await Assert.That(oid.TimestampUnixSeconds).IsGreaterThan((uint)int.MaxValue);
+        await Assert.That(oid.TimestampSeconds).IsLessThan(0);
+    }
+
+    [Test]
     public async Task Comparison_Operators()
     {
         var oid1 = ObjectId.NewObjectId();

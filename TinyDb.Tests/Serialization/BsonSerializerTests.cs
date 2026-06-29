@@ -54,6 +54,23 @@ public class BsonSerializerTests
     }
 
     [Test]
+    public async Task SerializeDocument_Should_WriteWrappedNestedDocumentAndArray()
+    {
+        var document = new BsonDocument()
+            .Set("nested", new BsonDocumentValue(new BsonDocument().Set("x", 1)))
+            .Set("items", new BsonArrayValue(new BsonArray().AddValue("a").AddValue("b")));
+
+        var bytes = BsonSerializer.SerializeDocument(document);
+        var roundTrip = BsonSerializer.DeserializeDocument(bytes);
+
+        await Assert.That(roundTrip["nested"]).IsTypeOf<BsonDocument>();
+        await Assert.That(((BsonDocument)roundTrip["nested"])["x"].ToInt32(null)).IsEqualTo(1);
+
+        await Assert.That(roundTrip["items"]).IsTypeOf<BsonArray>();
+        await Assert.That(((BsonArray)roundTrip["items"]).Count).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Serialize_Should_Convert_BsonArray_To_Bytes()
     {
         // Arrange

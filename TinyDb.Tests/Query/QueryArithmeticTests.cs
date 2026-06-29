@@ -54,6 +54,20 @@ public class QueryArithmeticTests : IDisposable
         await Assert.That(res.Count).IsEqualTo(1);
         await Assert.That(res[0].Id).IsEqualTo(2);
     }
+
+    [Test]
+    public async Task LongInteger_Arithmetic_Should_NotLosePrecision()
+    {
+        var col = _engine.GetCollection<QueryArithmeticLongMathItem>();
+        col.Insert(new QueryArithmeticLongMathItem { Id = 1, A = 9_007_199_254_740_992L });
+
+        var res = _executor.Execute<QueryArithmeticLongMathItem>(
+            "LongMath",
+            x => x.A + 1 == 9_007_199_254_740_993L).ToList();
+
+        await Assert.That(res.Count).IsEqualTo(1);
+        await Assert.That(res[0].Id).IsEqualTo(1);
+    }
 }
 
 [Entity("Math")]
@@ -61,4 +75,11 @@ public class QueryArithmeticMathItem
 {
     public int Id { get; set; }
     public int A { get; set; }
+}
+
+[Entity("LongMath")]
+public class QueryArithmeticLongMathItem
+{
+    public int Id { get; set; }
+    public long A { get; set; }
 }

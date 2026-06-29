@@ -12,6 +12,9 @@ public interface IAotEntityAdapter
 {
     BsonDocument ToDocumentUntyped(object entity);
     object FromDocumentUntyped(BsonDocument document);
+    IReadOnlyList<AotForeignKeyReference> ForeignKeyReferences { get; }
+    object? GetPropertyValueUntyped(object entity, string propertyName);
+    bool TrySetPropertyValueUntyped(object entity, string propertyName, object? value);
     
     /// <summary>
     /// 从文档转换为对象（返回 object 类型）
@@ -39,6 +42,26 @@ public interface IAotEntityAdapter
     System.Collections.IList CreateListFrom(IEnumerable<object> items);
 }
 
+public sealed class AotForeignKeyReference
+{
+    public string ForeignKeyPropertyName { get; }
+    public string CollectionName { get; }
+    public string? TargetPropertyName { get; }
+    public Type? TargetPropertyType { get; }
+
+    public AotForeignKeyReference(
+        string foreignKeyPropertyName,
+        string collectionName,
+        string? targetPropertyName,
+        Type? targetPropertyType)
+    {
+        ForeignKeyPropertyName = foreignKeyPropertyName ?? throw new ArgumentNullException(nameof(foreignKeyPropertyName));
+        CollectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
+        TargetPropertyName = targetPropertyName;
+        TargetPropertyType = targetPropertyType;
+    }
+}
+
 internal interface IAotEntityPropertyAccessor
 {
     object? GetPropertyValueUntyped(object entity, string propertyName);
@@ -55,6 +78,8 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
     public Action<T, BsonValue> SetId { get; }
     public Func<T, bool> HasValidId { get; }
     public Func<T, string, object?> GetPropertyValue { get; }
+    public Func<T, string, object?, bool> TrySetPropertyValue { get; }
+    public IReadOnlyList<AotForeignKeyReference> ForeignKeyReferences { get; }
 
     public AotEntityAdapter(
         Func<T, BsonDocument> toDocument,
@@ -63,6 +88,27 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
         Action<T, BsonValue> setId,
         Func<T, bool> hasValidId,
         Func<T, string, object?> getPropertyValue)
+        : this(
+            toDocument,
+            fromDocument,
+            getId,
+            setId,
+            hasValidId,
+            getPropertyValue,
+            static (_, _, _) => false,
+            null)
+    {
+    }
+
+    public AotEntityAdapter(
+        Func<T, BsonDocument> toDocument,
+        Func<BsonDocument, T> fromDocument,
+        Func<T, BsonValue> getId,
+        Action<T, BsonValue> setId,
+        Func<T, bool> hasValidId,
+        Func<T, string, object?> getPropertyValue,
+        Func<T, string, object?, bool> trySetPropertyValue,
+        IReadOnlyList<AotForeignKeyReference>? foreignKeyReferences = null)
     {
         ToDocument = toDocument ?? throw new ArgumentNullException(nameof(toDocument));
         FromDocument = fromDocument ?? throw new ArgumentNullException(nameof(fromDocument));
@@ -70,13 +116,17 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
         SetId = setId ?? throw new ArgumentNullException(nameof(setId));
         HasValidId = hasValidId ?? throw new ArgumentNullException(nameof(hasValidId));
         GetPropertyValue = getPropertyValue ?? throw new ArgumentNullException(nameof(getPropertyValue));
+        TrySetPropertyValue = trySetPropertyValue ?? throw new ArgumentNullException(nameof(trySetPropertyValue));
+        ForeignKeyReferences = foreignKeyReferences ?? Array.Empty<AotForeignKeyReference>();
     }
 
     // 实现非泛型接口
     public BsonDocument ToDocumentUntyped(object entity) => ToDocument((T)entity);
     public object FromDocumentUntyped(BsonDocument document) => FromDocument(document)!;
     public object? FromDocumentObject(BsonDocument document) => FromDocument(document);
-    object? IAotEntityPropertyAccessor.GetPropertyValueUntyped(object entity, string propertyName) => GetPropertyValue((T)entity, propertyName);
+    public object? GetPropertyValueUntyped(object entity, string propertyName) => GetPropertyValue((T)entity, propertyName);
+    public bool TrySetPropertyValueUntyped(object entity, string propertyName, object? value) =>
+        TrySetPropertyValue((T)entity, propertyName, value);
     
     /// <summary>
     /// 创建 T 类型的数组（AOT 兼容）

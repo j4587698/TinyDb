@@ -129,6 +129,59 @@ public sealed class WriteAheadLogSyncReplayCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task Replay_EncryptedCrcMismatchTail_ShouldApplyValidAndTruncate()
+    {
+        var walFile = GetWalFile(_dbFile);
+        var key = new byte[32];
+        var databaseId = new byte[16];
+        for (int i = 0; i < key.Length; i++) key[i] = (byte)(i + 1);
+        for (int i = 0; i < databaseId.Length; i++) databaseId[i] = (byte)(i + 17);
+
+        using (var wal = new WriteAheadLog(
+                   _dbFile,
+                   PageSize,
+                   enabled: true,
+                   walFileNameFormat: null,
+                   logger: null,
+                   walCodec: new AesGcmWalCodec(key, databaseId)))
+        {
+            for (uint i = 1; i <= 2; i++)
+            {
+                var page = new Page(i, PageSize);
+                page.WriteData(0, new byte[] { (byte)i });
+                wal.AppendPage(page);
+            }
+
+            wal.FlushLog();
+        }
+
+        var bytes = File.ReadAllBytes(walFile);
+        var firstLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(5, 4));
+        var secondPayloadOffset = 13 + firstLength + 13;
+        bytes[secondPayloadOffset] ^= 0x5A;
+        File.WriteAllBytes(walFile, bytes);
+
+        long beforeReplayLength = new FileInfo(walFile).Length;
+        var applied = new List<uint>();
+
+        using (var wal = new WriteAheadLog(
+                   _dbFile,
+                   PageSize,
+                   enabled: true,
+                   walFileNameFormat: null,
+                   logger: null,
+                   walCodec: new AesGcmWalCodec(key, databaseId)))
+        {
+            wal.Replay((id, _) => applied.Add(id));
+        }
+
+        long afterReplayLength = new FileInfo(walFile).Length;
+        await Assert.That(applied.Count).IsEqualTo(1);
+        await Assert.That(applied[0]).IsEqualTo(1u);
+        await Assert.That(afterReplayLength < beforeReplayLength).IsTrue();
+    }
+
+    [Test]
     public async Task Replay_IncompleteDataRecord_ShouldStopWithoutApply()
     {
         var walFile = GetWalFile(_dbFile);

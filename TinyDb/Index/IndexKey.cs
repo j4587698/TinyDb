@@ -216,10 +216,10 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// <summary>
     /// 获取最小索引键（用于范围查询的下界）
     /// </summary>
-    public static IndexKey MinValue => new IndexKey(BsonMinKey.Value);
+    public static IndexKey MinValue { get; } = new(BsonMinKey.Value);
 
     /// <summary>
     /// 获取最大索引键（用于范围查询的上界）
     /// </summary>
-    public static IndexKey MaxValue => new IndexKey(BsonMaxKey.Value);
+    public static IndexKey MaxValue { get; } = new(BsonMaxKey.Value);
 }

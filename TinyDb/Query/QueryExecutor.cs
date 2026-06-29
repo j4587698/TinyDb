@@ -442,6 +442,7 @@ public sealed class QueryExecutor
         foreach (var stat in idxMgr.GetAllStatistics())
         {
             if (stat.Type != IndexType.BTree) continue;
+            if (stat.IsSparse) continue;
             if (stat.Fields.Length < desiredFields.Length) continue;
 
             bool match = true;

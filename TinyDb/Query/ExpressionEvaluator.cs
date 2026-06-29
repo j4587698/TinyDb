@@ -344,13 +344,40 @@ public static class ExpressionEvaluator
                 {
                     return (leftValue?.ToString() ?? "") + (rightValue?.ToString() ?? "");
                 }
-                return EvaluateMathOp(leftValue, rightValue, (a, b) => a + b, (a, b) => a + b);
-            case ExpressionType.Subtract: return EvaluateMathOp(leftValue, rightValue, (a, b) => a - b, (a, b) => a - b);
-            case ExpressionType.Multiply: return EvaluateMathOp(leftValue, rightValue, (a, b) => a * b, (a, b) => a * b);
+                return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a + b, (a, b) => a + b, (a, b) => a + b);
+            case ExpressionType.Subtract: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a - b, (a, b) => a - b, (a, b) => a - b);
+            case ExpressionType.Multiply: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a * b, (a, b) => a * b, (a, b) => a * b);
             case ExpressionType.Divide: return EvaluateMathOp(leftValue, rightValue, (a, b) => a / b, (a, b) => a / b);
 
             default: throw new NotSupportedException($"Binary operation {nodeType} is not supported");
         }
+    }
+
+    private static object? EvaluateIntegralMathOp(object? left, object? right, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc, Func<long, long, long> integralFunc)
+    {
+        if (left == null || right == null) return null;
+
+        if (left is decimal || right is decimal || left is Decimal128 || right is Decimal128)
+        {
+            return decimalFunc(ToDecimal(left), ToDecimal(right));
+        }
+
+        if (TryGetIntegral(left, out var leftLong, out var leftRequiresLong) &&
+            TryGetIntegral(right, out var rightLong, out var rightRequiresLong))
+        {
+            var result = integralFunc(leftLong, rightLong);
+            if (!leftRequiresLong &&
+                !rightRequiresLong &&
+                result >= int.MinValue &&
+                result <= int.MaxValue)
+            {
+                return (int)result;
+            }
+
+            return result;
+        }
+
+        return EvaluateMathOp(left, right, doubleFunc, decimalFunc);
     }
 
     private static object? EvaluateMathOp(object? left, object? right, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc)
@@ -371,6 +398,53 @@ public static class ExpressionEvaluator
         }
 
         return dResult;
+    }
+
+    private static bool TryGetIntegral(object value, out long result, out bool requiresLongResult)
+    {
+        switch (value)
+        {
+            case BsonInt32 bsonInt32:
+                result = bsonInt32.Value;
+                requiresLongResult = false;
+                return true;
+            case BsonInt64 bsonInt64:
+                result = bsonInt64.Value;
+                requiresLongResult = true;
+                return true;
+            case byte byteValue:
+                result = byteValue;
+                requiresLongResult = false;
+                return true;
+            case sbyte sbyteValue:
+                result = sbyteValue;
+                requiresLongResult = false;
+                return true;
+            case short shortValue:
+                result = shortValue;
+                requiresLongResult = false;
+                return true;
+            case ushort ushortValue:
+                result = ushortValue;
+                requiresLongResult = false;
+                return true;
+            case int intValue:
+                result = intValue;
+                requiresLongResult = false;
+                return true;
+            case uint uintValue:
+                result = uintValue;
+                requiresLongResult = true;
+                return true;
+            case long longValue:
+                result = longValue;
+                requiresLongResult = true;
+                return true;
+            default:
+                result = default;
+                requiresLongResult = false;
+                return false;
+        }
     }
 
     private static decimal ToDecimal(object val)

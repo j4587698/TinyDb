@@ -421,6 +421,12 @@ public sealed class BsonWriter : IDisposable
             case BsonDecimal128 dec128:
                 WriteDecimal128(dec128.Value);
                 break;
+            case BsonDocumentValue docVal:
+                WriteDocument(docVal.Value);
+                break;
+            case BsonArrayValue arrVal:
+                WriteArray(arrVal.Value);
+                break;
             case BsonDocument doc:
                 WriteDocument(doc);
                 break;

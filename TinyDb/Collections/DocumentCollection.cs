@@ -106,6 +106,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
 
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            return InsertInTransaction(entities, (Transaction)currentTransaction);
+        }
+
         int totalInserted = 0;
         const int BatchSize = 1000;
         var entityBatch = new List<T>(BatchSize);
@@ -144,6 +150,23 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         var insertedCount = _engine.InsertDocuments(_name, documents);
 
         UpdateEntityIds(entities, documents, insertedCount);
+
+        return insertedCount;
+    }
+
+    private int InsertInTransaction(IEnumerable<T> entities, Transaction transaction, CancellationToken cancellationToken = default)
+    {
+        var insertedCount = 0;
+        foreach (var entity in entities)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entity == null) continue;
+
+            var document = PrepareDocumentForInsert(entity);
+            var documentId = transaction.RecordInsert(_name, document);
+            UpdateEntityId(entity, documentId);
+            insertedCount++;
+        }
 
         return insertedCount;
     }
@@ -850,6 +873,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         ThrowIfDisposed();
         if (entities == null) throw new ArgumentNullException(nameof(entities));
+
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction != null)
+        {
+            return InsertInTransaction(entities, (Transaction)currentTransaction, cancellationToken);
+        }
 
         int totalInserted = 0;
         const int BatchSize = 1000;
