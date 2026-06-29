@@ -170,6 +170,11 @@ public sealed class TransactionOperation
     public bool IndexUnique { get; }
 
     /// <summary>
+    /// 索引是否稀疏
+    /// </summary>
+    public bool IndexSparse { get; }
+
+    /// <summary>
     /// 操作时间
     /// </summary>
     public DateTime Timestamp { get; }
@@ -200,7 +205,8 @@ public sealed class TransactionOperation
         Guid? savepointId = null,
         string? indexName = null,
         string[]? indexFields = null,
-        bool indexUnique = false)
+        bool indexUnique = false,
+        bool indexSparse = false)
     {
         OperationId = Guid.NewGuid();
         OperationType = operationType;
@@ -213,6 +219,7 @@ public sealed class TransactionOperation
         IndexName = indexName;
         IndexFields = indexFields;
         IndexUnique = indexUnique;
+        IndexSparse = indexSparse;
     }
 
     /// <summary>
@@ -230,7 +237,8 @@ public sealed class TransactionOperation
             SavepointId,
             IndexName,
             IndexFields,
-            IndexUnique
+            IndexUnique,
+            IndexSparse
         );
     }
 
@@ -289,4 +297,3 @@ public sealed class TransactionSavepoint
         return $"Savepoint[{Name}]: {SavepointId:N} at {CreatedAt:HH:mm:ss.fff} ({OperationCount} operations)";
     }
 }
-

@@ -31,7 +31,8 @@ internal static class BsonValueComparer
             BsonType.MinKey or BsonType.MaxKey or BsonType.Null => 0,
             BsonType.String => string.Compare(((BsonString)left).Value, ((BsonString)right).Value, StringComparison.Ordinal),
             BsonType.Boolean => ((BsonBoolean)left).Value.CompareTo(((BsonBoolean)right).Value),
-            BsonType.DateTime => ((BsonDateTime)left).Value.CompareTo(((BsonDateTime)right).Value),
+            BsonType.DateTime => BsonDateTime.GetComparableTicks(((BsonDateTime)left).Value)
+                .CompareTo(BsonDateTime.GetComparableTicks(((BsonDateTime)right).Value)),
             BsonType.ObjectId => ((BsonObjectId)left).Value.CompareTo(((BsonObjectId)right).Value),
             BsonType.Binary => ((BsonBinary)left).CompareTo((BsonBinary)right),
             BsonType.Timestamp => ((BsonTimestamp)left).Value.CompareTo(((BsonTimestamp)right).Value),
@@ -54,7 +55,7 @@ internal static class BsonValueComparer
         {
             BsonType.String => StringComparer.Ordinal.GetHashCode(((BsonString)value).Value),
             BsonType.Boolean => ((BsonBoolean)value).Value.GetHashCode(),
-            BsonType.DateTime => ((BsonDateTime)value).Value.GetHashCode(),
+            BsonType.DateTime => BsonDateTime.GetComparableTicks(((BsonDateTime)value).Value).GetHashCode(),
             BsonType.ObjectId => ((BsonObjectId)value).Value.GetHashCode(),
             BsonType.Binary => ((BsonBinary)value).GetHashCode(),
             BsonType.Timestamp => ((BsonTimestamp)value).Value.GetHashCode(),

@@ -139,10 +139,9 @@ public static class BsonScanner
                 return new BsonBoolean(b);
             case BsonType.DateTime:
                 EnsureAvailable(data, offset, 8);
-                var ms = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset));
+                var storedDateTime = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset));
                 offset += 8;
-                var dt = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(ms);
-                return new BsonDateTime(dt);
+                return new BsonDateTime(BsonDateTime.DecodeStoredValue(storedDateTime));
             case BsonType.Decimal128:
                 EnsureAvailable(data, offset, 16);
                 var lo = BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset));

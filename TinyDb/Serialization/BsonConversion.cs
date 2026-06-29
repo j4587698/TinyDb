@@ -102,7 +102,7 @@ public static class BsonConversion
             short s => BsonInt32.FromValue(s),     // 小整数使用缓存
             ushort us => BsonInt32.FromValue(us),  // 小整数使用缓存
             uint ui => new BsonInt64(ui),
-            ulong ul => new BsonInt64(unchecked((long)ul)),
+            ulong ul => ul <= long.MaxValue ? new BsonInt64((long)ul) : new BsonDecimal128((decimal)ul),
             string str => new BsonString(str),
             int i => BsonInt32.FromValue(i),       // 使用缓存
             long l => new BsonInt64(l),
@@ -534,9 +534,10 @@ public static class BsonConversion
             var t when t == typeof(ulong) =>
                 bsonValue switch
                 {
-                    BsonInt64 i64 => unchecked((ulong)i64.Value),
-                    BsonInt32 i32 => unchecked((ulong)i32.Value),
+                    BsonInt64 i64 => checked((ulong)i64.Value),
+                    BsonInt32 i32 => checked((ulong)i32.Value),
                     BsonDouble dbl => checked((ulong)dbl.Value),
+                    BsonDecimal128 dec => checked((ulong)dec.Value.ToDecimal()),
                     BsonString str => ulong.Parse(str.Value, CultureInfo.InvariantCulture),
                     _ => Convert.ToUInt64(bsonValue.ToString(), CultureInfo.InvariantCulture)
                 },

@@ -253,15 +253,17 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
-    public async Task DateTimeSerialization_ShouldNormalizeLocalValuesToUtc()
+    public async Task DateTimeSerialization_ShouldPreserveTicksAndKind()
     {
-        var local = DateTime.SpecifyKind(new DateTime(2024, 6, 1, 12, 30, 15, 123), DateTimeKind.Local);
+        var local = DateTime.SpecifyKind(
+            new DateTime(2024, 6, 1, 12, 30, 15, 123).AddTicks(4567),
+            DateTimeKind.Local);
         var bson = new BsonDateTime(local);
 
         var deserialized = (BsonDateTime)BsonSerializer.Deserialize(BsonSerializer.Serialize(bson));
 
-        await Assert.That(deserialized.Value.Kind).IsEqualTo(DateTimeKind.Utc);
-        await Assert.That(Math.Abs((deserialized.Value - local.ToUniversalTime()).TotalMilliseconds)).IsLessThan(1.0);
+        await Assert.That(deserialized.Value.Kind).IsEqualTo(DateTimeKind.Local);
+        await Assert.That(deserialized.Value.Ticks).IsEqualTo(local.Ticks);
     }
 
     [Test]
@@ -649,6 +651,117 @@ public sealed class ReviewReportRegressionTests : IDisposable
         await Assert.That(collection.FindById(2)).IsNull();
     }
 
+    [Test]
+    public async Task IndexedNotEqual_ShouldReturnMatchingRows()
+    {
+        using var engine = CreateEngine("indexed-not-equal.db");
+        var collection = engine.GetCollection<IndexedValueDocument>();
+
+        collection.Insert(new IndexedValueDocument { Id = 1, Score = 5 });
+        collection.Insert(new IndexedValueDocument { Id = 2, Score = 6 });
+        collection.Insert(new IndexedValueDocument { Id = 3, Score = 7 });
+        engine.EnsureIndex("IndexedValueDocuments", "Score", "idx_score");
+
+        var ids = collection.Find(x => x.Score != 5).Select(x => x.Id).OrderBy(x => x).ToArray();
+
+        await Assert.That(ids.SequenceEqual(new[] { 2, 3 })).IsTrue();
+    }
+
+    [Test]
+    public async Task PageManager_ShouldCalculateOffsetsBeyondFourGb()
+    {
+        var path = Path.Combine(_directory, "large-offset.db");
+        using var disk = new DiskStream(path);
+        using var pageManager = new PageManager(disk, 8192);
+        var method = typeof(PageManager).GetMethod(
+            "CalculatePageOffset",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        var pageId = 600_000u;
+        var offset = (long)method!.Invoke(pageManager, new object[] { pageId })!;
+
+        await Assert.That(offset).IsEqualTo(((long)pageId - 1) * 8192);
+    }
+
+    [Test]
+    public async Task DefaultObjectId_ShouldSerializeAsAllZeroBytes()
+    {
+        var value = new BsonObjectId(default(ObjectId));
+
+        var deserialized = (BsonObjectId)BsonSerializer.Deserialize(BsonSerializer.Serialize(value));
+
+        await Assert.That(deserialized.Value).IsEqualTo(ObjectId.Empty);
+        await Assert.That(deserialized.Value.ToByteArray().ToArray().All(b => b == 0)).IsTrue();
+    }
+
+    [Test]
+    public async Task SparseUniqueIndex_ShouldIgnoreMissingFields()
+    {
+        using var manager = new IndexManager("sparse_unique");
+        manager.CreateIndex("idx_email", new[] { "email" }, unique: true, sparse: true);
+
+        manager.InsertDocument(new BsonDocument().Set("_id", 1), new BsonInt32(1));
+        manager.InsertDocument(new BsonDocument().Set("_id", 2), new BsonInt32(2));
+        manager.InsertDocument(new BsonDocument().Set("_id", 3).Set("email", "a@example.com"), new BsonInt32(3));
+
+        var index = manager.GetIndex("idx_email")!;
+        await Assert.That(index.GetStatistics().IsSparse).IsTrue();
+        await Assert.That(index.EntryCount).IsEqualTo(1);
+        await Assert.That(() => manager.InsertDocument(
+            new BsonDocument().Set("_id", 4).Set("email", "a@example.com"),
+            new BsonInt32(4))).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task CompositeIndex_ShouldMatchPredicatesByIndexFieldOrder()
+    {
+        using var engine = CreateEngine("composite-order.db");
+        engine.GetIndexManager("CompositeOrderDocuments").CreateIndex("idx_b_a", new[] { "B", "A" });
+        var optimizer = new QueryOptimizer(engine);
+
+        var plan = optimizer.CreateExecutionPlan<CompositeOrderDocument>(
+            "CompositeOrderDocuments",
+            x => x.A == 1 && x.B == 2);
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexScan);
+        await Assert.That(plan.UseIndex!.Name).IsEqualTo("idx_b_a");
+        await Assert.That(plan.IndexScanKeys.Select(k => k.FieldName).SequenceEqual(new[] { "b", "a" })).IsTrue();
+    }
+
+    [Test]
+    public async Task ReverseRangeScan_ShouldReadDuplicateKeysAcrossLeafBoundary()
+    {
+        var path = Path.Combine(_directory, "btree-reverse-duplicates.db");
+        using var disk = new DiskStream(path);
+        using var pageManager = new PageManager(disk, 4096, 8);
+        using var tree = DiskBTree.Create(pageManager, maxKeys: 3);
+        var duplicateKey = new IndexKey(new BsonInt32(10));
+
+        tree.Insert(new IndexKey(new BsonInt32(9)), new BsonInt32(-1));
+        for (int i = 0; i < 40; i++)
+        {
+            tree.Insert(duplicateKey, new BsonInt32(i));
+        }
+        tree.Insert(new IndexKey(new BsonInt32(11)), new BsonInt32(100));
+
+        var values = tree.FindRangeReverse(duplicateKey, duplicateKey, true, true)
+            .Cast<BsonInt32>()
+            .Select(x => x.Value)
+            .OrderBy(x => x)
+            .ToArray();
+
+        await Assert.That(values.SequenceEqual(Enumerable.Range(0, 40))).IsTrue();
+    }
+
+    [Test]
+    public async Task Decimal128_ToString_ShouldHandleExternalLargeFiniteValues()
+    {
+        var large = new Decimal128(1UL, 0x3108000000000000UL);
+
+        await Assert.That(() => large.ToString()).ThrowsNothing();
+        await Assert.That(() => large.ToDecimal()).Throws<OverflowException>();
+    }
+
     private TinyDbEngine CreateEngine(string fileName)
     {
         return new TinyDbEngine(Path.Combine(_directory, fileName));
@@ -727,4 +840,19 @@ public sealed class TransactionDocument
 {
     public int Id { get; set; }
     public int Value { get; set; }
+}
+
+[Entity("IndexedValueDocuments")]
+public sealed class IndexedValueDocument
+{
+    public int Id { get; set; }
+    public int Score { get; set; }
+}
+
+[Entity("CompositeOrderDocuments")]
+public sealed class CompositeOrderDocument
+{
+    public int Id { get; set; }
+    public int A { get; set; }
+    public int B { get; set; }
 }

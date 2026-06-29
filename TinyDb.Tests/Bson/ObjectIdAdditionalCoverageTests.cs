@@ -14,7 +14,7 @@ public class ObjectIdAdditionalCoverageTests
 
         await Assert.That(def.ToString()).IsEqualTo("000000000000000000000000");
         await Assert.That(def.CompareTo(default)).IsEqualTo(0);
-        await Assert.That(def.CompareTo(ObjectId.Empty)).IsNegative();
+        await Assert.That(def.CompareTo(ObjectId.Empty)).IsEqualTo(0);
         await Assert.That(def.GetHashCode()).IsEqualTo(0);
     }
 
@@ -39,4 +39,3 @@ public class ObjectIdAdditionalCoverageTests
         await Assert.That(() => c.ToType(typeof(int), null)).Throws<InvalidCastException>();
     }
 }
-

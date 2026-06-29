@@ -13,15 +13,17 @@ namespace TinyDb.Bson;
 public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, IConvertible
 {
     private const int ObjectIdSize = 12;
+    private static readonly byte[] EmptyBytes = new byte[ObjectIdSize];
     private static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
     private static int _counter = new Random().Next();
 
     private readonly byte[] _bytes;
+    private byte[] Bytes => _bytes ?? EmptyBytes;
 
     /// <summary>
     /// 获取 ObjectId 的字节数组表示
     /// </summary>
-    public ReadOnlySpan<byte> ToByteArray() => _bytes ?? throw new InvalidOperationException("ObjectId is not initialized");
+    public ReadOnlySpan<byte> ToByteArray() => Bytes;
 
     /// <summary>
     /// 获取时间戳部分
@@ -35,8 +37,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
-            return BinaryPrimitives.ReadInt32BigEndian(_bytes);
+            return BinaryPrimitives.ReadInt32BigEndian(Bytes);
         }
     }
 
@@ -47,9 +48,9 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
+            var bytes = Bytes;
             // 3 bytes starting at index 4
-            return (_bytes[4] << 16) | (_bytes[5] << 8) | _bytes[6];
+            return (bytes[4] << 16) | (bytes[5] << 8) | bytes[6];
         }
     }
 
@@ -60,8 +61,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
-            return BinaryPrimitives.ReadInt16BigEndian(_bytes.AsSpan(7));
+            return BinaryPrimitives.ReadInt16BigEndian(Bytes.AsSpan(7));
         }
     }
 
@@ -72,9 +72,9 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            if (_bytes == null) throw new InvalidOperationException("ObjectId is not initialized");
+            var bytes = Bytes;
             // 3 bytes starting at index 9
-            return (_bytes[9] << 16) | (_bytes[10] << 8) | _bytes[11];
+            return (bytes[9] << 16) | (bytes[10] << 8) | bytes[11];
         }
     }
 
@@ -245,9 +245,9 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public override string ToString()
     {
-        if (_bytes == null) return "000000000000000000000000";
+        var bytes = Bytes;
         var sb = new StringBuilder(24);
-        foreach (var b in _bytes)
+        foreach (var b in bytes)
         {
             sb.Append(b.ToString("x2"));
         }
@@ -259,14 +259,14 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public int CompareTo(ObjectId other)
     {
-        if (_bytes == null) return other._bytes == null ? 0 : -1;
-        if (other._bytes == null) return 1;
+        var left = Bytes;
+        var right = other.Bytes;
 
         // 由于使用了 Big-Endian 存储，直接按字节比较即可保证正确的排序（时间戳优先）
         for (int i = 0; i < ObjectIdSize; i++)
         {
-            var cmp = _bytes[i].CompareTo(other._bytes[i]);
-            if (cmp != 0) return cmp;
+            var cmp = left[i].CompareTo(right[i]);
+            if (cmp != 0) return Math.Sign(cmp);
         }
         return 0;
     }
@@ -292,12 +292,14 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public override int GetHashCode()
     {
-        if (_bytes == null) return 0;
+        var bytes = Bytes;
+        if (bytes.All(b => b == 0)) return 0;
+
         // 使用简单的哈希算法，或者直接取前4字节（时间戳）
         var hash = new HashCode();
         for (int i = 0; i < ObjectIdSize; i++)
         {
-            hash.Add(_bytes[i]);
+            hash.Add(bytes[i]);
         }
 
         return hash.ToHashCode();

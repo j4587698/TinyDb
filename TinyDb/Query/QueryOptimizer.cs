@@ -14,6 +14,84 @@ public sealed class QueryOptimizer
     private readonly TinyDbEngine _engine;
     private readonly ExpressionParser _expressionParser;
 
+    private static Dictionary<string, FieldComparison> ExtractComparisonMap(QueryExpression queryExpression)
+    {
+        var comparisons = new Dictionary<string, FieldComparison>(StringComparer.OrdinalIgnoreCase);
+        AddComparisons(queryExpression, comparisons);
+        return comparisons;
+    }
+
+    private static void AddComparisons(QueryExpression queryExpression, Dictionary<string, FieldComparison> comparisons)
+    {
+        if (queryExpression is not BinaryExpression binaryExpr) return;
+
+        if (binaryExpr.NodeType == System.Linq.Expressions.ExpressionType.AndAlso)
+        {
+            AddComparisons(binaryExpr.Left, comparisons);
+            AddComparisons(binaryExpr.Right, comparisons);
+            return;
+        }
+
+        if (!IsComparisonNode(binaryExpr.NodeType)) return;
+
+        if (binaryExpr.Left is MemberExpression leftMember)
+        {
+            var value = ExtractConstantValue(binaryExpr.Right);
+            if (value != null)
+            {
+                comparisons.TryAdd(leftMember.MemberName, new FieldComparison(value, ToComparisonType(binaryExpr.NodeType, reversed: false)));
+            }
+            return;
+        }
+
+        if (binaryExpr.Right is MemberExpression rightMember)
+        {
+            var value = ExtractConstantValue(binaryExpr.Left);
+            if (value != null)
+            {
+                comparisons.TryAdd(rightMember.MemberName, new FieldComparison(value, ToComparisonType(binaryExpr.NodeType, reversed: true)));
+            }
+        }
+    }
+
+    private static bool IsComparisonNode(System.Linq.Expressions.ExpressionType nodeType)
+    {
+        return nodeType is System.Linq.Expressions.ExpressionType.Equal
+            or System.Linq.Expressions.ExpressionType.NotEqual
+            or System.Linq.Expressions.ExpressionType.GreaterThan
+            or System.Linq.Expressions.ExpressionType.GreaterThanOrEqual
+            or System.Linq.Expressions.ExpressionType.LessThan
+            or System.Linq.Expressions.ExpressionType.LessThanOrEqual;
+    }
+
+    private static ComparisonType ToComparisonType(System.Linq.Expressions.ExpressionType nodeType, bool reversed)
+    {
+        if (reversed)
+        {
+            nodeType = nodeType switch
+            {
+                System.Linq.Expressions.ExpressionType.GreaterThan => System.Linq.Expressions.ExpressionType.LessThan,
+                System.Linq.Expressions.ExpressionType.GreaterThanOrEqual => System.Linq.Expressions.ExpressionType.LessThanOrEqual,
+                System.Linq.Expressions.ExpressionType.LessThan => System.Linq.Expressions.ExpressionType.GreaterThan,
+                System.Linq.Expressions.ExpressionType.LessThanOrEqual => System.Linq.Expressions.ExpressionType.GreaterThanOrEqual,
+                _ => nodeType
+            };
+        }
+
+        return nodeType switch
+        {
+            System.Linq.Expressions.ExpressionType.Equal => ComparisonType.Equal,
+            System.Linq.Expressions.ExpressionType.NotEqual => ComparisonType.NotEqual,
+            System.Linq.Expressions.ExpressionType.GreaterThan => ComparisonType.GreaterThan,
+            System.Linq.Expressions.ExpressionType.GreaterThanOrEqual => ComparisonType.GreaterThanOrEqual,
+            System.Linq.Expressions.ExpressionType.LessThan => ComparisonType.LessThan,
+            System.Linq.Expressions.ExpressionType.LessThanOrEqual => ComparisonType.LessThanOrEqual,
+            _ => ComparisonType.Equal
+        };
+    }
+
+    private sealed record FieldComparison(BsonValue Value, ComparisonType ComparisonType);
+
     /// <summary>
     /// 初始化查询优化器
     /// </summary>
@@ -200,12 +278,12 @@ public sealed class QueryOptimizer
     private static int CalculateIndexMatchScore(QueryExpression queryExpression, IndexStatistics indexStat)
     {
         var score = 0;
-        var queryFields = ExtractQueryFields(queryExpression).ToList();
+        var comparisons = ExtractComparisonMap(queryExpression);
 
         // 单字段索引匹配
-        if (indexStat.Fields.Length == 1 && queryFields.Count == 1)
+        if (indexStat.Fields.Length == 1)
         {
-            if (indexStat.Fields.Contains(queryFields[0], StringComparer.OrdinalIgnoreCase))
+            if (comparisons.ContainsKey(indexStat.Fields[0]))
             {
                 score = 10; // 单字段精确匹配
                 if (indexStat.IsUnique)
@@ -218,9 +296,9 @@ public sealed class QueryOptimizer
         else if (indexStat.Fields.Length > 1)
         {
             var matchedFields = 0;
-            for (int i = 0; i < Math.Min(indexStat.Fields.Length, queryFields.Count); i++)
+            for (int i = 0; i < indexStat.Fields.Length; i++)
             {
-                if (string.Equals(indexStat.Fields[i], queryFields[i], StringComparison.OrdinalIgnoreCase))
+                if (comparisons.ContainsKey(indexStat.Fields[i]))
                 {
                     matchedFields++;
                     score += 10; // 前缀匹配每个字段加分
@@ -278,26 +356,25 @@ public sealed class QueryOptimizer
     private static List<IndexScanKey> ExtractIndexScanKeys(QueryExpression queryExpression, IndexStatistics indexStat)
     {
         var scanKeys = new List<IndexScanKey>();
-        var queryFields = ExtractQueryFields(queryExpression).ToList();
+        var comparisons = ExtractComparisonMap(queryExpression);
 
-        for (int i = 0; i < Math.Min(indexStat.Fields.Length, queryFields.Count); i++)
+        for (int i = 0; i < indexStat.Fields.Length; i++)
         {
             var fieldName = indexStat.Fields[i];
-            var queryField = queryFields[i];
 
-            if (string.Equals(fieldName, queryField, StringComparison.OrdinalIgnoreCase))
+            if (comparisons.TryGetValue(fieldName, out var comparison))
             {
                 // 尝试从查询表达式中提取比较值
-                var comparisonValue = ExtractComparisonValue(queryExpression, queryField);
-                if (comparisonValue != null)
+                scanKeys.Add(new IndexScanKey
                 {
-                    scanKeys.Add(new IndexScanKey
-                    {
-                        FieldName = fieldName,
-                        Value = comparisonValue,
-                        ComparisonType = ExtractComparisonType(queryExpression, queryField)
-                    });
-                }
+                    FieldName = fieldName,
+                    Value = comparison.Value,
+                    ComparisonType = comparison.ComparisonType
+                });
+            }
+            else
+            {
+                break;
             }
         }
 

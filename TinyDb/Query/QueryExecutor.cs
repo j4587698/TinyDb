@@ -14,8 +14,6 @@ namespace TinyDb.Query;
 
 public sealed class QueryExecutor
 {
-    private static readonly long UnixEpochTicks = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
-
     private readonly TinyDbEngine _engine;
     private readonly ExpressionParser _expressionParser;
     private readonly QueryOptimizer _queryOptimizer;
@@ -1283,9 +1281,9 @@ public sealed class QueryExecutor
                         return true;
                     case BsonType.DateTime:
                     {
-                        var ms = BinaryPrimitives.ReadInt64LittleEndian(document.Slice(valueOffset, 8));
-                        var ticks = UnixEpochTicks + (ms * TimeSpan.TicksPerMillisecond);
-                        key = new SortKeyRef(type, 0, ticks, default, default);
+                        var storedDateTime = BinaryPrimitives.ReadInt64LittleEndian(document.Slice(valueOffset, 8));
+                        var dateTime = BsonDateTime.DecodeStoredValue(storedDateTime);
+                        key = new SortKeyRef(type, 0, BsonDateTime.GetComparableTicks(dateTime), default, default);
                         return true;
                     }
                     case BsonType.ObjectId:
@@ -1641,6 +1639,11 @@ public sealed class QueryExecutor
                 lastOp = key.ComparisonType;
                 switch (key.ComparisonType)
                 {
+                    case ComparisonType.NotEqual:
+                        maxValues.Add(BsonMaxKey.Value);
+                        includeMin = true;
+                        includeMax = true;
+                        break;
                     case ComparisonType.GreaterThan:
                         minValues.Add(key.Value);
                         maxValues.Add(BsonMaxKey.Value);

@@ -11,6 +11,7 @@ public sealed class IndexStatistics
     public IndexType Type { get; init; }
     public string[] Fields { get; init; } = Array.Empty<string>();
     public bool IsUnique { get; init; }
+    public bool IsSparse { get; init; }
     public int NodeCount { get; init; }
     public int EntryCount { get; init; }
     public int MaxKeysPerNode { get; init; }

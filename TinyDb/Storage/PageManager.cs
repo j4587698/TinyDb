@@ -860,7 +860,8 @@ public sealed class PageManager : IDisposable
     /// <returns>偏移量</returns>
     private long CalculatePageOffset(uint pageID)
     {
-        return (pageID - 1) * _physicalPageSize;
+        if (pageID == 0) throw new ArgumentOutOfRangeException(nameof(pageID), "Page ID cannot be zero.");
+        return ((long)pageID - 1) * _physicalPageSize;
     }
 
     /// <summary>

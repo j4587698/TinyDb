@@ -56,7 +56,7 @@ public class PageHeaderExtendedTests
     }
 
     [Test]
-    public async Task PageHeader_VerifyChecksum_Should_Accept_Legacy_Additive_Checksum()
+    public async Task PageHeader_VerifyChecksum_Should_Reject_Legacy_Additive_Checksum()
     {
         var header = new PageHeader();
         var data = new byte[100];
@@ -71,6 +71,6 @@ public class PageHeaderExtendedTests
 
         header.Checksum = legacyChecksum;
 
-        await Assert.That(header.VerifyChecksum(data)).IsTrue();
+        await Assert.That(header.VerifyChecksum(data)).IsFalse();
     }
 }

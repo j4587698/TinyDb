@@ -28,7 +28,7 @@ public sealed class BsonDecimal128 : BsonValue, IComparable<BsonDecimal128>, IEq
 
     // Numeric conversions
     public override bool ToBoolean(IFormatProvider? provider) => Value.Equals(Decimal128.Zero) == false;
-    public override double ToDouble(IFormatProvider? provider) => (double)Value.ToDecimal();
+    public override double ToDouble(IFormatProvider? provider) => Value.ToDouble(provider);
     public override decimal ToDecimal(IFormatProvider? provider) => Value.ToDecimal();
     public override int ToInt32(IFormatProvider? provider) => (int)Value.ToDecimal();
     public override long ToInt64(IFormatProvider? provider) => (long)Value.ToDecimal();
@@ -39,7 +39,7 @@ public sealed class BsonDecimal128 : BsonValue, IComparable<BsonDecimal128>, IEq
     public override ulong ToUInt64(IFormatProvider? provider) => (ulong)Value.ToDecimal();
     public override byte ToByte(IFormatProvider? provider) => (byte)Value.ToDecimal();
     public override sbyte ToSByte(IFormatProvider? provider) => (sbyte)Value.ToDecimal();
-    public override float ToSingle(IFormatProvider? provider) => (float)Value.ToDecimal();
+    public override float ToSingle(IFormatProvider? provider) => Value.ToSingle(provider);
 
     // Non-numeric conversions
     public override char ToChar(IFormatProvider? provider) => throw new InvalidCastException();

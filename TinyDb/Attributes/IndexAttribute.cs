@@ -19,6 +19,11 @@ public sealed class IndexAttribute : Attribute
     public bool Unique { get; set; }
 
     /// <summary>
+    /// 是否为稀疏索引
+    /// </summary>
+    public bool Sparse { get; set; }
+
+    /// <summary>
     /// 索引排序方向
     /// </summary>
     public IndexSortDirection SortDirection { get; set; } = IndexSortDirection.Ascending;
@@ -33,8 +38,9 @@ public sealed class IndexAttribute : Attribute
     /// </summary>
     public IndexAttribute()
     {
-    Unique = false;
-    SortDirection = IndexSortDirection.Ascending;
+        Unique = false;
+        Sparse = false;
+        SortDirection = IndexSortDirection.Ascending;
         Priority = 0;
     }
 
@@ -45,6 +51,7 @@ public sealed class IndexAttribute : Attribute
     public IndexAttribute(bool unique)
     {
         Unique = unique;
+        Sparse = false;
         SortDirection = IndexSortDirection.Ascending;
         Priority = 0;
     }
@@ -57,6 +64,7 @@ public sealed class IndexAttribute : Attribute
     {
         Name = name;
         Unique = false;
+        Sparse = false;
         SortDirection = IndexSortDirection.Ascending;
         Priority = 0;
     }
@@ -70,6 +78,7 @@ public sealed class IndexAttribute : Attribute
     {
         Name = name;
         Unique = unique;
+        Sparse = false;
         SortDirection = IndexSortDirection.Ascending;
         Priority = 0;
     }
@@ -82,6 +91,7 @@ public sealed class IndexAttribute : Attribute
     public IndexAttribute(bool unique, IndexSortDirection sortDirection)
     {
         Unique = unique;
+        Sparse = false;
         SortDirection = sortDirection;
         Priority = 0;
     }
@@ -96,6 +106,7 @@ public sealed class IndexAttribute : Attribute
     {
         Name = name;
         Unique = unique;
+        Sparse = false;
         SortDirection = sortDirection;
         Priority = 0;
     }
@@ -112,6 +123,8 @@ public sealed class IndexAttribute : Attribute
 
         parts.Add($"Unique={Unique}");
         parts.Add($"Sort={SortDirection}");
+        if (Sparse)
+            parts.Add("Sparse=True");
 
         if (Priority != 0)
             parts.Add($"Priority={Priority}");
@@ -158,6 +171,11 @@ public sealed class CompositeIndexAttribute : Attribute
     public bool Unique { get; set; }
 
     /// <summary>
+    /// 是否为稀疏索引
+    /// </summary>
+    public bool Sparse { get; set; }
+
+    /// <summary>
     /// 初始化复合索引属性
     /// </summary>
     /// <param name="fields">索引字段列表</param>
@@ -166,6 +184,7 @@ public sealed class CompositeIndexAttribute : Attribute
         Fields = fields ?? throw new ArgumentNullException(nameof(fields));
         Name = $"idx_{string.Join("_", Fields)}";
         Unique = false;
+        Sparse = false;
     }
 
     /// <summary>
@@ -178,6 +197,7 @@ public sealed class CompositeIndexAttribute : Attribute
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Fields = fields ?? throw new ArgumentNullException(nameof(fields));
         Unique = false;
+        Sparse = false;
     }
 
     /// <summary>
@@ -191,6 +211,7 @@ public sealed class CompositeIndexAttribute : Attribute
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Fields = fields ?? throw new ArgumentNullException(nameof(fields));
         Unique = unique;
+        Sparse = false;
     }
 
     /// <summary>
@@ -198,6 +219,6 @@ public sealed class CompositeIndexAttribute : Attribute
     /// </summary>
     public override string ToString()
     {
-        return $"CompositeIndex(Name={Name}, Fields=[{string.Join(", ", Fields)}], Unique={Unique})";
+        return $"CompositeIndex(Name={Name}, Fields=[{string.Join(", ", Fields)}], Unique={Unique}, Sparse={Sparse})";
     }
 }
