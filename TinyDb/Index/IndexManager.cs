@@ -4,7 +4,7 @@ using System.Collections.Concurrent;
 
 namespace TinyDb.Index;
 
-internal readonly record struct PersistedIndexDefinition(string Name, string[] Fields, bool IsUnique, uint RootPageId, int MaxKeys);
+internal readonly record struct PersistedIndexDefinition(string Name, string[] Fields, bool IsUnique, bool IsSparse, uint RootPageId, int MaxKeys);
 
 public sealed class IndexManager : IDisposable
 {
@@ -83,17 +83,17 @@ public sealed class IndexManager : IDisposable
     /// <param name="fields">要索引的字段。</param>
     /// <param name="unique">索引是否应该是唯一的。</param>
     /// <returns>如果创建成功则为 true；如果已存在则为 false。</returns>
-    public bool CreateIndex(string name, string[] fields, bool unique = false)
+    public bool CreateIndex(string name, string[] fields, bool unique = false, bool sparse = false)
     {
-        return CreateIndexCore(name, fields, unique, persistImmediately: true);
+        return CreateIndexCore(name, fields, unique, sparse, persistImmediately: true);
     }
 
-    internal bool CreateIndexForBackfill(string name, string[] fields, bool unique = false)
+    internal bool CreateIndexForBackfill(string name, string[] fields, bool unique = false, bool sparse = false)
     {
-        return CreateIndexCore(name, fields, unique, persistImmediately: false);
+        return CreateIndexCore(name, fields, unique, sparse, persistImmediately: false);
     }
 
-    private bool CreateIndexCore(string name, string[] fields, bool unique, bool persistImmediately)
+    private bool CreateIndexCore(string name, string[] fields, bool unique, bool sparse, bool persistImmediately)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
         if (fields == null || fields.Length == 0) throw new ArgumentException("Fields cannot be null or empty", nameof(fields));
@@ -110,6 +110,11 @@ public sealed class IndexManager : IDisposable
                     throw new InvalidOperationException($"Index '{name}' already exists with different uniqueness (existing: {existing.IsUnique}, new: {unique})");
                 }
 
+                if (existing.IsSparse != sparse)
+                {
+                    throw new InvalidOperationException($"Index '{name}' already exists with different sparse setting (existing: {existing.IsSparse}, new: {sparse})");
+                }
+
                 if (!normalizedFields.SequenceEqual(existing.Fields))
                 {
                     throw new InvalidOperationException($"Index '{name}' already exists with different fields (existing: {string.Join(",", existing.Fields)}, new: {string.Join(",", normalizedFields)})");
@@ -122,7 +127,7 @@ public sealed class IndexManager : IDisposable
             // 扫描 IndexInfoPage 以查找匹配的索引名和根页面ID
             // 如果没找到，才创建新的
             
-            var index = new BTreeIndex(_pm, name, normalizedFields, unique);
+            var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse);
             if (_indexes.TryAdd(name, index))
             {
                 if (persistImmediately)
@@ -162,7 +167,7 @@ public sealed class IndexManager : IDisposable
             }
 
             var normalizedFields = definition.Fields.Select(ToCamelCase).ToArray();
-            var index = new BTreeIndex(_pm, definition.Name, normalizedFields, definition.IsUnique, definition.RootPageId, definition.MaxKeys);
+            var index = new BTreeIndex(_pm, definition.Name, normalizedFields, definition.IsUnique, definition.RootPageId, definition.MaxKeys, definition.IsSparse);
             if (!_indexes.TryAdd(definition.Name, index))
             {
                 index.Dispose();
@@ -196,6 +201,7 @@ public sealed class IndexManager : IDisposable
                 index.Name,
                 index.Fields.ToArray(),
                 index.IsUnique,
+                index.IsSparse,
                 index.RootPageId,
                 index.MaxKeys))
             .ToArray();
@@ -627,7 +633,12 @@ public sealed class IndexManager : IDisposable
         // 单字段优化
         if (index.Fields.Count == 1)
         {
-            return doc.TryGetValue(index.Fields[0], out var val) ? new IndexKey(val) : new IndexKey(BsonNull.Value);
+            if (doc.TryGetValue(index.Fields[0], out var val))
+            {
+                return new IndexKey(val);
+            }
+
+            return index.IsSparse ? null : new IndexKey(BsonNull.Value);
         }
 
         // 复合索引
@@ -640,6 +651,7 @@ public sealed class IndexManager : IDisposable
             }
             else
             {
+                if (index.IsSparse) return null;
                 values[i] = BsonNull.Value;
             }
         }

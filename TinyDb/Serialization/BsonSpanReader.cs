@@ -244,8 +244,7 @@ public ref struct BsonSpanReader
 
     public DateTime ReadDateTime()
     {
-        long ms = ReadInt64();
-        return new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMilliseconds(ms);
+        return BsonDateTime.DecodeStoredValue(ReadInt64());
     }
 
     public string ReadCString()

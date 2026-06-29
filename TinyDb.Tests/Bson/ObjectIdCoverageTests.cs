@@ -9,15 +9,16 @@ namespace TinyDb.Tests.Bson;
 public class ObjectIdCoverageTests
 {
     [Test]
-    public async Task Default_ObjectId_Should_Be_Uninitialized()
+    public async Task Default_ObjectId_Should_Be_Empty()
     {
         ObjectId def = default;
-        // Accessing properties on default struct should throw because _bytes is null
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => _ = def.TimestampSeconds);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => _ = def.Machine);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => _ = def.Pid);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => _ = def.Counter);
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => _ = def.ToByteArray());
+
+        await Assert.That(def.TimestampSeconds).IsEqualTo(0);
+        await Assert.That(def.Machine).IsEqualTo(0);
+        await Assert.That((int)def.Pid).IsEqualTo(0);
+        await Assert.That(def.Counter).IsEqualTo(0);
+        await Assert.That(def.ToByteArray().Length).IsEqualTo(12);
+        await Assert.That(def).IsEqualTo(ObjectId.Empty);
     }
 
     [Test]

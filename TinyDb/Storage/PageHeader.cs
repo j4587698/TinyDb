@@ -137,22 +137,7 @@ public class PageHeader
     /// </summary>
     public bool VerifyChecksum(byte[] pageData)
     {
-        return CalculateChecksum(pageData) == Checksum || CalculateLegacyChecksum(pageData) == Checksum;
-    }
-
-    private static uint CalculateLegacyChecksum(byte[] pageData)
-    {
-        if (pageData == null || pageData.Length < Size)
-            return 0;
-
-        uint checksum = 0;
-        for (int i = 0; i < pageData.Length; i++)
-        {
-            if (i >= 21 && i < 25) continue;
-            checksum += pageData[i];
-        }
-
-        return checksum;
+        return CalculateChecksum(pageData) == Checksum;
     }
 
     /// <summary>

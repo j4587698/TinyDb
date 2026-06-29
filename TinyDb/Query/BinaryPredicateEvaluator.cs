@@ -11,8 +11,6 @@ namespace TinyDb.Query;
 /// </summary>
 public static class BinaryPredicateEvaluator
 {
-    private static readonly DateTime UnixEpochUtc = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-
     /// <summary>
     /// 尝试对原始 BSON 字节执行比较。
     /// </summary>
@@ -53,8 +51,8 @@ public static class BinaryPredicateEvaluator
 
                 case BsonType.DateTime:
                     if (!CanRead(data, offset, 8)) return false;
-                    long ms = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset, 8));
-                    var dtValue = UnixEpochUtc.AddMilliseconds(ms);
+                    long storedDateTime = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(offset, 8));
+                    var dtValue = BsonDateTime.DecodeStoredValue(storedDateTime);
                     result = Compare(dtValue, targetValue, op);
                     return true;
 

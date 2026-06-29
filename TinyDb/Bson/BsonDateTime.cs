@@ -7,6 +7,11 @@ namespace TinyDb.Bson;
 /// </summary>
 public sealed class BsonDateTime : BsonValue
 {
+    private const long LegacyMinMilliseconds = -62135596800000L;
+    private const long LegacyMaxMilliseconds = 253402300799999L;
+    private const ulong TicksMask = 0x3FFFFFFFFFFFFFFFUL;
+    private static readonly DateTime UnixEpochUtc = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
     public override BsonType BsonType => BsonType.DateTime;
     public override object? RawValue { get; }
 
@@ -16,6 +21,49 @@ public sealed class BsonDateTime : BsonValue
     {
         Value = value;
         RawValue = value;
+    }
+
+    public static long EncodeStoredValue(DateTime value)
+    {
+        var kindCode = value.Kind switch
+        {
+            DateTimeKind.Utc => 1UL,
+            DateTimeKind.Local => 2UL,
+            _ => 3UL
+        };
+
+        return unchecked((long)((kindCode << 62) | (ulong)value.Ticks));
+    }
+
+    public static DateTime DecodeStoredValue(long storedValue)
+    {
+        if (storedValue >= LegacyMinMilliseconds && storedValue <= LegacyMaxMilliseconds)
+        {
+            return UnixEpochUtc.AddMilliseconds(storedValue);
+        }
+
+        var raw = unchecked((ulong)storedValue);
+        var ticks = checked((long)(raw & TicksMask));
+        var kind = (raw >> 62) switch
+        {
+            1UL => DateTimeKind.Utc,
+            2UL => DateTimeKind.Local,
+            _ => DateTimeKind.Unspecified
+        };
+
+        return new DateTime(ticks, kind);
+    }
+
+    public static long GetComparableTicks(DateTime value)
+    {
+        var normalized = value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+
+        return normalized.Ticks;
     }
 
     public static implicit operator BsonDateTime(DateTime value) => new(value);

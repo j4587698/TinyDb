@@ -8,7 +8,7 @@ namespace TinyDb.Storage;
 /// <summary>
 /// 后台刷盘调度器，负责协调 WAL 与数据页的刷新。
 /// </summary>
-public sealed class FlushScheduler : IDisposable
+public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 {
     private readonly PageManager _pageManager;
     private readonly WriteAheadLog _wal;
@@ -263,7 +263,7 @@ public sealed class FlushScheduler : IDisposable
 
         try
         {
-            _journalWorkerTask?.Wait();
+            _journalWorkerTask?.ConfigureAwait(false).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
@@ -272,7 +272,63 @@ public sealed class FlushScheduler : IDisposable
 
         try
         {
-            _backgroundTask?.Wait();
+            _backgroundTask?.ConfigureAwait(false).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            backgroundWaitException = new InvalidOperationException("Background worker stop failed.", ex);
+        }
+
+        try
+        {
+            Flush();
+        }
+        catch (Exception ex)
+        {
+            flushException = ex;
+        }
+        finally
+        {
+            _cts.Dispose();
+        }
+
+        if (journalWaitException != null || backgroundWaitException != null || flushException != null)
+        {
+            var exceptions = new List<Exception>();
+            if (journalWaitException != null) exceptions.Add(journalWaitException);
+            if (backgroundWaitException != null) exceptions.Add(backgroundWaitException);
+            if (flushException != null) exceptions.Add(flushException);
+            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _cts.Cancel();
+
+        Exception? journalWaitException = null;
+        Exception? backgroundWaitException = null;
+        Exception? flushException = null;
+
+        try
+        {
+            if (_journalWorkerTask != null)
+            {
+                await _journalWorkerTask.ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            journalWaitException = new InvalidOperationException("Journal worker stop failed.", ex);
+        }
+
+        try
+        {
+            if (_backgroundTask != null)
+            {
+                await _backgroundTask.ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {

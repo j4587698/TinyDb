@@ -71,6 +71,7 @@ public sealed class TinyDbEngine : IDisposable
     private const string IndexNameKey = "n";
     private const string IndexFieldsKey = "f";
     private const string IndexUniqueKey = "u";
+    private const string IndexSparseKey = "s";
     private const string IndexRootPageKey = "r";
     private const string IndexMaxKeysKey = "m";
     private const int IdentitySequenceReservationSize = 1024;
@@ -763,19 +764,19 @@ public sealed class TinyDbEngine : IDisposable
     /// <param name="indexName">索引的名称。</param>
     /// <param name="unique">索引是否应该是唯一的。</param>
     /// <returns>如果成功则为 true。</returns>
-    public bool EnsureIndex(string collectionName, string fieldName, string indexName, bool unique = false)
+    public bool EnsureIndex(string collectionName, string fieldName, string indexName, bool unique = false, bool sparse = false)
     {
-        return EnsureIndex(collectionName, new[] { fieldName }, indexName, unique);
+        return EnsureIndex(collectionName, new[] { fieldName }, indexName, unique, sparse);
     }
 
-    internal bool EnsureIndex(string collectionName, string[] fields, string indexName, bool unique = false)
+    internal bool EnsureIndex(string collectionName, string[] fields, string indexName, bool unique = false, bool sparse = false)
     {
         var lockKey = collectionName + "\u001F" + indexName;
         var indexLock = _indexCreationLocks.GetOrAdd(lockKey, _ => new object());
         lock (indexLock)
         {
             var indexManager = GetIndexManager(collectionName);
-            var created = indexManager.CreateIndexForBackfill(indexName, fields, unique);
+            var created = indexManager.CreateIndexForBackfill(indexName, fields, unique, sparse);
             if (!created) return false;
 
             try
@@ -854,11 +855,12 @@ public sealed class TinyDbEngine : IDisposable
             if (!TryGetUInt32(indexDefinition, IndexRootPageKey, out var rootPageId) || rootPageId == 0) continue;
 
             var unique = TryGetBoolean(indexDefinition, IndexUniqueKey, out var uniqueValue) && uniqueValue;
+            var sparse = TryGetBoolean(indexDefinition, IndexSparseKey, out var sparseValue) && sparseValue;
             var maxKeys = TryGetInt32(indexDefinition, IndexMaxKeysKey, out var maxKeysValue) && maxKeysValue > 0
                 ? maxKeysValue
                 : 200;
 
-            definitions.Add(new PersistedIndexDefinition(name, fields, unique, rootPageId, maxKeys));
+            definitions.Add(new PersistedIndexDefinition(name, fields, unique, sparse, rootPageId, maxKeys));
         }
 
         return definitions;
@@ -886,6 +888,7 @@ public sealed class TinyDbEngine : IDisposable
                     .Set(IndexNameKey, new BsonString(definition.Name))
                     .Set(IndexFieldsKey, fields)
                     .Set(IndexUniqueKey, BsonBoolean.FromValue(definition.IsUnique))
+                    .Set(IndexSparseKey, BsonBoolean.FromValue(definition.IsSparse))
                     .Set(IndexRootPageKey, new BsonInt64(definition.RootPageId))
                     .Set(IndexMaxKeysKey, BsonInt32.FromValue(definition.MaxKeys));
 
@@ -1082,7 +1085,7 @@ public sealed class TinyDbEngine : IDisposable
             var targetIndexManager = target.GetIndexManager(collectionName);
             foreach (var stat in sourceIndexManager.GetAllStatistics())
             {
-                targetIndexManager.CreateIndex(stat.Name, stat.Fields, stat.IsUnique);
+                targetIndexManager.CreateIndex(stat.Name, stat.Fields, stat.IsUnique, stat.IsSparse);
             }
 
             if (documents.Count > 0)

@@ -76,8 +76,9 @@ public static class IndexScanner
         {
             var fields = entries.Select(e => ToCamelCase(e.Property.Name)).ToArray();
             var unique = entries.Any(e => e.Attribute.Unique);
+            var sparse = entries.Any(e => e.Attribute.Sparse);
 
-            engine.EnsureIndex(collectionName, fields, indexName, unique);
+            engine.EnsureIndex(collectionName, fields, indexName, unique, sparse);
         }
     }
 
@@ -99,7 +100,7 @@ public static class IndexScanner
             {
                 fields[i] = ToCamelCase(compositeAttr.Fields[i]);
             }
-            engine.EnsureIndex(collectionName, fields, compositeAttr.Name, compositeAttr.Unique);
+            engine.EnsureIndex(collectionName, fields, compositeAttr.Name, compositeAttr.Unique, compositeAttr.Sparse);
         }
     }
 
@@ -141,6 +142,7 @@ public static class IndexScanner
                     Name = GenerateIndexName(indexAttr, property.Name),
                     Fields = new[] { ToCamelCase(property.Name) },
                     IsUnique = indexAttr.Unique,
+                    IsSparse = indexAttr.Sparse,
                     SortDirection = indexAttr.SortDirection,
                     Priority = indexAttr.Priority,
                     IsComposite = false
@@ -156,6 +158,7 @@ public static class IndexScanner
                 Name = compositeAttr.Name,
                 Fields = compositeAttr.Fields.Select(ToCamelCase).ToArray(),
                 IsUnique = compositeAttr.Unique,
+                IsSparse = compositeAttr.Sparse,
                 SortDirection = IndexSortDirection.Ascending, // 复合索引默认升序
                 Priority = 0,
                 IsComposite = true
@@ -210,6 +213,11 @@ public sealed class EntityIndexInfo
     public bool IsUnique { get; init; }
 
     /// <summary>
+    /// 是否为稀疏索引
+    /// </summary>
+    public bool IsSparse { get; init; }
+
+    /// <summary>
     /// 排序方向
     /// </summary>
     public IndexSortDirection SortDirection { get; init; }
@@ -231,6 +239,7 @@ public sealed class EntityIndexInfo
     {
         var type = IsComposite ? "Composite" : "Single";
         var unique = IsUnique ? "Unique" : "Non-Unique";
-        return $"{type}Index[{Name}]: [{string.Join(", ", Fields)}] ({unique})";
+        var sparse = IsSparse ? ", Sparse" : string.Empty;
+        return $"{type}Index[{Name}]: [{string.Join(", ", Fields)}] ({unique}{sparse})";
     }
 }

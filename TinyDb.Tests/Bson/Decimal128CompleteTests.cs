@@ -161,11 +161,10 @@ public class Decimal128CompleteTests
     }
 
     [Test]
-    public async Task ToString_WithInvalidValue_ShouldReturnNaN()
+    public async Task ToString_WithInfinity_ShouldReturnInfinity()
     {
-        // When ToDecimal throws, ToString returns "NaN/Infinity/Overflow"
         var d = Decimal128.MaxValue;
-        await Assert.That(d.ToString()).IsEqualTo("NaN/Infinity/Overflow");
+        await Assert.That(d.ToString()).IsEqualTo("Infinity");
     }
 
     [Test]

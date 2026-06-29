@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
 
 namespace TinyDb.Bson;
@@ -9,6 +10,13 @@ namespace TinyDb.Bson;
 [StructLayout(LayoutKind.Explicit)]
 public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, IConvertible
 {
+    private const int ExponentBias = 6176;
+    private const ulong SignMask = 0x8000000000000000UL;
+    private const ulong SpecialMask = 0x7800000000000000UL;
+    private const ulong InfinityMask = 0x7800000000000000UL;
+    private const ulong NaNMask = 0x7C00000000000000UL;
+    private static readonly BigInteger UInt96Max = (BigInteger.One << 96) - BigInteger.One;
+
     [FieldOffset(0)]
     private readonly ulong _lo;
     [FieldOffset(8)]
@@ -46,7 +54,7 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
         bool sign = (flags & 0x80000000) != 0;
         int scale = (flags >> 16) & 0x7F;
 
-        int exponent = -scale + 6176;
+        int exponent = -scale + ExponentBias;
 
         ulong hi = 0;
         ulong lo = 0;
@@ -66,47 +74,72 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     /// </summary>
     public decimal ToDecimal()
     {
-        bool sign = (_hi & 0x8000000000000000) != 0;
-        ulong combination = (_hi >> 49) & 0x7FFF;
-        
-        if ((combination & 0x6000) == 0x6000)
+        if (!TryDecodeFinite(out var sign, out var exponent, out var significand))
         {
             throw new OverflowException("Decimal128 Infinity or NaN cannot be converted to decimal.");
         }
-        
-        int exponent = (int)(combination & 0x3FFF) - 6176;
-        ulong significandHigh = _hi & 0x0001FFFFFFFFFFFF; 
-        
-        uint low = (uint)_lo;
-        uint mid = (uint)(_lo >> 32);
-        uint high = (uint)significandHigh;
-        
-        if (high == 0 && mid == 0 && low == 0) return 0m;
-        
-        if ((significandHigh >> 32) != 0) 
+
+        if (significand.IsZero) return 0m;
+
+        var scale = -exponent;
+        if (scale < 0)
         {
-             throw new OverflowException("Decimal128 value is too large for decimal.");
+            significand *= BigInteger.Pow(10, -scale);
+            scale = 0;
         }
 
-        int scale = -exponent;
-        if (scale < 0 || scale > 28)
+        while (scale > 28 && significand % 10 == 0)
         {
-             throw new OverflowException($"Decimal128 scale {scale} is out of range for decimal.");
+            significand /= 10;
+            scale--;
         }
 
+        if (scale > 28)
+        {
+            throw new OverflowException($"Decimal128 scale {scale} is out of range for decimal.");
+        }
+
+        if (significand > UInt96Max)
+        {
+            throw new OverflowException("Decimal128 value is too large for decimal.");
+        }
+
+        uint low = (uint)(significand & 0xFFFFFFFF);
+        uint mid = (uint)((significand >> 32) & 0xFFFFFFFF);
+        uint high = (uint)((significand >> 64) & 0xFFFFFFFF);
         return new decimal((int)low, (int)mid, (int)high, sign, (byte)scale);
     }
 
     public override string ToString()
     {
-        try
+        if (!TryDecodeFinite(out var sign, out var exponent, out var significand))
         {
-            return ToDecimal().ToString();
+            if ((_hi & NaNMask) == NaNMask) return "NaN";
+            return (_hi & SignMask) != 0 ? "-Infinity" : "Infinity";
         }
-        catch (OverflowException)
+
+        if (significand.IsZero) return "0";
+
+        var digits = significand.ToString();
+        if (exponent >= 0)
         {
-            return "NaN/Infinity/Overflow";
+            return (sign ? "-" : string.Empty) + digits + new string('0', exponent);
         }
+
+        var scale = -exponent;
+        string result;
+        if (scale < digits.Length)
+        {
+            var point = digits.Length - scale;
+            result = digits.Insert(point, ".");
+        }
+        else
+        {
+            result = "0." + new string('0', scale - digits.Length) + digits;
+        }
+
+        result = result.TrimEnd('0').TrimEnd('.');
+        return sign ? "-" + result : result;
     }
 
     public bool Equals(Decimal128 other)
@@ -126,7 +159,69 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
     public int CompareTo(Decimal128 other)
     {
-        return ToDecimal().CompareTo(other.ToDecimal());
+        if (TryDecodeFinite(out var leftSign, out var leftExponent, out var leftSignificand) &&
+            other.TryDecodeFinite(out var rightSign, out var rightExponent, out var rightSignificand))
+        {
+            return CompareFinite(leftSign, leftExponent, leftSignificand, rightSign, rightExponent, rightSignificand);
+        }
+
+        var highComparison = _hi.CompareTo(other._hi);
+        return highComparison != 0 ? highComparison : _lo.CompareTo(other._lo);
+    }
+
+    private bool TryDecodeFinite(out bool sign, out int exponent, out BigInteger significand)
+    {
+        sign = (_hi & SignMask) != 0;
+
+        if ((_hi & SpecialMask) == InfinityMask)
+        {
+            exponent = 0;
+            significand = BigInteger.Zero;
+            return false;
+        }
+
+        ulong significandHigh;
+        int biasedExponent;
+        if ((_hi & 0x6000000000000000UL) == 0x6000000000000000UL)
+        {
+            biasedExponent = (int)((_hi & 0x1FFFE00000000000UL) >> 47);
+            significandHigh = 0x0000800000000000UL | (_hi & 0x00001FFFFFFFFFFFUL);
+        }
+        else
+        {
+            biasedExponent = (int)((_hi & 0x7FFF800000000000UL) >> 49);
+            significandHigh = _hi & 0x00007FFFFFFFFFFFUL;
+        }
+
+        exponent = biasedExponent - ExponentBias;
+        significand = (new BigInteger(significandHigh) << 64) | new BigInteger(_lo);
+        return true;
+    }
+
+    private static int CompareFinite(
+        bool leftSign,
+        int leftExponent,
+        BigInteger leftSignificand,
+        bool rightSign,
+        int rightExponent,
+        BigInteger rightSignificand)
+    {
+        if (leftSignificand.IsZero && rightSignificand.IsZero) return 0;
+        if (leftSign != rightSign) return leftSign ? -1 : 1;
+
+        var commonExponent = Math.Min(leftExponent, rightExponent);
+        if (leftExponent != commonExponent)
+        {
+            leftSignificand *= BigInteger.Pow(10, leftExponent - commonExponent);
+        }
+
+        if (rightExponent != commonExponent)
+        {
+            rightSignificand *= BigInteger.Pow(10, rightExponent - commonExponent);
+        }
+
+        var comparison = leftSignificand.CompareTo(rightSignificand);
+        return leftSign ? -comparison : comparison;
     }
     
     public byte[] ToBytes()
@@ -160,8 +255,18 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     public uint ToUInt32(IFormatProvider? provider) => (uint)ToDecimal();
     public long ToInt64(IFormatProvider? provider) => (long)ToDecimal();
     public ulong ToUInt64(IFormatProvider? provider) => (ulong)ToDecimal();
-    public float ToSingle(IFormatProvider? provider) => (float)ToDecimal();
-    public double ToDouble(IFormatProvider? provider) => (double)ToDecimal();
+    public float ToSingle(IFormatProvider? provider) => (float)ToDouble(provider);
+    public double ToDouble(IFormatProvider? provider)
+    {
+        if (!TryDecodeFinite(out var sign, out var exponent, out var significand))
+        {
+            if ((_hi & NaNMask) == NaNMask) return double.NaN;
+            return sign ? double.NegativeInfinity : double.PositiveInfinity;
+        }
+
+        var result = (double)significand * Math.Pow(10, exponent);
+        return sign ? -result : result;
+    }
     public decimal ToDecimal(IFormatProvider? provider) => ToDecimal();
     public DateTime ToDateTime(IFormatProvider? provider) => throw new InvalidCastException();
     public string ToString(IFormatProvider? provider) => ToString();
@@ -169,6 +274,8 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     {
         if (conversionType == typeof(decimal)) return ToDecimal();
         if (conversionType == typeof(Decimal128)) return this;
+        if (conversionType == typeof(double)) return ToDouble(provider);
+        if (conversionType == typeof(float)) return ToSingle(provider);
         return Convert.ChangeType(ToDecimal(), conversionType, provider);
     }
 }

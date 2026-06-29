@@ -633,6 +633,7 @@ public sealed class WriteAheadLog : IDisposable
         var stream = _stream!;
         _mutex.Wait();
         long lastSuccessfulPosition = 0;
+        bool replayStoppedAtInvalidRecord = false;
         try
         {
             stream.Flush(true);
@@ -649,6 +650,7 @@ public sealed class WriteAheadLog : IDisposable
                 var read = stream.Read(headerBuffer, 0, FullHeaderSize);
                 if (read < HeaderSize)
                 {
+                    replayStoppedAtInvalidRecord = true;
                     break;
                 }
 
@@ -656,6 +658,7 @@ public sealed class WriteAheadLog : IDisposable
                 if (entryType is not (EntryTypePage or EntryTypeTransactionBegin or EntryTypeTransactionPage or EntryTypeTransactionCommit))
                 {
                     Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{entryType:X} at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
                     break;
                 }
 
@@ -672,6 +675,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (read > HeaderSize)
                     {
                         Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
                 }
@@ -679,6 +683,7 @@ public sealed class WriteAheadLog : IDisposable
                 if (length <= 0 || length > _maxRecordSize)
                 {
                     Log(TinyDbLogLevel.Warning, $"Invalid record length {length} at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
                     break;
                 }
 
@@ -697,6 +702,7 @@ public sealed class WriteAheadLog : IDisposable
                 if (offset != length)
                 {
                     Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
                     break;
                 }
 
@@ -712,6 +718,7 @@ public sealed class WriteAheadLog : IDisposable
                         }
 
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
                 }
@@ -727,6 +734,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (!TryReadTransactionId(buffer, out var transactionId))
                     {
                         Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
 
@@ -737,6 +745,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
                     {
                         Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
 
@@ -753,6 +762,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (!TryReadTransactionId(buffer, out var transactionId))
                     {
                         Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
 
@@ -782,7 +792,12 @@ public sealed class WriteAheadLog : IDisposable
                 }
             }
 
-            if (lastSuccessfulPosition > 0 || stream.Length > 0)
+            if (replayStoppedAtInvalidRecord)
+            {
+                stream.SetLength(lastSuccessfulPosition);
+                stream.Flush(true);
+            }
+            else if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 stream.SetLength(0);
                 stream.Flush(true);
@@ -834,6 +849,7 @@ public sealed class WriteAheadLog : IDisposable
         var stream = _stream!;
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         long lastSuccessfulPosition = 0;
+        bool replayStoppedAtInvalidRecord = false;
         try
         {
             stream.Flush(true);
@@ -853,6 +869,7 @@ public sealed class WriteAheadLog : IDisposable
                 // 如果连最小头部 (HeaderSize = 9) 都读不够，说明文件结束或损坏
                 if (read < HeaderSize)
                 {
+                    replayStoppedAtInvalidRecord = true;
                     break;
                 }
 
@@ -860,6 +877,7 @@ public sealed class WriteAheadLog : IDisposable
                 if (entryType is not (EntryTypePage or EntryTypeTransactionBegin or EntryTypeTransactionPage or EntryTypeTransactionCommit))
                 {
                     Log(TinyDbLogLevel.Warning, $"Invalid entry type 0x{entryType:X} at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
                     break; // 无效类型，停止重放
                 }
 
@@ -877,6 +895,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (read > HeaderSize) 
                     {
                         Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break; 
                     }
                 }
@@ -884,6 +903,7 @@ public sealed class WriteAheadLog : IDisposable
                 if (length <= 0 || length > _maxRecordSize)
                 {
                     Log(TinyDbLogLevel.Warning, $"Invalid record length {length} at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
                     break; // 无效长度
                 }
 
@@ -902,6 +922,7 @@ public sealed class WriteAheadLog : IDisposable
                 if (offset != length)
                 {
                     Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
                     break; // 数据不完整
                 }
 
@@ -918,6 +939,7 @@ public sealed class WriteAheadLog : IDisposable
                         }
 
                         Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
                 }
@@ -933,6 +955,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (!TryReadTransactionId(buffer, out var transactionId))
                     {
                         Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
 
@@ -943,6 +966,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
                     {
                         Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
 
@@ -959,6 +983,7 @@ public sealed class WriteAheadLog : IDisposable
                     if (!TryReadTransactionId(buffer, out var transactionId))
                     {
                         Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
                         break;
                     }
 
@@ -989,7 +1014,12 @@ public sealed class WriteAheadLog : IDisposable
                 }
             }
 
-            if (lastSuccessfulPosition > 0 || stream.Length > 0)
+            if (replayStoppedAtInvalidRecord)
+            {
+                stream.SetLength(lastSuccessfulPosition);
+                stream.Flush(true);
+            }
+            else if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
                 stream.SetLength(0);

@@ -683,15 +683,7 @@ public sealed class BsonWriter : IDisposable
     /// </summary>
     public void WriteDateTime(DateTime value)
     {
-        var unixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var utcValue = value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-        };
-        var milliseconds = (long)(utcValue - unixEpoch).TotalMilliseconds;
-        InternalWrite(milliseconds);
+        InternalWrite(BsonDateTime.EncodeStoredValue(value));
     }
 
     /// <summary>
@@ -1098,7 +1090,7 @@ public sealed class BsonReader : IDisposable
         {
             var arraySize = ReadContainerLength("array");
             var startPosition = _stream.Position;
-            var array = new BsonArray();
+            var values = new List<BsonValue>();
 
             while (true)
             {
@@ -1110,7 +1102,7 @@ public sealed class BsonReader : IDisposable
                 var key = ReadCString(); // 数组索引
                 var value = ReadTypedValue(type);
 
-                array = array.AddValue(value);
+                values.Add(value);
             }
 
             var endPosition = _stream.Position;
@@ -1122,7 +1114,7 @@ public sealed class BsonReader : IDisposable
                 throw new InvalidOperationException($"Array size mismatch: expected {arraySize} (content: {expectedContentSize}), actual content size {actualContentSize}");
             }
 
-            return array;
+            return new BsonArray(values);
         }
         finally
         {
@@ -1256,10 +1248,7 @@ public sealed class BsonReader : IDisposable
     public BsonDateTime ReadDateTime()
     {
         ThrowIfDisposed();
-        var milliseconds = _reader.ReadInt64();
-        var unixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var dateTime = unixEpoch.AddMilliseconds(milliseconds);
-        return new BsonDateTime(dateTime);
+        return new BsonDateTime(BsonDateTime.DecodeStoredValue(_reader.ReadInt64()));
     }
 
     /// <summary>

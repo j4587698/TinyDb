@@ -615,7 +615,7 @@ public sealed class TransactionManager : IDisposable
                     var indexManager = _engine.GetIndexManager(operation.CollectionName);
                     if (operation.IndexFields != null && !string.IsNullOrEmpty(operation.IndexName))
                     {
-                        indexManager.CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique);
+                        indexManager.CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique, operation.IndexSparse);
                     }
                 }
                 catch (Exception ex)
@@ -693,7 +693,7 @@ public sealed class TransactionManager : IDisposable
 
                 case TransactionOperationType.DropIndex:
                     if (!string.IsNullOrEmpty(operation.IndexName) && operation.IndexFields != null)
-                        _engine.GetIndexManager(operation.CollectionName).CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique);
+                        _engine.GetIndexManager(operation.CollectionName).CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique, operation.IndexSparse);
                     break;
 
                 default:

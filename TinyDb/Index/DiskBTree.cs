@@ -781,7 +781,7 @@ public sealed class DiskBTree : IDisposable
         ThrowIfDisposed();
         var results = new List<BsonValue>();
         using var lease = BeginPageLease();
-        var node = FindLeafNode(endKey);
+        var node = FindLastCandidateLeafNode(endKey);
 
         while (node != null)
         {
@@ -846,7 +846,9 @@ public sealed class DiskBTree : IDisposable
         }
         else
         {
-            node = FindLeafNode(continuationKey ?? endKey);
+            node = continuationKey != null
+                ? FindLastCandidateLeafNode(continuationKey)
+                : FindLastCandidateLeafNode(endKey);
             startIndex = node.KeyCount - 1;
         }
 
@@ -984,6 +986,24 @@ public sealed class DiskBTree : IDisposable
             }
 
             node = prev;
+        }
+
+        return node;
+    }
+
+    private DiskBTreeNode FindLastCandidateLeafNode(IndexKey key)
+    {
+        var node = FindLeafNode(key);
+
+        while (node.NextSiblingId != 0)
+        {
+            var next = LoadNode(node.NextSiblingId);
+            if (next.KeyCount == 0 || next.Keys[0].CompareTo(key) > 0)
+            {
+                break;
+            }
+
+            node = next;
         }
 
         return node;

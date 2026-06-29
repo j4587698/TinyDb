@@ -264,7 +264,7 @@ internal sealed class Transaction : ITransaction
     /// <param name="indexName">索引名称</param>
     /// <param name="indexFields">索引字段</param>
     /// <param name="unique">索引是否唯一</param>
-    internal void RecordCreateIndex(string collectionName, string indexName, string[] indexFields, bool unique)
+    internal void RecordCreateIndex(string collectionName, string indexName, string[] indexFields, bool unique, bool sparse = false)
     {
         ThrowIfDisposed();
         if (State != TransactionState.Active)
@@ -281,7 +281,8 @@ internal sealed class Transaction : ITransaction
             null,
             indexName,
             indexFields,
-            unique);
+            unique,
+            sparse);
 
         _manager.RecordOperation(this, operation);
     }
@@ -304,6 +305,7 @@ internal sealed class Transaction : ITransaction
         
         string[]? indexFields = null;
         bool unique = false;
+        bool sparse = false;
         
         // 尝试从元数据获取现有索引信息用于回滚
         try
@@ -317,6 +319,7 @@ internal sealed class Transaction : ITransaction
                     var stats = index.GetStatistics();
                     indexFields = stats.Fields;
                     unique = stats.IsUnique;
+                    sparse = stats.IsSparse;
                 }
             }
         }
@@ -336,7 +339,8 @@ internal sealed class Transaction : ITransaction
             null,
             indexName,
             indexFields,
-            unique);
+            unique,
+            sparse);
 
         _manager.RecordOperation(this, operation);
     }
