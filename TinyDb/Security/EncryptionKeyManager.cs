@@ -5,7 +5,7 @@ using TinyDb.Storage;
 
 namespace TinyDb.Security;
 
-internal sealed class EncryptionContext
+internal sealed class EncryptionContext : IDisposable
 {
     private static readonly byte[] WrapAadPrefix = Encoding.UTF8.GetBytes("TinyDb.DEK.v1");
     private static readonly byte[] PageKeyLabel = Encoding.UTF8.GetBytes("TinyDb.PageKey.v1");
@@ -25,8 +25,16 @@ internal sealed class EncryptionContext
 
         var pageKey = DeriveSubkey(_dek, PageKeyLabel);
         var walKey = DeriveSubkey(_dek, WalKeyLabel);
-        PageCodec = new AesGcmPageCodec(metadata.LogicalPageSize, metadata.PhysicalPageSize, pageKey, metadata.DatabaseId);
-        WalCodec = new AesGcmWalCodec(walKey, metadata.DatabaseId);
+        try
+        {
+            PageCodec = new AesGcmPageCodec(metadata.LogicalPageSize, metadata.PhysicalPageSize, pageKey, metadata.DatabaseId, metadata.NonceEpoch);
+            WalCodec = new AesGcmWalCodec(walKey, metadata.DatabaseId, metadata.NonceEpoch);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(pageKey);
+            CryptographicOperations.ZeroMemory(walKey);
+        }
     }
 
     public EncryptionMetadata Metadata { get; }
@@ -48,11 +56,24 @@ internal sealed class EncryptionContext
         RandomNumberGenerator.Fill(metadata.DatabaseId);
 
         var kek = BuildNewKek(options, metadata);
-        var dek = new byte[EncryptionMetadata.KeyLength];
-        RandomNumberGenerator.Fill(dek);
-        WrapDek(metadata, dek, kek);
-        UpdateMetadataMac(metadata, dek);
-        return new EncryptionContext(metadata, dek);
+        byte[]? dek = new byte[EncryptionMetadata.KeyLength];
+        try
+        {
+            RandomNumberGenerator.Fill(dek);
+            WrapDek(metadata, dek, kek);
+            ReserveNextNonceEpoch(metadata, dek);
+            var context = new EncryptionContext(metadata, dek);
+            dek = null;
+            return context;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kek);
+            if (dek != null)
+            {
+                CryptographicOperations.ZeroMemory(dek);
+            }
+        }
     }
 
     public static EncryptionContext OpenExisting(EncryptionMetadata metadata, TinyDbOptions options)
@@ -61,9 +82,24 @@ internal sealed class EncryptionContext
         if (options == null) throw new ArgumentNullException(nameof(options));
 
         var kek = BuildExistingKek(metadata, options);
-        var dek = UnwrapDek(metadata, kek);
-        VerifyMetadataMac(metadata, dek);
-        return new EncryptionContext(metadata, dek);
+        byte[]? dek = null;
+        try
+        {
+            dek = UnwrapDek(metadata, kek);
+            VerifyMetadataMac(metadata, dek);
+            ReserveNextNonceEpoch(metadata, dek);
+            var context = new EncryptionContext(metadata, dek);
+            dek = null;
+            return context;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kek);
+            if (dek != null)
+            {
+                CryptographicOperations.ZeroMemory(dek);
+            }
+        }
     }
 
     public bool VerifyPassword(string password)
@@ -113,8 +149,15 @@ internal sealed class EncryptionContext
         Metadata.Iterations = DatabaseSecurity.EncryptionPbkdf2Iterations;
         RandomNumberGenerator.Fill(Metadata.KdfSalt);
         var kek = DerivePasswordKek(newPassword, Metadata.KdfSalt, Metadata.Iterations);
-        WrapDek(Metadata, _dek, kek);
-        UpdateMetadataMac(Metadata, _dek);
+        try
+        {
+            WrapDek(Metadata, _dek, kek);
+            UpdateMetadataMac(Metadata, _dek);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(kek);
+        }
     }
 
     private static byte[] BuildNewKek(TinyDbOptions options, EncryptionMetadata metadata)
@@ -222,21 +265,61 @@ internal sealed class EncryptionContext
         return hmac.ComputeHash(label);
     }
 
+    private static void ReserveNextNonceEpoch(EncryptionMetadata metadata, byte[] dek)
+    {
+        if (metadata.NonceEpoch == ulong.MaxValue)
+        {
+            throw new InvalidOperationException("AES-GCM nonce epoch exhausted; rotate the encryption key.");
+        }
+
+        metadata.NonceEpoch++;
+        metadata.UseCurrentFormat();
+        UpdateMetadataMac(metadata, dek);
+    }
+
     private static void UpdateMetadataMac(EncryptionMetadata metadata, byte[] dek)
     {
         var key = DeriveSubkey(dek, MetadataMacLabel);
-        using var hmac = new HMACSHA256(key);
-        metadata.MetadataMac = hmac.ComputeHash(metadata.GetMacData());
+        try
+        {
+            using var hmac = new HMACSHA256(key);
+            metadata.MetadataMac = hmac.ComputeHash(metadata.GetMacData());
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
     }
 
     private static void VerifyMetadataMac(EncryptionMetadata metadata, byte[] dek)
     {
         var key = DeriveSubkey(dek, MetadataMacLabel);
-        using var hmac = new HMACSHA256(key);
-        var actual = hmac.ComputeHash(metadata.GetMacData());
-        if (!CryptographicOperations.FixedTimeEquals(actual, metadata.MetadataMac))
+        try
         {
-            throw new SecurityCorruptedException("Encryption metadata authentication failed.");
+            using var hmac = new HMACSHA256(key);
+            var actual = hmac.ComputeHash(metadata.GetMacData());
+            if (!CryptographicOperations.FixedTimeEquals(actual, metadata.MetadataMac))
+            {
+                throw new SecurityCorruptedException("Encryption metadata authentication failed.");
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+        }
+    }
+
+    public void Dispose()
+    {
+        CryptographicOperations.ZeroMemory(_dek);
+        if (PageCodec is IDisposable pageCodec)
+        {
+            pageCodec.Dispose();
+        }
+
+        if (WalCodec is IDisposable walCodec)
+        {
+            walCodec.Dispose();
         }
     }
 }

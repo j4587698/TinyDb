@@ -42,7 +42,7 @@ public class AotMapperTests
         // Binary -> Guid/Byte[]
         var bytes = new byte[] { 1, 2, 3 };
         var binVal = new BsonBinary(bytes);
-        await Assert.That(BsonMapper.ConvertFromBsonValue(binVal, typeof(byte[]))).IsEqualTo(bytes);
+        await Assert.That(((byte[])BsonMapper.ConvertFromBsonValue(binVal, typeof(byte[]))!).SequenceEqual(bytes)).IsTrue();
         
         var guid = Guid.NewGuid();
         var guidBin = new BsonBinary(guid);

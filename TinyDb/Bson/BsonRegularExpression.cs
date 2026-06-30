@@ -109,7 +109,7 @@ public sealed class BsonRegularExpression : BsonValue
             if (patternComparison != 0) return patternComparison;
             return Options.CompareTo(otherRegex.Options);
         }
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     /// <summary>

@@ -275,8 +275,19 @@ public sealed class ExpressionParser
             if (nodeType == ExpressionType.Multiply) return EvaluateMultiply(left, right);
             if (nodeType == ExpressionType.Divide) return EvaluateDivide(left, right);
 
-            if (nodeType == ExpressionType.Equal) return Equals(left, right);
-            if (nodeType == ExpressionType.NotEqual) return !Equals(left, right);
+            if (nodeType == ExpressionType.Equal)
+            {
+                return TryCompare(left, right, out var equalCompareResult)
+                    ? equalCompareResult == 0
+                    : Equals(left, right);
+            }
+
+            if (nodeType == ExpressionType.NotEqual)
+            {
+                return TryCompare(left, right, out var notEqualCompareResult)
+                    ? notEqualCompareResult != 0
+                    : !Equals(left, right);
+            }
 
             if (TryCompare(left, right, out var compareResult))
             {

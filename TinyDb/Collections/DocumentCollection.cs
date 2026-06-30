@@ -715,12 +715,11 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// <param name="entity">实体</param>
     private void EnsureEntityHasId(T entity)
     {
-        var idProperty = TinyDb.Serialization.EntityMetadata<T>.IdProperty;
-        if (idProperty != null &&
-            (idProperty.PropertyType == typeof(int) || idProperty.PropertyType == typeof(long)) &&
+        if (AotIdAccessor<T>.TryGetIdInfo(out var idPropertyName, out var idPropertyType) &&
+            (idPropertyType == typeof(int) || idPropertyType == typeof(long)) &&
             !AotIdAccessor<T>.HasValidId(entity))
         {
-            var identityId = _engine.AllocateIdentityId(_name, idProperty.Name, idProperty.PropertyType);
+            var identityId = _engine.AllocateIdentityId(_name, idPropertyName, idPropertyType);
             AotIdAccessor<T>.SetId(entity, identityId);
             EnsureIdIndex();
             return;
@@ -751,8 +750,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         try
         {
-            var idProperty = TinyDb.Serialization.EntityMetadata<T>.IdProperty;
-            if (idProperty != null)
+            if (AotIdAccessor<T>.TryGetIdInfo(out _, out _))
             {
                 var indexName = $"idx_{_name}_id";
                 _engine.EnsureIndex(_name, "_id", indexName, unique: true);
@@ -1077,7 +1075,15 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (id == null || id.IsNull) return null;
 
         var document = await _engine.FindByIdAsync(_name, id, cancellationToken).ConfigureAwait(false);
-        return document != null ? AotBsonMapper.FromDocument<T>(document) : default(T);
+        if (document == null) return default;
+
+        if (typeof(T) == typeof(BsonDocument))
+        {
+            var patched = _engine.MetadataManager.ApplySchemaDefaults(_name, document);
+            return (T)(object)patched;
+        }
+
+        return AotBsonMapper.FromDocument<T>(document);
     }
 
     public async Task<List<T>> FindAllAsync(CancellationToken cancellationToken = default)
@@ -1086,6 +1092,18 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
         var results = new List<T>(documents.Count);
+
+        if (typeof(T) == typeof(BsonDocument))
+        {
+            foreach (var document in documents)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var patched = _engine.MetadataManager.ApplySchemaDefaults(_name, document);
+                results.Add((T)(object)patched);
+            }
+
+            return results;
+        }
 
         foreach (var document in documents)
         {
@@ -1110,72 +1128,20 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
         ValidatePaginationArguments(skip, limit);
-        if (limit == 0) return new List<T>();
-
-        var queryExpression = new ExpressionParser().Parse(predicate);
-        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
-        var results = limit == int.MaxValue
-            ? new List<T>()
-            : new List<T>(Math.Min(limit, documents.Count));
-        var skipped = 0;
-
-        foreach (var document in documents)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!ExpressionEvaluator.Evaluate(queryExpression, document))
-            {
-                continue;
-            }
-
-            var entity = AotBsonMapper.FromDocument<T>(document);
-            if (entity == null)
-            {
-                continue;
-            }
-
-            if (skipped < skip)
-            {
-                skipped++;
-                continue;
-            }
-
-            results.Add(entity);
-
-            if (limit < int.MaxValue && results.Count >= limit)
-            {
-                break;
-            }
-        }
-
-        return results;
+        cancellationToken.ThrowIfCancellationRequested();
+        var results = Find(predicate, skip, limit).ToList();
+        cancellationToken.ThrowIfCancellationRequested();
+        return await Task.FromResult(results).ConfigureAwait(false);
     }
 
     public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-
-        var queryExpression = new ExpressionParser().Parse(predicate);
-        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
-
-        foreach (var document in documents)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!ExpressionEvaluator.Evaluate(queryExpression, document))
-            {
-                continue;
-            }
-
-            var entity = AotBsonMapper.FromDocument<T>(document);
-            if (entity != null)
-            {
-                return entity;
-            }
-        }
-
-        return null;
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = Find(predicate, 0, 1).FirstOrDefault();
+        cancellationToken.ThrowIfCancellationRequested();
+        return await Task.FromResult(result).ConfigureAwait(false);
     }
 
     public async Task<long> CountAsync(CancellationToken cancellationToken = default)
@@ -1196,41 +1162,20 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-
-        var queryExpression = new ExpressionParser().Parse(predicate);
-        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
-
-        long count = 0;
-        foreach (var document in documents)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (ExpressionEvaluator.Evaluate(queryExpression, document))
-            {
-                count++;
-            }
-        }
-
-        return count;
+        cancellationToken.ThrowIfCancellationRequested();
+        var count = Find(predicate).LongCount();
+        cancellationToken.ThrowIfCancellationRequested();
+        return await Task.FromResult(count).ConfigureAwait(false);
     }
 
     public async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
-
-        var queryExpression = new ExpressionParser().Parse(predicate);
-        var documents = await _engine.FindAllAsync(_name, cancellationToken).ConfigureAwait(false);
-
-        foreach (var document in documents)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (ExpressionEvaluator.Evaluate(queryExpression, document))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        cancellationToken.ThrowIfCancellationRequested();
+        var exists = Find(predicate).Any();
+        cancellationToken.ThrowIfCancellationRequested();
+        return await Task.FromResult(exists).ConfigureAwait(false);
     }
 
     public async Task<int> DeleteAllAsync(CancellationToken cancellationToken = default)

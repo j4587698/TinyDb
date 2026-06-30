@@ -66,15 +66,12 @@ public class BsonDecimal128CoverageTests
     }
     
     [Test]
-    public async Task ToBoolean_DecimalZero_ShouldReturnTrue_DueToInternalRepresentation()
+    public async Task ToBoolean_DecimalZero_ShouldReturnFalse()
     {
-        // Note: Due to Decimal128's internal representation, a decimal 0m creates a non-zero bit pattern
-        // This tests the actual behavior - Decimal128(0m) has biasedExponent set, making it != Decimal128.Zero
         var bsonDec = new BsonDecimal128(0m);
-        // The value equals 0 when converted to decimal, but ToBoolean uses bit comparison with Decimal128.Zero
+
         await Assert.That(bsonDec.Value.ToDecimal()).IsEqualTo(0m);
-        // ToBoolean returns true because internal bits differ from Decimal128.Zero
-        await Assert.That(bsonDec.ToBoolean(null)).IsTrue();
+        await Assert.That(bsonDec.ToBoolean(null)).IsFalse();
     }
 
     [Test]

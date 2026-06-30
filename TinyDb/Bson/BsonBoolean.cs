@@ -40,7 +40,7 @@ public sealed class BsonBoolean : BsonValue
     {
         if (other is null) return 1;
         if (other is BsonBoolean otherBool) return Value.CompareTo(otherBool.Value);
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public override bool Equals(BsonValue? other)

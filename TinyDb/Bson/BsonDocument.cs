@@ -246,7 +246,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
             return 0;
         }
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     /// <summary>
@@ -458,7 +458,7 @@ internal sealed class BsonDocumentValue : BsonValue
         if (other is null) return 1;
         if (other is BsonDocumentValue otherDoc) return Value.CompareTo(otherDoc.Value);
         if (other is BsonDocument doc) return Value.CompareTo(doc);
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public override bool Equals(BsonValue? other)

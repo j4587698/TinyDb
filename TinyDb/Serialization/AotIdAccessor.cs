@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using TinyDb.Bson;
-using TinyDb.IdGeneration;
 
 namespace TinyDb.Serialization;
 
@@ -106,15 +105,26 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         }
 
         // 如果已有有效 ID，则不需要生成
-        if (adapter.HasValidId(entity))
-        {
-            return false;
-        }
+        return adapter.GenerateIdIfNeeded(entity);
 
         // 获取 ID 属性信息并生成 ID
-        var idProperty = EntityMetadata<T>.IdProperty;
-        if (idProperty == null) return false;
+    }
 
-        return AutoIdGenerator.GenerateIdIfNeeded(entity, idProperty);
+    internal static bool TryGetIdInfo(
+        [NotNullWhen(true)] out string? idPropertyName,
+        [NotNullWhen(true)] out Type? idPropertyType)
+    {
+        if (AotHelperRegistry.TryGetAdapter<T>(out var adapter) &&
+            !string.IsNullOrWhiteSpace(adapter.IdPropertyName) &&
+            adapter.IdPropertyType != null)
+        {
+            idPropertyName = adapter.IdPropertyName;
+            idPropertyType = adapter.IdPropertyType;
+            return true;
+        }
+
+        idPropertyName = null;
+        idPropertyType = null;
+        return false;
     }
 }

@@ -51,15 +51,15 @@ internal sealed class NoOpPageCodec : IPageCodec
     }
 }
 
-internal sealed class AesGcmPageCodec : IPageCodec
+internal sealed class AesGcmPageCodec : IPageCodec, IDisposable
 {
     private static readonly byte[] AadPrefix = Encoding.UTF8.GetBytes("TinyDb.Page.v1");
     private readonly byte[] _key;
     private readonly byte[] _databaseId;
-    private readonly byte[] _noncePrefix = new byte[8];
+    private readonly ulong _nonceEpoch;
     private long _nonceCounter;
 
-    public AesGcmPageCodec(uint logicalPageSize, uint physicalPageSize, byte[] key, byte[] databaseId)
+    public AesGcmPageCodec(uint logicalPageSize, uint physicalPageSize, byte[] key, byte[] databaseId, ulong nonceEpoch)
     {
         if (physicalPageSize != logicalPageSize + EncryptionMetadata.FrameOverhead)
         {
@@ -80,7 +80,7 @@ internal sealed class AesGcmPageCodec : IPageCodec
         PhysicalPageSize = physicalPageSize;
         _key = key.ToArray();
         _databaseId = databaseId.ToArray();
-        RandomNumberGenerator.Fill(_noncePrefix);
+        _nonceEpoch = nonceEpoch;
     }
 
     public uint LogicalPageSize { get; }
@@ -158,8 +158,8 @@ internal sealed class AesGcmPageCodec : IPageCodec
             throw new InvalidOperationException("AES-GCM page nonce counter exhausted; rotate the encryption key.");
         }
 
-        _noncePrefix.CopyTo(nonce);
-        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(_noncePrefix.Length, sizeof(uint)), (uint)counter);
+        BinaryPrimitives.WriteUInt64LittleEndian(nonce, _nonceEpoch);
+        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(sizeof(ulong), sizeof(uint)), (uint)counter);
     }
 
     private byte[] BuildAad(uint pageId)
@@ -171,5 +171,11 @@ internal sealed class AesGcmPageCodec : IPageCodec
         BinaryPrimitives.WriteUInt32LittleEndian(aad.AsSpan(offset, sizeof(uint)), pageId);
         BinaryPrimitives.WriteUInt32LittleEndian(aad.AsSpan(offset + sizeof(uint), sizeof(uint)), LogicalPageSize);
         return aad;
+    }
+
+    public void Dispose()
+    {
+        CryptographicOperations.ZeroMemory(_key);
+        CryptographicOperations.ZeroMemory(_databaseId);
     }
 }

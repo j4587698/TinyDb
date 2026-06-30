@@ -2,12 +2,14 @@ using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
+using TinyDb.Metadata;
 using TinyDb.Query;
 using TinyDb.Serialization;
 using TinyDb.Storage;
 using TinyDb.Security;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
+using System.Globalization;
 using ExpressionType = System.Linq.Expressions.ExpressionType;
 
 namespace TinyDb.Tests.Regression;
@@ -762,6 +764,176 @@ public sealed class ReviewReportRegressionTests : IDisposable
         await Assert.That(() => large.ToDecimal()).Throws<OverflowException>();
     }
 
+    [Test]
+    public async Task Decimal128_ShouldUseNumericEqualityForBooleanAndHashing()
+    {
+        var zero = new BsonDecimal128(0m);
+        var oneWithOneScale = new Decimal128(1.0m);
+        var oneWithTwoScale = new Decimal128(1.00m);
+        var largeOne = new BsonDecimal128(new Decimal128(1UL, 0x3108000000000000UL));
+        var largeTwo = new BsonDecimal128(new Decimal128(2UL, 0x3108000000000000UL));
+
+        await Assert.That(zero.ToBoolean(null)).IsFalse();
+        await Assert.That(oneWithOneScale.Equals(oneWithTwoScale)).IsTrue();
+        await Assert.That(oneWithOneScale.GetHashCode()).IsEqualTo(oneWithTwoScale.GetHashCode());
+        await Assert.That(largeOne.CompareTo(largeTwo)).IsLessThan(0);
+    }
+
+    [Test]
+    public async Task BsonBinary_ShouldDefensivelyCopyByteArrays()
+    {
+        var source = new byte[] { 1, 2, 3 };
+        var binary = new BsonBinary(source);
+        var hash = binary.GetHashCode();
+
+        source[0] = 9;
+        var exposed = binary.Bytes;
+        exposed[1] = 9;
+
+        await Assert.That(binary.Bytes.SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
+        await Assert.That(binary.GetHashCode()).IsEqualTo(hash);
+    }
+
+    [Test]
+    public async Task PrimaryKeyLookup_ShouldUseBsonNumericValueEquality()
+    {
+        using var engine = CreateEngine("primary-key-numeric-equality.db");
+        var collection = engine.GetCollection<IndexedValueDocument>();
+
+        collection.Insert(new IndexedValueDocument { Id = 10, Score = 5 });
+
+        var found = collection.FindById(new BsonInt64(10));
+        await Assert.That(found).IsNotNull();
+        await Assert.That(found!.Score).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task QueryAggregationProjection_ShouldConvertSumAndAverageToLinqReturnTypes()
+    {
+        using var engine = CreateEngine("query-aggregate-return-types.db");
+        var collection = engine.GetCollection<QueryAggregateDocument>();
+
+        collection.Insert(new QueryAggregateDocument { Id = 1, Category = "A", Score = 1 });
+        collection.Insert(new QueryAggregateDocument { Id = 2, Category = "A", Score = 2 });
+
+        var sum = collection.Query()
+            .GroupBy(x => x.Category)
+            .Select(g => g.Sum(x => x.Score))
+            .Single();
+        var average = collection.Query()
+            .GroupBy(x => x.Category)
+            .Select(g => g.Average(x => x.Score))
+            .Single();
+
+        await Assert.That(sum).IsEqualTo(3);
+        await Assert.That(average).IsEqualTo(1.5d);
+    }
+
+    [Test]
+    public async Task ExpressionEvaluator_ShouldUseCSharpIntegerDivision()
+    {
+        var divide = new BinaryExpression(
+            ExpressionType.Divide,
+            new ConstantExpression(5),
+            new ConstantExpression(2));
+
+        var result = ExpressionEvaluator.EvaluateValue(divide, new BsonDocument());
+
+        await Assert.That(result).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task StringFunctions_ShouldUseInvariantCaseConversion()
+    {
+        var previousCulture = CultureInfo.CurrentCulture;
+        var previousUiCulture = CultureInfo.CurrentUICulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("tr-TR");
+            CultureInfo.CurrentUICulture = new CultureInfo("tr-TR");
+
+            using var engine = CreateEngine("invariant-string-functions.db");
+            var collection = engine.GetCollection<CultureStringDocument>();
+            collection.Insert(new CultureStringDocument { Id = 1, Name = "INTEREST" });
+
+            await Assert.That(collection.Find(x => x.Name.ToLower() == "interest").Count()).IsEqualTo(1);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+            CultureInfo.CurrentUICulture = previousUiCulture;
+        }
+    }
+
+    [Test]
+    public async Task MetadataCodeGeneration_ShouldRejectUnsafeTypeSyntaxAndEscapeLineSeparators()
+    {
+        var unsafeSchema = new MetadataDocument
+        {
+            TableName = "UnsafeTypes",
+            TypeName = "UnsafeTypes",
+            DisplayName = "UnsafeTypes",
+            Columns = new BsonArray()
+                .AddValue(new BsonDocument()
+                    .Set("n", "_id")
+                    .Set("pn", "Id")
+                    .Set("t", "System.Int32")
+                    .Set("pk", true)
+                    .Set("r", true)
+                    .Set("o", 1))
+                .AddValue(new BsonDocument()
+                    .Set("n", "name")
+                    .Set("pn", "Name")
+                    .Set("t", "System.String\npublic int Injected { get; set; }")
+                    .Set("r", false)
+                    .Set("o", 2))
+        };
+
+        await Assert.That(() => CSharpEntityGenerator.Generate(unsafeSchema))
+            .Throws<InvalidOperationException>();
+
+        var safeSchema = new MetadataDocument
+        {
+            TableName = "GeneratedTypes",
+            TypeName = "GeneratedTypes",
+            DisplayName = "Line\u2028Separator",
+            Columns = new BsonArray()
+                .AddValue(new BsonDocument()
+                    .Set("n", "_id")
+                    .Set("pn", "Id")
+                    .Set("t", "System.Int32")
+                    .Set("pk", true)
+                    .Set("r", true)
+                    .Set("o", 1))
+        };
+
+        var code = CSharpEntityGenerator.Generate(safeSchema);
+        await Assert.That(code).Contains("\\u2028");
+    }
+
+    [Test]
+    public async Task BsonSerialization_ShouldRejectExcessiveDepthAndConversionCycles()
+    {
+        BsonValue deepValue = new BsonString("leaf");
+        for (var i = 0; i < 130; i++)
+        {
+            deepValue = new BsonDocument().Set("x", deepValue);
+        }
+
+        var deepDocument = (BsonDocument)deepValue;
+        await Assert.That(() => BsonSerializer.CalculateDocumentSize(deepDocument))
+            .Throws<InvalidDataException>();
+        await Assert.That(() => BsonSerializer.SerializeDocument(deepDocument))
+            .Throws<InvalidDataException>();
+
+        var cycle = new List<object>();
+        cycle.Add(cycle);
+
+        await Assert.That(() => BsonConversion.ToBsonValue(cycle))
+            .Throws<InvalidOperationException>();
+    }
+
     private TinyDbEngine CreateEngine(string fileName)
     {
         return new TinyDbEngine(Path.Combine(_directory, fileName));
@@ -855,4 +1027,19 @@ public sealed class CompositeOrderDocument
     public int Id { get; set; }
     public int A { get; set; }
     public int B { get; set; }
+}
+
+[Entity("QueryAggregateDocuments")]
+public sealed class QueryAggregateDocument
+{
+    public int Id { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public int Score { get; set; }
+}
+
+[Entity("CultureStringDocuments")]
+public sealed class CultureStringDocument
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
 }

@@ -7,6 +7,8 @@ namespace TinyDb.Bson;
 /// </summary>
 public sealed class BsonBinary : BsonValue
 {
+    private readonly byte[] _bytes;
+
     /// <summary>
     /// 二进制数据子类型
     /// </summary>
@@ -51,7 +53,9 @@ public sealed class BsonBinary : BsonValue
     /// <summary>
     /// 二进制数据
     /// </summary>
-    public byte[] Bytes { get; }
+    public byte[] Bytes => _bytes.ToArray();
+
+    internal ReadOnlySpan<byte> BytesSpan => _bytes;
 
     /// <summary>
     /// 子类型
@@ -80,7 +84,7 @@ public sealed class BsonBinary : BsonValue
     /// <param name="subType">子类型</param>
     public BsonBinary(byte[] bytes, BinarySubType subType = BinarySubType.Generic)
     {
-        Bytes = bytes ?? throw new ArgumentNullException(nameof(bytes));
+        _bytes = (bytes ?? throw new ArgumentNullException(nameof(bytes))).ToArray();
         SubType = subType;
     }
 
@@ -91,7 +95,7 @@ public sealed class BsonBinary : BsonValue
     /// <param name="subType">子类型</param>
     public BsonBinary(Guid guid, BinarySubType subType = BinarySubType.Uuid)
     {
-        Bytes = guid.ToByteArray();
+        _bytes = guid.ToByteArray();
         SubType = subType;
     }
 
@@ -113,7 +117,7 @@ public sealed class BsonBinary : BsonValue
         if (other is not BsonBinary otherBinary) return false;
         if (SubType != otherBinary.SubType) return false;
 
-        return Bytes.SequenceEqual(otherBinary.Bytes);
+        return _bytes.SequenceEqual(otherBinary._bytes);
     }
 
     /// <summary>
@@ -123,11 +127,11 @@ public sealed class BsonBinary : BsonValue
     {
         var hash = new HashCode();
         hash.Add(SubType);
-        hash.Add(Bytes.Length);
+        hash.Add(_bytes.Length);
         
         // Add content hash (optimization: maybe only sample if large?)
         // For correctness/coverage now, we iterate.
-        foreach(var b in Bytes)
+        foreach(var b in _bytes)
         {
             hash.Add(b);
         }
@@ -140,7 +144,7 @@ public sealed class BsonBinary : BsonValue
     /// </summary>
     public override string ToString()
     {
-        return $"Binary({SubType}, {Bytes.Length} bytes)";
+        return $"Binary({SubType}, {_bytes.Length} bytes)";
     }
 
     /// <summary>
@@ -152,7 +156,7 @@ public sealed class BsonBinary : BsonValue
         if (other is BsonBinary otherBinary)
         {
             // 1. Length
-            var lenDiff = Bytes.Length.CompareTo(otherBinary.Bytes.Length);
+            var lenDiff = _bytes.Length.CompareTo(otherBinary._bytes.Length);
             if (lenDiff != 0) return lenDiff;
 
             // 2. SubType
@@ -160,14 +164,14 @@ public sealed class BsonBinary : BsonValue
             if (subTypeDiff != 0) return subTypeDiff;
 
             // 3. Bytes
-            for (int i = 0; i < Bytes.Length; i++)
+            for (int i = 0; i < _bytes.Length; i++)
             {
-                var byteDiff = Bytes[i].CompareTo(otherBinary.Bytes[i]);
+                var byteDiff = _bytes[i].CompareTo(otherBinary._bytes[i]);
                 if (byteDiff != 0) return byteDiff;
             }
             return 0;
         }
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     // IConvertible 接口的简化实现

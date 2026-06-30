@@ -20,8 +20,8 @@ public class MetadataDocument
     // 核心：直接存储 BsonArray 格式的字段定义
     public BsonArray Columns { get; set; } = new BsonArray();
 
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
-    public DateTime UpdatedAt { get; set; } = DateTime.Now;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
     // 静态工厂：从 EntityMetadata 转换 (用于 Code-First)
     public static MetadataDocument FromEntityMetadata(EntityMetadata metadata)
@@ -34,8 +34,8 @@ public class MetadataDocument
             TypeName = metadata.TypeName,
             DisplayName = metadata.DisplayName,
             Description = metadata.Description,
-            CreatedAt = DateTime.Now,
-            UpdatedAt = DateTime.Now
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
         };
 
         var cols = new BsonArray();

@@ -1,8 +1,10 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Security;
+using TinyDb.Storage;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -102,6 +104,76 @@ public sealed class EncryptionStorageTests : IDisposable
         }
 
         await Assert.That(DatabaseSecurity.HasSecurityMetadata(_dbPath)).IsFalse();
+    }
+
+    [Test]
+    public async Task EncryptedDatabase_Open_ShouldPersistMonotonicNonceEpoch()
+    {
+        using (var engine = CreatePasswordEngine(writeConcern: WriteConcern.Synced))
+        {
+            engine.GetBsonCollection("epoch_docs").Insert(new BsonDocument()
+                .Set("_id", 1)
+                .Set("value", "epoch-secret"));
+        }
+
+        var createdEpoch = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+
+        using (new TinyDbEngine(_dbPath, new TinyDbOptions
+        {
+            Password = "password123",
+            EnableJournaling = false
+        }))
+        {
+            var reopenedEpoch = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+            await Assert.That(reopenedEpoch).IsGreaterThan(createdEpoch);
+        }
+
+        var afterFirstReopen = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+
+        using (new TinyDbEngine(_dbPath, new TinyDbOptions
+        {
+            Password = "password123",
+            EnableJournaling = false
+        }))
+        {
+            var reopenedAgainEpoch = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+            await Assert.That(reopenedAgainEpoch).IsGreaterThan(afterFirstReopen);
+        }
+    }
+
+    [Test]
+    public async Task AesGcmCodecs_ShouldUsePersistedEpochAndMonotonicCounters()
+    {
+        var key = Enumerable.Range(1, EncryptionMetadata.KeyLength).Select(i => (byte)i).ToArray();
+        var databaseId = Enumerable.Range(1, EncryptionMetadata.DatabaseIdLength).Select(i => (byte)(i + 10)).ToArray();
+
+        using (var pageCodec = new AesGcmPageCodec(
+            TinyDbOptions.DefaultPageSize,
+            TinyDbOptions.DefaultPageSize + (uint)EncryptionMetadata.FrameOverhead,
+            key,
+            databaseId,
+            nonceEpoch: 42))
+        {
+            var page = new byte[(int)TinyDbOptions.DefaultPageSize];
+            var first = pageCodec.Encode(2, page);
+            var second = pageCodec.Encode(3, page);
+
+            await Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(first.AsSpan(0, sizeof(ulong)))).IsEqualTo(42UL);
+            await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(first.AsSpan(sizeof(ulong), sizeof(uint)))).IsEqualTo(1U);
+            await Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(second.AsSpan(0, sizeof(ulong)))).IsEqualTo(42UL);
+            await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(second.AsSpan(sizeof(ulong), sizeof(uint)))).IsEqualTo(2U);
+        }
+
+        using (var walCodec = new AesGcmWalCodec(key, databaseId, nonceEpoch: 77))
+        {
+            var first = walCodec.Encode(1, 2, 3, new byte[] { 1, 2, 3 });
+            var second = walCodec.Encode(1, 2, 4, new byte[] { 4, 5, 6 });
+
+            await Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(first.AsSpan(4, sizeof(ulong)))).IsEqualTo(77UL);
+            await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(first.AsSpan(4 + sizeof(ulong), sizeof(uint)))).IsEqualTo(1U);
+            await Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(second.AsSpan(4, sizeof(ulong)))).IsEqualTo(77UL);
+            await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(second.AsSpan(4 + sizeof(ulong), sizeof(uint)))).IsEqualTo(2U);
+        }
     }
 
     [Test]
@@ -364,6 +436,17 @@ public sealed class EncryptionStorageTests : IDisposable
         }
 
         return buffer;
+    }
+
+    private static EncryptionMetadata ReadEncryptionMetadata(string path)
+    {
+        using var disk = new DiskStream(path, FileAccess.Read, FileShare.ReadWrite);
+        if (!EncryptionMetadataStore.TryReadFromDisk(disk, TinyDbOptions.DefaultPageSize, out var metadata) || metadata == null)
+        {
+            throw new InvalidDataException("Encryption metadata was not found.");
+        }
+
+        return metadata;
     }
 
     private static void WriteLegacySecurityMetadata(TinyDbEngine engine, string password)

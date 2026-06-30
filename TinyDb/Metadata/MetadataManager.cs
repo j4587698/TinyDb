@@ -156,13 +156,13 @@ public class MetadataManager
         if (existing != null)
         {
             doc.CreatedAt = existing.CreatedAt;
-            doc.UpdatedAt = DateTime.Now;
+            doc.UpdatedAt = DateTime.UtcNow;
             col.Update(doc);
         }
         else
         {
-            doc.CreatedAt = DateTime.Now;
-            doc.UpdatedAt = DateTime.Now;
+            doc.CreatedAt = DateTime.UtcNow;
+            doc.UpdatedAt = DateTime.UtcNow;
             col.Insert(doc);
         }
 

@@ -24,11 +24,14 @@ internal sealed class EncryptionMetadata
     internal const int TagLength = 16;
     internal const int MacLength = 32;
     internal const int FrameOverhead = NonceLength + TagLength;
-    internal const int SerializedLength = 156;
+    internal const int LegacySerializedLength = 156;
+    internal const int SerializedLength = 164;
     internal const int MaxSerializedLength = 512;
 
     private const uint MagicValue = 0x31434E45; // ENC1
+    private const int NonceEpochOffset = 124;
     private const int MacOffset = SerializedLength - MacLength;
+    private const int LegacyMacOffset = LegacySerializedLength - MacLength;
 
     public int Version { get; set; } = VersionValue;
     public EncryptionCredentialKind CredentialKind { get; set; }
@@ -43,7 +46,9 @@ internal sealed class EncryptionMetadata
     public byte[] WrappedDekNonce { get; set; } = new byte[NonceLength];
     public byte[] WrappedDekCiphertext { get; set; } = new byte[KeyLength];
     public byte[] WrappedDekTag { get; set; } = new byte[TagLength];
+    public ulong NonceEpoch { get; set; }
     public byte[] MetadataMac { get; set; } = new byte[MacLength];
+    private int _serializedLength = SerializedLength;
 
     public static bool HasMagic(ReadOnlySpan<byte> data)
     {
@@ -52,7 +57,7 @@ internal sealed class EncryptionMetadata
 
     public static EncryptionMetadata FromBytes(ReadOnlySpan<byte> data)
     {
-        if (data.Length < SerializedLength)
+        if (data.Length < LegacySerializedLength)
         {
             throw new SecurityCorruptedException("Encryption metadata is truncated.");
         }
@@ -64,13 +69,19 @@ internal sealed class EncryptionMetadata
 
         var version = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(4, 4));
         var length = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(8, 4));
-        if (version != VersionValue || length != SerializedLength)
+        if (version != VersionValue || length is not (LegacySerializedLength or SerializedLength))
         {
             throw new SecurityCorruptedException("Encryption metadata version is not supported.");
         }
 
+        if (data.Length < length)
+        {
+            throw new SecurityCorruptedException("Encryption metadata is truncated.");
+        }
+
         var metadata = new EncryptionMetadata
         {
+            _serializedLength = length,
             Version = version,
             CredentialKind = (EncryptionCredentialKind)data[12],
             Algorithm = data[13],
@@ -84,7 +95,10 @@ internal sealed class EncryptionMetadata
             WrappedDekNonce = data.Slice(64, NonceLength).ToArray(),
             WrappedDekCiphertext = data.Slice(76, KeyLength).ToArray(),
             WrappedDekTag = data.Slice(108, TagLength).ToArray(),
-            MetadataMac = data.Slice(MacOffset, MacLength).ToArray()
+            NonceEpoch = length == SerializedLength
+                ? BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(NonceEpochOffset, sizeof(ulong)))
+                : 0UL,
+            MetadataMac = data.Slice(length == SerializedLength ? MacOffset : LegacyMacOffset, MacLength).ToArray()
         };
 
         metadata.Validate();
@@ -93,6 +107,7 @@ internal sealed class EncryptionMetadata
 
     public byte[] ToBytes()
     {
+        _serializedLength = SerializedLength;
         var buffer = new byte[SerializedLength];
         WriteTo(buffer, includeMac: true);
         return buffer;
@@ -100,21 +115,27 @@ internal sealed class EncryptionMetadata
 
     public byte[] GetMacData()
     {
-        var buffer = new byte[MacOffset];
+        var buffer = new byte[GetMacOffset()];
         WriteTo(buffer, includeMac: false);
         return buffer;
     }
 
+    public void UseCurrentFormat()
+    {
+        _serializedLength = SerializedLength;
+    }
+
     private void WriteTo(Span<byte> buffer, bool includeMac)
     {
-        if (buffer.Length < (includeMac ? SerializedLength : MacOffset))
+        var requiredLength = includeMac ? _serializedLength : GetMacOffset();
+        if (buffer.Length < requiredLength)
         {
             throw new ArgumentException("Destination is too small.", nameof(buffer));
         }
 
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.Slice(0, 4), MagicValue);
         BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(4, 4), Version);
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(8, 4), SerializedLength);
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.Slice(8, 4), _serializedLength);
         buffer[12] = (byte)CredentialKind;
         buffer[13] = Algorithm;
         buffer[14] = Kdf;
@@ -128,11 +149,20 @@ internal sealed class EncryptionMetadata
         WrappedDekNonce.CopyTo(buffer.Slice(64, NonceLength));
         WrappedDekCiphertext.CopyTo(buffer.Slice(76, KeyLength));
         WrappedDekTag.CopyTo(buffer.Slice(108, TagLength));
+        if (_serializedLength == SerializedLength)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(buffer.Slice(NonceEpochOffset, sizeof(ulong)), NonceEpoch);
+        }
 
         if (includeMac)
         {
-            MetadataMac.CopyTo(buffer.Slice(MacOffset, MacLength));
+            MetadataMac.CopyTo(buffer.Slice(GetMacOffset(), MacLength));
         }
+    }
+
+    private int GetMacOffset()
+    {
+        return _serializedLength == SerializedLength ? MacOffset : LegacyMacOffset;
     }
 
     public void Validate()
@@ -189,12 +219,13 @@ internal static class EncryptionMetadataStore
     public static bool TryReadFromLogicalPage(ReadOnlySpan<byte> logicalPage, out EncryptionMetadata? metadata)
     {
         metadata = null;
-        if (logicalPage.Length < FileOffset + EncryptionMetadata.SerializedLength)
+        if (logicalPage.Length < FileOffset + EncryptionMetadata.LegacySerializedLength)
         {
             return false;
         }
 
-        var span = logicalPage.Slice(FileOffset, EncryptionMetadata.SerializedLength);
+        var availableLength = Math.Min(EncryptionMetadata.MaxSerializedLength, logicalPage.Length - FileOffset);
+        var span = logicalPage.Slice(FileOffset, availableLength);
         if (!EncryptionMetadata.HasMagic(span))
         {
             return false;
@@ -207,13 +238,34 @@ internal static class EncryptionMetadataStore
     public static bool TryReadFromDisk(IDiskStream diskStream, uint logicalPageSize, out EncryptionMetadata? metadata)
     {
         metadata = null;
-        if (diskStream.Size < FileOffset + EncryptionMetadata.SerializedLength)
+        if (diskStream.Size < FileOffset + EncryptionMetadata.LegacySerializedLength)
         {
             return false;
         }
 
         var logicalPage = diskStream.ReadPage(0, checked((int)logicalPageSize));
         return TryReadFromLogicalPage(logicalPage, out metadata);
+    }
+
+    public static void WriteToDisk(IDiskStream diskStream, uint logicalPageSize, EncryptionMetadata metadata)
+    {
+        if (diskStream == null) throw new ArgumentNullException(nameof(diskStream));
+        if (metadata == null) throw new ArgumentNullException(nameof(metadata));
+
+        var logicalPage = diskStream.ReadPage(0, checked((int)logicalPageSize));
+        var clear = new byte[EncryptionMetadata.MaxSerializedLength];
+        clear.CopyTo(logicalPage.AsSpan(FileOffset));
+        metadata.ToBytes().CopyTo(logicalPage.AsSpan(FileOffset));
+
+        var header = PageHeader.FromByteArray(logicalPage);
+        header.UpdateModification();
+        header.Checksum = 0;
+        header.WriteTo(logicalPage.AsSpan(0, PageHeader.Size));
+        header.Checksum = header.CalculateChecksum(logicalPage);
+        header.WriteTo(logicalPage.AsSpan(0, PageHeader.Size));
+
+        diskStream.WritePage(0, logicalPage);
+        diskStream.Flush();
     }
 
     public static void WriteToPage(Page page, EncryptionMetadata metadata)

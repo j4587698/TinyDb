@@ -55,7 +55,7 @@ public sealed class BsonSymbol : BsonValue, IComparable<BsonSymbol>, IEquatable<
     {
         if (other == null) return 1;
         if (other is BsonSymbol otherSymbol) return CompareTo(otherSymbol);
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public bool Equals(BsonSymbol? other)

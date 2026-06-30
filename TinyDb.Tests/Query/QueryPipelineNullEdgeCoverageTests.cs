@@ -42,11 +42,12 @@ public class QueryPipelineNullEdgeCoverageTests
     }
 
     [Test]
-    public async Task ExecuteAot_GroupBy_Generic_NullKey_ShouldUseEmptyString()
+    public async Task ExecuteAot_GroupBy_Generic_NullKey_ShouldPreserveNull()
     {
         var items = new List<Item>
         {
             new() { Id = 1, Category = null },
+            new() { Id = 3, Category = "" },
             new() { Id = 2, Category = "A" }
         };
 
@@ -55,18 +56,20 @@ public class QueryPipelineNullEdgeCoverageTests
             .Select(g => g.Key);
 
         var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
-        var keys = result.Cast<string>().ToList();
+        var keys = result.Cast<string?>().ToList();
 
-        await Assert.That(keys).Contains("");
+        await Assert.That(keys.Count(x => x == null)).IsEqualTo(1);
+        await Assert.That(keys.Count(x => x == "")).IsEqualTo(1);
         await Assert.That(keys).Contains("A");
     }
 
     [Test]
-    public async Task ExecuteAot_GroupBy_NonGeneric_NullKey_ShouldUseEmptyString()
+    public async Task ExecuteAot_GroupBy_NonGeneric_NullKey_ShouldPreserveNull()
     {
         var items = new List<Item>
         {
             new() { Id = 1, Category = null },
+            new() { Id = 3, Category = "" },
             new() { Id = 2, Category = "A" }
         };
 
@@ -76,9 +79,10 @@ public class QueryPipelineNullEdgeCoverageTests
             .Select(g => g.Key);
 
         var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
-        var keys = result.Cast<string>().ToList();
+        var keys = result.Cast<string?>().ToList();
 
-        await Assert.That(keys).Contains("");
+        await Assert.That(keys.Count(x => x == null)).IsEqualTo(1);
+        await Assert.That(keys.Count(x => x == "")).IsEqualTo(1);
         await Assert.That(keys).Contains("A");
     }
 

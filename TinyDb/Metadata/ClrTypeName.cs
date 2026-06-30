@@ -90,7 +90,9 @@ internal static class ClrTypeName
             normalized = inner;
         }
 
-        return ApplyAliases(normalized, useAliases);
+        var syntax = ApplyAliases(normalized, useAliases);
+        ValidateCSharpTypeSyntax(syntax);
+        return syntax;
     }
 
     private static bool TryUnwrapNullable(string typeName, out string innerTypeName)
@@ -180,6 +182,50 @@ internal static class ClrTypeName
             "System.Byte[]" => "byte[]",
             _ => normalizedTypeName
         };
+    }
+
+    private static void ValidateCSharpTypeSyntax(string syntax)
+    {
+        if (string.IsNullOrWhiteSpace(syntax) || !IsSafeCSharpTypeSyntax(syntax))
+        {
+            throw new InvalidOperationException($"CLR type name '{syntax}' is not a safe C# type syntax.");
+        }
+    }
+
+    private static bool IsSafeCSharpTypeSyntax(string syntax)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+
+        foreach (var ch in syntax)
+        {
+            if (char.IsLetterOrDigit(ch) || ch is '_' or '.' or ',' or ' ')
+            {
+                continue;
+            }
+
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    angleDepth--;
+                    if (angleDepth < 0) return false;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    bracketDepth--;
+                    if (bracketDepth < 0) return false;
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return angleDepth == 0 && bracketDepth == 0;
     }
 
     private static string SimplifyReflectionTypeName(string reflectionTypeName)

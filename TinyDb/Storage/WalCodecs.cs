@@ -31,7 +31,7 @@ internal sealed class NoOpWalCodec : IWalCodec
     }
 }
 
-internal sealed class AesGcmWalCodec : IWalCodec
+internal sealed class AesGcmWalCodec : IWalCodec, IDisposable
 {
     private static readonly byte[] Magic = { (byte)'W', (byte)'A', (byte)'E', (byte)'1' };
     private static readonly byte[] AadPrefix = Encoding.UTF8.GetBytes("TinyDb.Wal.v1");
@@ -39,10 +39,10 @@ internal sealed class AesGcmWalCodec : IWalCodec
 
     private readonly byte[] _key;
     private readonly byte[] _databaseId;
-    private readonly byte[] _noncePrefix = new byte[8];
+    private readonly ulong _nonceEpoch;
     private long _nonceCounter;
 
-    public AesGcmWalCodec(byte[] key, byte[] databaseId)
+    public AesGcmWalCodec(byte[] key, byte[] databaseId, ulong nonceEpoch)
     {
         if (key == null || key.Length != EncryptionMetadata.KeyLength)
         {
@@ -56,7 +56,7 @@ internal sealed class AesGcmWalCodec : IWalCodec
 
         _key = key.ToArray();
         _databaseId = databaseId.ToArray();
-        RandomNumberGenerator.Fill(_noncePrefix);
+        _nonceEpoch = nonceEpoch;
     }
 
     public bool IsEncrypted => true;
@@ -92,8 +92,8 @@ internal sealed class AesGcmWalCodec : IWalCodec
             throw new InvalidOperationException("AES-GCM WAL nonce counter exhausted; rotate the encryption key.");
         }
 
-        _noncePrefix.CopyTo(nonce);
-        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(_noncePrefix.Length, sizeof(uint)), (uint)counter);
+        BinaryPrimitives.WriteUInt64LittleEndian(nonce, _nonceEpoch);
+        BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(sizeof(ulong), sizeof(uint)), (uint)counter);
     }
 
     public byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload)
@@ -132,5 +132,11 @@ internal sealed class AesGcmWalCodec : IWalCodec
         BinaryPrimitives.WriteUInt32LittleEndian(aad.AsSpan(offset + 1, sizeof(uint)), pageId);
         BinaryPrimitives.WriteInt64LittleEndian(aad.AsSpan(offset + 1 + sizeof(uint), sizeof(long)), recordOffset);
         return aad;
+    }
+
+    public void Dispose()
+    {
+        CryptographicOperations.ZeroMemory(_key);
+        CryptographicOperations.ZeroMemory(_databaseId);
     }
 }

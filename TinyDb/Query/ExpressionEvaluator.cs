@@ -347,7 +347,7 @@ public static class ExpressionEvaluator
                 return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a + b, (a, b) => a + b, (a, b) => a + b);
             case ExpressionType.Subtract: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a - b, (a, b) => a - b, (a, b) => a - b);
             case ExpressionType.Multiply: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a * b, (a, b) => a * b, (a, b) => a * b);
-            case ExpressionType.Divide: return EvaluateMathOp(leftValue, rightValue, (a, b) => a / b, (a, b) => a / b);
+            case ExpressionType.Divide: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a / b, (a, b) => a / b, (a, b) => a / b);
 
             default: throw new NotSupportedException($"Binary operation {nodeType} is not supported");
         }
@@ -647,11 +647,11 @@ public static class ExpressionEvaluator
 
         if (targetValue is string str)
         {
-            if (functionName == "Contains") return args.Length == 1 && args[0] is string s ? str.Contains(s) : false;
-            if (functionName == "StartsWith") return args.Length == 1 && args[0] is string s ? str.StartsWith(s) : false;
-            if (functionName == "EndsWith") return args.Length == 1 && args[0] is string s ? str.EndsWith(s) : false;
-            if (functionName == "ToLower") return str.ToLower();
-            if (functionName == "ToUpper") return str.ToUpper();
+            if (functionName == "Contains") return args.Length == 1 && args[0] is string s ? str.Contains(s, StringComparison.Ordinal) : false;
+            if (functionName == "StartsWith") return args.Length == 1 && args[0] is string s ? str.StartsWith(s, StringComparison.Ordinal) : false;
+            if (functionName == "EndsWith") return args.Length == 1 && args[0] is string s ? str.EndsWith(s, StringComparison.Ordinal) : false;
+            if (functionName == "ToLower") return str.ToLowerInvariant();
+            if (functionName == "ToUpper") return str.ToUpperInvariant();
             if (functionName == "Trim") return str.Trim();
             if (functionName == "Substring")
             {

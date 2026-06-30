@@ -63,7 +63,7 @@ public sealed class BsonJavaScriptWithScope : BsonValue, IComparable<BsonJavaScr
     {
         if (other == null) return 1;
         if (other is BsonJavaScriptWithScope otherJs) return CompareTo(otherJs);
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public bool Equals(BsonJavaScriptWithScope? other)

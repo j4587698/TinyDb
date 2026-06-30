@@ -8,12 +8,19 @@ namespace TinyDb.Serialization;
 /// </summary>
 internal sealed class SizeCalculator
 {
+    private const int MaxBsonDepth = 128;
+
     /// <summary>
     /// 计算 BSON 值的序列化大小
     /// </summary>
     /// <param name="value">BSON 值</param>
     /// <returns>大小（字节）</returns>
     public int CalculateSize(BsonValue value)
+    {
+        return CalculateSize(value, 0);
+    }
+
+    private int CalculateSize(BsonValue value, int depth)
     {
         return value switch
         {
@@ -27,17 +34,17 @@ internal sealed class SizeCalculator
             BsonBoolean => 1,
             BsonObjectId => 12,
             BsonDateTime dt => 8,
-            BsonDocument doc => CalculateDocumentSize(doc),
-            BsonArray arr => CalculateArraySize(arr),
-            BsonDocumentValue docVal => CalculateDocumentSize(docVal.Value),
-            BsonArrayValue arrVal => CalculateArraySize(arrVal.Value),
-            BsonBinary b => 4 + 1 + b.Bytes.Length,
+            BsonDocument doc => CalculateDocumentSize(doc, depth + 1),
+            BsonArray arr => CalculateArraySize(arr, depth + 1),
+            BsonDocumentValue docVal => CalculateDocumentSize(docVal.Value, depth + 1),
+            BsonArrayValue arrVal => CalculateArraySize(arrVal.Value, depth + 1),
+            BsonBinary b => 4 + 1 + b.BytesSpan.Length,
             BsonRegularExpression r => CalculateCStringSize(r.Pattern) + CalculateCStringSize(r.Options),
             BsonTimestamp => 8,
             BsonDecimal128 => 16, // Decimal128 is fixed 128-bit (16 bytes)
             BsonJavaScript js => CalculateStringSize(js.Code),
             BsonSymbol sym => CalculateStringSize(sym.Name),
-            BsonJavaScriptWithScope jsScope => 4 + CalculateStringSize(jsScope.Code) + CalculateDocumentSize(jsScope.Scope),
+            BsonJavaScriptWithScope jsScope => 4 + CalculateStringSize(jsScope.Code) + CalculateDocumentSize(jsScope.Scope, depth + 1),
             _ => throw new NotSupportedException($"BSON type {value.BsonType} is not supported")
         };
     }
@@ -49,7 +56,13 @@ internal sealed class SizeCalculator
     /// <returns>大小（字节）</returns>
     public int CalculateDocumentSize(BsonDocument document)
     {
+        return CalculateDocumentSize(document, 0);
+    }
+
+    private int CalculateDocumentSize(BsonDocument document, int depth)
+    {
         if (document == null) throw new ArgumentNullException(nameof(document));
+        ValidateDepth(depth);
 
         var size = 4; // 文档大小（4字节）
 
@@ -57,7 +70,7 @@ internal sealed class SizeCalculator
         {
             size += 1; // 类型字节
             size += CalculateCStringSize(kvp.Key); // 键名
-            size += CalculateSize(kvp.Value); // 值
+            size += CalculateSize(kvp.Value, depth); // 值
         }
 
         size += 1; // 结束标记
@@ -72,7 +85,13 @@ internal sealed class SizeCalculator
     /// <returns>大小（字节）</returns>
     public int CalculateArraySize(BsonArray array)
     {
+        return CalculateArraySize(array, 0);
+    }
+
+    private int CalculateArraySize(BsonArray array, int depth)
+    {
         if (array == null) throw new ArgumentNullException(nameof(array));
+        ValidateDepth(depth);
 
         var size = 4; // 数组大小（4字节）
 
@@ -80,7 +99,7 @@ internal sealed class SizeCalculator
         {
             size += 1; // 类型字节
             size += CalculateInt32CStringSize(i); // 索引作为键名
-            size += CalculateSize(array[i]); // 值
+            size += CalculateSize(array[i], depth); // 值
         }
 
         size += 1; // 结束标记
@@ -117,6 +136,14 @@ internal sealed class SizeCalculator
 
         var byteCount = Encoding.UTF8.GetByteCount(value);
         return byteCount + 1; // 字节 + null 终止符
+    }
+
+    private static void ValidateDepth(int depth)
+    {
+        if (depth > MaxBsonDepth)
+        {
+            throw new InvalidDataException($"BSON nesting depth exceeds {MaxBsonDepth}.");
+        }
     }
 
     private static int CalculateInt32CStringSize(int value)
