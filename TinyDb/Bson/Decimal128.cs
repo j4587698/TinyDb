@@ -144,7 +144,7 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
     public bool Equals(Decimal128 other)
     {
-        return _lo == other._lo && _hi == other._hi;
+        return CompareTo(other) == 0;
     }
 
     public override bool Equals(object? obj)
@@ -154,7 +154,7 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(_lo, _hi);
+        return StringComparer.Ordinal.GetHashCode(ToString());
     }
 
     public int CompareTo(Decimal128 other)
@@ -245,7 +245,7 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
     // IConvertible implementation
     public TypeCode GetTypeCode() => TypeCode.Object;
-    public bool ToBoolean(IFormatProvider? provider) => !Equals(Zero);
+    public bool ToBoolean(IFormatProvider? provider) => CompareTo(Zero) != 0;
     public char ToChar(IFormatProvider? provider) => throw new InvalidCastException();
     public sbyte ToSByte(IFormatProvider? provider) => (sbyte)ToDecimal();
     public byte ToByte(IFormatProvider? provider) => (byte)ToDecimal();

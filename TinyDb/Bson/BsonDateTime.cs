@@ -73,7 +73,7 @@ public sealed class BsonDateTime : BsonValue
     {
         if (other is null) return 1;
         if (other is BsonDateTime otherDateTime) return Value.CompareTo(otherDateTime.Value);
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     public override bool Equals(BsonValue? other)

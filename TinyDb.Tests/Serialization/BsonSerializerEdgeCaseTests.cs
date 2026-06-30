@@ -940,10 +940,16 @@ public class BsonSerializerEdgeCaseTests
     public async Task BsonSerializer_SerializeValue_ToWriter_ShouldWork()
     {
         var stream = new MemoryStream();
-        using var writer = new BsonWriter(stream, leaveOpen: true);
-        BsonSerializer.SerializeValue(new BsonString("test"), writer);
-        
-        await Assert.That(stream.Length > 0).IsTrue();
+        using (var writer = new BsonWriter(stream, leaveOpen: true))
+        {
+            BsonSerializer.SerializeValue(new BsonString("test"), writer);
+        }
+
+        stream.Position = 0;
+        var result = BsonSerializer.DeserializeValue(stream);
+
+        await Assert.That(result).IsTypeOf<BsonString>();
+        await Assert.That(((BsonString)result).Value).IsEqualTo("test");
     }
 
     [Test]
@@ -951,25 +957,21 @@ public class BsonSerializerEdgeCaseTests
     {
         var stream = new MemoryStream();
         BsonSerializer.SerializeValue(new BsonString("test"), stream);
-        
-        await Assert.That(stream.Length > 0).IsTrue();
+
+        stream.Position = 0;
+        var result = BsonSerializer.DeserializeValue(stream);
+
+        await Assert.That(result).IsTypeOf<BsonString>();
+        await Assert.That(((BsonString)result).Value).IsEqualTo("test");
     }
 
     [Test]
     public async Task BsonSerializer_DeserializeValue_FromStream_ShouldWork()
     {
-        // Note: SerializeValue/DeserializeValue are designed to work with the type byte prefix
-        // BsonReader.ReadValue() reads the type byte first, so we need to write it manually
         var stream = new MemoryStream();
-        
-        // Write type byte + value
-        stream.WriteByte((byte)BsonType.String);
-        using (var writer = new BsonWriter(stream, leaveOpen: true))
-        {
-            writer.WriteString("test");
-        }
+        BsonSerializer.SerializeValue(new BsonString("test"), stream);
         stream.Position = 0;
-        
+
         var result = BsonSerializer.DeserializeValue(stream);
         await Assert.That(result).IsTypeOf<BsonString>();
         await Assert.That(((BsonString)result).Value).IsEqualTo("test");

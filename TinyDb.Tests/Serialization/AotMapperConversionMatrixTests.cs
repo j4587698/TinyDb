@@ -112,7 +112,7 @@ public class AotMapperConversionMatrixTests
         
         var bytes = new byte[] { 1, 2 };
         var val2 = new BsonBinary(bytes);
-        await Assert.That(AotBsonMapper.ConvertValue(val2, typeof(byte[]))).IsEqualTo(bytes);
+        await Assert.That(((byte[])AotBsonMapper.ConvertValue(val2, typeof(byte[]))!).SequenceEqual(bytes)).IsTrue();
     }
 
     [Test]

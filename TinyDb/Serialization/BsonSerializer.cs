@@ -106,7 +106,10 @@ public static class BsonSerializer
     /// <param name="writer">BSON 写入器</param>
     public static void SerializeValue(BsonValue value, BsonWriter writer)
     {
-        writer.WriteValue(value);
+        if (value == null) throw new ArgumentNullException(nameof(value));
+        if (writer == null) throw new ArgumentNullException(nameof(writer));
+
+        writer.WriteValueWithType(value);
     }
 
     /// <summary>
@@ -116,8 +119,11 @@ public static class BsonSerializer
     /// <param name="stream">输出流</param>
     public static void SerializeValue(BsonValue value, Stream stream)
     {
+        if (value == null) throw new ArgumentNullException(nameof(value));
+        if (stream == null) throw new ArgumentNullException(nameof(stream));
+
         using var writer = new BsonWriter(stream, true);
-        writer.WriteValue(value);
+        writer.WriteValueWithType(value);
     }
 
     /// <summary>
@@ -280,6 +286,8 @@ public sealed class BsonWriter : IDisposable
     private readonly IBufferWriter<byte>? _bufferWriter;
     private readonly BinaryWriter? _writer;
     private readonly bool _leaveOpen;
+    private const int MaxBsonDepth = 128;
+    private int _depth;
     private bool _disposed;
 
     /// <summary>
@@ -385,6 +393,18 @@ public sealed class BsonWriter : IDisposable
     }
 
     /// <summary>
+    /// 写入包含 BSON 类型字节的值。
+    /// </summary>
+    public void WriteValueWithType(BsonValue value)
+    {
+        ThrowIfDisposed();
+        if (value == null) throw new ArgumentNullException(nameof(value));
+
+        InternalWrite((byte)value.BsonType);
+        WriteValue(value);
+    }
+
+    /// <summary>
     /// 写入 BSON 值
     /// </summary>
     /// <param name="value">BSON 值</param>
@@ -434,7 +454,7 @@ public sealed class BsonWriter : IDisposable
                 WriteArray(arr);
                 break;
             case BsonBinary binary:
-                WriteBinary(binary.Bytes, binary.SubType);
+                WriteBinary(binary.BytesSpan, binary.SubType);
                 break;
             case BsonRegularExpression regex:
                 WriteRegularExpression(regex.Pattern, regex.Options);
@@ -468,7 +488,10 @@ public sealed class BsonWriter : IDisposable
     {
         ThrowIfDisposed();
         if (document == null) throw new ArgumentNullException(nameof(document));
+        EnterContainer();
 
+        try
+        {
         if (_stream != null)
         {
             // 旧的 Stream 逻辑：使用 Seek 更新长度
@@ -508,6 +531,11 @@ public sealed class BsonWriter : IDisposable
             foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
             InternalWrite((byte)BsonType.End);
         }
+        }
+        finally
+        {
+            ExitContainer();
+        }
     }
 
     /// <summary>
@@ -518,7 +546,10 @@ public sealed class BsonWriter : IDisposable
     {
         ThrowIfDisposed();
         if (array == null) throw new ArgumentNullException(nameof(array));
+        EnterContainer();
 
+        try
+        {
         if (_stream != null)
         {
             _writer!.Flush();
@@ -555,6 +586,11 @@ public sealed class BsonWriter : IDisposable
             InternalWrite(size);
             for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
             InternalWrite((byte)BsonType.End);
+        }
+        }
+        finally
+        {
+            ExitContainer();
         }
     }
 
@@ -720,6 +756,13 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (bytes == null) throw new ArgumentNullException(nameof(bytes));
 
+        WriteBinary(bytes.AsSpan(), subType);
+    }
+
+    internal void WriteBinary(ReadOnlySpan<byte> bytes, BsonBinary.BinarySubType subType = BsonBinary.BinarySubType.Generic)
+    {
+        ThrowIfDisposed();
+
         InternalWrite(bytes.Length);
         InternalWrite((byte)subType);
         InternalWrite(bytes);
@@ -788,6 +831,20 @@ public sealed class BsonWriter : IDisposable
     public void WriteTimestamp(long value) => InternalWrite(value);
 
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(BsonWriter)); }
+
+    private void EnterContainer()
+    {
+        if (++_depth > MaxBsonDepth)
+        {
+            _depth--;
+            throw new InvalidDataException($"BSON nesting depth exceeds {MaxBsonDepth}.");
+        }
+    }
+
+    private void ExitContainer()
+    {
+        _depth--;
+    }
 
     public void Dispose()
     {

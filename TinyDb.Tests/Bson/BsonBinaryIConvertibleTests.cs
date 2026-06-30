@@ -53,7 +53,7 @@ public class BsonBinaryIConvertibleTests
         var bytes = new byte[] { 1, 2, 3 };
         var binary = new BsonBinary(bytes);
         
-        await Assert.That(binary.RawValue).IsEqualTo(bytes);
+        await Assert.That(((byte[])binary.RawValue!).SequenceEqual(bytes)).IsTrue();
     }
 
     [Test]

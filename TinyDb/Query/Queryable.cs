@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -133,7 +134,32 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
             return (TResult)(object)(enumerable == null ? Enumerable.Empty<TData>() : enumerable.Cast<TData>());
         }
 
-        return (TResult)result!;
+        return ConvertResult<TResult>(result);
+    }
+
+    private static TResult ConvertResult<TResult>(object? result)
+    {
+        if (result == null) return default!;
+        if (result is TResult typed) return typed;
+
+        var targetType = typeof(TResult);
+        var nonNullableTarget = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+        try
+        {
+            if (nonNullableTarget.IsEnum)
+            {
+                return (TResult)Enum.ToObject(nonNullableTarget, result);
+            }
+
+            return (TResult)Convert.ChangeType(result, nonNullableTarget, CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
+        {
+            throw new InvalidCastException(
+                $"Query result of type '{result.GetType().FullName}' cannot be converted to '{targetType.FullName}'.",
+                ex);
+        }
     }
 }
 
@@ -475,7 +501,7 @@ internal static class QueryPipeline
         
         foreach (var item in source)
         {
-            yield return ExpressionEvaluator.EvaluateValue(queryExpr, item!);
+            yield return ConvertValueToType(ExpressionEvaluator.EvaluateValue(queryExpr, item!), selector.ReturnType);
         }
     }
 
@@ -533,16 +559,16 @@ internal static class QueryPipeline
     /// </summary>
     internal sealed class AotGrouping : IGrouping<object, object>, IEnumerable<object>
     {
-        private readonly object _key;
+        private readonly object? _key;
         private readonly List<object> _elements;
 
-        public AotGrouping(object key, IEnumerable<object> elements)
+        public AotGrouping(object? key, IEnumerable<object> elements)
         {
             _key = key;
             _elements = elements.ToList();
         }
 
-        public object Key => _key;
+        public object Key => _key!;
         public int Count => _elements.Count;
         public IEnumerator<object> GetEnumerator() => _elements.GetEnumerator();
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -592,12 +618,12 @@ internal static class QueryPipeline
 
     private readonly struct GroupKey : IEquatable<GroupKey>
     {
-        public GroupKey(object value)
+        public GroupKey(object? value)
         {
             Value = value;
         }
 
-        public object Value { get; }
+        public object? Value { get; }
 
         public bool Equals(GroupKey other)
         {
@@ -627,7 +653,7 @@ internal static class QueryPipeline
         foreach (var item in source)
         {
             if (item == null) continue;
-            var key = new GroupKey(ExpressionEvaluator.EvaluateValue<T>(keyExpr, item) ?? "");
+            var key = new GroupKey(ExpressionEvaluator.EvaluateValue<T>(keyExpr, item));
 
             if (!groups.TryGetValue(key, out var list))
             {
@@ -654,7 +680,7 @@ internal static class QueryPipeline
         foreach (var item in source)
         {
             if (item == null) continue;
-            var key = new GroupKey(ExpressionEvaluator.EvaluateValue(keyExpr, item) ?? "");
+            var key = new GroupKey(ExpressionEvaluator.EvaluateValue(keyExpr, item));
 
             if (!groups.TryGetValue(key, out var list))
             {
@@ -691,15 +717,15 @@ internal static class QueryPipeline
 
         return m.Method.Name switch
         {
-            "Sum" => Sum(items, selector),
-            "Average" => Average(items, selector),
+            "Sum" => Sum(items, selector, m.Method.ReturnType),
+            "Average" => Average(items, selector, m.Method.ReturnType),
             "Min" => Min(items, selector),
             "Max" => Max(items, selector),
             _ => throw new NotSupportedException($"Aggregation {m.Method.Name} is not supported")
         };
     }
 
-    private static decimal Sum(IEnumerable<object> items, Func<object, object> selector)
+    private static object? Sum(IEnumerable<object> items, Func<object, object> selector, Type returnType)
     {
         decimal sum = 0;
         foreach (var item in items)
@@ -707,13 +733,20 @@ internal static class QueryPipeline
             sum = AddAggregateValue(sum, selector(item));
         }
 
-        return sum;
+        return ConvertValueToType(sum, returnType);
     }
 
-    private static decimal Average(IReadOnlyCollection<object> items, Func<object, object> selector)
+    private static object? Average(IReadOnlyCollection<object> items, Func<object, object> selector, Type returnType)
     {
-        if (items.Count == 0) return 0m;
-        return Sum(items, selector) / items.Count;
+        if (items.Count == 0) return ConvertValueToType(0m, returnType);
+
+        decimal sum = 0;
+        foreach (var item in items)
+        {
+            sum = AddAggregateValue(sum, selector(item));
+        }
+
+        return ConvertValueToType(sum / items.Count, returnType);
     }
 
     private static object? Min(IEnumerable<object> items, Func<object, object> selector)
@@ -753,6 +786,30 @@ internal static class QueryPipeline
         catch (Exception ex) when (ex is OverflowException or InvalidCastException or FormatException)
         {
             throw new InvalidOperationException("Numeric aggregate could not be evaluated without overflow or conversion loss.", ex);
+        }
+    }
+
+    private static object? ConvertValueToType(object? value, Type targetType)
+    {
+        if (value == null) return null;
+
+        var nonNullableTarget = Nullable.GetUnderlyingType(targetType) ?? targetType;
+        if (nonNullableTarget.IsInstanceOfType(value)) return value;
+
+        try
+        {
+            if (nonNullableTarget.IsEnum)
+            {
+                return Enum.ToObject(nonNullableTarget, value);
+            }
+
+            return Convert.ChangeType(value, nonNullableTarget, CultureInfo.InvariantCulture);
+        }
+        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
+        {
+            throw new InvalidOperationException(
+                $"Unable to convert query value of type '{value.GetType().FullName}' to '{targetType.FullName}'.",
+                ex);
         }
     }
 

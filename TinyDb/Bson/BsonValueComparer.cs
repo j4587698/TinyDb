@@ -100,17 +100,15 @@ internal static class BsonValueComparer
             return leftDecimal.CompareTo(rightDecimal);
         }
 
+        if (left is BsonDecimal128 leftDecimal128 && right is BsonDecimal128 rightDecimal128)
+        {
+            return leftDecimal128.Value.CompareTo(rightDecimal128.Value);
+        }
+
         if (TryGetDouble(left, out var leftDouble) &&
             TryGetDouble(right, out var rightDouble))
         {
             return leftDouble.CompareTo(rightDouble);
-        }
-
-        if (left is BsonDecimal128 leftDecimal128 && right is BsonDecimal128 rightDecimal128)
-        {
-            var highComparison = leftDecimal128.Value.HighBits.CompareTo(rightDecimal128.Value.HighBits);
-            if (highComparison != 0) return highComparison;
-            return leftDecimal128.Value.LowBits.CompareTo(rightDecimal128.Value.LowBits);
         }
 
         var typeComparison = GetTypeOrder(left.BsonType).CompareTo(GetTypeOrder(right.BsonType));

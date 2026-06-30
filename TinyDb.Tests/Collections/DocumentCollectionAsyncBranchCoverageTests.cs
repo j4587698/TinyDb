@@ -79,6 +79,29 @@ public sealed class DocumentCollectionAsyncBranchCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task AsyncPredicateMethods_ShouldMatchSyncQueryPipeline()
+    {
+        var col = _engine.GetCollection<AsyncTestEntity>();
+        col.GetIndexManager().CreateIndex("idx_value", new[] { nameof(AsyncTestEntity.Value) }, unique: false);
+
+        col.Insert(new AsyncTestEntity { Name = "low", Value = 1 });
+        col.Insert(new AsyncTestEntity { Name = "match-one", Value = 10 });
+        col.Insert(new AsyncTestEntity { Name = "match-two", Value = 20 });
+
+        Expression<Func<AsyncTestEntity, bool>> predicate = x => x.Value >= 10;
+
+        var syncFirst = col.FindOne(predicate);
+        var asyncFirst = await col.FindOneAsync(predicate);
+        var syncPage = col.Find(predicate, 1, 1).ToList();
+        var asyncPage = await col.FindAsync(predicate, 1, 1);
+
+        await Assert.That(asyncFirst?.Id).IsEqualTo(syncFirst?.Id);
+        await Assert.That(await col.ExistsAsync(predicate)).IsEqualTo(col.Exists(predicate));
+        await Assert.That(await col.CountAsync(predicate)).IsEqualTo(col.Count(predicate));
+        await Assert.That(asyncPage.Select(x => x.Id).SequenceEqual(syncPage.Select(x => x.Id))).IsTrue();
+    }
+
+    [Test]
     public async Task InsertAsyncBatch_InTransaction_ShouldRollback()
     {
         var col = _engine.GetCollection<AsyncTestEntity>();

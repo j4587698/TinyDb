@@ -181,7 +181,7 @@ public class ExpressionEvaluatorBranchTests
         await Assert.That(ExpressionEvaluator.EvaluateValue(subtractDecimal, entity)).IsEqualTo(7m);
 
         var divide = new BinaryExpression(ExpressionType.Divide, new ConstantExpression(10), new ConstantExpression(4));
-        await Assert.That(ExpressionEvaluator.EvaluateValue(divide, entity)).IsEqualTo(2.5);
+        await Assert.That(ExpressionEvaluator.EvaluateValue(divide, entity)).IsEqualTo(2);
 
         var divideDecimal = new BinaryExpression(ExpressionType.Divide, new ConstantExpression(10m), new ConstantExpression(4m));
         await Assert.That(ExpressionEvaluator.EvaluateValue(divideDecimal, entity)).IsEqualTo(2.5m);

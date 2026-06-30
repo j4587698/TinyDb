@@ -264,7 +264,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                                               propertySymbol?.NullableAnnotation == NullableAnnotation.Annotated;
                 var isEnumType = typeSymbol?.TypeKind == TypeKind.Enum;
 
-                var fullyQualifiedType = typeSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? propertyType;
+                var fullyQualifiedType = typeSymbol?.ToDisplayString(FullyQualifiedNullableDisplayFormat) ?? propertyType;
                 var nonNullableType = propertyType;
                 var fullyQualifiedNonNullableType = fullyQualifiedType;
 
@@ -273,7 +273,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     var underlyingType = nullableType.TypeArguments[0];
                     isEnumType = underlyingType.TypeKind == TypeKind.Enum;
                     nonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-                    fullyQualifiedNonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    fullyQualifiedNonNullableType = underlyingType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                     
                     // 记录底层类型符号
                     if (!typeSymbolMap.ContainsKey(fullyQualifiedNonNullableType))
@@ -322,6 +322,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     }
                 }
 
+                var idGenerationInfo = GetIdGenerationInfo(propertySymbol);
                 var propInfo = new PropertyInfo(
                     propertyName,
                     propertyType,
@@ -347,7 +348,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     isDictionaryValueComplexType: typeAnalysis.IsDictionaryValueComplexType,
                     isDictionaryValueValueType: typeAnalysis.IsDictionaryValueValueType,
                     bsonRefCollectionName: bsonRefCollectionName,
-                    foreignKeyCollectionName: foreignKeyCollectionName);
+                    foreignKeyCollectionName: foreignKeyCollectionName,
+                    idGenerationStrategyValue: idGenerationInfo.StrategyValue,
+                    idGenerationSequenceName: idGenerationInfo.SequenceName);
                 properties.Add(propInfo);
             }
             // 处理公共字段 (FieldDeclarationSyntax)
@@ -395,7 +398,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                                                   fieldSymbol?.NullableAnnotation == NullableAnnotation.Annotated;
                     var isEnumType = typeSymbol?.TypeKind == TypeKind.Enum;
 
-                    var fullyQualifiedType = typeSymbol?.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) ?? fieldType;
+                var fullyQualifiedType = typeSymbol?.ToDisplayString(FullyQualifiedNullableDisplayFormat) ?? fieldType;
                     var nonNullableType = fieldType;
                     var fullyQualifiedNonNullableType = fullyQualifiedType;
 
@@ -404,7 +407,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                         var underlyingType = nullableType.TypeArguments[0];
                         isEnumType = underlyingType.TypeKind == TypeKind.Enum;
                         nonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
-                        fullyQualifiedNonNullableType = underlyingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                        fullyQualifiedNonNullableType = underlyingType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                         
                         if (!typeSymbolMap.ContainsKey(fullyQualifiedNonNullableType))
                         {
@@ -568,6 +571,47 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 只处理有属性的实体类（ID将通过智能识别获得）
         return classInfo.Properties.Count > 0;
+    }
+
+    private static (int StrategyValue, string? SequenceName) GetIdGenerationInfo(ISymbol? symbol)
+    {
+        var attribute = symbol?.GetAttributes()
+            .FirstOrDefault(attr => attr.AttributeClass?.Name == "IdGenerationAttribute");
+        if (attribute == null)
+        {
+            return (0, null);
+        }
+
+        var strategyValue = 0;
+        if (attribute.ConstructorArguments.Length > 0)
+        {
+            strategyValue = GetEnumConstantValue(attribute.ConstructorArguments[0]);
+        }
+
+        var namedStrategy = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == "Strategy");
+        if (namedStrategy.Value.Value != null)
+        {
+            strategyValue = GetEnumConstantValue(namedStrategy.Value);
+        }
+
+        string? sequenceName = null;
+        if (attribute.ConstructorArguments.Length > 1)
+        {
+            sequenceName = attribute.ConstructorArguments[1].Value?.ToString();
+        }
+
+        var namedSequence = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == "SequenceName");
+        if (namedSequence.Value.Value != null)
+        {
+            sequenceName = namedSequence.Value.Value?.ToString();
+        }
+
+        return (strategyValue, sequenceName);
+    }
+
+    private static int GetEnumConstantValue(TypedConstant constant)
+    {
+        return constant.Value is int value ? value : 0;
     }
 
     /// <summary>
@@ -799,6 +843,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine("        }");
         }
 
+        AppendIdAdapterMetadata(sb, classInfo);
+
         // 生成完整的序列化方法
         sb.AppendLine();
         sb.AppendLine("        /// <summary>");
@@ -948,6 +994,138 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        };");
     }
 
+    private static void AppendIdAdapterMetadata(StringBuilder sb, ClassInfo classInfo)
+    {
+        sb.AppendLine();
+
+        if (classInfo.IdProperty == null)
+        {
+            sb.AppendLine("        public static string? IdPropertyName => null;");
+            sb.AppendLine("        public static Type? IdPropertyType => null;");
+            sb.AppendLine("        public static global::TinyDb.Attributes.IdGenerationStrategy IdGenerationStrategy => global::TinyDb.Attributes.IdGenerationStrategy.None;");
+            sb.AppendLine("        public static string? IdGenerationSequenceName => null;");
+            sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.TypeReference} entity) => false;");
+            return;
+        }
+
+        var idProperty = classInfo.IdProperty;
+        var idType = idProperty.FullyQualifiedNonNullableType;
+        var strategy = ToIdGenerationStrategyExpression(idProperty.IdGenerationStrategyValue);
+        var sequenceName = idProperty.IdGenerationSequenceName == null
+            ? "null"
+            : ToCSharpStringLiteral(idProperty.IdGenerationSequenceName);
+
+        sb.AppendLine($"        public static string? IdPropertyName => {ToCSharpStringLiteral(idProperty.Name)};");
+        sb.AppendLine($"        public static Type? IdPropertyType => typeof({idType});");
+        sb.AppendLine($"        public static global::TinyDb.Attributes.IdGenerationStrategy IdGenerationStrategy => {strategy};");
+        sb.AppendLine($"        public static string? IdGenerationSequenceName => {sequenceName};");
+        sb.AppendLine();
+        sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.TypeReference} entity)");
+        sb.AppendLine("        {");
+        if (!classInfo.IsValueType)
+        {
+            sb.AppendLine("            if (entity == null) return false;");
+        }
+
+        sb.AppendLine("            if (HasValidId(entity)) return false;");
+        sb.AppendLine();
+        sb.AppendLine("            if (IdGenerationStrategy != global::TinyDb.Attributes.IdGenerationStrategy.None)");
+        sb.AppendLine("            {");
+        AppendConfiguredIdGeneration(sb, classInfo, idProperty);
+        sb.AppendLine("            }");
+        sb.AppendLine();
+        AppendDefaultIdGeneration(sb, classInfo, idProperty);
+        sb.AppendLine("        }");
+    }
+
+    private static void AppendConfiguredIdGeneration(StringBuilder sb, ClassInfo classInfo, PropertyInfo idProperty)
+    {
+        var idType = idProperty.FullyQualifiedNonNullableType;
+        var defaultSequenceName = ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}");
+        var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
+
+        sb.AppendLine($"                var generatedId = global::TinyDb.IdGeneration.AutoIdGenerator.CreateIdValue(typeof({idType}), IdGenerationStrategy, IdGenerationSequenceName, {defaultSequenceName});");
+        sb.AppendLine("                if (generatedId == null) return false;");
+
+        if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"                entity.{idProperty.Name} = (int)generatedId;");
+        }
+        else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"                entity.{idProperty.Name} = (long)generatedId;");
+        }
+        else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
+        {
+            sb.AppendLine($"                entity.{idProperty.Name} = (Guid)generatedId;");
+        }
+        else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"                entity.{idProperty.Name} = (string)generatedId;");
+        }
+        else if (normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal))
+        {
+            sb.AppendLine($"                entity.{idProperty.Name} = (ObjectId)generatedId;");
+        }
+        else
+        {
+            sb.AppendLine("                return false;");
+            return;
+        }
+
+        sb.AppendLine("                return true;");
+    }
+
+    private static void AppendDefaultIdGeneration(StringBuilder sb, ClassInfo classInfo, PropertyInfo idProperty)
+    {
+        var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
+
+        if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"            var nextValue = global::TinyDb.IdGeneration.AutoIdGenerator.GetNextIdentityValue({ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}_int")});");
+            sb.AppendLine("            if (nextValue > int.MaxValue) return false;");
+            sb.AppendLine($"            entity.{idProperty.Name} = (int)nextValue;");
+            sb.AppendLine("            return true;");
+        }
+        else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"            entity.{idProperty.Name} = global::TinyDb.IdGeneration.AutoIdGenerator.GetNextIdentityValue({ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}_long")});");
+            sb.AppendLine("            return true;");
+        }
+        else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
+        {
+            sb.AppendLine($"            entity.{idProperty.Name} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7();");
+            sb.AppendLine("            return true;");
+        }
+        else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.AppendLine($"            entity.{idProperty.Name} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7().ToString();");
+            sb.AppendLine("            return true;");
+        }
+        else if (normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal))
+        {
+            sb.AppendLine($"            entity.{idProperty.Name} = ObjectId.NewObjectId();");
+            sb.AppendLine("            return true;");
+        }
+        else
+        {
+            sb.AppendLine("            return false;");
+        }
+    }
+
+    private static string ToIdGenerationStrategyExpression(int value)
+    {
+        return value switch
+        {
+            1 => "global::TinyDb.Attributes.IdGenerationStrategy.ObjectId",
+            2 => "global::TinyDb.Attributes.IdGenerationStrategy.IdentityInt",
+            3 => "global::TinyDb.Attributes.IdGenerationStrategy.IdentityLong",
+            4 => "global::TinyDb.Attributes.IdGenerationStrategy.GuidV7",
+            5 => "global::TinyDb.Attributes.IdGenerationStrategy.GuidV4",
+            _ => "global::TinyDb.Attributes.IdGenerationStrategy.None"
+        };
+    }
+
     private static PropertyInfo? ResolveForeignKeyTarget(ClassInfo classInfo, PropertyInfo foreignKeyProperty)
     {
         if (CanStoreReference(foreignKeyProperty))
@@ -1025,7 +1203,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine($"            entity => {helperFullName}.HasValidId(entity),");
             sb.AppendLine($"            (entity, propertyName) => {helperFullName}.GetPropertyValue(entity, propertyName),");
             sb.AppendLine($"            (entity, propertyName, value) => {helperFullName}.TrySetPropertyValue(entity, propertyName, value),");
-            sb.AppendLine($"            {helperFullName}.ForeignKeyReferences));");
+            sb.AppendLine($"            {helperFullName}.ForeignKeyReferences,");
+            sb.AppendLine($"            {helperFullName}.IdPropertyName,");
+            sb.AppendLine($"            {helperFullName}.IdPropertyType,");
+            sb.AppendLine($"            {helperFullName}.IdGenerationStrategy,");
+            sb.AppendLine($"            {helperFullName}.IdGenerationSequenceName,");
+            sb.AppendLine($"            entity => {helperFullName}.GenerateIdIfNeeded(entity)));");
         }
 
         sb.AppendLine("    }");
@@ -1159,9 +1342,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        /// <summary>");
         sb.AppendLine("        /// 辅助方法：将BSON值转换为目标类型");
         sb.AppendLine("        /// </summary>");
-        sb.AppendLine($"        private static T ConvertFromBsonValue<[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)] T>(BsonValue value)");
+        sb.AppendLine("        private static T ConvertFromBsonValue<T>(BsonValue value)");
         sb.AppendLine("        {");
-        sb.AppendLine("            return (T)global::TinyDb.Serialization.BsonConversion.FromBsonValue(value, typeof(T))!;");
+        sb.AppendLine("            return global::TinyDb.Serialization.BsonConversion.FromBsonValue<T>(value)!;");
         sb.AppendLine("        }");
         sb.AppendLine();
         
@@ -2914,6 +3097,8 @@ public class PropertyInfo
     /// </summary>
     public string? BsonRefCollectionName { get; }
     public string? ForeignKeyCollectionName { get; }
+    public int IdGenerationStrategyValue { get; }
+    public string? IdGenerationSequenceName { get; }
     
     /// <summary>
     /// 是否是 DbRef 引用类型
@@ -2946,7 +3131,9 @@ public class PropertyInfo
         bool isDictionaryValueComplexType = false,
         bool isDictionaryValueValueType = false,
         string? bsonRefCollectionName = null,
-        string? foreignKeyCollectionName = null)
+        string? foreignKeyCollectionName = null,
+        int idGenerationStrategyValue = 0,
+        string? idGenerationSequenceName = null)
     {
         Name = name;
         Type = type;
@@ -2973,6 +3160,8 @@ public class PropertyInfo
         IsDictionaryValueValueType = isDictionaryValueValueType;
         BsonRefCollectionName = bsonRefCollectionName;
         ForeignKeyCollectionName = foreignKeyCollectionName;
+        IdGenerationStrategyValue = idGenerationStrategyValue;
+        IdGenerationSequenceName = idGenerationSequenceName;
     }
 }
 

@@ -27,7 +27,7 @@ public sealed class BsonDecimal128 : BsonValue, IComparable<BsonDecimal128>, IEq
     }
 
     // Numeric conversions
-    public override bool ToBoolean(IFormatProvider? provider) => Value.Equals(Decimal128.Zero) == false;
+    public override bool ToBoolean(IFormatProvider? provider) => Value.CompareTo(Decimal128.Zero) != 0;
     public override double ToDouble(IFormatProvider? provider) => Value.ToDouble(provider);
     public override decimal ToDecimal(IFormatProvider? provider) => Value.ToDecimal();
     public override int ToInt32(IFormatProvider? provider) => (int)Value.ToDecimal();

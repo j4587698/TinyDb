@@ -106,7 +106,7 @@ public sealed class BsonTimestamp : BsonValue
     {
         if (other is null) return 1;
         if (other is BsonTimestamp otherTimestamp) return Value.CompareTo(otherTimestamp.Value);
-        return BsonType.CompareTo(other.BsonType);
+        return BsonValueComparer.Compare(this, other);
     }
 
     /// <summary>

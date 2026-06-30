@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using TinyDb.Bson;
 
@@ -406,17 +407,16 @@ public static class CSharpEntityGenerator
                 case '"':
                     sb.Append("\\\"");
                     break;
-                case '\r':
-                    sb.Append("\\r");
-                    break;
-                case '\n':
-                    sb.Append("\\n");
-                    break;
-                case '\t':
-                    sb.Append("\\t");
-                    break;
                 default:
-                    sb.Append(ch);
+                    if (ch < 0x20 || ch is '\u007f' or '\u0085' or '\u2028' or '\u2029')
+                    {
+                        sb.Append("\\u");
+                        sb.Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        sb.Append(ch);
+                    }
                     break;
             }
         }

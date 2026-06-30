@@ -164,7 +164,7 @@ public class QueryPipelineCoverageTests : IDisposable
 
         var result = QueryPipeline.ExecuteAotForTests<TestEntity>(provider.LastExpression!, data, null);
 
-        await Assert.That(result).IsEqualTo(3m);
+        await Assert.That(result).IsEqualTo(3);
     }
 
     [Test]
@@ -185,7 +185,7 @@ public class QueryPipelineCoverageTests : IDisposable
 
         var result = QueryPipeline.ExecuteAotForTests<TestEntity>(provider.LastExpression!, data, null);
 
-        await Assert.That(result).IsEqualTo(6m);
+        await Assert.That(result).IsEqualTo(6);
     }
 
     private sealed class RecordingQueryProvider : IQueryProvider

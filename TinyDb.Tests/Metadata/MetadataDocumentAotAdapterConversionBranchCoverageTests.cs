@@ -39,11 +39,11 @@ public class MetadataDocumentAotAdapterConversionBranchCoverageTests
         var roundtrip = AotBsonMapper.FromDocument<MetadataDocument>(modified);
         await Assert.That(roundtrip.TableName).IsEqualTo(entity.TableName);
 
-        // 当前 AOT 适配器仅处理 BsonDateTime；当收到字符串时应回退到属性默认值（DateTime.Now）
+        // 当前 AOT 适配器仅处理 BsonDateTime；当收到字符串时应回退到属性默认值（DateTime.UtcNow）
         await Assert.That(roundtrip.CreatedAt).IsNotEqualTo(entity.CreatedAt);
         await Assert.That(roundtrip.UpdatedAt).IsNotEqualTo(entity.UpdatedAt);
 
-        var now = DateTime.Now;
+        var now = DateTime.UtcNow;
         await Assert.That(Math.Abs((roundtrip.CreatedAt - now).TotalMinutes)).IsLessThan(5.0);
         await Assert.That(Math.Abs((roundtrip.UpdatedAt - now).TotalMinutes)).IsLessThan(5.0);
     }

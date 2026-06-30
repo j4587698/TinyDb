@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using TinyDb.Attributes;
 using TinyDb.Bson;
 
 namespace TinyDb.Serialization;
@@ -79,7 +80,12 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
     public Func<T, bool> HasValidId { get; }
     public Func<T, string, object?> GetPropertyValue { get; }
     public Func<T, string, object?, bool> TrySetPropertyValue { get; }
+    public Func<T, bool> GenerateIdIfNeeded { get; }
     public IReadOnlyList<AotForeignKeyReference> ForeignKeyReferences { get; }
+    public string? IdPropertyName { get; }
+    public Type? IdPropertyType { get; }
+    public IdGenerationStrategy IdGenerationStrategy { get; }
+    public string? IdGenerationSequenceName { get; }
 
     public AotEntityAdapter(
         Func<T, BsonDocument> toDocument,
@@ -96,7 +102,12 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
             hasValidId,
             getPropertyValue,
             static (_, _, _) => false,
-            null)
+            null,
+            null,
+            null,
+            IdGenerationStrategy.None,
+            null,
+            static _ => false)
     {
     }
 
@@ -108,7 +119,12 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
         Func<T, bool> hasValidId,
         Func<T, string, object?> getPropertyValue,
         Func<T, string, object?, bool> trySetPropertyValue,
-        IReadOnlyList<AotForeignKeyReference>? foreignKeyReferences = null)
+        IReadOnlyList<AotForeignKeyReference>? foreignKeyReferences = null,
+        string? idPropertyName = null,
+        Type? idPropertyType = null,
+        IdGenerationStrategy idGenerationStrategy = IdGenerationStrategy.None,
+        string? idGenerationSequenceName = null,
+        Func<T, bool>? generateIdIfNeeded = null)
     {
         ToDocument = toDocument ?? throw new ArgumentNullException(nameof(toDocument));
         FromDocument = fromDocument ?? throw new ArgumentNullException(nameof(fromDocument));
@@ -118,6 +134,11 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
         GetPropertyValue = getPropertyValue ?? throw new ArgumentNullException(nameof(getPropertyValue));
         TrySetPropertyValue = trySetPropertyValue ?? throw new ArgumentNullException(nameof(trySetPropertyValue));
         ForeignKeyReferences = foreignKeyReferences ?? Array.Empty<AotForeignKeyReference>();
+        IdPropertyName = idPropertyName;
+        IdPropertyType = idPropertyType;
+        IdGenerationStrategy = idGenerationStrategy;
+        IdGenerationSequenceName = idGenerationSequenceName;
+        GenerateIdIfNeeded = generateIdIfNeeded ?? (static _ => false);
     }
 
     // 实现非泛型接口

@@ -228,7 +228,17 @@ public sealed class TinyDbEngine : IDisposable
 
             _options.PageSize = metadata.LogicalPageSize;
             _options.EnableEncryption = true;
-            return EncryptionContext.OpenExisting(metadata, _options);
+            var context = EncryptionContext.OpenExisting(metadata, _options);
+            try
+            {
+                EncryptionMetadataStore.WriteToDisk(_diskStream, metadata.LogicalPageSize, context.Metadata);
+                return context;
+            }
+            catch
+            {
+                context.Dispose();
+                throw;
+            }
         }
 
         if (isNewDatabase)
@@ -272,6 +282,8 @@ public sealed class TinyDbEngine : IDisposable
         _writeAheadLog.Dispose();
         _pageManager.Dispose();
         _diskStream.Dispose();
+        _encryptionContext?.Dispose();
+        _encryptionContext = null;
     }
 
     private void ResetRuntimeStateForReinitialize()

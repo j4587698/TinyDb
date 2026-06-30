@@ -59,10 +59,10 @@ public sealed class CSharpEntityGeneratorExtendedCoverageTests
 
         await Assert.That(code).Contains("namespace My.App.Entities");
         await Assert.That(code).Contains("[Entity(\"order-items\")]");
-        await Assert.That(code).Contains("[EntityMetadata(DisplayName = \"Order \\\"Items\\\"\", Description = \"line1\\r\\nline2\\t\\\\desc\")]");
+        await Assert.That(code).Contains("[EntityMetadata(DisplayName = \"Order \\\"Items\\\"\", Description = \"line1\\u000D\\u000Aline2\\u0009\\\\desc\")]");
         await Assert.That(code).Contains("public partial class Class");
         await Assert.That(code).Contains("[ForeignKey(\"orders(_id)\")]");
-        await Assert.That(code).Contains("[PropertyMetadata(\"Name\\\"Display\", Description = \"Desc\\\\With\\r\\nTab\\t\", Order = 2, Required = true)]");
+        await Assert.That(code).Contains("[PropertyMetadata(\"Name\\\"Display\", Description = \"Desc\\\\With\\u000D\\u000ATab\\u0009\", Order = 2, Required = true)]");
         await Assert.That(code).Contains("public System.Text.StringBuilder _1abc { get; set; } = default!;");
         await Assert.That(code).Contains("public string _1abc_2 { get; set; } = string.Empty;");
         await Assert.That(code).Contains("public string? @class { get; set; }");

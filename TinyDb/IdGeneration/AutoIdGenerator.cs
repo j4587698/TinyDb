@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using TinyDb.Attributes;
 using TinyDb.Bson;
 
 namespace TinyDb.IdGeneration;
@@ -9,6 +10,31 @@ namespace TinyDb.IdGeneration;
 /// </summary>
 public static class AutoIdGenerator
 {
+    public static long GetNextIdentityValue(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
+
+        return IdentitySequences.GetNextValue(key);
+    }
+
+    public static object? CreateIdValue(Type idType, IdGenerationStrategy strategy, string? sequenceName, string defaultSequenceName)
+    {
+        if (idType == null) throw new ArgumentNullException(nameof(idType));
+        if (string.IsNullOrWhiteSpace(defaultSequenceName)) throw new ArgumentNullException(nameof(defaultSequenceName));
+
+        return strategy switch
+        {
+            IdGenerationStrategy.ObjectId when idType == typeof(ObjectId) => ObjectId.NewObjectId(),
+            IdGenerationStrategy.IdentityInt when idType == typeof(int) => CreateIntIdentity(sequenceName ?? defaultSequenceName),
+            IdGenerationStrategy.IdentityLong when idType == typeof(long) => GetNextIdentityValue(sequenceName ?? defaultSequenceName),
+            IdGenerationStrategy.GuidV7 when idType == typeof(Guid) => CreateGuidV7(),
+            IdGenerationStrategy.GuidV7 when idType == typeof(string) => CreateGuidV7().ToString(),
+            IdGenerationStrategy.GuidV4 when idType == typeof(Guid) => Guid.NewGuid(),
+            IdGenerationStrategy.GuidV4 when idType == typeof(string) => Guid.NewGuid().ToString(),
+            _ => null
+        };
+    }
+
     /// <summary>
     /// 为实体自动生成ID（如果需要）
     /// </summary>
@@ -46,7 +72,7 @@ public static class AutoIdGenerator
     private static bool GenerateIntId(object entity, PropertyInfo idProperty)
     {
         var key = $"{entity.GetType().Name}_{idProperty.Name}_int";
-        var nextValue = IdentitySequences.GetNextValue(key);
+        var nextValue = GetNextIdentityValue(key);
 
         if (nextValue > int.MaxValue)
         {
@@ -63,7 +89,7 @@ public static class AutoIdGenerator
     private static bool GenerateLongId(object entity, PropertyInfo idProperty)
     {
         var key = $"{entity.GetType().Name}_{idProperty.Name}_long";
-        var nextValue = IdentitySequences.GetNextValue(key);
+        var nextValue = GetNextIdentityValue(key);
 
         idProperty.SetValue(entity, nextValue);
         return true;
@@ -102,7 +128,7 @@ public static class AutoIdGenerator
     /// <summary>
     /// 创建 GUID v7
     /// </summary>
-    private static Guid CreateGuidV7()
+    public static Guid CreateGuidV7()
     {
 #if NET9_0_OR_GREATER
         // .NET 9+ 使用内置的 GUID v7 生成方法
@@ -162,6 +188,12 @@ public static class AutoIdGenerator
             long l => l == 0,
             _ => false
         };
+    }
+
+    private static int? CreateIntIdentity(string key)
+    {
+        var nextValue = GetNextIdentityValue(key);
+        return nextValue > int.MaxValue ? null : (int)nextValue;
     }
 }
 

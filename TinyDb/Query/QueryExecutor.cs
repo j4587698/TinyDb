@@ -881,6 +881,12 @@ public sealed class QueryExecutor
 
                 if (queryExpression == null)
                 {
+                    if (IsLargeDocumentStub(span))
+                    {
+                        doc = DeserializeDocumentOrThrow(slice);
+                        doc = _engine.ResolveLargeDocument(doc);
+                    }
+
                     match = true;
                 }
                 else if (fullyPushed && !requiresPostFilter && !IsLargeDocumentStub(span))

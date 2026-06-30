@@ -143,7 +143,7 @@ public sealed class WriteAheadLogSyncReplayCoverageTests : IDisposable
                    enabled: true,
                    walFileNameFormat: null,
                    logger: null,
-                   walCodec: new AesGcmWalCodec(key, databaseId)))
+                   walCodec: new AesGcmWalCodec(key, databaseId, nonceEpoch: 1)))
         {
             for (uint i = 1; i <= 2; i++)
             {
@@ -170,7 +170,7 @@ public sealed class WriteAheadLogSyncReplayCoverageTests : IDisposable
                    enabled: true,
                    walFileNameFormat: null,
                    logger: null,
-                   walCodec: new AesGcmWalCodec(key, databaseId)))
+                   walCodec: new AesGcmWalCodec(key, databaseId, nonceEpoch: 1)))
         {
             wal.Replay((id, _) => applied.Add(id));
         }
