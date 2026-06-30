@@ -474,4 +474,14 @@ internal sealed class DataPageAccess
     {
         _pm.SavePage(p, false);
     }
+
+    public byte[]? CaptureBeforeImageForWal(Page p)
+    {
+        return _pm.CaptureBeforeImageForWal(p);
+    }
+
+    public void PersistPageDeferred(Page p, byte[]? beforeImage)
+    {
+        _pm.SavePageDeferred(p, beforeImage);
+    }
 }

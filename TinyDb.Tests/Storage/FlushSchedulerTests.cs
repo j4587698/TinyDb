@@ -206,7 +206,7 @@ public class FlushSchedulerTests
     }
 
     [Test]
-    public async Task FlushScheduler_BackgroundLoop_WhenFlushThrows_ShouldSwallowException()
+    public async Task FlushScheduler_BackgroundLoop_WhenFlushThrows_ShouldSurfaceExceptionOnDispose()
     {
         var dbFile = Path.Combine(Path.GetTempPath(), $"fs_throw_{Guid.NewGuid():N}.db");
         try
@@ -215,12 +215,13 @@ public class FlushSchedulerTests
             using var pageManager = new PageManager(throwingStream);
             using var walDisabled = new WriteAheadLog(dbFile, 8192, false);
 
-            using var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.FromMilliseconds(25));
+            var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.FromMilliseconds(25));
 
             var page = pageManager.GetPage(1);
             page.WriteData(0, new byte[] { 1 }); // Mark dirty; don't save, let background loop try
 
             await Task.Delay(250);
+            await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
         }
         finally
         {

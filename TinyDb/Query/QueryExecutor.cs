@@ -4,7 +4,9 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
@@ -49,6 +51,26 @@ public sealed class QueryExecutor
             QueryExecutionStrategy.IndexScan => ExecuteIndexScan<T>(executionPlan),
             QueryExecutionStrategy.IndexSeek => ExecuteIndexSeek<T>(executionPlan),
             _ => ExecuteFullTableScan<T>(collectionName, expression)
+        };
+    }
+
+    public IAsyncEnumerable<T> ExecuteAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        Expression<Func<T, bool>>? expression = null,
+        CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        if (string.IsNullOrWhiteSpace(collectionName))
+            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
+
+        var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression, planningMetadataOnly: true);
+
+        return executionPlan.Strategy switch
+        {
+            QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookupAsync<T>(executionPlan, cancellationToken),
+            QueryExecutionStrategy.IndexScan => ExecuteIndexScanAsync<T>(executionPlan, cancellationToken),
+            QueryExecutionStrategy.IndexSeek => ExecuteIndexSeekAsync<T>(executionPlan, cancellationToken),
+            _ => ExecuteFullTableScanAsync<T>(collectionName, expression, cancellationToken)
         };
     }
 
@@ -144,10 +166,192 @@ public sealed class QueryExecutor
         return Execute<T>(collectionName, shape.Predicate);
     }
 
+    internal IAsyncEnumerable<T> ExecuteShapedAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        QueryShape<T> shape,
+        out QueryPushdownInfo pushdown,
+        CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        if (shape == null) throw new ArgumentNullException(nameof(shape));
+        if (string.IsNullOrWhiteSpace(collectionName))
+            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
+
+        var skip = shape.Skip.GetValueOrDefault();
+        var take = shape.Take;
+
+        if (shape.Sort.Count == 0)
+        {
+            var result = ExecuteAsync<T>(collectionName, shape.Predicate, cancellationToken);
+            if (skip > 0 || take.HasValue)
+            {
+                result = OrderByIdAsync(result, cancellationToken);
+            }
+
+            bool skipPushed = false;
+            bool takePushed = false;
+
+            if (skip > 0)
+            {
+                skipPushed = true;
+            }
+
+            if (take is int t)
+            {
+                if (t <= 0)
+                {
+                    pushdown = new QueryPushdownInfo
+                    {
+                        WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+                        SkipPushedCount = skipPushed ? 1 : 0,
+                        TakePushedCount = 1,
+                        OrderPushedCount = 0
+                    };
+                    return AsyncEmpty<T>();
+                }
+
+                takePushed = true;
+            }
+
+            pushdown = new QueryPushdownInfo
+            {
+                WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+                SkipPushedCount = skipPushed ? 1 : 0,
+                TakePushedCount = takePushed ? 1 : 0,
+                OrderPushedCount = 0
+            };
+
+            return ApplySkipTakeAsync(result, skip, take, cancellationToken);
+        }
+
+        var tx = _engine.GetCurrentTransaction();
+
+        if (TryGetOrderIndex(collectionName, shape.Sort, out var orderIndex, out var allDescending))
+        {
+            if (tx == null)
+            {
+                return ExecuteByOrderIndexAsync<T>(collectionName, shape, orderIndex, allDescending, out pushdown, cancellationToken);
+            }
+
+            return ExecuteByOrderIndexWithTransactionAsync<T>(collectionName, shape, orderIndex, allDescending, tx, out pushdown, cancellationToken);
+        }
+
+        if (take is int takeCount)
+        {
+            if (takeCount <= 0)
+            {
+                pushdown = new QueryPushdownInfo
+                {
+                    WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+                    OrderPushedCount = shape.Sort.Count,
+                    SkipPushedCount = skip > 0 ? 1 : 0,
+                    TakePushedCount = 1
+                };
+                return AsyncEmpty<T>();
+            }
+
+            return ExecuteTopKScanAsync<T>(collectionName, shape, out pushdown, cancellationToken);
+        }
+
+        pushdown = new QueryPushdownInfo { WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0 };
+        return ExecuteAsync<T>(collectionName, shape.Predicate, cancellationToken);
+    }
+
     // ... (省略 Index 相关方法，保持不变) ...
     internal IEnumerable<BsonDocument> ExecuteIndexScanForTests(QueryExecutionPlan executionPlan) => ExecuteIndexScan<BsonDocument>(executionPlan);
     internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecutePrimaryKeyLookup<T>(executionPlan);
     internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecuteIndexSeek<T>(executionPlan);
+
+    private static async IAsyncEnumerable<T> AsyncEmpty<T>()
+    {
+        await Task.CompletedTask.ConfigureAwait(false);
+        yield break;
+    }
+
+    private static async IAsyncEnumerable<T> ApplySkipTakeAsync<T>(
+        IAsyncEnumerable<T> source,
+        int skip,
+        int? take,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var remainingSkip = Math.Max(skip, 0);
+        var remainingTake = take;
+
+        await foreach (var item in source.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (remainingSkip > 0)
+            {
+                remainingSkip--;
+                continue;
+            }
+
+            if (remainingTake is int t)
+            {
+                if (t <= 0) yield break;
+                remainingTake = t - 1;
+            }
+
+            yield return item;
+        }
+    }
+
+    private static async IAsyncEnumerable<T> OrderByIdAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        IAsyncEnumerable<T> source,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        var items = new List<T>();
+        await foreach (var item in source.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            items.Add(item);
+        }
+
+        items.Sort(static (a, b) => BsonValueSortComparer.Instance.Compare(AotIdAccessor<T>.GetId(a), AotIdAccessor<T>.GetId(b)));
+        foreach (var item in items)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return item;
+        }
+    }
+
+    private async IAsyncEnumerable<T> ExecutePrimaryKeyLookupAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (executionPlan.IndexScanKeys.Count == 0) yield break;
+
+        var id = executionPlan.IndexScanKeys[0].Value;
+        var tx = _engine.GetCurrentTransaction();
+        if (tx != null && TryGetTransactionDocument(tx, executionPlan.CollectionName, id, out var txDoc))
+        {
+            if (txDoc != null)
+            {
+                bool match = executionPlan.QueryExpression == null || ExpressionEvaluator.Evaluate(executionPlan.QueryExpression, txDoc);
+                if (match)
+                {
+                    var entity = AotBsonMapper.FromDocument<T>(txDoc);
+                    if (entity != null) yield return entity;
+                }
+            }
+            yield break;
+        }
+
+        var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
+        if (doc != null)
+        {
+            bool match = executionPlan.QueryExpression == null || ExpressionEvaluator.Evaluate(executionPlan.QueryExpression, doc);
+            if (match)
+            {
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
+            }
+        }
+    }
 
     private IEnumerable<T> ExecutePrimaryKeyLookup<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
     {
@@ -175,6 +379,78 @@ public sealed class QueryExecutor
             bool match = executionPlan.QueryExpression == null || ExpressionEvaluator.Evaluate(executionPlan.QueryExpression, doc);
             if (match)
             {
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<T> ExecuteIndexScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tx = _engine.GetCurrentTransaction();
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        if (idxMgr == null || executionPlan.UseIndex == null)
+        {
+            await foreach (var item in ExecuteFullTableScanAsync<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
+        if (index == null)
+        {
+            await foreach (var item in ExecuteFullTableScanAsync<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        var range = BuildIndexScanRange(executionPlan);
+
+        QueryExpression? qe = null;
+        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
+
+        var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
+
+        await foreach (var id in index.FindRangeAsync(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
+            {
+                txOverlay.Remove(id);
+                if (txDoc == null) continue;
+                if (qe != null && !ExpressionEvaluator.Evaluate(qe, txDoc)) continue;
+
+                var txEntity = AotBsonMapper.FromDocument<T>(txDoc);
+                if (txEntity != null) yield return txEntity;
+                continue;
+            }
+
+            var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
+            if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+            {
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
+            }
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var doc in txOverlay.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (doc == null) continue;
+                if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
+
                 var entity = AotBsonMapper.FromDocument<T>(doc);
                 if (entity != null) yield return entity;
             }
@@ -230,6 +506,117 @@ public sealed class QueryExecutor
         {
             foreach (var doc in txOverlay.Values)
             {
+                if (doc == null) continue;
+                if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
+
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<T> ExecuteIndexSeekAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var tx = _engine.GetCurrentTransaction();
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        if (idxMgr == null || executionPlan.UseIndex == null)
+        {
+            await foreach (var item in ExecuteFullTableScanAsync<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
+        if (index == null)
+        {
+            await foreach (var item in ExecuteFullTableScanAsync<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        var key = BuildExactIndexKey(executionPlan);
+        if (key == null)
+        {
+            await foreach (var item in ExecuteFullTableScanAsync<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        QueryExpression? qe = null;
+        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
+
+        var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
+
+        if (index.IsUnique)
+        {
+            var id = await index.FindExactAsync(key, cancellationToken).ConfigureAwait(false);
+            if (id != null)
+            {
+                bool usedTxDoc = false;
+                if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
+                {
+                    txOverlay.Remove(id);
+                    usedTxDoc = true;
+                    if (txDoc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, txDoc)))
+                    {
+                        var txEntity = AotBsonMapper.FromDocument<T>(txDoc);
+                        if (txEntity != null) yield return txEntity;
+                    }
+                }
+
+                if (!usedTxDoc)
+                {
+                    var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
+                    if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+                    {
+                        var entity = AotBsonMapper.FromDocument<T>(doc);
+                        if (entity != null) yield return entity;
+                    }
+                }
+            }
+        }
+        else
+        {
+            await foreach (var id in index.FindAsync(key, cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
+                {
+                    txOverlay.Remove(id);
+                    if (txDoc == null) continue;
+                    if (qe != null && !ExpressionEvaluator.Evaluate(qe, txDoc)) continue;
+
+                    var txEntity = AotBsonMapper.FromDocument<T>(txDoc);
+                    if (txEntity != null) yield return txEntity;
+                    continue;
+                }
+
+                var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
+                if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+                {
+                    var entity = AotBsonMapper.FromDocument<T>(doc);
+                    if (entity != null) yield return entity;
+                }
+            }
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var doc in txOverlay.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (doc == null) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
 
@@ -416,6 +803,91 @@ public sealed class QueryExecutor
         }
     }
 
+    private async IAsyncEnumerable<T> ExecuteFullTableScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        Expression<Func<T, bool>>? expression = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        QueryExpression? queryExpression = null;
+
+        if (expression != null)
+        {
+            try { queryExpression = _expressionParser.Parse(expression); }
+            catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
+        }
+
+        var predicates = new List<ScanPredicate>();
+        bool fullyPushed = CollectPredicates(queryExpression, predicates);
+        var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+
+        Dictionary<string, BsonDocument?>? txOverlay = null;
+        var tx = _engine.GetCurrentTransaction();
+        if (tx != null)
+        {
+            txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
+            foreach (var op in tx.GetOperationsSnapshot())
+            {
+                if (op.CollectionName != collectionName) continue;
+                var key = op.DocumentId?.ToString() ?? string.Empty;
+                if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
+                else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
+            }
+
+            if (txOverlay.Count == 0) txOverlay = null;
+        }
+
+        await foreach (var result in _engine.FindAllRawWithPredicateInfoAsync(collectionName, pushDownPredicates, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var doc = DeserializeDocumentOrThrow(result.Slice);
+            if (doc.TryGetValue("_collection", out var c) && c.ToString() != collectionName)
+            {
+                continue;
+            }
+
+            doc = await _engine.ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
+            var requiresPostFilter = result.RequiresPostFilter;
+
+            if (txOverlay != null)
+            {
+                var idKey = doc["_id"].ToString();
+                if (txOverlay.TryGetValue(idKey, out var txDoc))
+                {
+                    txOverlay.Remove(idKey);
+                    if (txDoc == null) continue;
+                    doc = txDoc;
+                    requiresPostFilter = true;
+                }
+            }
+
+            if (queryExpression != null)
+            {
+                var matched = fullyPushed
+                    ? (!requiresPostFilter || ExpressionEvaluator.Evaluate(queryExpression, doc))
+                    : ExpressionEvaluator.Evaluate(queryExpression, doc);
+                if (!matched) continue;
+            }
+
+            var entity = AotBsonMapper.FromDocument<T>(doc);
+            if (entity != null) yield return entity;
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var txDoc in txOverlay.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (txDoc == null) continue;
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, txDoc)) continue;
+
+                var entity = AotBsonMapper.FromDocument<T>(txDoc);
+                if (entity != null) yield return entity;
+            }
+        }
+    }
+
     private bool TryGetOrderIndex(string collectionName, IReadOnlyList<QuerySortField> sort, [NotNullWhen(true)] out BTreeIndex? index, out bool allDescending)
     {
         index = null;
@@ -439,7 +911,7 @@ public sealed class QueryExecutor
         }
 
         IndexStatistics? best = null;
-        foreach (var stat in idxMgr.GetAllStatistics())
+        foreach (var stat in idxMgr.GetPlanningStatistics())
         {
             if (stat.Type != IndexType.BTree) continue;
             if (stat.IsSparse) continue;
@@ -707,6 +1179,229 @@ public sealed class QueryExecutor
         }
     }
 
+    private IAsyncEnumerable<T> ExecuteByOrderIndexAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        QueryShape<T> shape,
+        BTreeIndex orderIndex,
+        bool descending,
+        out QueryPushdownInfo pushdown,
+        CancellationToken cancellationToken)
+        where T : class, new()
+    {
+        var skipRemaining = Math.Max(shape.Skip.GetValueOrDefault(), 0);
+        var takeRemaining = shape.Take;
+
+        QueryExpression? qe = null;
+        if (shape.Predicate != null)
+        {
+            try { qe = _expressionParser.Parse(shape.Predicate); }
+            catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
+        }
+
+        pushdown = new QueryPushdownInfo
+        {
+            WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+            OrderPushedCount = shape.Sort.Count,
+            SkipPushedCount = shape.Skip.GetValueOrDefault() > 0 ? 1 : 0,
+            TakePushedCount = shape.Take != null ? 1 : 0
+        };
+
+        if (takeRemaining is int initialTake && initialTake <= 0)
+        {
+            return AsyncEmpty<T>();
+        }
+
+        return Iterator(skipRemaining, takeRemaining, qe, cancellationToken);
+
+        async IAsyncEnumerable<T> Iterator(
+            int remainingSkip,
+            int? remainingTake,
+            QueryExpression? queryExpression,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            var ids = descending ? orderIndex.GetAllReverseAsync(ct) : orderIndex.GetAllAsync(ct);
+            await foreach (var id in ids.WithCancellation(ct).ConfigureAwait(false))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var doc = await _engine.FindByIdAsync(collectionName, id, ct).ConfigureAwait(false);
+                if (doc == null) continue;
+
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, doc)) continue;
+
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity == null) continue;
+
+                if (remainingSkip > 0)
+                {
+                    remainingSkip--;
+                    continue;
+                }
+
+                yield return entity;
+
+                if (remainingTake is int take)
+                {
+                    take--;
+                    if (take <= 0) yield break;
+                    remainingTake = take;
+                }
+            }
+        }
+    }
+
+    private IAsyncEnumerable<T> ExecuteByOrderIndexWithTransactionAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        QueryShape<T> shape,
+        BTreeIndex orderIndex,
+        bool descending,
+        Transaction tx,
+        out QueryPushdownInfo pushdown,
+        CancellationToken cancellationToken)
+        where T : class, new()
+    {
+        if (tx == null) throw new ArgumentNullException(nameof(tx));
+
+        var skipRemaining = Math.Max(shape.Skip.GetValueOrDefault(), 0);
+        var takeRemaining = shape.Take;
+
+        QueryExpression? qe = null;
+        if (shape.Predicate != null)
+        {
+            try { qe = _expressionParser.Parse(shape.Predicate); }
+            catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
+        }
+
+        pushdown = new QueryPushdownInfo
+        {
+            WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+            OrderPushedCount = shape.Sort.Count,
+            SkipPushedCount = shape.Skip.GetValueOrDefault() > 0 ? 1 : 0,
+            TakePushedCount = shape.Take != null ? 1 : 0
+        };
+
+        if (takeRemaining is int initialTake && initialTake <= 0)
+        {
+            return AsyncEmpty<T>();
+        }
+
+        var txOverlay = new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
+        foreach (var op in tx.GetOperationsSnapshot())
+        {
+            if (op.CollectionName != collectionName) continue;
+            if (op.DocumentId == null || op.DocumentId.IsNull) continue;
+
+            if (op.OperationType == TransactionOperationType.Delete)
+            {
+                txOverlay[op.DocumentId] = null;
+            }
+            else if (op.NewDocument != null)
+            {
+                txOverlay[op.DocumentId] = op.NewDocument;
+            }
+        }
+
+        List<TxOrderRow>? txRows = null;
+        if (txOverlay.Count > 0)
+        {
+            txRows = new List<TxOrderRow>(txOverlay.Count);
+            foreach (var (id, doc) in txOverlay)
+            {
+                if (doc == null) continue;
+                if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
+                txRows.Add(new TxOrderRow(id, BuildIndexKeyForOrder(orderIndex, doc), doc));
+            }
+
+            if (txRows.Count == 0)
+            {
+                txRows = null;
+            }
+            else
+            {
+                txRows.Sort((a, b) => CompareTxRows(a, b, descending));
+            }
+        }
+
+        return Iterator(skipRemaining, takeRemaining, qe, txOverlay, txRows, cancellationToken);
+
+        async IAsyncEnumerable<T> Iterator(
+            int remainingSkip,
+            int? remainingTake,
+            QueryExpression? queryExpression,
+            Dictionary<BsonValue, BsonDocument?> overlay,
+            List<TxOrderRow>? rows,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            var ids = descending ? orderIndex.GetAllReverseAsync(ct) : orderIndex.GetAllAsync(ct);
+            int txIndex = 0;
+
+            (T? Item, bool Done) TryYieldRow(BsonDocument rowDocument)
+            {
+                var entity = AotBsonMapper.FromDocument<T>(rowDocument);
+                if (entity == null) return (null, false);
+
+                if (remainingSkip > 0)
+                {
+                    remainingSkip--;
+                    return (null, false);
+                }
+
+                if (remainingTake is int take)
+                {
+                    take--;
+                    remainingTake = take;
+                    return (entity, take <= 0);
+                }
+
+                return (entity, false);
+            }
+
+            await foreach (var id in ids.WithCancellation(ct).ConfigureAwait(false))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (overlay.ContainsKey(id))
+                {
+                    continue;
+                }
+
+                var doc = await _engine.FindByIdAsync(collectionName, id, ct).ConfigureAwait(false);
+                if (doc == null) continue;
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, doc)) continue;
+
+                var baseKey = BuildIndexKeyForOrder(orderIndex, doc);
+
+                if (rows != null)
+                {
+                    while (txIndex < rows.Count && CompareTxRowToBase(rows[txIndex], baseKey, id, descending) < 0)
+                    {
+                        var yielded = TryYieldRow(rows[txIndex].Document);
+                        txIndex++;
+                        if (yielded.Item != null) yield return yielded.Item;
+                        if (yielded.Done) yield break;
+                    }
+                }
+
+                var baseYielded = TryYieldRow(doc);
+                if (baseYielded.Item != null) yield return baseYielded.Item;
+                if (baseYielded.Done) yield break;
+            }
+
+            if (rows != null)
+            {
+                while (txIndex < rows.Count)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    var yielded = TryYieldRow(rows[txIndex].Document);
+                    txIndex++;
+                    if (yielded.Item != null) yield return yielded.Item;
+                    if (yielded.Done) yield break;
+                }
+            }
+        }
+    }
+
     private IEnumerable<T> ExecuteTopKScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         QueryShape<T> shape,
@@ -957,6 +1652,173 @@ public sealed class QueryExecutor
             {
                 if (!BsonScanner.TryLocateField(span, isLargeDocumentFieldNameBytes, out var offset, out var type)) return false;
                 return type == BsonType.Boolean && offset >= 0 && offset < span.Length && span[offset] != 0;
+            }
+        }
+    }
+
+    private IAsyncEnumerable<T> ExecuteTopKScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        QueryShape<T> shape,
+        out QueryPushdownInfo pushdown,
+        CancellationToken cancellationToken)
+        where T : class, new()
+    {
+        var sort = shape.Sort;
+        var skip = Math.Max(shape.Skip.GetValueOrDefault(), 0);
+        var take = shape.Take ?? 0;
+
+        var kLong = (long)skip + take;
+        if (kLong <= 0)
+        {
+            pushdown = new QueryPushdownInfo
+            {
+                WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+                OrderPushedCount = shape.Sort.Count,
+                SkipPushedCount = skip > 0 ? 1 : 0,
+                TakePushedCount = 1
+            };
+            return AsyncEmpty<T>();
+        }
+
+        if (kLong > int.MaxValue)
+        {
+            throw new NotSupportedException("Skip + Take is too large.");
+        }
+
+        var k = (int)kLong;
+
+        QueryExpression? queryExpression = null;
+        if (shape.Predicate != null)
+        {
+            try { queryExpression = _expressionParser.Parse(shape.Predicate); }
+            catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
+        }
+
+        var predicates = new List<ScanPredicate>();
+        bool fullyPushed = CollectPredicates(queryExpression, predicates);
+        var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+
+        pushdown = new QueryPushdownInfo
+        {
+            WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0,
+            OrderPushedCount = shape.Sort.Count,
+            SkipPushedCount = skip > 0 ? 1 : 0,
+            TakePushedCount = 1
+        };
+
+        return Iterator(queryExpression, fullyPushed, pushDownPredicates, cancellationToken);
+
+        async IAsyncEnumerable<T> Iterator(
+            QueryExpression? queryExpr,
+            bool allPredicatesPushed,
+            ScanPredicate[]? scanPredicates,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            var heap = new List<TopKRow>(Math.Min(k, 256));
+            long sequence = 0;
+
+            Dictionary<string, BsonDocument?>? txOverlay = null;
+            var tx = _engine.GetCurrentTransaction();
+            if (tx != null)
+            {
+                txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
+                foreach (var op in tx.GetOperationsSnapshot())
+                {
+                    if (op.CollectionName != collectionName) continue;
+                    var key = op.DocumentId?.ToString() ?? string.Empty;
+                    if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
+                    else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
+                }
+
+                if (txOverlay.Count == 0) txOverlay = null;
+            }
+
+            await foreach (var result in _engine.FindAllRawWithPredicateInfoAsync(collectionName, scanPredicates, ct).ConfigureAwait(false))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var doc = DeserializeDocumentOrThrow(result.Slice);
+                if (doc.TryGetValue("_collection", out var c) && c.ToString() != collectionName)
+                {
+                    continue;
+                }
+
+                doc = await _engine.ResolveLargeDocumentAsync(doc, ct).ConfigureAwait(false);
+                var requiresPostFilter = result.RequiresPostFilter;
+
+                if (txOverlay != null && doc.TryGetValue("_id", out var idValue))
+                {
+                    var idKey = idValue.ToString();
+                    if (txOverlay.TryGetValue(idKey, out var txDoc))
+                    {
+                        txOverlay.Remove(idKey);
+                        if (txDoc == null) continue;
+                        ConsiderDocument(txDoc, requiresPostFilter: true);
+                        continue;
+                    }
+                }
+
+                ConsiderDocument(doc, requiresPostFilter);
+            }
+
+            if (txOverlay != null)
+            {
+                foreach (var doc in txOverlay.Values)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (doc == null) continue;
+                    ConsiderDocument(doc, requiresPostFilter: true);
+                }
+            }
+
+            heap.Sort((a, b) => CompareRows(a, b, sort));
+
+            var start = Math.Min(skip, heap.Count);
+            var end = Math.Min(start + take, heap.Count);
+
+            for (int i = start; i < end; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var row = heap[i];
+                if (row.TransactionDocument == null) continue;
+
+                var entity = AotBsonMapper.FromDocument<T>(row.TransactionDocument);
+                if (entity != null) yield return entity;
+            }
+
+            void ConsiderDocument(BsonDocument doc, bool requiresPostFilter)
+            {
+                bool match;
+                if (queryExpr == null)
+                {
+                    match = true;
+                }
+                else
+                {
+                    match = allPredicatesPushed
+                        ? (!requiresPostFilter || ExpressionEvaluator.Evaluate(queryExpr, doc))
+                        : ExpressionEvaluator.Evaluate(queryExpr, doc);
+                }
+
+                if (!match) return;
+                if (!doc.TryGetValue("_id", out var id) || id == null) return;
+
+                var seq = sequence++;
+                var row = new TopKRow(id, MaterializeKeysFromDocument(doc, sort), seq, doc);
+
+                if (heap.Count < k)
+                {
+                    heap.Add(row);
+                    HeapifyUp(heap, heap.Count - 1, sort);
+                    return;
+                }
+
+                if (CompareRows(row, heap[0], sort) < 0)
+                {
+                    heap[0] = row;
+                    HeapifyDown(heap, 0, sort);
+                }
             }
         }
     }

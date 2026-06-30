@@ -246,7 +246,8 @@ public sealed class QueryOptimizer
     /// <param name="expression">查询表达式</param>
     /// <returns>查询执行计划</returns>
     public QueryExecutionPlan CreateExecutionPlan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
-        string collectionName, Expression<Func<T, bool>>? expression = null)
+        string collectionName, Expression<Func<T, bool>>? expression = null,
+        bool planningMetadataOnly = false)
         where T : class, new()
     {
         var plan = new QueryExecutionPlan
@@ -297,7 +298,9 @@ public sealed class QueryOptimizer
         // 获取集合的索引管理器
         var indexManager = _engine.GetIndexManager(collectionName);
         // 分析可用的索引
-        var availableIndexes = indexManager.GetAllStatistics().ToList();
+        var availableIndexes = (planningMetadataOnly
+            ? indexManager.GetPlanningStatistics()
+            : indexManager.GetAllStatistics()).ToList();
         if (!availableIndexes.Any())
         {
             plan.Strategy = QueryExecutionStrategy.FullTableScan;

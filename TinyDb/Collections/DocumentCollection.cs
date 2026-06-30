@@ -1129,9 +1129,27 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
         ValidatePaginationArguments(skip, limit);
         cancellationToken.ThrowIfCancellationRequested();
-        var results = Find(predicate, skip, limit).ToList();
-        cancellationToken.ThrowIfCancellationRequested();
-        return await Task.FromResult(results).ConfigureAwait(false);
+        if (limit == 0) return new List<T>();
+
+        var shape = new QueryShape<T>
+        {
+            Predicate = predicate,
+            PushedWhereCount = 1,
+            Skip = skip > 0 ? skip : null,
+            Take = limit < int.MaxValue ? limit : null
+        };
+
+        var results = limit == int.MaxValue
+            ? new List<T>()
+            : new List<T>(Math.Max(0, limit));
+
+        await foreach (var item in _queryExecutor.ExecuteShapedAsync(_name, shape, out _, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(item);
+        }
+
+        return results;
     }
 
     public async Task<T?> FindOneAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
@@ -1139,9 +1157,13 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
         cancellationToken.ThrowIfCancellationRequested();
-        var result = Find(predicate, 0, 1).FirstOrDefault();
-        cancellationToken.ThrowIfCancellationRequested();
-        return await Task.FromResult(result).ConfigureAwait(false);
+        await foreach (var item in _queryExecutor.ExecuteAsync(_name, predicate, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return item;
+        }
+
+        return default;
     }
 
     public async Task<long> CountAsync(CancellationToken cancellationToken = default)
@@ -1151,8 +1173,14 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         // 关键修复：如果在事务中，必须使用 FindAllAsync().Count 以包含挂起的操作
         if (_engine.GetCurrentTransaction() != null)
         {
-            var all = await FindAllAsync(cancellationToken).ConfigureAwait(false);
-            return all.Count;
+            long transactionCount = 0;
+            await foreach (var _ in _queryExecutor.ExecuteAsync<T>(_name, null, cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                transactionCount++;
+            }
+
+            return transactionCount;
         }
 
         return _engine.GetCachedDocumentCount(_name);
@@ -1163,9 +1191,14 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
         cancellationToken.ThrowIfCancellationRequested();
-        var count = Find(predicate).LongCount();
-        cancellationToken.ThrowIfCancellationRequested();
-        return await Task.FromResult(count).ConfigureAwait(false);
+        long count = 0;
+        await foreach (var _ in _queryExecutor.ExecuteAsync(_name, predicate, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            count++;
+        }
+
+        return count;
     }
 
     public async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)
@@ -1173,9 +1206,13 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
         cancellationToken.ThrowIfCancellationRequested();
-        var exists = Find(predicate).Any();
-        cancellationToken.ThrowIfCancellationRequested();
-        return await Task.FromResult(exists).ConfigureAwait(false);
+        await foreach (var _ in _queryExecutor.ExecuteAsync(_name, predicate, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return true;
+        }
+
+        return false;
     }
 
     public async Task<int> DeleteAllAsync(CancellationToken cancellationToken = default)
