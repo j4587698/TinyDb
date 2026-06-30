@@ -2,6 +2,8 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TinyDb.Storage;
@@ -33,6 +35,11 @@ public sealed class DiskBTreeNode : IDisposable
     public int KeyCount => Keys.Count;
 
     public DiskBTreeNode(Page page, PageManager pm)
+        : this(page, pm, loadFromPage: true)
+    {
+    }
+
+    private DiskBTreeNode(Page page, PageManager pm, bool loadFromPage)
     {
         _page = page ?? throw new ArgumentNullException(nameof(page));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
@@ -41,7 +48,7 @@ public sealed class DiskBTreeNode : IDisposable
         ChildrenIds = new List<uint>();
         Values = new List<BsonValue>();
 
-        if (_page.PageType == PageType.Index && _page.Header.ItemCount > 0)
+        if (loadFromPage && _page.PageType == PageType.Index && _page.Header.ItemCount > 0)
         {
             LoadFromPage();
         }
@@ -50,6 +57,17 @@ public sealed class DiskBTreeNode : IDisposable
             IsLeaf = true;
             _isDirty = true;
         }
+    }
+
+    internal static async Task<DiskBTreeNode> LoadAsync(Page page, PageManager pm, CancellationToken cancellationToken = default)
+    {
+        var node = new DiskBTreeNode(page, pm, loadFromPage: false);
+        if (page.PageType == PageType.Index && page.Header.ItemCount > 0)
+        {
+            await node.LoadFromPageAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return node;
     }
 
     public void Dispose()
@@ -205,9 +223,10 @@ public sealed class DiskBTreeNode : IDisposable
                 _page.SetLinks(_page.Header.PrevPageID, 0);
             }
 
+            var beforeImage = pm.CaptureBeforeImageForWal(_page);
             _page.SetContent(fullDataSpan);
             _page.CachedParsedData = this;
-            pm.SavePage(_page);
+            pm.SavePageDeferred(_page, beforeImage);
         }
         else
         {
@@ -220,12 +239,13 @@ public sealed class DiskBTreeNode : IDisposable
                 var overflowPage = pm.NewPage(PageType.Index);
                 nextPageId = overflowPage.PageID;
                 _page.SetLinks(_page.Header.PrevPageID, nextPageId);
-                pm.SavePage(overflowPage);
+                pm.SavePageDeferred(overflowPage, pm.CaptureBeforeImageForWal(overflowPage));
             }
 
+            var beforeImage = pm.CaptureBeforeImageForWal(_page);
             _page.SetContent(fullDataSpan.Slice(offset, capacity));
             _page.CachedParsedData = this;
-            pm.SavePage(_page);
+            pm.SavePageDeferred(_page, beforeImage);
 
             offset += capacity;
             remaining -= capacity;
@@ -258,8 +278,9 @@ public sealed class DiskBTreeNode : IDisposable
                     }
                 }
 
+                var overflowBeforeImage = pm.CaptureBeforeImageForWal(page);
                 page.SetContent(subChunkSpan);
-                pm.SavePage(page);
+                pm.SavePageDeferred(page, overflowBeforeImage);
 
                 offset += chunkLen;
                 remaining -= chunkLen;
@@ -391,6 +412,89 @@ public sealed class DiskBTreeNode : IDisposable
         {
             ArrayPool<byte>.Shared.Return(rented);
         }
+    }
+
+    private async Task LoadFromPageAsync(CancellationToken cancellationToken)
+    {
+        int totalLength = 0;
+
+        uint currentPageId = _page.PageID;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var page = currentPageId == _page.PageID
+                ? _page
+                : await _pm.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (!TryReadChunkInfo(page, out var len, out var nextPageId)) break;
+            totalLength += len;
+            currentPageId = nextPageId;
+            if (currentPageId == 0) break;
+        }
+
+        if (totalLength <= 0) return;
+
+        var rented = ArrayPool<byte>.Shared.Rent(totalLength);
+        try
+        {
+            int offset = 0;
+            currentPageId = _page.PageID;
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var page = currentPageId == _page.PageID
+                    ? _page
+                    : await _pm.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (!TryCopyChunk(page, rented, offset, out var len, out var nextPageId)) break;
+                offset += len;
+
+                currentPageId = nextPageId;
+                if (currentPageId == 0) break;
+            }
+
+            var data = rented.AsSpan(0, offset);
+
+            if (!TryParseNodeData(data, hasTreeEntryCount: true) &&
+                !TryParseNodeData(data, hasTreeEntryCount: false))
+            {
+                throw new InvalidDataException("Invalid index node data.");
+            }
+
+            _isDirty = false;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private static bool TryReadChunkInfo(Page page, out int length, out uint nextPageId)
+    {
+        var span = page.ValidDataSpan;
+        nextPageId = page.Header.NextPageID;
+        length = 0;
+
+        if (span.Length < 4) return false;
+
+        length = BinaryPrimitives.ReadInt32LittleEndian(span);
+        return length > 0 && length <= span.Length - 4;
+    }
+
+    private static bool TryCopyChunk(Page page, byte[] destination, int offset, out int length, out uint nextPageId)
+    {
+        var span = page.ValidDataSpan;
+        nextPageId = page.Header.NextPageID;
+        length = 0;
+
+        if (span.Length < 4) return false;
+
+        length = BinaryPrimitives.ReadInt32LittleEndian(span);
+        if (length <= 0 || length > span.Length - 4) return false;
+
+        span.Slice(4, length).CopyTo(destination.AsSpan(offset, length));
+        return true;
     }
 
     private bool TryParseNodeData(ReadOnlySpan<byte> data, bool hasTreeEntryCount)

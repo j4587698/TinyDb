@@ -20,6 +20,7 @@ public sealed class WriteAheadLog : IDisposable
     private const int HeaderSize = 9;
     private const int TransactionIdSize = 16;
     private const int BeforeLengthSize = sizeof(int);
+    private const long DeferredTruncateThresholdBytes = 4L * 1024 * 1024;
 
     private readonly string _logFilePath;
     private readonly FileStream? _stream;
@@ -166,12 +167,25 @@ public sealed class WriteAheadLog : IDisposable
 
     public async Task AppendPageAsync(Page page, CancellationToken cancellationToken = default)
     {
+        await AppendPageAsync(page, beforeImage: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task AppendPageAsync(Page page, byte[]? beforeImage, CancellationToken cancellationToken = default)
+    {
         if (!IsEnabled) return;
 
         if (_synchronizationDepth.Value > 0)
         {
-            var data = PreparePageRecord(page);
-            await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
+            if (_currentTransactionId.Value is Guid transactionId)
+            {
+                var transactionData = PrepareTransactionPageRecord(transactionId, page, beforeImage);
+                await WriteEntryAsync(EntryTypeTransactionPage, page.PageID, transactionData, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                var data = PreparePageRecord(page);
+                await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
+            }
             SetHasPendingEntries(true);
             return;
         }
@@ -227,11 +241,13 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    internal WalTransactionScope BeginTransaction(Guid transactionId)
+    internal WalTransactionScope BeginTransaction(Guid transactionId) => BeginTransaction(transactionId, flushOnCommit: true);
+
+    internal WalTransactionScope BeginTransaction(Guid transactionId, bool flushOnCommit)
     {
         if (!IsEnabled)
         {
-            return new WalTransactionScope(this, transactionId, ownsMutex: false);
+            return new WalTransactionScope(this, transactionId, ownsMutex: false, flushOnCommit);
         }
 
         _mutex.Wait();
@@ -241,7 +257,7 @@ public sealed class WriteAheadLog : IDisposable
             _currentTransactionId.Value = transactionId;
             WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
             SetHasPendingEntries(true);
-            return new WalTransactionScope(this, transactionId, ownsMutex: true);
+            return new WalTransactionScope(this, transactionId, ownsMutex: true, flushOnCommit);
         }
         catch
         {
@@ -257,14 +273,16 @@ public sealed class WriteAheadLog : IDisposable
         private readonly WriteAheadLog _wal;
         private readonly Guid _transactionId;
         private readonly bool _ownsMutex;
+        private readonly bool _flushOnCommit;
         private bool _completed;
         private bool _disposed;
 
-        internal WalTransactionScope(WriteAheadLog wal, Guid transactionId, bool ownsMutex)
+        internal WalTransactionScope(WriteAheadLog wal, Guid transactionId, bool ownsMutex, bool flushOnCommit)
         {
             _wal = wal;
             _transactionId = transactionId;
             _ownsMutex = ownsMutex;
+            _flushOnCommit = flushOnCommit;
         }
 
         public void Commit()
@@ -280,7 +298,10 @@ public sealed class WriteAheadLog : IDisposable
                 _wal.BeforeTransactionCommitForTesting?.Invoke();
                 _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
                 _wal.SetHasPendingEntries(true);
-                _wal.FlushLogCore();
+                if (_flushOnCommit)
+                {
+                    _wal.FlushLogCore();
+                }
             }
 
             _completed = true;
@@ -473,7 +494,9 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    public void Synchronize(Action flushData)
+    public void Synchronize(Action flushData) => Synchronize(flushData, truncateLog: true);
+
+    internal void Synchronize(Action flushData, bool truncateLog)
     {
         if (flushData == null) throw new ArgumentNullException(nameof(flushData));
 
@@ -514,9 +537,13 @@ public sealed class WriteAheadLog : IDisposable
 
             if (HasPendingEntriesCore)
             {
-                stream.SetLength(0);
-                stream.Seek(0, SeekOrigin.End);
-                stream.Flush(true);
+                if (truncateLog || stream.Length >= DeferredTruncateThresholdBytes)
+                {
+                    stream.SetLength(0);
+                    stream.Seek(0, SeekOrigin.End);
+                    stream.Flush(true);
+                }
+
                 SetHasPendingEntries(false);
                 _flushedLSN = stream.Position;
             }
@@ -527,7 +554,15 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    public async Task SynchronizeAsync(Func<CancellationToken, Task> flushDataAsync, CancellationToken cancellationToken = default)
+    public Task SynchronizeAsync(Func<CancellationToken, Task> flushDataAsync, CancellationToken cancellationToken = default)
+    {
+        return SynchronizeAsync(flushDataAsync, truncateLog: true, cancellationToken);
+    }
+
+    internal async Task SynchronizeAsync(
+        Func<CancellationToken, Task> flushDataAsync,
+        bool truncateLog,
+        CancellationToken cancellationToken = default)
     {
         if (flushDataAsync == null) throw new ArgumentNullException(nameof(flushDataAsync));
 
@@ -568,9 +603,13 @@ public sealed class WriteAheadLog : IDisposable
 
             if (HasPendingEntriesCore)
             {
-                stream.SetLength(0);
-                stream.Seek(0, SeekOrigin.End);
-                stream.Flush(true);
+                if (truncateLog || stream.Length >= DeferredTruncateThresholdBytes)
+                {
+                    stream.SetLength(0);
+                    stream.Seek(0, SeekOrigin.End);
+                    stream.Flush(true);
+                }
+
                 SetHasPendingEntries(false);
                 _flushedLSN = stream.Position;
             }

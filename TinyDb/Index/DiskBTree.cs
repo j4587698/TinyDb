@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Serialization;
 using TinyDb.Storage;
@@ -620,6 +622,54 @@ public sealed class DiskBTree : IDisposable
 
         return null;
     }
+
+    internal async Task<BsonValue?> FindExactAsync(IndexKey key, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var node = await FindFirstCandidateLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
+
+        bool passed = false;
+        for (int i = 0; i < node.KeyCount; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int cmp = node.Keys[i].CompareTo(key);
+            if (cmp == 0)
+            {
+                return node.Values[i];
+            }
+            if (cmp > 0)
+            {
+                passed = true;
+                break;
+            }
+        }
+        if (passed) return null;
+
+        while (node.NextSiblingId != 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            node = await LoadNodeAsync(node.NextSiblingId, cancellationToken).ConfigureAwait(false);
+            for (int i = 0; i < node.KeyCount; i++)
+            {
+                int cmp = node.Keys[i].CompareTo(key);
+                if (cmp == 0)
+                {
+                    return node.Values[i];
+                }
+
+                if (cmp > 0)
+                {
+                    return null;
+                }
+            }
+        }
+
+        return null;
+    }
     
     /// <summary>
     /// 在键范围内查找值。
@@ -762,6 +812,124 @@ public sealed class DiskBTree : IDisposable
             if (pastEnd) break;
             if (node.NextSiblingId == 0) break;
             node = LoadNode(node.NextSiblingId);
+            startIndex = 0;
+        }
+
+        return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: false);
+    }
+
+    internal async Task<IndexScanBatch> FindRangeBatchAsync(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart,
+        bool includeEnd,
+        IndexKey? continuationKey,
+        BsonValue? continuationValue,
+        uint continuationPageId,
+        int continuationIndex,
+        int batchSize,
+        CancellationToken cancellationToken = default)
+    {
+        if (batchSize <= 0) throw new ArgumentOutOfRangeException(nameof(batchSize));
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var results = new List<BsonValue>(batchSize);
+        IndexKey? lastKey = null;
+        BsonValue? lastValue = null;
+        uint lastPageId = 0;
+        int lastIndex = -1;
+
+        DiskBTreeNode node;
+        var startIndex = 0;
+        var waitingForContinuation = continuationKey != null;
+        var resume = await TryResumeFromLeafPositionAsync(
+            continuationPageId,
+            continuationIndex,
+            continuationKey,
+            continuationValue,
+            forward: true,
+            cancellationToken).ConfigureAwait(false);
+
+        if (resume.Node != null)
+        {
+            node = resume.Node;
+            startIndex = resume.StartIndex;
+            waitingForContinuation = false;
+        }
+        else
+        {
+            node = await FindFirstCandidateLeafNodeAsync(continuationKey ?? startKey, cancellationToken).ConfigureAwait(false);
+        }
+
+        while (node != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (startIndex >= node.KeyCount)
+            {
+                if (node.NextSiblingId == 0) break;
+                node = await LoadNodeAsync(node.NextSiblingId, cancellationToken).ConfigureAwait(false);
+                startIndex = 0;
+                continue;
+            }
+
+            bool pastEnd = false;
+            for (int i = startIndex; i < node.KeyCount; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var key = node.Keys[i];
+                var value = node.Values[i];
+                int cmpEnd = key.CompareTo(endKey);
+
+                if (cmpEnd > 0 || (cmpEnd == 0 && !includeEnd))
+                {
+                    pastEnd = true;
+                    break;
+                }
+
+                if (waitingForContinuation)
+                {
+                    var cmpContinuation = key.CompareTo(continuationKey!);
+                    if (cmpContinuation < 0)
+                    {
+                        continue;
+                    }
+
+                    if (cmpContinuation == 0)
+                    {
+                        if (continuationValue != null && ValuesEqual(value, continuationValue))
+                        {
+                            waitingForContinuation = false;
+                        }
+
+                        continue;
+                    }
+
+                    waitingForContinuation = false;
+                }
+
+                int cmpStart = key.CompareTo(startKey);
+                if (cmpStart > 0 || (cmpStart == 0 && includeStart))
+                {
+                    results.Add(value);
+                    lastKey = key.Clone();
+                    lastValue = value;
+                    lastPageId = node.PageId;
+                    lastIndex = i;
+
+                    if (results.Count >= batchSize)
+                    {
+                        return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: true);
+                    }
+                }
+            }
+
+            if (pastEnd) break;
+            if (node.NextSiblingId == 0) break;
+            node = await LoadNodeAsync(node.NextSiblingId, cancellationToken).ConfigureAwait(false);
             startIndex = 0;
         }
 
@@ -924,6 +1092,130 @@ public sealed class DiskBTree : IDisposable
         return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: false);
     }
 
+    internal async Task<IndexScanBatch> FindRangeReverseBatchAsync(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart,
+        bool includeEnd,
+        IndexKey? continuationKey,
+        BsonValue? continuationValue,
+        uint continuationPageId,
+        int continuationIndex,
+        int batchSize,
+        CancellationToken cancellationToken = default)
+    {
+        if (batchSize <= 0) throw new ArgumentOutOfRangeException(nameof(batchSize));
+
+        ThrowIfDisposed();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var results = new List<BsonValue>(batchSize);
+        IndexKey? lastKey = null;
+        BsonValue? lastValue = null;
+        uint lastPageId = 0;
+        int lastIndex = -1;
+
+        DiskBTreeNode node;
+        var startIndex = -1;
+        var waitingForContinuation = continuationKey != null;
+        var resume = await TryResumeFromLeafPositionAsync(
+            continuationPageId,
+            continuationIndex,
+            continuationKey,
+            continuationValue,
+            forward: false,
+            cancellationToken).ConfigureAwait(false);
+
+        if (resume.Node != null)
+        {
+            node = resume.Node;
+            startIndex = resume.StartIndex;
+            waitingForContinuation = false;
+        }
+        else
+        {
+            node = continuationKey != null
+                ? await FindLastCandidateLeafNodeAsync(continuationKey, cancellationToken).ConfigureAwait(false)
+                : await FindLastCandidateLeafNodeAsync(endKey, cancellationToken).ConfigureAwait(false);
+            startIndex = node.KeyCount - 1;
+        }
+
+        while (node != null)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (startIndex < 0)
+            {
+                if (node.PrevSiblingId == 0) break;
+                node = await LoadNodeAsync(node.PrevSiblingId, cancellationToken).ConfigureAwait(false);
+                startIndex = node.KeyCount - 1;
+                continue;
+            }
+
+            bool pastStart = false;
+
+            for (int i = startIndex; i >= 0; i--)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var key = node.Keys[i];
+                var value = node.Values[i];
+                int cmpStart = key.CompareTo(startKey);
+
+                if (cmpStart < 0 || (cmpStart == 0 && !includeStart))
+                {
+                    pastStart = true;
+                    break;
+                }
+
+                if (waitingForContinuation)
+                {
+                    var cmpContinuation = key.CompareTo(continuationKey!);
+                    if (cmpContinuation > 0)
+                    {
+                        continue;
+                    }
+
+                    if (cmpContinuation == 0)
+                    {
+                        if (continuationValue != null && ValuesEqual(value, continuationValue))
+                        {
+                            waitingForContinuation = false;
+                        }
+
+                        continue;
+                    }
+
+                    waitingForContinuation = false;
+                }
+
+                int cmpEnd = key.CompareTo(endKey);
+                if (cmpEnd > 0 || (cmpEnd == 0 && !includeEnd))
+                {
+                    continue;
+                }
+
+                results.Add(value);
+                lastKey = key.Clone();
+                lastValue = value;
+                lastPageId = node.PageId;
+                lastIndex = i;
+
+                if (results.Count >= batchSize)
+                {
+                    return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: true);
+                }
+            }
+
+            if (pastStart) break;
+            if (node.PrevSiblingId == 0) break;
+            node = await LoadNodeAsync(node.PrevSiblingId, cancellationToken).ConfigureAwait(false);
+            startIndex = node.KeyCount - 1;
+        }
+
+        return new IndexScanBatch(results, lastKey, lastValue, lastPageId, lastIndex, hasMore: false);
+    }
+
     private bool TryResumeFromLeafPosition(
         uint pageId,
         int index,
@@ -959,6 +1251,40 @@ public sealed class DiskBTree : IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return false;
+        }
+    }
+
+    private async Task<(DiskBTreeNode? Node, int StartIndex)> TryResumeFromLeafPositionAsync(
+        uint pageId,
+        int index,
+        IndexKey? key,
+        BsonValue? value,
+        bool forward,
+        CancellationToken cancellationToken)
+    {
+        var startIndex = forward ? 0 : -1;
+
+        if (pageId == 0 || index < 0 || key == null || value == null)
+        {
+            return (null, startIndex);
+        }
+
+        try
+        {
+            var candidate = await LoadNodeAsync(pageId, cancellationToken).ConfigureAwait(false);
+            if (!candidate.IsLeaf ||
+                index >= candidate.KeyCount ||
+                candidate.Keys[index].CompareTo(key) != 0 ||
+                !ValuesEqual(candidate.Values[index], value))
+            {
+                return (null, startIndex);
+            }
+
+            return (candidate, forward ? index + 1 : index - 1);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            return (null, startIndex);
         }
     }
 
@@ -998,6 +1324,59 @@ public sealed class DiskBTree : IDisposable
         while (node.NextSiblingId != 0)
         {
             var next = LoadNode(node.NextSiblingId);
+            if (next.KeyCount == 0 || next.Keys[0].CompareTo(key) > 0)
+            {
+                break;
+            }
+
+            node = next;
+        }
+
+        return node;
+    }
+
+    private async Task<DiskBTreeNode> FindLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
+    {
+        var node = await LoadNodeAsync(_rootPageId, cancellationToken).ConfigureAwait(false);
+        while (!node.IsLeaf)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int childIdx = UpperBound(node.Keys, key);
+            node = await LoadNodeAsync(node.ChildrenIds[childIdx], cancellationToken).ConfigureAwait(false);
+        }
+        return node;
+    }
+
+    private async Task<DiskBTreeNode> FindFirstCandidateLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
+    {
+        var node = await FindLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
+
+        while (node.PrevSiblingId != 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var prev = await LoadNodeAsync(node.PrevSiblingId, cancellationToken).ConfigureAwait(false);
+            if (prev.KeyCount == 0 || prev.Keys[prev.KeyCount - 1].CompareTo(key) < 0)
+            {
+                break;
+            }
+
+            node = prev;
+        }
+
+        return node;
+    }
+
+    private async Task<DiskBTreeNode> FindLastCandidateLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
+    {
+        var node = await FindLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
+
+        while (node.NextSiblingId != 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var next = await LoadNodeAsync(node.NextSiblingId, cancellationToken).ConfigureAwait(false);
             if (next.KeyCount == 0 || next.Keys[0].CompareTo(key) > 0)
             {
                 break;
@@ -1531,6 +1910,19 @@ public sealed class DiskBTree : IDisposable
             return node;
         }
         node = new DiskBTreeNode(page, _pm);
+        page.CachedParsedData = node;
+        return node;
+    }
+
+    internal async Task<DiskBTreeNode> LoadNodeAsync(uint id, CancellationToken cancellationToken = default)
+    {
+        var page = await _pm.GetPageAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (page.CachedParsedData is DiskBTreeNode node)
+        {
+            return node;
+        }
+
+        node = await DiskBTreeNode.LoadAsync(page, _pm, cancellationToken).ConfigureAwait(false);
         page.CachedParsedData = node;
         return node;
     }

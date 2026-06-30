@@ -7,8 +7,10 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -159,6 +161,7 @@ public sealed class TinyDbEngine : IDisposable
             (page, beforeImage) => _writeAheadLog.AppendPage(page, beforeImage),
             lsn => _writeAheadLog.FlushToLSN(lsn),
             () => _writeAheadLog.RequiresBeforeImage);
+        _pageManager.RegisterWAL((page, beforeImage, ct) => _writeAheadLog.AppendPageAsync(page, beforeImage, ct));
         _pageManager.RegisterWAL((lsn, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ct));
 
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), _log);
@@ -584,7 +587,7 @@ public sealed class TinyDbEngine : IDisposable
             return null;
         }
 
-        return _writeAheadLog.BeginTransaction(Guid.NewGuid());
+        return _writeAheadLog.BeginTransaction(Guid.NewGuid(), flushOnCommit: false);
     }
 
     internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;
@@ -1755,12 +1758,14 @@ public sealed class TinyDbEngine : IDisposable
         var exceptions = new List<Exception>();
 
         var pagesToPersist = new HashSet<Page>();
+        var pageBeforeImages = new Dictionary<Page, byte[]?>();
         var pinnedPages = new List<Page>();
 
         void TrackPageForPersist(Page page)
         {
             if (pagesToPersist.Add(page))
             {
+                pageBeforeImages[page] = _dataPageAccess.CaptureBeforeImageForWal(page);
                 page.Pin();
                 pinnedPages.Add(page);
             }
@@ -1831,6 +1836,7 @@ public sealed class TinyDbEngine : IDisposable
                             }
 
                             ushort i = currentPage.Header.ItemCount;
+                            TrackPageForPersist(currentPage);
                             _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
                             st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
 
@@ -1853,7 +1859,7 @@ public sealed class TinyDbEngine : IDisposable
 
                 foreach (var page in pagesToPersist)
                 {
-                    _dataPageAccess.PersistPage(page);
+                    _dataPageAccess.PersistPageDeferred(page, pageBeforeImages[page]);
                 }
 
                 foreach (var (doc, id) in docsToUpdateIndex)
@@ -1914,12 +1920,14 @@ public sealed class TinyDbEngine : IDisposable
         var exceptions = new List<Exception>();
 
         var pagesToPersist = new HashSet<Page>();
+        var pageBeforeImages = new Dictionary<Page, byte[]?>();
         var pinnedPages = new List<Page>();
 
         void TrackPageForPersist(Page page)
         {
             if (pagesToPersist.Add(page))
             {
+                pageBeforeImages[page] = _dataPageAccess.CaptureBeforeImageForWal(page);
                 page.Pin();
                 pinnedPages.Add(page);
             }
@@ -1996,6 +2004,7 @@ public sealed class TinyDbEngine : IDisposable
                             }
 
                             ushort i = currentPage.Header.ItemCount;
+                            TrackPageForPersist(currentPage);
                             _dataPageAccess.AppendDocumentToPage(currentPage, buffer.WrittenSpan);
                             st.Index.Set(id, new DocumentLocation(currentPage.PageID, i));
 
@@ -2018,7 +2027,7 @@ public sealed class TinyDbEngine : IDisposable
 
                 foreach (var page in pagesToPersist)
                 {
-                    _dataPageAccess.PersistPage(page);
+                    _dataPageAccess.PersistPageDeferred(page, pageBeforeImages[page]);
                 }
 
                 foreach (var (doc, id) in docsToUpdateIndex)
@@ -2071,15 +2080,15 @@ public sealed class TinyDbEngine : IDisposable
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
     }
 
-    internal Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
+    internal async Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         var st = GetCollectionState(col);
-        var ds = ReadAllDocumentsSnapshot(col, st, cancellationToken);
+        var ds = await ReadAllDocumentsSnapshotAsync(col, st, cancellationToken).ConfigureAwait(false);
         var tx = GetCurrentTransaction();
         var result = tx != null ? MergeTransactionOperations(col, ds, tx).ToList() : ds;
-        return Task.FromResult(result);
+        return result;
     }
 
     /// <summary>
@@ -2100,6 +2109,29 @@ public sealed class TinyDbEngine : IDisposable
         return ReadRawScanResultSnapshot(col, st, predicates);
     }
 
+    internal async IAsyncEnumerable<ReadOnlyMemory<byte>> FindAllRawAsync(
+        string col,
+        ScanPredicate[]? predicates = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await foreach (var result in FindAllRawWithPredicateInfoAsync(col, predicates, cancellationToken).ConfigureAwait(false))
+        {
+            yield return result.Slice;
+        }
+    }
+
+    internal async IAsyncEnumerable<RawScanResult> FindAllRawWithPredicateInfoAsync(
+        string col,
+        ScanPredicate[]? predicates = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var st = GetCollectionState(col);
+        await foreach (var result in StreamRawScanResultPagesAsync(col, st, predicates, cancellationToken).ConfigureAwait(false))
+        {
+            yield return result;
+        }
+    }
+
     internal BsonDocument? FindById(string col, BsonValue id)
     {
         var tx = GetCurrentTransaction();
@@ -2114,13 +2146,35 @@ public sealed class TinyDbEngine : IDisposable
     internal BsonDocument? FindCommittedById(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
+        DocumentLocation? indexedLocation = null;
         lock (st.PageState.SyncRoot)
         {
             if (st.Index.TryGet(id, out var loc))
             {
-                var p = _pageManager.GetPage(loc.PageId);
-                var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
-                if (entry != null) return ResolveLargeDocument(entry.Value.Document);
+                indexedLocation = loc;
+            }
+        }
+
+        if (indexedLocation is { } location)
+        {
+            var p = _pageManager.GetPage(location.PageId);
+            BsonDocument? document = null;
+
+            lock (st.PageState.SyncRoot)
+            {
+                if (p.PageType == PageType.Data && location.EntryIndex < p.Header.ItemCount)
+                {
+                    var entry = _dataPageAccess.ReadDocumentAt(p, location.EntryIndex);
+                    document = entry?.Document;
+                }
+            }
+
+            if (document != null &&
+                document.TryGetValue("_id", out var documentId) &&
+                BsonValuesEqual(documentId, id) &&
+                (!document.TryGetValue("_collection", out var collectionValue) || collectionValue.ToString() == col))
+            {
+                return ResolveLargeDocument(document);
             }
         }
 
@@ -2137,14 +2191,19 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         var st = GetCollectionState(col);
+        DocumentLocation? indexedLocation = null;
         lock (st.PageState.SyncRoot)
         {
             if (st.Index.TryGet(id, out var loc))
             {
-                var p = _pageManager.GetPage(loc.PageId);
-                var entry = _dataPageAccess.ReadDocumentAt(p, loc.EntryIndex);
-                if (entry != null) return ResolveLargeDocument(entry.Value.Document);
+                indexedLocation = loc;
             }
+        }
+
+        if (indexedLocation is { } location)
+        {
+            var indexedDocument = await TryReadCommittedByLocationAsync(col, id, st, location, cancellationToken).ConfigureAwait(false);
+            if (indexedDocument != null) return indexedDocument;
         }
 
         return await FindByIdFullScanAsync(col, id, cancellationToken).ConfigureAwait(false);
@@ -2152,8 +2211,34 @@ public sealed class TinyDbEngine : IDisposable
 
     private async Task<BsonDocument?> FindByIdFullScanAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
-        var all = await FindAllAsync(col, cancellationToken).ConfigureAwait(false);
-        return all.FirstOrDefault(d => d["_id"].Equals(id));
+        var idPredicate = new[]
+        {
+            new ScanPredicate(
+                Encoding.UTF8.GetBytes("_id"),
+                Encoding.UTF8.GetBytes("id"),
+                Encoding.UTF8.GetBytes("Id"),
+                id,
+                ExpressionType.Equal)
+        };
+
+        await foreach (var result in FindAllRawWithPredicateInfoAsync(col, idPredicate, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var doc = DeserializeDocumentOrThrow(result.Slice);
+            if (doc.TryGetValue("_collection", out var c) && c.ToString() != col)
+            {
+                continue;
+            }
+
+            doc = await ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
+            if (doc.TryGetValue("_id", out var documentId) && BsonValuesEqual(documentId, id))
+            {
+                return doc;
+            }
+        }
+
+        return null;
     }
 
     private List<BsonDocument> ReadAllDocumentsSnapshot(string col, CollectionState st, CancellationToken cancellationToken = default)
@@ -2187,6 +2272,26 @@ public sealed class TinyDbEngine : IDisposable
                         $"Failed to scan page {pageId} in collection '{col}'.", ex);
                 }
             }
+        }
+
+        return ds;
+    }
+
+    private async Task<List<BsonDocument>> ReadAllDocumentsSnapshotAsync(string col, CollectionState st, CancellationToken cancellationToken = default)
+    {
+        var ds = new List<BsonDocument>();
+
+        await foreach (var result in StreamRawScanResultPagesAsync(col, st, null, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var doc = DeserializeDocumentOrThrow(result.Slice);
+            if (doc.TryGetValue("_collection", out var c) && c.ToString() != col)
+            {
+                continue;
+            }
+
+            ds.Add(await ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false));
         }
 
         return ds;
@@ -2229,9 +2334,10 @@ public sealed class TinyDbEngine : IDisposable
             {
                 try
                 {
+                    var p = _pageManager.GetPage(pageId);
+
                     lock (st.PageState.SyncRoot)
                     {
-                        var p = _pageManager.GetPage(pageId);
                         if (p.PageType != PageType.Data || p.Header.ItemCount == 0)
                         {
                             pageSnapshot = null;
@@ -2281,6 +2387,139 @@ public sealed class TinyDbEngine : IDisposable
             {
                 yield return result;
             }
+        }
+    }
+
+    private async IAsyncEnumerable<RawScanResult> StreamRawScanResultPagesAsync(
+        string col,
+        CollectionState st,
+        ScanPredicate[]? predicates,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        List<uint> pages;
+        lock (st.PageState.SyncRoot)
+        {
+            pages = st.OwnedPages.Keys.ToList();
+        }
+
+        pages.Sort();
+
+        foreach (var pageId in pages)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte[]? pageSnapshot = null;
+            int itemCount = 0;
+            int endOffset = 0;
+            Exception? lastError = null;
+
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                try
+                {
+                    var p = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    lock (st.PageState.SyncRoot)
+                    {
+                        if (p.PageType != PageType.Data || p.Header.ItemCount == 0)
+                        {
+                            pageSnapshot = null;
+                            itemCount = 0;
+                            endOffset = 0;
+                            break;
+                        }
+
+                        p.Pin();
+                        try
+                        {
+                            itemCount = p.Header.ItemCount;
+                            pageSnapshot = p.Snapshot(includeUnusedTail: false);
+                            endOffset = pageSnapshot.Length;
+                        }
+                        finally
+                        {
+                            p.Unpin();
+                        }
+                    }
+
+                    lastError = null;
+                    break;
+                }
+                catch (ObjectDisposedException ex) when (attempt == 0)
+                {
+                    lastError = ex;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    lastError = ex;
+                    break;
+                }
+            }
+
+            if (lastError != null)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to read page {pageId} in collection '{col}'.", lastError);
+            }
+
+            if (pageSnapshot == null || itemCount == 0) continue;
+
+            foreach (var result in _dataPageAccess.ScanRawDocumentsFromPageSnapshotWithPredicateInfo(pageSnapshot, itemCount, endOffset, predicates))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return result;
+            }
+        }
+    }
+
+    private async Task<BsonDocument?> TryReadCommittedByLocationAsync(
+        string col,
+        BsonValue id,
+        CollectionState st,
+        DocumentLocation location,
+        CancellationToken cancellationToken)
+    {
+        var page = await _pageManager.GetPageAsync(location.PageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+        BsonDocument? document = null;
+
+        lock (st.PageState.SyncRoot)
+        {
+            if (page.PageType != PageType.Data || location.EntryIndex >= page.Header.ItemCount)
+            {
+                return null;
+            }
+
+            var entry = _dataPageAccess.ReadDocumentAt(page, location.EntryIndex);
+            if (entry == null)
+            {
+                return null;
+            }
+
+            document = entry.Value.Document;
+        }
+
+        if (!document.TryGetValue("_id", out var documentId) || !BsonValuesEqual(documentId, id))
+        {
+            return null;
+        }
+
+        if (document.TryGetValue("_collection", out var collectionValue) && collectionValue.ToString() != col)
+        {
+            return null;
+        }
+
+        return await ResolveLargeDocumentAsync(document, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static BsonDocument DeserializeDocumentOrThrow(ReadOnlyMemory<byte> slice)
+    {
+        try
+        {
+            return BsonSerializer.DeserializeDocument(slice);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("Failed to deserialize BSON document from storage slice.", ex);
         }
     }
 
@@ -2345,6 +2584,7 @@ public sealed class TinyDbEngine : IDisposable
             Page? p = null;
             bool isNewPage = false;
             ushort entryIndex;
+            byte[]? beforeImage;
 
             lock (st.PageState.SyncRoot)
             {
@@ -2354,6 +2594,7 @@ public sealed class TinyDbEngine : IDisposable
                 isNewPage = isN;
                 st.OwnedPages.TryAdd(p.PageID, 0);
                 entryIndex = p.Header.ItemCount;
+                beforeImage = _dataPageAccess.CaptureBeforeImageForWal(p);
                 _dataPageAccess.AppendDocumentToPage(p, span);
                 st.Index.Set(id, new DocumentLocation(p.PageID, entryIndex));
             }
@@ -2366,7 +2607,7 @@ public sealed class TinyDbEngine : IDisposable
                     lock (_lock) { _header.UsedPages++; WriteHeader(); }
                 }
 
-                _dataPageAccess.PersistPage(p!);
+                _dataPageAccess.PersistPageDeferred(p!, beforeImage);
 
                 if (u)
                 {
@@ -2577,7 +2818,9 @@ public sealed class TinyDbEngine : IDisposable
         return new BsonDocument(dict);
     }
 
-    private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st) => FindAll(col).FirstOrDefault(d => d["_id"].Equals(id));
+    private static bool BsonValuesEqual(BsonValue? left, BsonValue? right) => BsonValueComparer.Compare(left, right) == 0;
+
+    private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st) => FindAll(col).FirstOrDefault(d => BsonValuesEqual(d["_id"], id));
 
     private bool TryResolveDocumentLocation(string col, CollectionState st, BsonValue id, out Page p, out List<PageDocumentEntry> e, out ushort i)
     {
@@ -2690,7 +2933,7 @@ public sealed class TinyDbEngine : IDisposable
             var op = operations[i];
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
-            if (!op.DocumentId.Equals(id)) continue;
+            if (!BsonValuesEqual(op.DocumentId, id)) continue;
 
             if (op.OperationType == TransactionOperationType.Delete)
             {

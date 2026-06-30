@@ -28,7 +28,9 @@ public sealed class PageManager : IDisposable
     private Action<long>? _flushLogToLsn;
     private Func<long, CancellationToken, Task>? _flushLogToLsnAsync;
     private Action<Page, byte[]?>? _appendLogPage;
+    private Func<Page, byte[]?, CancellationToken, Task>? _appendLogPageAsync;
     private Func<bool>? _requiresWalBeforeImage;
+    private readonly ConcurrentDictionary<uint, long> _deferredWalPages = new();
 
     /// <summary>
     /// 注册 WAL 刷新回调
@@ -67,6 +69,11 @@ public sealed class PageManager : IDisposable
         _appendLogPage = appendLogPage;
         _flushLogToLsn = flushLogToLsn;
         _requiresWalBeforeImage = requiresBeforeImage;
+    }
+
+    internal void RegisterWAL(Func<Page, byte[]?, CancellationToken, Task> appendLogPageAsync)
+    {
+        _appendLogPageAsync = appendLogPageAsync ?? throw new ArgumentNullException(nameof(appendLogPageAsync));
     }
 
     /// <summary>
@@ -613,6 +620,38 @@ public sealed class PageManager : IDisposable
 
             // 标记页面为干净
             page.MarkClean();
+            _deferredWalPages.TryRemove(page.PageID, out _);
+        }
+    }
+
+    internal byte[]? CaptureBeforeImageForWal(Page page)
+    {
+        ThrowIfDisposed();
+        if (page == null) throw new ArgumentNullException(nameof(page));
+
+        if (_appendLogPage == null || _requiresWalBeforeImage?.Invoke() != true)
+        {
+            return null;
+        }
+
+        return page.Snapshot(includeUnusedTail: true);
+    }
+
+    internal void SavePageDeferred(Page page, byte[]? beforeImage)
+    {
+        ThrowIfDisposed();
+        if (page == null) throw new ArgumentNullException(nameof(page));
+
+        if (_appendLogPage == null)
+        {
+            SavePage(page, forceFlush: false);
+            return;
+        }
+
+        _appendLogPage(page, beforeImage);
+        if (page.Header.LSN >= 0)
+        {
+            _deferredWalPages[page.PageID] = page.Header.LSN;
         }
     }
 
@@ -622,14 +661,54 @@ public sealed class PageManager : IDisposable
     /// <param name="page">要保存的页面</param>
     /// <param name="forceFlush">是否强制刷新到磁盘</param>
     /// <param name="cancellationToken">取消令牌</param>
-    public Task SavePageAsync(Page page, bool forceFlush = false, CancellationToken cancellationToken = default)
+    public async Task SavePageAsync(Page page, bool forceFlush = false, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
         cancellationToken.ThrowIfCancellationRequested();
 
-        SavePage(page, forceFlush);
-        return Task.CompletedTask;
+        byte[]? beforeImage = null;
+        if ((_appendLogPage != null || _appendLogPageAsync != null) && _requiresWalBeforeImage?.Invoke() == true)
+        {
+            beforeImage = await ReadPageSnapshotForWalAsync(page.PageID, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (_appendLogPageAsync != null)
+        {
+            await _appendLogPageAsync(page, beforeImage, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            _appendLogPage?.Invoke(page, beforeImage);
+        }
+
+        if (_flushLogToLsnAsync != null && page.Header.LSN >= 0)
+        {
+            await _flushLogToLsnAsync(page.Header.LSN, cancellationToken).ConfigureAwait(false);
+        }
+        else if (_flushLogToLsn != null && page.Header.LSN >= 0)
+        {
+            _flushLogToLsn(page.Header.LSN);
+        }
+
+        long pageOffset;
+        byte[] encoded;
+        lock (_allocationLock)
+        {
+            page.UpdateChecksum();
+            pageOffset = CalculatePageOffset(page.PageID);
+            encoded = _pageCodec.Encode(page.PageID, page.Buffer);
+        }
+
+        await _diskStream.WritePageAsync(pageOffset, encoded, cancellationToken).ConfigureAwait(false);
+
+        if (forceFlush)
+        {
+            await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        page.MarkClean();
+        _deferredWalPages.TryRemove(page.PageID, out _);
     }
 
     private void WritePageToDisk(Page page, bool forceFlush)
@@ -645,6 +724,46 @@ public sealed class PageManager : IDisposable
         }
 
         page.MarkClean();
+        _deferredWalPages.TryRemove(page.PageID, out _);
+    }
+
+    private bool TryWriteDeferredWalPage(Page page)
+    {
+        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn) ||
+            page.Header.LSN != loggedLsn)
+        {
+            return false;
+        }
+
+        lock (_allocationLock)
+        {
+            WritePageToDisk(page, forceFlush: false);
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryWriteDeferredWalPageAsync(Page page, CancellationToken cancellationToken)
+    {
+        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn) ||
+            page.Header.LSN != loggedLsn)
+        {
+            return false;
+        }
+
+        long pageOffset;
+        byte[] encoded;
+        lock (_allocationLock)
+        {
+            page.UpdateChecksum();
+            pageOffset = CalculatePageOffset(page.PageID);
+            encoded = _pageCodec.Encode(page.PageID, page.Buffer);
+        }
+
+        await _diskStream.WritePageAsync(pageOffset, encoded, cancellationToken).ConfigureAwait(false);
+        page.MarkClean();
+        _deferredWalPages.TryRemove(page.PageID, out _);
+        return true;
     }
 
     private byte[]? ReadPageSnapshotForWal(uint pageID)
@@ -656,6 +775,23 @@ public sealed class PageManager : IDisposable
         }
 
         var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+        if (IsZeroFilledPage(frame))
+        {
+            return null;
+        }
+
+        return _pageCodec.Decode(pageID, frame);
+    }
+
+    private async Task<byte[]?> ReadPageSnapshotForWalAsync(uint pageID, CancellationToken cancellationToken)
+    {
+        var pageOffset = CalculatePageOffset(pageID);
+        if (pageOffset + _physicalPageSize > _fileSize)
+        {
+            return null;
+        }
+
+        var frame = await _diskStream.ReadPageAsync(pageOffset, (int)_physicalPageSize, cancellationToken).ConfigureAwait(false);
         if (IsZeroFilledPage(frame))
         {
             return null;
@@ -723,6 +859,11 @@ public sealed class PageManager : IDisposable
 
         foreach (var page in dirtyPages)
         {
+            if (TryWriteDeferredWalPage(page))
+            {
+                continue;
+            }
+
             SavePage(page);
         }
 
@@ -746,7 +887,12 @@ public sealed class PageManager : IDisposable
         foreach (var page in dirtyPages)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            SavePage(page);
+            if (await TryWriteDeferredWalPageAsync(page, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            await SavePageAsync(page, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);

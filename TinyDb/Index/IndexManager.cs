@@ -270,6 +270,23 @@ public sealed class IndexManager : IDisposable
         return _indexes.Values.Select(i => i.GetStatistics());
     }
 
+    internal IEnumerable<IndexStatistics> GetPlanningStatistics()
+    {
+        return _indexes.Values.Select(i => new IndexStatistics
+        {
+            Name = i.Name,
+            Type = i.Type,
+            Fields = i.Fields.ToArray(),
+            IsUnique = i.IsUnique,
+            IsSparse = i.IsSparse,
+            NodeCount = 0,
+            EntryCount = 0,
+            AverageKeysPerNode = 0,
+            TreeHeight = 0,
+            MaxKeysPerNode = i.MaxKeys
+        });
+    }
+
     /// <summary>
     /// 为一组查询字段找到最佳匹配索引。
     /// </summary>

@@ -6,6 +6,8 @@ using System.IO;
 using System.Linq;
 using System;
 using System.Threading;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 
 namespace TinyDb.Index;
 
@@ -26,6 +28,7 @@ public sealed class BTreeIndex : IDisposable
     private readonly PageManager? _tempPm;
     private readonly int _maxKeys;
     private readonly ReaderWriterLockSlim _lock = new();
+    private readonly SemaphoreSlim _asyncReadGate = new(1, 1);
     private const int DefaultScanBatchSize = 1024;
 
     public string Name => _name;
@@ -126,20 +129,29 @@ public sealed class BTreeIndex : IDisposable
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        _lock.EnterWriteLock();
+        _asyncReadGate.Wait();
         try
         {
-            if (_unique && _tree.Contains(key))
+            _lock.EnterWriteLock();
+            try
             {
-                return false;
+                if (_unique && _tree.Contains(key))
+                {
+                    return false;
+                }
+
+                _tree.Insert(key, documentId);
+                UpdateRootField();
+                return true;
             }
-            _tree.Insert(key, documentId);
-            UpdateRootField();
-            return true;
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
         }
         finally
         {
-            _lock.ExitWriteLock();
+            _asyncReadGate.Release();
         }
     }
 
@@ -147,16 +159,24 @@ public sealed class BTreeIndex : IDisposable
     {
         if (key == null) throw new ArgumentNullException(nameof(key));
 
-        _lock.EnterWriteLock();
+        _asyncReadGate.Wait();
         try
         {
-            var res = _tree.Delete(key, documentId);
-            UpdateRootField();
-            return res;
+            _lock.EnterWriteLock();
+            try
+            {
+                var res = _tree.Delete(key, documentId);
+                UpdateRootField();
+                return res;
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
         }
         finally
         {
-            _lock.ExitWriteLock();
+            _asyncReadGate.Release();
         }
     }
 
@@ -211,6 +231,61 @@ public sealed class BTreeIndex : IDisposable
         return GetAllReverseIterator();
     }
 
+    internal IAsyncEnumerable<BsonValue> FindAsync(IndexKey key, CancellationToken cancellationToken = default)
+    {
+        if (key == null) throw new ArgumentNullException(nameof(key));
+        return ScanRangeIteratorAsync(key, key, includeStart: true, includeEnd: true, descending: false, cancellationToken);
+    }
+
+    internal async Task<BsonValue?> FindExactAsync(IndexKey key, CancellationToken cancellationToken = default)
+    {
+        if (key == null) throw new ArgumentNullException(nameof(key));
+
+        await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await _tree.FindExactAsync(key, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _asyncReadGate.Release();
+        }
+    }
+
+    internal IAsyncEnumerable<BsonValue> FindRangeAsync(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart = true,
+        bool includeEnd = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (startKey == null) throw new ArgumentNullException(nameof(startKey));
+        if (endKey == null) throw new ArgumentNullException(nameof(endKey));
+        return ScanRangeIteratorAsync(startKey, endKey, includeStart, includeEnd, descending: false, cancellationToken);
+    }
+
+    internal IAsyncEnumerable<BsonValue> FindRangeReverseAsync(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart = true,
+        bool includeEnd = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (startKey == null) throw new ArgumentNullException(nameof(startKey));
+        if (endKey == null) throw new ArgumentNullException(nameof(endKey));
+        return ScanRangeIteratorAsync(startKey, endKey, includeStart, includeEnd, descending: true, cancellationToken);
+    }
+
+    internal IAsyncEnumerable<BsonValue> GetAllAsync(CancellationToken cancellationToken = default)
+    {
+        return ScanRangeIteratorAsync(IndexKey.MinValue, IndexKey.MaxValue, includeStart: true, includeEnd: true, descending: false, cancellationToken);
+    }
+
+    internal IAsyncEnumerable<BsonValue> GetAllReverseAsync(CancellationToken cancellationToken = default)
+    {
+        return ScanRangeIteratorAsync(IndexKey.MinValue, IndexKey.MaxValue, includeStart: true, includeEnd: true, descending: true, cancellationToken);
+    }
+
     private IEnumerable<BsonValue> GetAllIterator()
     {
         return ScanRangeIterator(IndexKey.MinValue, IndexKey.MaxValue, includeStart: true, includeEnd: true, descending: false);
@@ -219,6 +294,59 @@ public sealed class BTreeIndex : IDisposable
     private IEnumerable<BsonValue> GetAllReverseIterator()
     {
         return ScanRangeIterator(IndexKey.MinValue, IndexKey.MaxValue, includeStart: true, includeEnd: true, descending: true);
+    }
+
+    private async IAsyncEnumerable<BsonValue> ScanRangeIteratorAsync(
+        IndexKey startKey,
+        IndexKey endKey,
+        bool includeStart,
+        bool includeEnd,
+        bool descending,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        IndexKey? continuationKey = null;
+        BsonValue? continuationValue = null;
+        uint continuationPageId = 0;
+        int continuationIndex = -1;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            DiskBTree.IndexScanBatch batch;
+            await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                batch = descending
+                    ? await _tree.FindRangeReverseBatchAsync(startKey, endKey, includeStart, includeEnd, continuationKey, continuationValue, continuationPageId, continuationIndex, DefaultScanBatchSize, cancellationToken).ConfigureAwait(false)
+                    : await _tree.FindRangeBatchAsync(startKey, endKey, includeStart, includeEnd, continuationKey, continuationValue, continuationPageId, continuationIndex, DefaultScanBatchSize, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _asyncReadGate.Release();
+            }
+
+            if (batch.Values.Count == 0)
+            {
+                yield break;
+            }
+
+            foreach (var value in batch.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return value;
+            }
+
+            if (!batch.HasMore || batch.LastKey == null || batch.LastValue == null)
+            {
+                yield break;
+            }
+
+            continuationKey = batch.LastKey;
+            continuationValue = batch.LastValue;
+            continuationPageId = batch.LastPageId;
+            continuationIndex = batch.LastIndex;
+        }
     }
 
     private IEnumerable<BsonValue> ScanRangeIterator(
@@ -272,28 +400,44 @@ public sealed class BTreeIndex : IDisposable
 
     public void Clear()
     {
-        _lock.EnterWriteLock();
+        _asyncReadGate.Wait();
         try
         {
-            _tree.Clear();
-            UpdateRootField();
+            _lock.EnterWriteLock();
+            try
+            {
+                _tree.Clear();
+                UpdateRootField();
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
         }
         finally
         {
-            _lock.ExitWriteLock();
+            _asyncReadGate.Release();
         }
     }
 
     internal void DropStorage()
     {
-        _lock.EnterWriteLock();
+        _asyncReadGate.Wait();
         try
         {
-            _tree.DropPages();
+            _lock.EnterWriteLock();
+            try
+            {
+                _tree.DropPages();
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
         }
         finally
         {
-            _lock.ExitWriteLock();
+            _asyncReadGate.Release();
         }
     }
 
@@ -309,6 +453,7 @@ public sealed class BTreeIndex : IDisposable
         if (!_disposed)
         {
             _lock.Dispose();
+            _asyncReadGate.Dispose();
             _tree.Dispose();
             if (_ownsPageManager)
             {
