@@ -56,6 +56,25 @@ public sealed class QueryExecutor
         };
     }
 
+    internal IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        QueryExpression? queryExpression)
+        where T : class, new()
+    {
+        if (string.IsNullOrWhiteSpace(collectionName))
+            throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
+
+        var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, queryExpression);
+
+        return executionPlan.Strategy switch
+        {
+            QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookup<T>(executionPlan),
+            QueryExecutionStrategy.IndexScan => ExecuteIndexScan<T>(executionPlan),
+            QueryExecutionStrategy.IndexSeek => ExecuteIndexSeek<T>(executionPlan),
+            _ => ExecuteFullTableScanQuery<T>(collectionName, queryExpression)
+        };
+    }
+
     public IAsyncEnumerable<T> ExecuteAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         Expression<Func<T, bool>>? expression = null,
@@ -319,6 +338,25 @@ public sealed class QueryExecutor
         }
     }
 
+    private QueryExpression? GetPlanQueryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan)
+        where T : class, new()
+    {
+        if (executionPlan.QueryExpression != null) return executionPlan.QueryExpression;
+        return executionPlan.OriginalExpression != null
+            ? _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression)
+            : null;
+    }
+
+    private IEnumerable<T> ExecuteFullTableScanFallback<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan)
+        where T : class, new()
+    {
+        return executionPlan.QueryExpression != null
+            ? ExecuteFullTableScanQuery<T>(executionPlan.CollectionName, executionPlan.QueryExpression)
+            : ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression);
+    }
+
     private async IAsyncEnumerable<T> ExecutePrimaryKeyLookupAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -460,8 +498,7 @@ public sealed class QueryExecutor
 
         var range = BuildIndexScanRange(executionPlan);
 
-        QueryExpression? qe = null;
-        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
+        var qe = GetPlanQueryExpression<T>(executionPlan);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
         var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
@@ -533,21 +570,20 @@ public sealed class QueryExecutor
         var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
         if (idxMgr == null || executionPlan.UseIndex == null)
         {
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
+            foreach (var item in ExecuteFullTableScanFallback<T>(executionPlan)) yield return item;
             yield break;
         }
         var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
         if (index == null)
         {
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
+            foreach (var item in ExecuteFullTableScanFallback<T>(executionPlan)) yield return item;
             yield break;
         }
 
         var range = BuildIndexScanRange(executionPlan);
         var ids = index.FindRange(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax);
         
-        QueryExpression? qe = null;
-        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
+        var qe = GetPlanQueryExpression<T>(executionPlan);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
         var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
@@ -638,8 +674,7 @@ public sealed class QueryExecutor
             yield break;
         }
 
-        QueryExpression? qe = null;
-        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
+        var qe = GetPlanQueryExpression<T>(executionPlan);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
 
@@ -742,25 +777,24 @@ public sealed class QueryExecutor
         var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
         if (idxMgr == null || executionPlan.UseIndex == null)
         {
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
+            foreach (var item in ExecuteFullTableScanFallback<T>(executionPlan)) yield return item;
             yield break;
         }
         var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
         if (index == null)
         {
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
+            foreach (var item in ExecuteFullTableScanFallback<T>(executionPlan)) yield return item;
             yield break;
         }
 
         var key = BuildExactIndexKey(executionPlan);
         if (key == null)
         {
-            foreach (var item in ExecuteFullTableScan<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression)) yield return item;
+            foreach (var item in ExecuteFullTableScanFallback<T>(executionPlan)) yield return item;
             yield break;
         }
 
-        QueryExpression? qe = null;
-        if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
+        var qe = GetPlanQueryExpression<T>(executionPlan);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
 
@@ -855,6 +889,14 @@ public sealed class QueryExecutor
             catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
         }
 
+        return ExecuteFullTableScanQuery<T>(collectionName, queryExpression);
+    }
+
+    private IEnumerable<T> ExecuteFullTableScanQuery<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        QueryExpression? queryExpression)
+        where T : class, new()
+    {
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
@@ -2365,7 +2407,7 @@ public sealed class QueryExecutor
         byte[]? secondAlternateFieldNameBytes = null;
 
         // 与 ExpressionEvaluator 行为保持一致：优先 camelCase，其次原字段名，Id 特殊映射到 _id。
-        if (string.Equals(memberName, "Id", StringComparison.Ordinal))
+        if (string.Equals(memberName, "Id", StringComparison.OrdinalIgnoreCase))
         {
             fieldNameBytes = System.Text.Encoding.UTF8.GetBytes("id");
             alternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes("Id");

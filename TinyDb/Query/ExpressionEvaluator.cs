@@ -542,7 +542,12 @@ public static class ExpressionEvaluator
 
             if (doc.TryGetValue(camelName, out var val)) return val.RawValue;
             if (doc.TryGetValue(memberName, out val)) return val.RawValue;
-            if (memberName == "Id" && doc.TryGetValue("_id", out val)) return val.RawValue;
+            if (string.Equals(memberName, "Id", StringComparison.OrdinalIgnoreCase) &&
+                doc.TryGetValue("_id", out val))
+            {
+                return val.RawValue;
+            }
+
             return null;
         }
 

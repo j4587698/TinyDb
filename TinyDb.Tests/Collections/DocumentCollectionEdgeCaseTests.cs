@@ -296,7 +296,7 @@ public class DocumentCollectionEdgeCaseTests
     [Test]
     public async Task Find_WithNullPredicate_ShouldThrowArgumentNullException()
     {
-        await Assert.That(() => _collection.Find(null!).ToList())
+        await Assert.That(() => _collection.Find((System.Linq.Expressions.Expression<Func<TestEntity, bool>>)null!).ToList())
             .Throws<ArgumentNullException>();
     }
 

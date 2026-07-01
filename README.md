@@ -32,6 +32,7 @@ TinyDb 是一个 **AOT 优先**、受 **LiteDB** 启发的单文件嵌入式 NoS
 - **100% AOT 兼容** - 完全支持 Native AOT 编译，无反射依赖
 - **源代码生成器** - 编译时生成序列化代码，零运行时开销
 - **LINQ 查询** - 完整的 LINQ 支持，类型安全的查询体验
+- **动态字符串与 SQL 子集** - 支持 AOT 兼容的字符串条件、`Execute`、`select/insert/update/delete`
 - **ACID 事务** - 完整的事务支持，保证数据一致性
 - **密码保护** - 内置数据库级别加密保护
 - **高性能索引** - B+树索引，支持快速数据检索
@@ -113,6 +114,127 @@ var results = users.Query()
 var count = users.Query().Where(u => u.Age > 20).Count();
 var exists = users.Query().Any(u => u.Email.Contains("@gmail.com"));
 ```
+
+### 字符串查询与 SQL Execute
+
+TinyDb 提供一组 AOT 兼容的动态查询入口。所有动态条件和 SQL 都会先解析成内部 AST，不使用运行时动态代码生成。
+
+#### 字符串条件查询
+
+```csharp
+using TinyDb.Query;
+
+var adults = users.Find(
+    "Age >= @minAge and Name startswith @prefix",
+    QueryParams.Create(("minAge", 18), ("prefix", "张")))
+    .ToList();
+
+var page = users.Find(
+    "Age >= @minAge",
+    QueryParams.Create(("minAge", 18)),
+    skip: 20,
+    limit: 10)
+    .ToList();
+```
+
+字符串条件支持：
+
+- 字段路径：`Id`、`Name`、`Address.City`，其中 `Id` / `id` / `_id` 会按主键处理。
+- 比较：`=`、`==`、`!=`、`<>`、`>`、`>=`、`<`、`<=`，以及 `eq`、`ne`、`gt`、`gte`、`lt`、`lte`。
+- 逻辑：`and`、`or`、`not`、括号。
+- 空值：`is null`、`is not null`。
+- 字符串匹配：`contains`、`startswith` / `starts_with`、`endswith` / `ends_with`。
+- `like`：支持 `abc%`、`%abc`、`%abc%` 和精确匹配，不支持 `_` 或中间多段 `%` 通配。
+- 函数：`contains(field, value)`、`startswith(field, value)`、`endswith(field, value)`、`lower(field)`、`upper(field)`、`trim(field)`。
+- 参数：`@name`，推荐用 `QueryParams.Create(("name", value))` 传入。
+
+暂不支持：
+
+- `in` / `not in`、子查询、正则表达式。
+- 任意 .NET 方法调用；只支持上面列出的固定函数。
+- 匿名对象投影；AOT 下请使用 `BsonDocument` 或带 `[Entity]` 的 DTO。
+
+#### SQL 查询与 DML
+
+推荐新代码统一使用 `Execute`：
+
+```csharp
+// SELECT -> BsonDocument，字段名按 SELECT 里写的名字返回
+var select = users.Execute(
+    "select Id, Name from users where Age >= @age order by Age desc limit 10 offset 0",
+    QueryParams.Create(("age", 18)));
+
+foreach (var doc in select.Documents)
+{
+    var id = doc["Id"];
+    var name = doc["Name"].ToString();
+}
+
+// SELECT * 会展开为实体属性名
+var all = users.Execute("select * from users where Id = @id", QueryParams.Create(("id", id)));
+var userName = all.Documents.Single()["Name"].ToString();
+
+// 泛型 DTO 投影，DTO 需要 [Entity] 并参与源生成
+var summaries = users.Execute<UserSummary>(
+    "select Id, Name from users where Age >= @age",
+    QueryParams.Create(("age", 18))).Rows;
+
+// INSERT / UPDATE / DELETE 返回影响行数
+var inserted = users.Execute(
+    "insert into users (Id, Name, Email, Age) values (@id, @name, @email, @age)",
+    QueryParams.Create(("id", ObjectId.NewObjectId()), ("name", "李四"), ("email", "lisi@example.com"), ("age", 22)));
+
+var updated = users.Execute(
+    "update users set Name = @name, Age = @age where Id = @id",
+    QueryParams.Create(("id", id), ("name", "王五"), ("age", 23)));
+
+var deleted = users.Execute(
+    "delete from users where Id = @id",
+    QueryParams.Create(("id", id)));
+```
+
+SQL 支持：
+
+- `select * from collection`
+- `select Id, Name from collection`
+- `select Name as DisplayName from collection`
+- `where`：复用字符串条件查询语法。
+- `order by Field asc|desc`，支持多字段排序。
+- `limit`、`offset`，支持字面量或参数。
+- `insert into collection (Field1, Field2) values (@v1, @v2)`。
+- `update collection set Field = @value where ...`。
+- `delete from collection where ...`。
+- 字面量：字符串、数字、`true`、`false`、`null`。
+- DML 写入会按目标实体属性类型归一化数值字面量，避免 AOT 反序列化时因 BSON 类型不匹配而丢值。
+- `FindSql`、`FindSqlDocuments`、`FindSql<TProjection>` 仍保留兼容，但内部已走 `Execute`。
+- `TinyDbEngine.Execute<TSource>(...)` 和 `TinyDbEngine.Execute<TSource, TProjection>(...)` 可从引擎层按 SQL 中的集合名路由。
+
+注意：`update` / `delete` 的 `where` 按 SQL 语义可省略；省略时会影响整个集合。批量写入建议显式添加 `where`，需要事务时用 TinyDb 事务 API 包裹。
+
+SQL 暂不支持：
+
+- `join`；请使用 `Include(...)` 做实体引用加载。
+- `group by`、`having`、聚合函数、窗口函数。
+- 子查询、CTE、`union`。
+- `insert into ... select ...`。
+- `update set Age = Age + 1` 这类表达式赋值；当前只支持字面量或参数赋值。
+- 更新主键 `Id` / `_id`。
+- DML 的嵌套字段写入；当前 `insert` / `update` 只支持顶层字段。
+- DML 重复写入同一字段；`insert` 字段列表和 `update set` 中重复字段会被拒绝。
+- SQL 事务语法；需要事务时使用 `BeginTransaction()` / `Commit()` / `Rollback()` 包裹。
+
+#### Include 与 SQL 的关系
+
+`Include(...)` 不是 SQL `join`，它是在实体查询后按 DBRef / 外键元数据加载引用：
+
+```csharp
+var orders = db.GetCollection<Order>()
+    .Include("Customer")
+    .FindSql("select * from orders where Total >= @min", QueryParams.Create(("min", 100)))
+    .ToList();
+```
+
+`Include` 面向实体结果，不适用于 `FindSqlDocuments` / `Execute(...).Documents` 这种动态文档投影。
 
 ### 密码保护与数据页加密
 
@@ -213,6 +335,8 @@ var options = new TinyDbOptions
 ## 版本历史
 
 ### v0.4.5 (当前)
+- **动态查询与 SQL 子集**：新增 AOT 兼容的字符串条件查询、统一 `Execute` SQL 入口、`BsonDocument` 动态投影、泛型 DTO 投影，以及基础 `select/insert/update/delete` 解析执行。
+- **SQL 能力边界文档化**：明确列出当前支持的条件语法、投影规则、DML 范围，以及暂不支持的 join、聚合、子查询、表达式赋值等能力。
 - **WAL 崩溃恢复增强**：页写入前先追加并刷新 WAL，重放时会校验磁盘页头、页号和页校验和，即使半写盘页带有最新 LSN 也会从 WAL 恢复。
 - **页校验升级**：页 checksum 从旧累加和升级为 CRC32，提升半写盘和静默损坏检测能力。
 - **旧库兼容**：校验逻辑同时接受 CRC32 和旧累加和 checksum，旧库无需迁移，页面重新写入后自然升级为 CRC32。

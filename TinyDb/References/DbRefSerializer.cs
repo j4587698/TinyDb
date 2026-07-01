@@ -157,6 +157,36 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
         }
     }
 
+    /// <summary>
+    /// æ ¹æ®å­—ç¬¦ä¸²æ¡ä»¶æŸ¥æ‰¾æ–‡æ¡£å¹¶åŠ è½½å¼•ç”¨
+    /// </summary>
+    public IEnumerable<T> Find(string predicate, IReadOnlyDictionary<string, object?>? parameters = null)
+    {
+        var collection = _engine.GetCollection<T>(_collectionName);
+        var documents = collection.Find(predicate, parameters);
+
+        foreach (var doc in documents)
+        {
+            LoadReferences(doc);
+            yield return doc;
+        }
+    }
+
+    /// <summary>
+    /// æ ¹æ® SQL æŸ¥è¯¢æ–‡æ¡£å¹¶åŠ è½½å¼•ç”¨
+    /// </summary>
+    public IEnumerable<T> FindSql(string sql, IReadOnlyDictionary<string, object?>? parameters = null)
+    {
+        var collection = _engine.GetCollection<T>(_collectionName);
+        var documents = collection.FindSql(sql, parameters);
+
+        foreach (var doc in documents)
+        {
+            LoadReferences(doc);
+            yield return doc;
+        }
+    }
+
     private void LoadReferences(T entity)
     {
         if (_includes.Count == 0)
