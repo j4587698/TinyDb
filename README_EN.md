@@ -32,6 +32,7 @@ TinyDb is an **AOT-first**, **LiteDB-inspired** single-file embedded NoSQL datab
 - **100% AOT Compatible** - Full Native AOT compilation support, no reflection
 - **Source Generator** - Compile-time serialization code generation, zero runtime overhead
 - **LINQ Support** - Complete LINQ support with type-safe queries
+- **Dynamic Predicates and SQL Subset** - AOT-compatible string predicates, `Execute`, and `select/insert/update/delete`
 - **ACID Transactions** - Full transaction support for data consistency
 - **Password Protection** - Built-in database-level encryption
 - **High-Performance Indexing** - B+ tree indexes for fast data retrieval
@@ -113,6 +114,127 @@ var results = users.Query()
 var count = users.Query().Where(u => u.Age > 20).Count();
 var exists = users.Query().Any(u => u.Email.Contains("@gmail.com"));
 ```
+
+### String Predicates and SQL Execute
+
+TinyDb provides AOT-compatible dynamic query APIs. String predicates and SQL are parsed into an internal AST; TinyDb does not generate runtime code for them.
+
+#### String Predicate Queries
+
+```csharp
+using TinyDb.Query;
+
+var adults = users.Find(
+    "Age >= @minAge and Name startswith @prefix",
+    QueryParams.Create(("minAge", 18), ("prefix", "J")))
+    .ToList();
+
+var page = users.Find(
+    "Age >= @minAge",
+    QueryParams.Create(("minAge", 18)),
+    skip: 20,
+    limit: 10)
+    .ToList();
+```
+
+String predicates support:
+
+- Field paths: `Id`, `Name`, `Address.City`; `Id` / `id` / `_id` are treated as the primary key.
+- Comparisons: `=`, `==`, `!=`, `<>`, `>`, `>=`, `<`, `<=`, plus `eq`, `ne`, `gt`, `gte`, `lt`, `lte`.
+- Logic: `and`, `or`, `not`, and parentheses.
+- Null checks: `is null`, `is not null`.
+- String matching: `contains`, `startswith` / `starts_with`, `endswith` / `ends_with`.
+- `like`: supports `abc%`, `%abc`, `%abc%`, and exact matches; `_` and multi-segment middle `%` wildcards are not supported.
+- Functions: `contains(field, value)`, `startswith(field, value)`, `endswith(field, value)`, `lower(field)`, `upper(field)`, `trim(field)`.
+- Parameters: `@name`, preferably passed with `QueryParams.Create(("name", value))`.
+
+Not supported:
+
+- `in` / `not in`, subqueries, regular expressions.
+- Arbitrary .NET method calls; only the fixed functions listed above are supported.
+- Anonymous-object projection; under AOT use `BsonDocument` or a `[Entity]` DTO.
+
+#### SQL Query and DML
+
+New code should prefer the unified `Execute` API:
+
+```csharp
+// SELECT -> BsonDocument; field names follow the SELECT list as written
+var select = users.Execute(
+    "select Id, Name from users where Age >= @age order by Age desc limit 10 offset 0",
+    QueryParams.Create(("age", 18)));
+
+foreach (var doc in select.Documents)
+{
+    var id = doc["Id"];
+    var name = doc["Name"].ToString();
+}
+
+// SELECT * expands to entity property names
+var all = users.Execute("select * from users where Id = @id", QueryParams.Create(("id", id)));
+var userName = all.Documents.Single()["Name"].ToString();
+
+// Generic DTO projection. The DTO must have [Entity] and source-generator support.
+var summaries = users.Execute<UserSummary>(
+    "select Id, Name from users where Age >= @age",
+    QueryParams.Create(("age", 18))).Rows;
+
+// INSERT / UPDATE / DELETE return affected row counts
+var inserted = users.Execute(
+    "insert into users (Id, Name, Email, Age) values (@id, @name, @email, @age)",
+    QueryParams.Create(("id", ObjectId.NewObjectId()), ("name", "Alice"), ("email", "alice@example.com"), ("age", 22)));
+
+var updated = users.Execute(
+    "update users set Name = @name, Age = @age where Id = @id",
+    QueryParams.Create(("id", id), ("name", "Bob"), ("age", 23)));
+
+var deleted = users.Execute(
+    "delete from users where Id = @id",
+    QueryParams.Create(("id", id)));
+```
+
+SQL supports:
+
+- `select * from collection`
+- `select Id, Name from collection`
+- `select Name as DisplayName from collection`
+- `where`: reuses the string predicate syntax.
+- `order by Field asc|desc`, including multiple fields.
+- `limit` and `offset`, with literals or parameters.
+- `insert into collection (Field1, Field2) values (@v1, @v2)`.
+- `update collection set Field = @value where ...`.
+- `delete from collection where ...`.
+- Literals: strings, numbers, `true`, `false`, `null`.
+- DML writes normalize numeric literals to the target entity property type, avoiding BSON type mismatches under AOT deserialization.
+- `FindSql`, `FindSqlDocuments`, and `FindSql<TProjection>` remain for compatibility, but internally route through `Execute`.
+- `TinyDbEngine.Execute<TSource>(...)` and `TinyDbEngine.Execute<TSource, TProjection>(...)` route from the engine by the collection name in the SQL.
+
+Note: `where` is optional for `update` / `delete` by SQL semantics. Omitting it affects the whole collection; prefer an explicit `where` for batch writes and wrap with TinyDb transactions when needed.
+
+SQL does not currently support:
+
+- `join`; use `Include(...)` for entity reference loading.
+- `group by`, `having`, aggregate functions, window functions.
+- Subqueries, CTEs, `union`.
+- `insert into ... select ...`.
+- Assignment expressions such as `update set Age = Age + 1`; only literal or parameter assignment is supported.
+- Updating primary key fields `Id` / `_id`.
+- Nested-field writes in DML; `insert` / `update` currently support top-level fields only.
+- Writing the same DML field more than once; duplicate `insert` fields and duplicate `update set` fields are rejected.
+- SQL transaction syntax; wrap calls with `BeginTransaction()` / `Commit()` / `Rollback()` instead.
+
+#### Include and SQL
+
+`Include(...)` is not SQL `join`. It loads references after entity queries using DBRef / foreign-key metadata:
+
+```csharp
+var orders = db.GetCollection<Order>()
+    .Include("Customer")
+    .FindSql("select * from orders where Total >= @min", QueryParams.Create(("min", 100)))
+    .ToList();
+```
+
+`Include` targets entity results and does not apply to `FindSqlDocuments` or `Execute(...).Documents` dynamic document projection.
 
 ### Password Protection and Page Encryption
 
@@ -213,6 +335,8 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28)
 ## Version History
 
 ### v0.4.5 (Current)
+- **Dynamic query and SQL subset**: added AOT-compatible string predicate queries, a unified `Execute` SQL entry point, `BsonDocument` dynamic projection, generic DTO projection, and basic `select/insert/update/delete` parsing and execution.
+- **SQL capability boundaries documented**: documented supported predicate syntax, projection rules, DML scope, and unsupported capabilities such as joins, aggregation, subqueries, and expression assignments.
 - **WAL crash recovery hardening**: appends and flushes WAL before page writes, and replay now validates disk page headers, page IDs, and checksums so latest-LSN half-written pages are restored from WAL.
 - **Page checksum upgrade**: page checksums now use CRC32 instead of the previous additive checksum, improving half-write and silent corruption detection.
 - **Existing database compatibility**: checksum verification accepts both CRC32 and legacy additive checksums, so existing databases do not require migration and pages naturally upgrade to CRC32 when rewritten.

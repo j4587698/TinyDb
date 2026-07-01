@@ -332,6 +332,72 @@ public sealed class QueryOptimizer
         return plan;
     }
 
+    internal QueryExecutionPlan CreateExecutionPlan(
+        string collectionName,
+        QueryExpression? queryExpression,
+        bool planningMetadataOnly = false)
+    {
+        var plan = new QueryExecutionPlan
+        {
+            CollectionName = collectionName,
+            QueryExpression = queryExpression
+        };
+
+        if (queryExpression == null)
+        {
+            plan.Strategy = QueryExecutionStrategy.FullTableScan;
+            return plan;
+        }
+
+        var primaryKeyValue = ExtractPrimaryKeyValue(queryExpression);
+        if (primaryKeyValue != null)
+        {
+            plan.Strategy = QueryExecutionStrategy.PrimaryKeyLookup;
+            plan.IndexScanKeys = new List<IndexScanKey>
+            {
+                new IndexScanKey
+                {
+                    FieldName = "_id",
+                    Value = primaryKeyValue,
+                    ComparisonType = ComparisonType.Equal
+                }
+            };
+            return plan;
+        }
+
+        var indexManager = _engine.GetIndexManager(collectionName);
+        var availableIndexes = (planningMetadataOnly
+            ? indexManager.GetPlanningStatistics()
+            : indexManager.GetAllStatistics()).ToList();
+        if (!availableIndexes.Any())
+        {
+            plan.Strategy = QueryExecutionStrategy.FullTableScan;
+            return plan;
+        }
+
+        var comparisons = ExtractComparisonMap(queryExpression);
+        var bestIndex = SelectBestIndex(availableIndexes, comparisons);
+        if (bestIndex != null)
+        {
+            plan.Strategy = QueryExecutionStrategy.IndexScan;
+            plan.UseIndex = bestIndex;
+            plan.IndexScanKeys = ExtractIndexScanKeys(bestIndex, comparisons);
+
+            if (bestIndex.IsUnique &&
+                plan.IndexScanKeys.Count == bestIndex.Fields.Length &&
+                plan.IndexScanKeys.All(k => k.ComparisonType == ComparisonType.Equal))
+            {
+                plan.Strategy = QueryExecutionStrategy.IndexSeek;
+            }
+        }
+        else
+        {
+            plan.Strategy = QueryExecutionStrategy.FullTableScan;
+        }
+
+        return plan;
+    }
+
     /// <summary>
     /// 尝试从查询表达式中提取主键值
     /// </summary>

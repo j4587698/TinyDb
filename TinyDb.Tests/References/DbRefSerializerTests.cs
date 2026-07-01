@@ -1,6 +1,7 @@
 using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
+using TinyDb.Query;
 using TinyDb.References;
 using TinyDb.Serialization;
 using TUnit.Assertions;
@@ -177,6 +178,66 @@ public class DbRefSerializerTests
             await Assert.That(orderByNavigation).IsNotNull();
             await Assert.That(orderByNavigation!.User).IsNotNull();
             await Assert.That(orderByNavigation.User!.Name).IsEqualTo("Alice");
+        }
+        finally
+        {
+            CleanupDb(dbPath);
+        }
+    }
+
+    [Test]
+    public async Task IncludeQueryBuilder_StringFind_ShouldLoadNavigationProperty()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"include_ref_string_find_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath);
+            var users = engine.GetCollection<RefUser>("Users");
+            var orders = engine.GetCollection<RefOrderWithUser>("OrdersWithUsers");
+
+            users.Insert(new RefUser { Id = 1, Name = "Alice" });
+            users.Insert(new RefUser { Id = 2, Name = "Bob" });
+            orders.Insert(new RefOrderWithUser { Id = 10, UserId = 1 });
+            orders.Insert(new RefOrderWithUser { Id = 11, UserId = 2 });
+
+            var order = new IncludeQueryBuilder<RefOrderWithUser>(engine, "OrdersWithUsers")
+                .Include("User")
+                .Find("UserId = @userId", QueryParams.Create(("userId", 1)))
+                .Single();
+
+            await Assert.That(order.User).IsNotNull();
+            await Assert.That(order.User!.Name).IsEqualTo("Alice");
+        }
+        finally
+        {
+            CleanupDb(dbPath);
+        }
+    }
+
+    [Test]
+    public async Task IncludeQueryBuilder_SqlFind_ShouldLoadNavigationProperty()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"include_ref_sql_find_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath);
+            var users = engine.GetCollection<RefUser>("Users");
+            var orders = engine.GetCollection<RefOrderWithUser>("OrdersWithUsers");
+
+            users.Insert(new RefUser { Id = 1, Name = "Alice" });
+            users.Insert(new RefUser { Id = 2, Name = "Bob" });
+            orders.Insert(new RefOrderWithUser { Id = 10, UserId = 1 });
+            orders.Insert(new RefOrderWithUser { Id = 11, UserId = 2 });
+
+            var order = new IncludeQueryBuilder<RefOrderWithUser>(engine, "OrdersWithUsers")
+                .Include("User")
+                .FindSql("select * from OrdersWithUsers where UserId = @userId", QueryParams.Create(("userId", 2)))
+                .Single();
+
+            await Assert.That(order.User).IsNotNull();
+            await Assert.That(order.User!.Name).IsEqualTo("Bob");
         }
         finally
         {

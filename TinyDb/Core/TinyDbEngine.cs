@@ -18,6 +18,7 @@ using TinyDb.Bson;
 using TinyDb.Security;
 using TinyDb.Collections;
 using TinyDb.Index;
+using TinyDb.Query;
 using TinyDb.Serialization;
 using TinyDb.Storage;
 using TinyDb.Attributes;
@@ -627,6 +628,87 @@ public sealed class TinyDbEngine : IDisposable
     {
         var n = !string.IsNullOrEmpty(name) ? name : (GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name);
         return GetOrCreateCollection<T>(n);
+    }
+
+    public IEnumerable<T> QuerySql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where T : class, new()
+    {
+        ThrowIfDisposed();
+        if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+        var query = SqlQueryParser.ParseSelect(sql, parameters);
+        var collection = GetCollection<T>(query.CollectionName);
+        return collection is DocumentCollection<T> documentCollection
+            ? documentCollection.Execute<T>(query).Rows
+            : collection.FindSql(sql, parameters);
+    }
+
+    public IEnumerable<BsonDocument> QuerySqlDocuments<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where TSource : class, new()
+    {
+        ThrowIfDisposed();
+        if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+        var query = SqlQueryParser.ParseSelect(sql, parameters);
+        var collection = GetCollection<TSource>(query.CollectionName);
+        return collection is DocumentCollection<TSource> documentCollection
+            ? documentCollection.Execute(query).Documents
+            : collection.FindSqlDocuments(sql, parameters);
+    }
+
+    public IEnumerable<TProjection> QuerySql<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where TSource : class, new()
+        where TProjection : class, new()
+    {
+        ThrowIfDisposed();
+        if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+        var query = SqlQueryParser.ParseSelect(sql, parameters);
+        var collection = GetCollection<TSource>(query.CollectionName);
+        return collection is DocumentCollection<TSource> documentCollection
+            ? documentCollection.Execute<TProjection>(query).Rows
+            : collection.FindSql<TProjection>(sql, parameters);
+    }
+
+    public SqlExecutionResult Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where TSource : class, new()
+    {
+        ThrowIfDisposed();
+        if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+        var statement = SqlQueryParser.Parse(sql, parameters);
+        var collection = GetCollection<TSource>(statement.CollectionName);
+        return collection is DocumentCollection<TSource> documentCollection
+            ? documentCollection.Execute(statement)
+            : collection.Execute(sql, parameters);
+    }
+
+    public SqlExecutionResult<TProjection> Execute<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where TSource : class, new()
+        where TProjection : class, new()
+    {
+        ThrowIfDisposed();
+        if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+        var statement = SqlQueryParser.Parse(sql, parameters);
+        var collection = GetCollection<TSource>(statement.CollectionName);
+        return collection is DocumentCollection<TSource> documentCollection
+            ? documentCollection.Execute<TProjection>(statement)
+            : collection.Execute<TProjection>(sql, parameters);
     }
 
     private ITinyCollection<T> GetOrCreateCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string name) where T : class, new()

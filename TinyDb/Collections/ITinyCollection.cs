@@ -1,8 +1,10 @@
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics.CodeAnalysis;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
+using TinyDb.Query;
 
 namespace TinyDb.Collections;
 
@@ -79,7 +81,27 @@ public interface ITinyCollection<T> where T : class
     /// <returns>匹配的文档集合</returns>
     IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate);
 
+    IEnumerable<T> Find(string predicate, IReadOnlyDictionary<string, object?>? parameters = null);
+
+    IEnumerable<T> FindSql(string sql, IReadOnlyDictionary<string, object?>? parameters = null);
+
+    IEnumerable<BsonDocument> FindSqlDocuments(string sql, IReadOnlyDictionary<string, object?>? parameters = null);
+
+    IEnumerable<TProjection> FindSql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where TProjection : class, new();
+
+    SqlExecutionResult Execute(string sql, IReadOnlyDictionary<string, object?>? parameters = null);
+
+    SqlExecutionResult<TProjection> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
+        string sql,
+        IReadOnlyDictionary<string, object?>? parameters = null)
+        where TProjection : class, new();
+
     IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit);
+
+    IEnumerable<T> Find(string predicate, IReadOnlyDictionary<string, object?>? parameters, int skip, int limit);
 
     IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit, out long totalCount);
 

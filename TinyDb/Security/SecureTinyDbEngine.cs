@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
+using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Collections;
+using TinyDb.Query;
 
 namespace TinyDb.Security;
 
@@ -161,6 +163,67 @@ public sealed class SecureTinyDbEngine : IDisposable
             ThrowIfNotAuthenticated();
 
             return _engine.GetCollection<T>(name);
+        }
+
+        public IEnumerable<T> QuerySql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(
+            string sql,
+            IReadOnlyDictionary<string, object?>? parameters = null)
+            where T : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.QuerySql<T>(sql, parameters);
+        }
+
+        public IEnumerable<BsonDocument> QuerySqlDocuments<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
+            string sql,
+            IReadOnlyDictionary<string, object?>? parameters = null)
+            where TSource : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.QuerySqlDocuments<TSource>(sql, parameters);
+        }
+
+        public IEnumerable<TProjection> QuerySql<
+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource,
+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
+            string sql,
+            IReadOnlyDictionary<string, object?>? parameters = null)
+            where TSource : class, new()
+            where TProjection : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.QuerySql<TSource, TProjection>(sql, parameters);
+        }
+
+        public SqlExecutionResult Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
+            string sql,
+            IReadOnlyDictionary<string, object?>? parameters = null)
+            where TSource : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.Execute<TSource>(sql, parameters);
+        }
+
+        public SqlExecutionResult<TProjection> Execute<
+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource,
+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
+            string sql,
+            IReadOnlyDictionary<string, object?>? parameters = null)
+            where TSource : class, new()
+            where TProjection : class, new()
+        {
+            ThrowIfDisposed();
+            ThrowIfNotAuthenticated();
+
+            return _engine.Execute<TSource, TProjection>(sql, parameters);
         }
 
     
