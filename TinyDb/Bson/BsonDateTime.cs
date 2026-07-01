@@ -13,14 +13,13 @@ public sealed class BsonDateTime : BsonValue
     private static readonly DateTime UnixEpochUtc = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
     public override BsonType BsonType => BsonType.DateTime;
-    public override object? RawValue { get; }
+    public override object? RawValue => Value;
 
     public DateTime Value { get; }
 
     public BsonDateTime(DateTime value)
     {
         Value = value;
-        RawValue = value;
     }
 
     public static long EncodeStoredValue(DateTime value)

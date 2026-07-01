@@ -94,6 +94,23 @@ internal static class BsonValueComparer
 
     private static int CompareNumeric(BsonValue left, BsonValue right)
     {
+        // 同型整数快速路径：BsonInt32/BsonInt64 的 ToDecimal 为无损转换，直接比较与 decimal 路径严格等价，
+        // 但避免了两次 int/long→decimal 扩展与 128 位比较。整数是索引键的绝对主力，命中此路径收益最大。
+        if (left is BsonInt32 leftInt32 && right is BsonInt32 rightInt32)
+        {
+            return leftInt32.Value.CompareTo(rightInt32.Value);
+        }
+
+        if (left is BsonInt64 leftInt64 && right is BsonInt64 rightInt64)
+        {
+            return leftInt64.Value.CompareTo(rightInt64.Value);
+        }
+
+        if (left is BsonDouble leftDoubleValue && right is BsonDouble rightDoubleValue)
+        {
+            return leftDoubleValue.Value.CompareTo(rightDoubleValue.Value);
+        }
+
         if (TryGetDecimal(left, out var leftDecimal) &&
             TryGetDecimal(right, out var rightDecimal))
         {

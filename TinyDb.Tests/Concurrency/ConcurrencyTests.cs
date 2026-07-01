@@ -96,6 +96,92 @@ public class ConcurrencyTests
     }
 
     /// <summary>
+    /// 脏页跟踪竞态回归测试。
+    /// 高并发写入会让前台/后台 flush 的 MarkClean 与写线程的 MarkDirty 在同一数据页上交错，
+    /// 一旦脏页跟踪集合与 IsDirty 真值不一致并丢失脏页，关库重开后会出现数据缺失。
+    /// 用极短的后台 flush 间隔放大交错窗口，并以"关库重开后全部可读"作为脏页未丢失的判据。
+    /// </summary>
+    [Test]
+    public async Task ConcurrentInserts_ShouldNotLoseDirtyPages_AfterReopen()
+    {
+        var dirtyRaceFile = Path.GetTempFileName();
+        const int threadCount = 12;
+        const int itemsPerThread = 250;
+        const int expectedTotal = threadCount * itemsPerThread;
+
+        try
+        {
+            var options = new TinyDbOptions
+            {
+                WriteConcern = WriteConcern.Synced,
+                // 1ms 后台 flush：最大化 flush 与并发写在同一页上的交错频率
+                BackgroundFlushInterval = TimeSpan.FromMilliseconds(1)
+            };
+
+            var exceptions = new List<Exception>();
+
+            using (var engine = new TinyDbEngine(dirtyRaceFile, options))
+            {
+                var collection = engine.GetCollection<UserWithIntId>();
+                var start = new ManualResetEventSlim(false);
+                var tasks = new List<Task>();
+
+                for (int i = 0; i < threadCount; i++)
+                {
+                    var threadId = i;
+                    tasks.Add(Task.Run(() =>
+                    {
+                        try
+                        {
+                            start.Wait();
+                            for (int j = 0; j < itemsPerThread; j++)
+                            {
+                                collection.Insert(new UserWithIntId
+                                {
+                                    Name = $"User_{threadId}_{j}",
+                                    Age = 20 + j
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            lock (exceptions)
+                            {
+                                exceptions.Add(ex);
+                            }
+                        }
+                    }));
+                }
+
+                start.Set();
+                await Task.WhenAll(tasks);
+
+                await Assert.That(exceptions).IsEmpty();
+
+                // 关库前在线计数应当完整
+                await Assert.That(collection.FindAll().Count()).IsEqualTo(expectedTotal);
+            }
+
+            // 关库重开：强制走完整的 WAL + 脏页落盘路径；任何被永久遗漏的脏页都会暴露为数据丢失
+            using (var reopened = new TinyDbEngine(dirtyRaceFile, options))
+            {
+                var reopenedCollection = reopened.GetCollection<UserWithIntId>();
+                var persisted = reopenedCollection.FindAll().ToList();
+
+                await Assert.That(persisted.Count).IsEqualTo(expectedTotal);
+                await Assert.That(persisted.Select(u => u.Name).Distinct().Count()).IsEqualTo(expectedTotal);
+            }
+        }
+        finally
+        {
+            if (File.Exists(dirtyRaceFile))
+            {
+                File.Delete(dirtyRaceFile);
+            }
+        }
+    }
+
+    /// <summary>
     /// 测试读写并发 - 写操作不应阻塞读操作（如果是快照隔离）或者应正确序列化
     /// TinyDb目前可能使用锁机制，所以这里验证数据一致性
     /// </summary>

@@ -404,31 +404,37 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterReadLock();
         try
         {
-            var inserted = new List<(BTreeIndex Index, IndexKey Key)>();
+            var prepared = new List<(BTreeIndex Index, IndexKey Key)>(_indexes.Count);
             foreach (var index in _indexes.Values)
             {
                 var key = ExtractIndexKey(index, document);
                 if (key != null)
                 {
-                    try
+                    prepared.Add((index, key));
+                }
+            }
+
+            var inserted = new List<(BTreeIndex Index, IndexKey Key)>(prepared.Count);
+            foreach (var (index, key) in prepared)
+            {
+                try
+                {
+                    if (!index.Insert(key, documentId))
                     {
-                        if (!index.Insert(key, documentId))
-                        {
-                            throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
-                        }
-                        inserted.Add((index, key));
+                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
                     }
-                    catch (InvalidOperationException ex)
-                    {
-                        ThrowWithRollbackErrors(ex, RollbackInsertedIndexes(inserted, documentId));
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        var insertException = new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
-                        ThrowWithRollbackErrors(insertException, RollbackInsertedIndexes(inserted, documentId));
-                        throw insertException;
-                    }
+                    inserted.Add((index, key));
+                }
+                catch (InvalidOperationException ex)
+                {
+                    ThrowWithRollbackErrors(ex, RollbackInsertedIndexes(inserted, documentId));
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    var insertException = new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
+                    ThrowWithRollbackErrors(insertException, RollbackInsertedIndexes(inserted, documentId));
+                    throw insertException;
                 }
             }
         }

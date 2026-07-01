@@ -342,12 +342,128 @@ public sealed class DiskBTree : IDisposable
         }
         else
         {
+            if (root.IsLeaf)
+            {
+                int pos = LowerBound(root.Keys, key);
+                root.Keys.Insert(pos, key);
+                root.Values.Insert(pos, value);
+                root.SetTreeEntryCount(root.TreeEntryCount + 1);
+                root.MarkDirty();
+                root.Save(_pm);
+                return;
+            }
+
             InsertNonFull(root, key, value);
         }
         
-        root = LoadNode(_rootPageId);
         root.SetTreeEntryCount(root.TreeEntryCount + 1);
         root.Save(_pm);
+    }
+
+    public bool TryInsertUnique(IndexKey key, BsonValue value)
+    {
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+
+        var path = new List<(DiskBTreeNode Parent, int ChildIndex)>();
+        var root = LoadNode(_rootPageId);
+        var node = root;
+        while (!node.IsLeaf)
+        {
+            int childIndex = UpperBound(node.Keys, key);
+            path.Add((node, childIndex));
+            node = LoadNode(node.ChildrenIds[childIndex]);
+        }
+
+        int position = LowerBound(node.Keys, key);
+        if (position < node.KeyCount && node.Keys[position].CompareTo(key) == 0)
+        {
+            return false;
+        }
+
+        node.Keys.Insert(position, key);
+        node.Values.Insert(position, value);
+        node.MarkDirty();
+
+        var shouldSplit = ShouldSplit(node);
+        if (node.PageId == _rootPageId && !shouldSplit)
+        {
+            node.SetTreeEntryCount(node.TreeEntryCount + 1);
+            node.Save(_pm);
+            return true;
+        }
+
+        if (shouldSplit)
+        {
+            SplitOverflowNode(node, path);
+        }
+        else
+        {
+            node.Save(_pm);
+        }
+
+        var rootForCount = shouldSplit ? LoadNode(_rootPageId) : root;
+        rootForCount.SetTreeEntryCount(rootForCount.TreeEntryCount + 1);
+        rootForCount.Save(_pm);
+        return true;
+    }
+
+    private bool ShouldSplit(DiskBTreeNode node)
+    {
+        return node.IsFull((int)_pm.PageSize) || node.KeyCount > _maxKeys;
+    }
+
+    private void SplitOverflowNode(DiskBTreeNode node, List<(DiskBTreeNode Parent, int ChildIndex)> path)
+    {
+        while (ShouldSplit(node))
+        {
+            if (node.PageId == _rootPageId || path.Count == 0)
+            {
+                SplitRoot(node);
+                return;
+            }
+
+            var parentRef = path[^1];
+            path.RemoveAt(path.Count - 1);
+            SplitChild(parentRef.Parent, parentRef.ChildIndex, node);
+            node = parentRef.Parent;
+        }
+    }
+
+    private void SplitRoot(DiskBTreeNode root)
+    {
+        var newChildPage = NewIndexPage();
+        var newChild = new DiskBTreeNode(newChildPage, _pm);
+        newChild.Keys.Clear();
+        newChild.ChildrenIds.Clear();
+        newChild.Values.Clear();
+
+        newChild.SetLeaf(root.IsLeaf);
+        newChild.Keys.AddRange(root.Keys);
+        newChild.ChildrenIds.AddRange(root.ChildrenIds);
+        newChild.Values.AddRange(root.Values);
+        newChild.SetNext(root.NextSiblingId);
+        newChild.SetParent(root.PageId);
+
+        if (!newChild.IsLeaf)
+        {
+            foreach (var childId in newChild.ChildrenIds)
+            {
+                var child = LoadNode(childId);
+                child.SetParent(newChild.PageId);
+                child.Save(_pm);
+            }
+        }
+
+        long currentCount = root.TreeEntryCount;
+        root.InitAsRoot();
+        root.SetLeaf(false);
+        root.SetTreeEntryCount(currentCount);
+        root.ChildrenIds.Add(newChild.PageId);
+        root.MarkDirty();
+        root.Save(_pm);
+
+        SplitChild(root, 0, newChild);
     }
 
     private void InsertNonFull(DiskBTreeNode node, IndexKey key, BsonValue value)
@@ -797,7 +913,7 @@ public sealed class DiskBTree : IDisposable
                 if (cmpStart > 0 || (cmpStart == 0 && includeStart))
                 {
                     results.Add(value);
-                    lastKey = key.Clone();
+                    lastKey = key;
                     lastValue = value;
                     lastPageId = node.PageId;
                     lastIndex = i;
@@ -915,7 +1031,7 @@ public sealed class DiskBTree : IDisposable
                 if (cmpStart > 0 || (cmpStart == 0 && includeStart))
                 {
                     results.Add(value);
-                    lastKey = key.Clone();
+                    lastKey = key;
                     lastValue = value;
                     lastPageId = node.PageId;
                     lastIndex = i;
@@ -1072,7 +1188,7 @@ public sealed class DiskBTree : IDisposable
                 }
 
                 results.Add(value);
-                lastKey = key.Clone();
+                lastKey = key;
                 lastValue = value;
                 lastPageId = node.PageId;
                 lastIndex = i;
@@ -1196,7 +1312,7 @@ public sealed class DiskBTree : IDisposable
                 }
 
                 results.Add(value);
-                lastKey = key.Clone();
+                lastKey = key;
                 lastValue = value;
                 lastPageId = node.PageId;
                 lastIndex = i;

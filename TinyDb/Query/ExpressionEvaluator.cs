@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -11,6 +12,7 @@ namespace TinyDb.Query;
 public static class ExpressionEvaluator
 {
     private const int MaxExpressionEvaluationDepth = 256;
+    private static readonly ConcurrentDictionary<string, string> CamelCaseNameCache = new(StringComparer.Ordinal);
     [ThreadStatic]
     private static int _evaluationDepth;
 
@@ -536,7 +538,7 @@ public static class ExpressionEvaluator
         // Check BsonDocument first - it implements IEnumerable but needs special handling for property access
         if (target is BsonDocument doc)
         {
-            var camelName = ToCamelCase(memberName);
+            var camelName = CamelCaseNameCache.GetOrAdd(memberName, static name => ToCamelCase(name));
 
             if (doc.TryGetValue(camelName, out var val)) return val.RawValue;
             if (doc.TryGetValue(memberName, out val)) return val.RawValue;
@@ -878,6 +880,8 @@ public static class ExpressionEvaluator
     {
         if (string.IsNullOrEmpty(name)) return name;
         if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        var first = char.ToLowerInvariant(name[0]);
+        if (first == name[0]) return name;
+        return first + name.Substring(1);
     }
 }

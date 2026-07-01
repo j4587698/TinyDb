@@ -308,12 +308,13 @@ public sealed class QueryOptimizer
         }
 
         // 尝试找到最适合的索引
-        var bestIndex = SelectBestIndex(queryExpression, availableIndexes);
+        var comparisons = ExtractComparisonMap(queryExpression);
+        var bestIndex = SelectBestIndex(availableIndexes, comparisons);
         if (bestIndex != null)
         {
             plan.Strategy = QueryExecutionStrategy.IndexScan;
             plan.UseIndex = bestIndex;
-            plan.IndexScanKeys = ExtractIndexScanKeys(queryExpression, bestIndex);
+            plan.IndexScanKeys = ExtractIndexScanKeys(bestIndex, comparisons);
 
             // 优化：如果是唯一索引且查询覆盖了所有字段且均为等值匹配，升级为 IndexSeek
             if (bestIndex.IsUnique && 
@@ -383,14 +384,16 @@ public sealed class QueryOptimizer
     /// <param name="queryExpression">查询表达式</param>
     /// <param name="availableIndexes">可用索引列表</param>
     /// <returns>最适合的索引，如果没有合适的则返回null</returns>
-    private IndexStatistics? SelectBestIndex(QueryExpression queryExpression, IEnumerable<IndexStatistics> availableIndexes)
+    private static IndexStatistics? SelectBestIndex(
+        IEnumerable<IndexStatistics> availableIndexes,
+        IReadOnlyDictionary<string, FieldComparison> comparisons)
     {
         var candidateIndexes = new List<IndexCandidate>();
 
         // 分析每个索引与查询的匹配度
         foreach (var indexStat in availableIndexes)
         {
-            var matchScore = CalculateIndexMatchScore(queryExpression, indexStat);
+            var matchScore = CalculateIndexMatchScoreCore(indexStat, comparisons);
             if (matchScore > 0)
             {
                 candidateIndexes.Add(new IndexCandidate
@@ -414,11 +417,11 @@ public sealed class QueryOptimizer
     /// <param name="queryExpression">查询表达式</param>
     /// <param name="indexStat">索引统计</param>
     /// <returns>匹配分数（0表示不匹配）</returns>
-    private static int CalculateIndexMatchScore(QueryExpression queryExpression, IndexStatistics indexStat)
+    private static int CalculateIndexMatchScoreCore(
+        IndexStatistics indexStat,
+        IReadOnlyDictionary<string, FieldComparison> comparisons)
     {
         var score = 0;
-        var comparisons = ExtractComparisonMap(queryExpression);
-
         // 单字段索引匹配
         if (indexStat.Fields.Length == 1)
         {
@@ -457,6 +460,11 @@ public sealed class QueryOptimizer
         return score;
     }
 
+    private static int CalculateIndexMatchScore(QueryExpression queryExpression, IndexStatistics indexStat)
+    {
+        return CalculateIndexMatchScoreCore(indexStat, ExtractComparisonMap(queryExpression));
+    }
+
     /// <summary>
     /// 从查询表达式中提取查询字段
     /// </summary>
@@ -492,10 +500,11 @@ public sealed class QueryOptimizer
     /// <param name="queryExpression">查询表达式</param>
     /// <param name="indexStat">索引统计</param>
     /// <returns>索引扫描键列表</returns>
-    private static List<IndexScanKey> ExtractIndexScanKeys(QueryExpression queryExpression, IndexStatistics indexStat)
+    private static List<IndexScanKey> ExtractIndexScanKeys(
+        IndexStatistics indexStat,
+        IReadOnlyDictionary<string, FieldComparison> comparisons)
     {
         var scanKeys = new List<IndexScanKey>();
-        var comparisons = ExtractComparisonMap(queryExpression);
 
         for (int i = 0; i < indexStat.Fields.Length; i++)
         {

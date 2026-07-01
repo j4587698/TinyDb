@@ -858,13 +858,13 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         {
             sb.AppendLine("            if (entity == null) throw new ArgumentNullException(nameof(entity));");
         }
-        sb.AppendLine("            var document = new BsonDocument();");
+        sb.AppendLine("            var documentBuilder = new BsonDocumentBuilder();");
         sb.AppendLine();
 
         // 为每个属性生成序列化代码
         foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
         {
-            var bsonCode = SourceGeneratorHelpers.GeneratePropertySerialization(prop);
+            var bsonCode = RewriteDocumentSetToBuilder(SourceGeneratorHelpers.GeneratePropertySerialization(prop));
             sb.AppendLine($"            // 序列化属性: {prop.Name}");
             sb.AppendLine(bsonCode);
             sb.AppendLine();
@@ -872,12 +872,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 确保包含集合名称字段
         sb.AppendLine("            // 确保包含集合名称字段");
-        sb.AppendLine("            if (!document.ContainsKey(\"_collection\"))");
+        sb.AppendLine("            if (!documentBuilder.ContainsKey(\"_collection\"))");
         sb.AppendLine("            {");
-        sb.AppendLine($"                document = document.Set(\"_collection\", \"{classInfo.CollectionName ?? classInfo.Name}\");");
+        sb.AppendLine($"                documentBuilder.Set(\"_collection\", \"{classInfo.CollectionName ?? classInfo.Name}\");");
         sb.AppendLine("            }");
 
-        sb.AppendLine("            return document;");
+        sb.AppendLine("            return documentBuilder.Build();");
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -966,6 +966,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         }
 
         return sb.ToString();
+    }
+
+    private static string RewriteDocumentSetToBuilder(string source)
+    {
+        return source.Replace("document = document.Set(", "documentBuilder.Set(");
     }
 
     private static void GenerateForeignKeyReferences(StringBuilder sb, ClassInfo classInfo)
@@ -1282,14 +1287,14 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("        {");
         sb.AppendLine("            if (entity == null) return new BsonDocument();");
         sb.AppendLine();
-        sb.AppendLine("            var doc = new BsonDocument();");
+        sb.AppendLine("            var documentBuilder = new BsonDocumentBuilder();");
 
         foreach (var property in classInfo.Properties)
         {
-            sb.AppendLine($"            doc[\"{property.Name}\"] = ConvertToBsonValue(entity.{property.Name});");
+            sb.AppendLine($"            documentBuilder.Set(\"{property.Name}\", ConvertToBsonValue(entity.{property.Name}));");
         }
 
-        sb.AppendLine("            return doc;");
+        sb.AppendLine("            return documentBuilder.Build();");
         sb.AppendLine("        }");
         sb.AppendLine();
     }
@@ -1502,7 +1507,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine($"        /// </summary>");
         sb.AppendLine($"        private static BsonDocument Serialize_{depType.SafeMethodName}({depType.FullyQualifiedName} obj)");
         sb.AppendLine("        {");
-        sb.AppendLine("            var document = new BsonDocument();");
+        sb.AppendLine("            var documentBuilder = new BsonDocumentBuilder();");
         sb.AppendLine();
         
         // 为每个属性生成序列化代码
@@ -1517,7 +1522,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 {
                     // 循环引用属性：跳过递归序列化，设置为 null 避免栈溢出
                     sb.AppendLine($"            // 注意：属性 {prop.Name} 涉及循环引用，跳过递归序列化以避免栈溢出");
-                    sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                 }
                 else
                 {
@@ -1525,13 +1530,13 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     if (prop.IsNullable || !prop.IsValueType)
                     {
                         sb.AppendLine($"            if (obj.{prop.Name} == null)");
-                        sb.AppendLine($"                document = document.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                        sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                         sb.AppendLine($"            else");
-                        sb.AppendLine($"                document = document.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{prop.Name}));");
+                        sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{prop.Name}));");
                     }
                     else
                     {
-                        sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{prop.Name}));");
+                        sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{prop.Name}));");
                     }
                 }
             }
@@ -1540,7 +1545,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 if (prop.IsNullable)
                 {
                     sb.AppendLine($"            if (obj.{prop.Name} == null)");
-                    sb.AppendLine($"                document = document.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                     sb.AppendLine($"            else");
                     sb.AppendLine($"            {{");
                 }
@@ -1562,7 +1567,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 }
 
                 sb.AppendLine($"            }}");
-                sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", array_{prop.Name});");
+                sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", array_{prop.Name});");
 
                 if (prop.IsNullable)
                 {
@@ -1574,7 +1579,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 if (prop.IsNullable)
                 {
                     sb.AppendLine($"            if (obj.{prop.Name} == null)");
-                    sb.AppendLine($"                document = document.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                     sb.AppendLine($"            else");
                     sb.AppendLine($"            {{");
                 }
@@ -1596,7 +1601,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 }
 
                 sb.AppendLine($"            }}");
-                sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", dict_{prop.Name});");
+                sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", dict_{prop.Name});");
 
                 if (prop.IsNullable)
                 {
@@ -1606,11 +1611,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             else
             {
                 // 简单类型使用 ConvertToBsonValue
-                sb.AppendLine($"            document = document.Set(\"{bsonFieldName}\", ConvertToBsonValue(obj.{prop.Name}));");
+                sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", ConvertToBsonValue(obj.{prop.Name}));");
             }
         }
         
-        sb.AppendLine("            return document;");
+        sb.AppendLine("            return documentBuilder.Build();");
         sb.AppendLine("        }");
         sb.AppendLine();
     }

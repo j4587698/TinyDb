@@ -20,7 +20,10 @@ public sealed class WriteAheadLog : IDisposable
     private const int HeaderSize = 9;
     private const int TransactionIdSize = 16;
     private const int BeforeLengthSize = sizeof(int);
+    private const int PageChecksumOffset = 21;
+    private const int PageLsnOffset = 41;
     private const long DeferredTruncateThresholdBytes = 4L * 1024 * 1024;
+    private const long PendingDeferredTransactionLsn = -1;
 
     private readonly string _logFilePath;
     private readonly FileStream? _stream;
@@ -29,6 +32,7 @@ public sealed class WriteAheadLog : IDisposable
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly AsyncLocal<int> _synchronizationDepth = new();
     private readonly AsyncLocal<Guid?> _currentTransactionId = new();
+    private readonly AsyncLocal<TransactionPageBuffer?> _currentTransactionPages = new();
     private readonly int _maxRecordSize;
     private bool _disposed;
     private int _hasPendingEntries;
@@ -61,6 +65,55 @@ public sealed class WriteAheadLog : IDisposable
     internal bool IsInTransactionScope => IsEnabled && _currentTransactionId.Value.HasValue;
 
     internal Action? BeforeTransactionCommitForTesting { get; set; }
+    internal Action<uint, long>? DeferredTransactionPageLogged { get; set; }
+
+    private sealed class PendingTransactionPage
+    {
+        public PendingTransactionPage(uint pageId, byte[]? beforeImage, byte[] afterImage)
+        {
+            PageId = pageId;
+            BeforeImage = beforeImage;
+            AfterImage = afterImage;
+        }
+
+        public uint PageId { get; }
+        public byte[]? BeforeImage { get; }
+        public byte[] AfterImage { get; set; }
+    }
+
+    private sealed class TransactionPageBuffer
+    {
+        private readonly Dictionary<uint, PendingTransactionPage> _pages = new();
+        private readonly List<uint> _order = new();
+
+        public TransactionPageBuffer(Guid transactionId)
+        {
+            TransactionId = transactionId;
+        }
+
+        public Guid TransactionId { get; }
+
+        public void AddOrReplace(uint pageId, byte[]? beforeImage, byte[] afterImage)
+        {
+            if (!_pages.TryGetValue(pageId, out var pending))
+            {
+                _pages.Add(pageId, new PendingTransactionPage(pageId, beforeImage, afterImage));
+                _order.Add(pageId);
+                return;
+            }
+
+            pending.AfterImage = afterImage;
+        }
+
+        public IEnumerable<(uint PageId, byte[] AfterImage, byte[]? BeforeImage)> GetPagesInFirstTouchOrder()
+        {
+            foreach (var pageId in _order)
+            {
+                var pending = _pages[pageId];
+                yield return (pending.PageId, pending.AfterImage, pending.BeforeImage);
+            }
+        }
+    }
 
     public WriteAheadLog(
         string databaseFilePath,
@@ -208,6 +261,21 @@ public sealed class WriteAheadLog : IDisposable
         AppendPage(page, beforeImage: null);
     }
 
+    internal void AppendPageDeferred(Page page, byte[]? beforeImage)
+    {
+        if (!IsEnabled) return;
+        if (page == null) throw new ArgumentNullException(nameof(page));
+
+        if (_synchronizationDepth.Value > 0 && _currentTransactionId.Value is Guid transactionId)
+        {
+            BufferDeferredTransactionPage(transactionId, page, beforeImage);
+            SetHasPendingEntries(true);
+            return;
+        }
+
+        AppendPage(page, beforeImage);
+    }
+
     public void AppendPage(Page page, byte[]? beforeImage)
     {
         if (!IsEnabled) return;
@@ -241,6 +309,18 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
+    private void BufferDeferredTransactionPage(Guid transactionId, Page page, byte[]? beforeImage)
+    {
+        var transactionPages = _currentTransactionPages.Value;
+        if (transactionPages == null || transactionPages.TransactionId != transactionId)
+        {
+            throw new InvalidOperationException("WAL transaction page buffer mismatch.");
+        }
+
+        page.UpdateLsnForWal(PendingDeferredTransactionLsn);
+        transactionPages.AddOrReplace(page.PageID, beforeImage, page.Snapshot(includeUnusedTail: true));
+    }
+
     internal WalTransactionScope BeginTransaction(Guid transactionId) => BeginTransaction(transactionId, flushOnCommit: true);
 
     internal WalTransactionScope BeginTransaction(Guid transactionId, bool flushOnCommit)
@@ -255,12 +335,14 @@ public sealed class WriteAheadLog : IDisposable
         {
             _synchronizationDepth.Value++;
             _currentTransactionId.Value = transactionId;
+            _currentTransactionPages.Value = new TransactionPageBuffer(transactionId);
             WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
             SetHasPendingEntries(true);
             return new WalTransactionScope(this, transactionId, ownsMutex: true, flushOnCommit);
         }
         catch
         {
+            _currentTransactionPages.Value = null;
             _currentTransactionId.Value = null;
             _synchronizationDepth.Value--;
             _mutex.Release();
@@ -295,6 +377,7 @@ public sealed class WriteAheadLog : IDisposable
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
 
+                _wal.WriteDeferredTransactionPages(_transactionId);
                 _wal.BeforeTransactionCommitForTesting?.Invoke();
                 _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
                 _wal.SetHasPendingEntries(true);
@@ -314,9 +397,31 @@ public sealed class WriteAheadLog : IDisposable
 
             if (!_ownsMutex) return;
 
+            _wal._currentTransactionPages.Value = null;
             _wal._currentTransactionId.Value = null;
             _wal._synchronizationDepth.Value--;
             _wal._mutex.Release();
+        }
+    }
+
+    private void WriteDeferredTransactionPages(Guid transactionId)
+    {
+        var transactionPages = _currentTransactionPages.Value;
+        if (transactionPages == null)
+        {
+            return;
+        }
+
+        if (transactionPages.TransactionId != transactionId)
+        {
+            throw new InvalidOperationException("WAL transaction page buffer mismatch.");
+        }
+
+        foreach (var record in transactionPages.GetPagesInFirstTouchOrder())
+        {
+            var data = PrepareTransactionPageRecord(transactionId, record.AfterImage, record.BeforeImage, out var lsn);
+            WriteEntry(EntryTypeTransactionPage, record.PageId, data);
+            DeferredTransactionPageLogged?.Invoke(record.PageId, lsn);
         }
     }
 
@@ -325,17 +430,46 @@ public sealed class WriteAheadLog : IDisposable
         var stream = _stream!;
         long lsn = stream.Position;
 
-        var header = page.Header;
-        header.LSN = lsn;
-        page.UpdateHeader(header);
+        page.UpdateLsnForWal(lsn);
         page.UpdateChecksum();
 
         return page.Snapshot(includeUnusedTail: true);
     }
 
+    private byte[] PreparePageRecord(byte[] afterImageSnapshot, long lsn)
+    {
+        if (afterImageSnapshot == null) throw new ArgumentNullException(nameof(afterImageSnapshot));
+        if (afterImageSnapshot.Length < PageHeader.Size)
+        {
+            throw new InvalidDataException("Deferred WAL page snapshot is too small.");
+        }
+
+        var afterImage = new byte[afterImageSnapshot.Length];
+        Array.Copy(afterImageSnapshot, afterImage, afterImage.Length);
+
+        BinaryPrimitives.WriteInt64LittleEndian(afterImage.AsSpan(PageLsnOffset, sizeof(long)), lsn);
+        BinaryPrimitives.WriteUInt32LittleEndian(afterImage.AsSpan(PageChecksumOffset, sizeof(uint)), 0);
+        var checksum = TinyCrc32.HashToUInt32WithZeroedRange(afterImage, PageChecksumOffset, sizeof(uint));
+        BinaryPrimitives.WriteUInt32LittleEndian(afterImage.AsSpan(PageChecksumOffset, sizeof(uint)), checksum);
+
+        return afterImage;
+    }
+
     private byte[] PrepareTransactionPageRecord(Guid transactionId, Page page, byte[]? beforeImage)
     {
         var afterImage = PreparePageRecord(page);
+        return CreateTransactionPageRecord(transactionId, beforeImage, afterImage);
+    }
+
+    private byte[] PrepareTransactionPageRecord(Guid transactionId, byte[] afterImageSnapshot, byte[]? beforeImage, out long lsn)
+    {
+        lsn = _stream!.Position;
+        var afterImage = PreparePageRecord(afterImageSnapshot, lsn);
+        return CreateTransactionPageRecord(transactionId, beforeImage, afterImage);
+    }
+
+    private static byte[] CreateTransactionPageRecord(Guid transactionId, byte[]? beforeImage, byte[] afterImage)
+    {
         var beforeLength = beforeImage?.Length ?? -1;
         var data = new byte[TransactionIdSize + BeforeLengthSize + Math.Max(beforeLength, 0) + afterImage.Length];
         transactionId.ToByteArray().CopyTo(data, 0);

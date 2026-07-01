@@ -32,6 +32,11 @@ public sealed class BsonDocumentBuilder
         return this;
     }
 
+    public bool ContainsKey(string key)
+    {
+        return _builder.ContainsKey(key);
+    }
+
     public BsonDocument Build()
     {
         return new BsonDocument(_builder);

@@ -8,14 +8,13 @@ namespace TinyDb.Bson;
 public sealed class BsonInt64 : BsonValue
 {
     public override BsonType BsonType => BsonType.Int64;
-    public override object? RawValue { get; }
+    public override object? RawValue => Value;
 
     public long Value { get; }
 
     public BsonInt64(long value)
     {
         Value = value;
-        RawValue = value;
     }
 
     public static implicit operator BsonInt64(long value) => new(value);

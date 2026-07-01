@@ -14,16 +14,32 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
 {
     private const int ObjectIdSize = 12;
     private static readonly DateTime UnixEpoch = DateTime.UnixEpoch;
-    private static readonly byte[] EmptyBytes = new byte[ObjectIdSize];
+    private static readonly int MachineHash = CreateMachineHash();
     private static int _counter = RandomNumberGenerator.GetInt32(0x01000000);
 
-    private readonly byte[] _bytes;
-    private byte[] Bytes => _bytes ?? EmptyBytes;
+    private readonly uint _timestamp;
+    private readonly ulong _tail;
 
     /// <summary>
     /// 获取 ObjectId 的字节数组表示
     /// </summary>
-    public ReadOnlySpan<byte> ToByteArray() => Bytes;
+    public byte[] ToByteArray()
+    {
+        var bytes = new byte[ObjectIdSize];
+        CopyTo(bytes);
+        return bytes;
+    }
+
+    public void CopyTo(Span<byte> destination)
+    {
+        if (destination.Length < ObjectIdSize)
+        {
+            throw new ArgumentException("ObjectId destination must be at least 12 bytes long", nameof(destination));
+        }
+
+        BinaryPrimitives.WriteUInt32BigEndian(destination, _timestamp);
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(4), _tail);
+    }
 
     /// <summary>
     /// 获取时间戳部分
@@ -33,7 +49,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// <summary>
     /// 获取无符号 Unix 时间戳秒数。
     /// </summary>
-    public uint TimestampUnixSeconds => BinaryPrimitives.ReadUInt32BigEndian(Bytes);
+    public uint TimestampUnixSeconds => _timestamp;
 
     /// <summary>
     /// 获取时间戳秒数
@@ -47,9 +63,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            var bytes = Bytes;
-            // 3 bytes starting at index 4
-            return (bytes[4] << 16) | (bytes[5] << 8) | bytes[6];
+            return (int)((_tail >> 40) & 0x00FFFFFFUL);
         }
     }
 
@@ -60,7 +74,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            return BinaryPrimitives.ReadInt16BigEndian(Bytes.AsSpan(7));
+            return unchecked((short)((_tail >> 24) & 0xFFFFUL));
         }
     }
 
@@ -71,9 +85,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     {
         get
         {
-            var bytes = Bytes;
-            // 3 bytes starting at index 9
-            return (bytes[9] << 16) | (bytes[10] << 8) | bytes[11];
+            return (int)(_tail & 0x00FFFFFFUL);
         }
     }
 
@@ -87,7 +99,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public ObjectId()
     {
-        _bytes = new byte[ObjectIdSize];
+        _timestamp = 0;
+        _tail = 0;
     }
 
     /// <summary>
@@ -101,8 +114,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         if (bytes.Length != ObjectIdSize)
             throw new ArgumentException("ObjectId byte array must be 12 bytes long", nameof(bytes));
 
-        _bytes = new byte[ObjectIdSize];
-        Array.Copy(bytes, _bytes, ObjectIdSize);
+        _timestamp = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+        _tail = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(4));
     }
 
     /// <summary>
@@ -115,8 +128,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         if (bytes.Length != ObjectIdSize)
             throw new ArgumentException("ObjectId bytes must be 12 bytes long", nameof(bytes));
 
-        _bytes = new byte[ObjectIdSize];
-        bytes.CopyTo(_bytes);
+        _timestamp = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+        _tail = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(4));
     }
 
     /// <summary>
@@ -130,12 +143,14 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
         if (value.Length != 24)
             throw new ArgumentException("ObjectId string must be 24 characters long", nameof(value));
 
-        _bytes = new byte[ObjectIdSize];
+        Span<byte> bytes = stackalloc byte[ObjectIdSize];
         for (int i = 0; i < ObjectIdSize; i++)
         {
-            var hex = value.Substring(i * 2, 2);
-            _bytes[i] = Convert.ToByte(hex, 16);
+            bytes[i] = ParseHexByte(value, i * 2);
         }
+
+        _timestamp = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+        _tail = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(4));
     }
 
     /// <summary>
@@ -143,24 +158,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public ObjectId(DateTime timestamp, int machine, short pid, int counter)
     {
-        _bytes = new byte[ObjectIdSize];
-
-        var timestampSeconds = GetObjectIdTimestampSeconds(timestamp);
-
-        BinaryPrimitives.WriteUInt32BigEndian(_bytes.AsSpan(0, 4), timestampSeconds);
-        
-        // Machine (3 bytes)
-        _bytes[4] = (byte)(machine >> 16);
-        _bytes[5] = (byte)(machine >> 8);
-        _bytes[6] = (byte)(machine);
-
-        // Pid (2 bytes)
-        BinaryPrimitives.WriteInt16BigEndian(_bytes.AsSpan(7, 2), pid);
-
-        // Counter (3 bytes)
-        _bytes[9] = (byte)(counter >> 16);
-        _bytes[10] = (byte)(counter >> 8);
-        _bytes[11] = (byte)(counter);
+        _timestamp = GetObjectIdTimestampSeconds(timestamp);
+        _tail = PackTail(machine, pid, counter);
     }
 
     /// <summary>
@@ -169,39 +168,43 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// <returns>新的 ObjectId</returns>
     public static ObjectId NewObjectId()
     {
-        var bytes = new byte[ObjectIdSize];
-
-        // 时间戳 (4 bytes)
         var timestamp = GetObjectIdTimestampSeconds(DateTime.UtcNow);
-        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(0, 4), timestamp);
-
-        // 机器标识 (3 bytes)
-        var machineBytes = GetMachineHash();
-        // Assuming machineBytes is 3 bytes
-        if (machineBytes.Length >= 3)
-        {
-            bytes[4] = machineBytes[0];
-            bytes[5] = machineBytes[1];
-            bytes[6] = machineBytes[2];
-        }
-
-        // 进程ID (2 bytes)
-        BinaryPrimitives.WriteInt16BigEndian(bytes.AsSpan(7, 2), GetCurrentProcessId());
-
-        // 计数器 (3 bytes)
         var counter = Interlocked.Increment(ref _counter) & 0x00FFFFFF;
-        bytes[9] = (byte)(counter >> 16);
-        bytes[10] = (byte)(counter >> 8);
-        bytes[11] = (byte)(counter);
-
-        return new ObjectId(bytes);
+        return new ObjectId(timestamp, MachineHash, GetCurrentProcessId(), counter);
     }
 
-    private static byte[] GetMachineHash()
+    private ObjectId(uint timestamp, int machine, short pid, int counter)
+    {
+        _timestamp = timestamp;
+        _tail = PackTail(machine, pid, counter);
+    }
+
+    private static int CreateMachineHash()
     {
         var machineName = Environment.MachineName;
         var hash = MD5.HashData(Encoding.UTF8.GetBytes(machineName));
-        return new[] { hash[0], hash[1], hash[2] };
+        return (hash[0] << 16) | (hash[1] << 8) | hash[2];
+    }
+
+    private static ulong PackTail(int machine, short pid, int counter)
+    {
+        var machinePart = (uint)machine & 0x00FFFFFFU;
+        var pidPart = unchecked((ushort)pid);
+        var counterPart = (uint)counter & 0x00FFFFFFU;
+        return ((ulong)machinePart << 40) | ((ulong)pidPart << 24) | counterPart;
+    }
+
+    private static byte ParseHexByte(string value, int index)
+    {
+        return (byte)((FromHex(value[index]) << 4) | FromHex(value[index + 1]));
+    }
+
+    private static int FromHex(char c)
+    {
+        if ((uint)(c - '0') <= 9) return c - '0';
+        if ((uint)(c - 'a') <= 5) return c - 'a' + 10;
+        if ((uint)(c - 'A') <= 5) return c - 'A' + 10;
+        throw new FormatException("ObjectId string contains an invalid hex character.");
     }
 
     private static uint GetObjectIdTimestampSeconds(DateTime timestamp)
@@ -255,7 +258,8 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public override string ToString()
     {
-        var bytes = Bytes;
+        Span<byte> bytes = stackalloc byte[ObjectIdSize];
+        CopyTo(bytes);
         var sb = new StringBuilder(24);
         foreach (var b in bytes)
         {
@@ -269,16 +273,13 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public int CompareTo(ObjectId other)
     {
-        var left = Bytes;
-        var right = other.Bytes;
-
-        // 由于使用了 Big-Endian 存储，直接按字节比较即可保证正确的排序（时间戳优先）
-        for (int i = 0; i < ObjectIdSize; i++)
+        var timestampComparison = _timestamp.CompareTo(other._timestamp);
+        if (timestampComparison != 0)
         {
-            var cmp = left[i].CompareTo(right[i]);
-            if (cmp != 0) return Math.Sign(cmp);
+            return Math.Sign(timestampComparison);
         }
-        return 0;
+
+        return Math.Sign(_tail.CompareTo(other._tail));
     }
 
     /// <summary>
@@ -286,7 +287,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public bool Equals(ObjectId other)
     {
-        return CompareTo(other) == 0;
+        return _timestamp == other._timestamp && _tail == other._tail;
     }
 
     /// <summary>
@@ -302,17 +303,9 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public override int GetHashCode()
     {
-        var bytes = Bytes;
-        if (bytes.All(b => b == 0)) return 0;
-
-        // 使用简单的哈希算法，或者直接取前4字节（时间戳）
-        var hash = new HashCode();
-        for (int i = 0; i < ObjectIdSize; i++)
-        {
-            hash.Add(bytes[i]);
-        }
-
-        return hash.ToHashCode();
+        return _timestamp == 0 && _tail == 0
+            ? 0
+            : HashCode.Combine(_timestamp, _tail);
     }
 
     /// <summary>
@@ -381,7 +374,7 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     object IConvertible.ToType(Type conversionType, IFormatProvider? provider)
     {
         if (conversionType == typeof(string)) return ToString();
-        if (conversionType == typeof(byte[])) return ToByteArray().ToArray();
+        if (conversionType == typeof(byte[])) return ToByteArray();
         if (conversionType == typeof(ObjectId)) return this;
         if (conversionType == typeof(object)) return this;
 

@@ -181,6 +181,30 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
         }
     }
 
+    public bool TryTouch(TKey key)
+    {
+        if (!Monitor.TryEnter(_lruList))
+        {
+            return false;
+        }
+
+        try
+        {
+            if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
+            {
+                _lruList.Remove(node);
+                _lruList.AddFirst(node);
+                return true;
+            }
+
+            return false;
+        }
+        finally
+        {
+            Monitor.Exit(_lruList);
+        }
+    }
+
     /// <summary>
     /// 尝试获取最少使用的项
     /// </summary>

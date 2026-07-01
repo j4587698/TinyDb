@@ -235,6 +235,26 @@ internal static class QueryValueComparer
 
     private static int CompareNumeric(object left, object right)
     {
+        if (left is int leftInt32 && right is int rightInt32)
+        {
+            return leftInt32.CompareTo(rightInt32);
+        }
+
+        if (left is long leftInt64 && right is long rightInt64)
+        {
+            return leftInt64.CompareTo(rightInt64);
+        }
+
+        if (left is decimal leftDecimalValue && right is decimal rightDecimalValue)
+        {
+            return leftDecimalValue.CompareTo(rightDecimalValue);
+        }
+
+        if (left is double leftDoubleValue && right is double rightDoubleValue)
+        {
+            return leftDoubleValue.CompareTo(rightDoubleValue);
+        }
+
         if (TryToDecimal(left, out var leftDecimal) &&
             TryToDecimal(right, out var rightDecimal))
         {

@@ -14,6 +14,7 @@ using ExpressionType = System.Linq.Expressions.ExpressionType;
 
 namespace TinyDb.Tests.Regression;
 
+[NotInParallel]
 public sealed class ReviewReportRegressionTests : IDisposable
 {
     private readonly string _directory;
