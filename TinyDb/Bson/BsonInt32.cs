@@ -33,14 +33,13 @@ public sealed class BsonInt32 : BsonValue
     }
 
     public override BsonType BsonType => BsonType.Int32;
-    public override object? RawValue { get; }
+    public override object? RawValue => Value;
 
     public int Value { get; }
 
     public BsonInt32(int value)
     {
         Value = value;
-        RawValue = value;
     }
 
     /// <summary>

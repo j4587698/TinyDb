@@ -67,7 +67,9 @@ public static class BinaryPredicateEvaluator
                 case BsonType.ObjectId:
                     if (!TryConvertObjectId(targetValue, out var oidTarget)) return false;
                     if (!CanRead(data, offset, 12)) return false;
-                    int cmp = CompareBytes(data.Slice(offset, 12), oidTarget.ToByteArray());
+                    Span<byte> oidBytes = stackalloc byte[12];
+                    oidTarget.CopyTo(oidBytes);
+                    int cmp = CompareBytes(data.Slice(offset, 12), oidBytes);
                     result = cmp switch
                     {
                         _ when op == ExpressionType.Equal => cmp == 0,

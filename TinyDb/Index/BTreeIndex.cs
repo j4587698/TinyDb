@@ -135,12 +135,18 @@ public sealed class BTreeIndex : IDisposable
             _lock.EnterWriteLock();
             try
             {
-                if (_unique && _tree.Contains(key))
+                if (_unique)
                 {
-                    return false;
+                    if (!_tree.TryInsertUnique(key, documentId))
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    _tree.Insert(key, documentId);
                 }
 
-                _tree.Insert(key, documentId);
                 UpdateRootField();
                 return true;
             }

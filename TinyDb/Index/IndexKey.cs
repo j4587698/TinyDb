@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using TinyDb.Bson;
 
 namespace TinyDb.Index;
@@ -11,7 +12,8 @@ namespace TinyDb.Index;
 public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
 {
     private readonly BsonValue[] _values;
-    private readonly int _hashCode;
+    private int _hashCode;
+    private int _hashCodeComputed;
 
     /// <summary>
     /// 索引键值数组
@@ -31,7 +33,6 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     public IndexKey(params BsonValue[] values)
     {
         _values = values ?? throw new ArgumentNullException(nameof(values));
-        _hashCode = CalculateHashCode();
     }
 
     /// <summary>
@@ -110,7 +111,15 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// <returns>哈希码</returns>
     public override int GetHashCode()
     {
-        return _hashCode;
+        if (Volatile.Read(ref _hashCodeComputed) != 0)
+        {
+            return _hashCode;
+        }
+
+        var hashCode = CalculateHashCode();
+        _hashCode = hashCode;
+        Volatile.Write(ref _hashCodeComputed, 1);
+        return hashCode;
     }
 
     /// <summary>

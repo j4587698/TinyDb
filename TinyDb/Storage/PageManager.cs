@@ -14,6 +14,7 @@ public sealed class PageManager : IDisposable
     private readonly uint _physicalPageSize;
     private readonly IPageCodec _pageCodec;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
+    private readonly ConcurrentDictionary<uint, byte> _dirtyPageIds;
     private readonly object _allocationLock = new(); // 用于分配新页面的锁
     private readonly object _freeListLock = new();
     private readonly object[] _pageLocks; // 分段锁，用于页面级别的同步
@@ -28,6 +29,7 @@ public sealed class PageManager : IDisposable
     private Action<long>? _flushLogToLsn;
     private Func<long, CancellationToken, Task>? _flushLogToLsnAsync;
     private Action<Page, byte[]?>? _appendLogPage;
+    private Action<Page, byte[]?>? _appendDeferredLogPage;
     private Func<Page, byte[]?, CancellationToken, Task>? _appendLogPageAsync;
     private Func<bool>? _requiresWalBeforeImage;
     private readonly ConcurrentDictionary<uint, long> _deferredWalPages = new();
@@ -67,8 +69,35 @@ public sealed class PageManager : IDisposable
         if (flushLogToLsn == null) throw new ArgumentNullException(nameof(flushLogToLsn));
 
         _appendLogPage = appendLogPage;
+        _appendDeferredLogPage = appendLogPage;
         _flushLogToLsn = flushLogToLsn;
         _requiresWalBeforeImage = requiresBeforeImage;
+    }
+
+    internal void RegisterDeferredWAL(Action<Page, byte[]?> appendDeferredLogPage)
+    {
+        _appendDeferredLogPage = appendDeferredLogPage ?? throw new ArgumentNullException(nameof(appendDeferredLogPage));
+    }
+
+    internal void MarkDeferredWalPageLogged(uint pageId, long lsn)
+    {
+        ThrowIfDisposed();
+
+        var hadDeferredWrite = _deferredWalPages.TryGetValue(pageId, out _);
+        if (hadDeferredWrite)
+        {
+            _deferredWalPages[pageId] = lsn;
+        }
+
+        if (_pageCache.TryGetValue(pageId, out var page) && (hadDeferredWrite || page.Header.LSN < 0))
+        {
+            page.UpdateLsnForWal(lsn);
+            page.UpdateChecksum();
+            if (page.IsDirty)
+            {
+                TrackDirtyPage(page);
+            }
+        }
     }
 
     internal void RegisterWAL(Func<Page, byte[]?, CancellationToken, Task> appendLogPageAsync)
@@ -137,6 +166,7 @@ public sealed class PageManager : IDisposable
         _physicalPageSize = _pageCodec.PhysicalPageSize;
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
+        _dirtyPageIds = new ConcurrentDictionary<uint, byte>();
         _lruCache = new LRUCache<uint, Page>(maxCacheSize);
         _pageLocks = new object[LockStripes];
         for (int i = 0; i < LockStripes; i++) _pageLocks[i] = new object();
@@ -148,6 +178,46 @@ public sealed class PageManager : IDisposable
     private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
     {
         TinyDbLogging.SafeLog(_log, level, message, ex);
+    }
+
+    private void TrackDirtyPage(Page page)
+    {
+        _dirtyPageIds[page.PageID] = 0;
+    }
+
+    // 在 page._lock 内被回调，与 TrackDirtyPage 互斥，保证 IsDirty 与 _dirtyPageIds 的增删原子一致
+    private void UntrackDirtyPage(Page page)
+    {
+        _dirtyPageIds.TryRemove(page.PageID, out _);
+    }
+
+    private void AttachDirtyTracking(Page page)
+    {
+        page.SetDirtyCallback(TrackDirtyPage, UntrackDirtyPage);
+        if (page.IsDirty)
+        {
+            TrackDirtyPage(page);
+        }
+    }
+
+    private bool MarkPageClean(Page page, long? dirtyGeneration = null)
+    {
+        // 移除动作在 page.MarkClean() 内随 IsDirty 翻转一并完成（page._lock 内），不可在此再单独 TryRemove，否则会误删并发写刚加回的条目
+        return dirtyGeneration.HasValue
+            ? page.MarkCleanIfGeneration(dirtyGeneration.Value)
+            : MarkPageCleanWithoutGeneration(page);
+    }
+
+    private static bool MarkPageCleanWithoutGeneration(Page page)
+    {
+        page.MarkClean();
+        return true;
+    }
+
+    private void RemoveDirtyTracking(Page page)
+    {
+        page.SetDirtyCallback(null, null);
+        _dirtyPageIds.TryRemove(page.PageID, out _);
     }
 
     /// <summary>
@@ -211,7 +281,7 @@ public sealed class PageManager : IDisposable
 
         lock (_allocationLock)
         {
-            var dirtyPages = _pageCache.Values.Count(p => p.IsDirty);
+            var dirtyPages = CountDirtyPages();
             var totalPages = TotalPages;
             
             // 简单估算：扫描空闲链表长度
@@ -263,7 +333,7 @@ public sealed class PageManager : IDisposable
         // 首先尝试从缓存获取
         if (useCache && _pageCache.TryGetValue(pageID, out var cachedPage))
         {
-            _lruCache.Touch(pageID);
+            _lruCache.TryTouch(pageID);
             return cachedPage;
         }
 
@@ -358,7 +428,7 @@ public sealed class PageManager : IDisposable
                 if (_pageCache.TryGetValue(pageID, out var cachedPage))
                 {
                     cachedPage.Pin();
-                    _lruCache.Touch(pageID);
+                    _lruCache.TryTouch(pageID);
                     return cachedPage;
                 }
             }
@@ -416,7 +486,7 @@ public sealed class PageManager : IDisposable
         // 首先尝试从缓存获取
         if (useCache && _pageCache.TryGetValue(pageID, out var cachedPage))
         {
-            _lruCache.Touch(pageID);
+            _lruCache.TryTouch(pageID);
             return cachedPage;
         }
 
@@ -607,11 +677,9 @@ public sealed class PageManager : IDisposable
 
         lock (_allocationLock)
         {
-            // 更新页面校验和
-            page.UpdateChecksum();
-
+            var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
             var pageOffset = CalculatePageOffset(page.PageID);
-            _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, page.Buffer));
+            _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, snapshot));
 
             if (forceFlush)
             {
@@ -619,8 +687,10 @@ public sealed class PageManager : IDisposable
             }
 
             // 标记页面为干净
-            page.MarkClean();
-            _deferredWalPages.TryRemove(page.PageID, out _);
+            if (MarkPageClean(page, dirtyGeneration))
+            {
+                _deferredWalPages.TryRemove(page.PageID, out _);
+            }
         }
     }
 
@@ -629,7 +699,7 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
 
-        if (_appendLogPage == null || _requiresWalBeforeImage?.Invoke() != true)
+        if ((_appendLogPage == null && _appendDeferredLogPage == null) || _requiresWalBeforeImage?.Invoke() != true)
         {
             return null;
         }
@@ -642,16 +712,19 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
 
-        if (_appendLogPage == null)
+        var appendDeferredLogPage = _appendDeferredLogPage ?? _appendLogPage;
+        if (appendDeferredLogPage == null)
         {
             SavePage(page, forceFlush: false);
             return;
         }
 
-        _appendLogPage(page, beforeImage);
-        if (page.Header.LSN >= 0)
+        appendDeferredLogPage(page, beforeImage);
+        _deferredWalPages[page.PageID] = page.Header.LSN;
+
+        if (page.IsDirty)
         {
-            _deferredWalPages[page.PageID] = page.Header.LSN;
+            TrackDirtyPage(page);
         }
     }
 
@@ -693,11 +766,12 @@ public sealed class PageManager : IDisposable
 
         long pageOffset;
         byte[] encoded;
+        long dirtyGeneration;
         lock (_allocationLock)
         {
-            page.UpdateChecksum();
+            var snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
             pageOffset = CalculatePageOffset(page.PageID);
-            encoded = _pageCodec.Encode(page.PageID, page.Buffer);
+            encoded = _pageCodec.Encode(page.PageID, snapshot);
         }
 
         await _diskStream.WritePageAsync(pageOffset, encoded, cancellationToken).ConfigureAwait(false);
@@ -707,30 +781,46 @@ public sealed class PageManager : IDisposable
             await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        page.MarkClean();
-        _deferredWalPages.TryRemove(page.PageID, out _);
+        if (MarkPageClean(page, dirtyGeneration))
+        {
+            _deferredWalPages.TryRemove(page.PageID, out _);
+        }
     }
 
     private void WritePageToDisk(Page page, bool forceFlush)
     {
-        page.UpdateChecksum();
+        var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
 
         var pageOffset = CalculatePageOffset(page.PageID);
-        _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, page.Buffer));
+        _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, snapshot));
 
         if (forceFlush)
         {
             _diskStream.Flush();
         }
 
-        page.MarkClean();
-        _deferredWalPages.TryRemove(page.PageID, out _);
+        if (MarkPageClean(page, dirtyGeneration))
+        {
+            _deferredWalPages.TryRemove(page.PageID, out _);
+        }
     }
 
     private bool TryWriteDeferredWalPage(Page page)
     {
-        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn) ||
-            page.Header.LSN != loggedLsn)
+        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn))
+        {
+            return false;
+        }
+
+        var currentLsn = page.Header.LSN;
+        if (loggedLsn < 0)
+        {
+            if (currentLsn < 0)
+            {
+                return false;
+            }
+        }
+        else if (currentLsn != loggedLsn)
         {
             return false;
         }
@@ -745,24 +835,39 @@ public sealed class PageManager : IDisposable
 
     private async Task<bool> TryWriteDeferredWalPageAsync(Page page, CancellationToken cancellationToken)
     {
-        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn) ||
-            page.Header.LSN != loggedLsn)
+        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn))
+        {
+            return false;
+        }
+
+        var currentLsn = page.Header.LSN;
+        if (loggedLsn < 0)
+        {
+            if (currentLsn < 0)
+            {
+                return false;
+            }
+        }
+        else if (currentLsn != loggedLsn)
         {
             return false;
         }
 
         long pageOffset;
         byte[] encoded;
+        long dirtyGeneration;
         lock (_allocationLock)
         {
-            page.UpdateChecksum();
+            var snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
             pageOffset = CalculatePageOffset(page.PageID);
-            encoded = _pageCodec.Encode(page.PageID, page.Buffer);
+            encoded = _pageCodec.Encode(page.PageID, snapshot);
         }
 
         await _diskStream.WritePageAsync(pageOffset, encoded, cancellationToken).ConfigureAwait(false);
-        page.MarkClean();
-        _deferredWalPages.TryRemove(page.PageID, out _);
+        if (MarkPageClean(page, dirtyGeneration))
+        {
+            _deferredWalPages.TryRemove(page.PageID, out _);
+        }
         return true;
     }
 
@@ -851,14 +956,14 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        List<Page> dirtyPages;
-        lock (_allocationLock)
+        var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
+        foreach (var pageId in dirtyPageIds)
         {
-            dirtyPages = _pageCache.Values.Where(p => p.IsDirty).ToList();
-        }
+            if (!TryGetDirtyCachedPage(pageId, out var page))
+            {
+                continue;
+            }
 
-        foreach (var page in dirtyPages)
-        {
             if (TryWriteDeferredWalPage(page))
             {
                 continue;
@@ -878,15 +983,15 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        List<Page> dirtyPages;
-        lock (_allocationLock)
-        {
-            dirtyPages = _pageCache.Values.Where(p => p.IsDirty).ToList();
-        }
-
-        foreach (var page in dirtyPages)
+        var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
+        foreach (var pageId in dirtyPageIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!TryGetDirtyCachedPage(pageId, out var page))
+            {
+                continue;
+            }
+
             if (await TryWriteDeferredWalPageAsync(page, cancellationToken).ConfigureAwait(false))
             {
                 continue;
@@ -946,18 +1051,48 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_allocationLock)
+        foreach (var pageId in _dirtyPageIds.Keys)
         {
-            foreach (var page in _pageCache.Values)
+            if (TryGetDirtyCachedPage(pageId, out _))
             {
-                if (page.IsDirty)
-                {
-                    return true;
-                }
+                return true;
             }
         }
 
         return false;
+    }
+
+    private bool TryGetDirtyCachedPage(uint pageId, out Page page)
+    {
+        if (_pageCache.TryGetValue(pageId, out page!))
+        {
+            if (page.IsDirty)
+            {
+                return true;
+            }
+
+            // 页仍在缓存但已不脏：移除交给 page.MarkClean()（page._lock 内）完成，此处不主动 TryRemove，
+            // 否则可能误删并发 MarkDirty 刚加回的条目，重新引入脏页丢失竞态。
+            return false;
+        }
+
+        // 页已不在缓存（被驱逐/移除），不可能再被并发置脏，安全地清理残留 id。
+        _dirtyPageIds.TryRemove(pageId, out _);
+        return false;
+    }
+
+    private int CountDirtyPages()
+    {
+        var count = 0;
+        foreach (var pageId in _dirtyPageIds.Keys)
+        {
+            if (TryGetDirtyCachedPage(pageId, out _))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -975,6 +1110,7 @@ public sealed class PageManager : IDisposable
                 // 清空所有缓存
                 foreach (var page in _pageCache.Values)
                 {
+                    RemoveDirtyTracking(page);
                     page.Dispose();
                 }
                 _pageCache.Clear();
@@ -991,6 +1127,7 @@ public sealed class PageManager : IDisposable
                     {
                         if (_pageCache.TryRemove(pageID, out var page))
                         {
+                            RemoveDirtyTracking(page);
                             page.Dispose();
                         }
                     }
@@ -1020,7 +1157,7 @@ public sealed class PageManager : IDisposable
         {
             if (_pageCache.TryGetValue(page.PageID, out var cachedPage))
             {
-                _lruCache.Touch(page.PageID);
+                _lruCache.TryTouch(page.PageID);
                 return cachedPage;
             }
 
@@ -1032,6 +1169,7 @@ public sealed class PageManager : IDisposable
 
             if (_pageCache.TryAdd(page.PageID, page))
             {
+                AttachDirtyTracking(page);
                 _lruCache.Put(page.PageID, page);
                 return page;
             }
@@ -1061,6 +1199,7 @@ public sealed class PageManager : IDisposable
                         {
                             SavePage(removedPage);
                         }
+                        RemoveDirtyTracking(removedPage);
                         _lruCache.Remove(pageID);
                         return; // 成功驱逐一个，退出
                     }
@@ -1071,7 +1210,10 @@ public sealed class PageManager : IDisposable
 
     private void RemoveFromCache(uint pageID)
     {
-        _pageCache.TryRemove(pageID, out _);
+        if (_pageCache.TryRemove(pageID, out var page))
+        {
+            RemoveDirtyTracking(page);
+        }
         _lruCache.Remove(pageID);
     }
 

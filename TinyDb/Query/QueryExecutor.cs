@@ -7,6 +7,7 @@ using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
@@ -19,6 +20,7 @@ public sealed class QueryExecutor
     private readonly TinyDbEngine _engine;
     private readonly ExpressionParser _expressionParser;
     private readonly QueryOptimizer _queryOptimizer;
+    private const int CommittedLookupBatchSize = 256;
 
     public QueryExecutor(TinyDbEngine engine)
     {
@@ -385,6 +387,49 @@ public sealed class QueryExecutor
         }
     }
 
+    private IEnumerable<T> ResolveCommittedBatch<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        List<BsonValue> ids,
+        QueryExpression? queryExpression)
+        where T : class, new()
+    {
+        if (ids.Count == 0) yield break;
+
+        var documents = _engine.FindCommittedByIds(collectionName, ids);
+        foreach (var doc in documents)
+        {
+            if (doc == null) continue;
+            if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, doc)) continue;
+
+            var entity = AotBsonMapper.FromDocument<T>(doc);
+            if (entity != null) yield return entity;
+        }
+    }
+
+    private async Task<List<T>> ResolveCommittedBatchAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        List<BsonValue> ids,
+        QueryExpression? queryExpression,
+        CancellationToken cancellationToken)
+        where T : class, new()
+    {
+        var results = new List<T>(ids.Count);
+        if (ids.Count == 0) return results;
+
+        var documents = await _engine.FindCommittedByIdsAsync(collectionName, ids, cancellationToken).ConfigureAwait(false);
+        foreach (var doc in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (doc == null) continue;
+            if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, doc)) continue;
+
+            var entity = AotBsonMapper.FromDocument<T>(doc);
+            if (entity != null) results.Add(entity);
+        }
+
+        return results;
+    }
+
     private async IAsyncEnumerable<T> ExecuteIndexScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -419,6 +464,7 @@ public sealed class QueryExecutor
         if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
+        var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
 
         await foreach (var id in index.FindRangeAsync(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax, cancellationToken).ConfigureAwait(false))
         {
@@ -426,6 +472,16 @@ public sealed class QueryExecutor
 
             if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
             {
+                if (committedIds.Count > 0)
+                {
+                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                    committedIds.Clear();
+                    foreach (var item in batch)
+                    {
+                        yield return item;
+                    }
+                }
+
                 txOverlay.Remove(id);
                 if (txDoc == null) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, txDoc)) continue;
@@ -435,11 +491,25 @@ public sealed class QueryExecutor
                 continue;
             }
 
-            var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
-            if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+            committedIds.Add(id);
+            if (committedIds.Count >= CommittedLookupBatchSize)
             {
-                var entity = AotBsonMapper.FromDocument<T>(doc);
-                if (entity != null) yield return entity;
+                var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                committedIds.Clear();
+                foreach (var item in batch)
+                {
+                    yield return item;
+                }
+            }
+        }
+
+        if (committedIds.Count > 0)
+        {
+            var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+            committedIds.Clear();
+            foreach (var item in batch)
+            {
+                yield return item;
             }
         }
 
@@ -480,11 +550,18 @@ public sealed class QueryExecutor
         if (executionPlan.OriginalExpression != null) qe = _expressionParser.Parse<T>((Expression<Func<T, bool>>)executionPlan.OriginalExpression);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
+        var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
 
         foreach (var id in ids)
         {
             if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
             {
+                foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                {
+                    yield return item;
+                }
+                committedIds.Clear();
+
                 txOverlay.Remove(id);
                 if (txDoc == null) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, txDoc)) continue;
@@ -494,12 +571,20 @@ public sealed class QueryExecutor
                 continue;
             }
 
-            var doc = _engine.FindById(executionPlan.CollectionName, id);
-            if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+            committedIds.Add(id);
+            if (committedIds.Count >= CommittedLookupBatchSize)
             {
-                var entity = AotBsonMapper.FromDocument<T>(doc);
-                if (entity != null) yield return entity;
+                foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                {
+                    yield return item;
+                }
+                committedIds.Clear();
             }
+        }
+
+        foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+        {
+            yield return item;
         }
 
         if (txOverlay != null)
@@ -588,12 +673,23 @@ public sealed class QueryExecutor
         }
         else
         {
+            var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
             await foreach (var id in index.FindAsync(key, cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
                 {
+                    if (committedIds.Count > 0)
+                    {
+                        var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                        committedIds.Clear();
+                        foreach (var item in batch)
+                        {
+                            yield return item;
+                        }
+                    }
+
                     txOverlay.Remove(id);
                     if (txDoc == null) continue;
                     if (qe != null && !ExpressionEvaluator.Evaluate(qe, txDoc)) continue;
@@ -603,11 +699,25 @@ public sealed class QueryExecutor
                     continue;
                 }
 
-                var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
-                if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+                committedIds.Add(id);
+                if (committedIds.Count >= CommittedLookupBatchSize)
                 {
-                    var entity = AotBsonMapper.FromDocument<T>(doc);
-                    if (entity != null) yield return entity;
+                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                    committedIds.Clear();
+                    foreach (var item in batch)
+                    {
+                        yield return item;
+                    }
+                }
+            }
+
+            if (committedIds.Count > 0)
+            {
+                var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                committedIds.Clear();
+                foreach (var item in batch)
+                {
+                    yield return item;
                 }
             }
         }
@@ -684,10 +794,17 @@ public sealed class QueryExecutor
         }
         else
         {
+            var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
             foreach (var id in index.Find(key))
             {
                 if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
                 {
+                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                    {
+                        yield return item;
+                    }
+                    committedIds.Clear();
+
                     txOverlay.Remove(id);
                     if (txDoc == null) continue;
                     if (qe != null && !ExpressionEvaluator.Evaluate(qe, txDoc)) continue;
@@ -697,12 +814,20 @@ public sealed class QueryExecutor
                     continue;
                 }
 
-                var doc = _engine.FindById(executionPlan.CollectionName, id);
-                if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+                committedIds.Add(id);
+                if (committedIds.Count >= CommittedLookupBatchSize)
                 {
-                    var entity = AotBsonMapper.FromDocument<T>(doc);
-                    if (entity != null) yield return entity;
+                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                    {
+                        yield return item;
+                    }
+                    committedIds.Clear();
                 }
+            }
+
+            foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+            {
+                yield return item;
             }
         }
 

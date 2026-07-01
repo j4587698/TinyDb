@@ -13,8 +13,11 @@ public sealed class Page : IDisposable
     private readonly object _lock = new();
     private int _pinCount;
     private bool _isDirty;
+    private long _dirtyGeneration;
     private bool _disposed;
     private object? _cachedParsedData;
+    private Action<Page>? _dirtyCallback;
+    private Action<Page>? _cleanCallback;
 
     /// <summary>
     /// 获取当前的锁定计数（Pin Count）。
@@ -92,8 +95,8 @@ public sealed class Page : IDisposable
     /// </summary>
     public bool IsDirty
     {
-        get => _isDirty;
-        private set => _isDirty = value;
+        get => Volatile.Read(ref _isDirty);
+        private set => Volatile.Write(ref _isDirty, value);
     }
 
     /// <summary>
@@ -275,6 +278,7 @@ public sealed class Page : IDisposable
     }
 
     public void UpdateHeader(PageHeader header) { lock(_lock) { Header = header.Clone(); WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
+    internal void UpdateLsnForWal(long lsn) { lock(_lock) { Header.LSN = lsn; WriteHeader(); MarkDirty(); } }
     public void UpdatePageType(PageType type) { lock(_lock) { Header.PageType = type; WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
     public void SetLinks(uint prev, uint next) { lock(_lock) { Header.PrevPageID = prev; Header.NextPageID = next; WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
     
@@ -317,10 +321,71 @@ public sealed class Page : IDisposable
     }
 
     public void UpdateStats(ushort free, ushort count) { lock(_lock) { Header.FreeBytes = free; Header.ItemCount = count; Header.UpdateModification(); WriteHeader(); _cachedParsedData = null; MarkDirty(); } }
-    public void UpdateChecksum() { lock(_lock) { Header.Checksum = 0; WriteHeader(); Header.Checksum = Header.CalculateChecksum(_data); WriteHeader(); } }
+    public void UpdateChecksum() { lock(_lock) { UpdateChecksumCore(); } }
+    internal byte[] SnapshotForDiskWrite(out long dirtyGeneration)
+    {
+        ThrowIfDisposed();
+        lock (_lock)
+        {
+            UpdateChecksumCore();
+            dirtyGeneration = _dirtyGeneration;
+            var snapshot = new byte[_data.Length];
+            Array.Copy(_data, 0, snapshot, 0, snapshot.Length);
+            return snapshot;
+        }
+    }
     public bool VerifyIntegrity() { lock(_lock) { return Header.IsValid() && Header.VerifyChecksum(_data); } }
-    public void MarkClean() => IsDirty = false;
-    private void MarkDirty() => IsDirty = true;
+    // 在 _lock 内翻转 IsDirty 并回调，使脏标记与 PageManager 的脏页集合增删原子化，避免 MarkDirty/MarkClean 竞态导致脏页丢失
+    public void MarkClean()
+    {
+        lock (_lock)
+        {
+            MarkCleanCore();
+        }
+    }
+    internal bool MarkCleanIfGeneration(long dirtyGeneration)
+    {
+        lock (_lock)
+        {
+            if (_dirtyGeneration != dirtyGeneration)
+            {
+                return false;
+            }
+
+            MarkCleanCore();
+            return true;
+        }
+    }
+    internal void SetDirtyCallback(Action<Page>? dirtyCallback, Action<Page>? cleanCallback)
+    {
+        lock (_lock)
+        {
+            _dirtyCallback = dirtyCallback;
+            _cleanCallback = cleanCallback;
+        }
+    }
+    private void MarkDirty()
+    {
+        _dirtyGeneration++;
+        if (IsDirty) return;
+
+        IsDirty = true;
+        _dirtyCallback?.Invoke(this);
+    }
+    private void MarkCleanCore()
+    {
+        if (!IsDirty) return;
+
+        IsDirty = false;
+        _cleanCallback?.Invoke(this);
+    }
+    private void UpdateChecksumCore()
+    {
+        Header.Checksum = 0;
+        WriteHeader();
+        Header.Checksum = Header.CalculateChecksum(_data);
+        WriteHeader();
+    }
     private void WriteHeader() { Header.WriteTo(new Span<byte>(_data, 0, PageHeader.Size)); }
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(Page)); }
     public void Dispose() { _disposed = true; }

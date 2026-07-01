@@ -235,6 +235,28 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     private void EnsureSyncedFlush()
     {
+        if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages())
+        {
+            return;
+        }
+
+        bool joinAsyncBatch;
+        lock (_flushLock)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                throw new ObjectDisposedException(nameof(FlushScheduler));
+            }
+
+            ThrowIfBackgroundFailed();
+            joinAsyncBatch = _syncedWorkerRunning || _syncedRequests > 0;
+            if (!joinAsyncBatch)
+            {
+                _wal.Synchronize(() => _pageManager.FlushDirtyPages(), truncateLog: false);
+                return;
+            }
+        }
+
         EnsureSyncedFlushAsync(CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
     }
 
@@ -243,15 +265,34 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         while (true)
         {
             TaskCompletionSource tcsToComplete;
+            bool delayForBatch;
 
             try
             {
-                await Task.Delay(GroupCommitDelay, _cts.Token).ConfigureAwait(false);
+                await Task.Yield();
             }
             catch (OperationCanceledException)
             {
                 CancelSyncedBatch();
                 return;
+            }
+
+            lock (_flushLock)
+            {
+                delayForBatch = _syncedRequests > 1;
+            }
+
+            if (delayForBatch)
+            {
+                try
+                {
+                    await Task.Delay(GroupCommitDelay, _cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    CancelSyncedBatch();
+                    return;
+                }
             }
 
             lock (_flushLock)

@@ -125,6 +125,26 @@ public class BTreeIndexTests
     }
 
     [Test]
+    public async Task Insert_Unique_Should_Detect_Duplicate_After_Split()
+    {
+        // Arrange
+        var index = new BTreeIndex("test", new[] { "field1" }, true, 2);
+        for (int i = 0; i < 8; i++)
+        {
+            var key = new IndexKey(new BsonInt32(i));
+            index.Insert(key, new BsonInt32(i));
+        }
+
+        // Act
+        var result = index.Insert(new IndexKey(new BsonInt32(6)), new BsonInt32(99));
+
+        // Assert
+        await Assert.That(result).IsFalse();
+        await Assert.That(index.EntryCount).IsEqualTo(8);
+        await Assert.That(index.NodeCount).IsGreaterThan(1);
+    }
+
+    [Test]
     public async Task Insert_Should_Throw_ArgumentNullException_For_Null_Key()
     {
         // Arrange

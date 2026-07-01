@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
+using System.Threading;
 
 namespace TinyDb.Bson;
 
@@ -10,6 +11,7 @@ namespace TinyDb.Bson;
 public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonValue>
 {
     private readonly ImmutableList<BsonValue> _elements;
+    private BsonValue[]? _indexCache;
 
     public override BsonType BsonType => BsonType.Array;
     public override object? RawValue => _elements;
@@ -25,7 +27,7 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     /// </summary>
     public BsonValue this[int index]
     {
-        get => _elements[index];
+        get => GetIndexedElement(index);
         set => throw new NotSupportedException("BsonArray is immutable. Use Set method to create a new array.");
     }
 
@@ -34,13 +36,31 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     /// </summary>
     public bool IsReadOnly => true;
 
+    private BsonValue GetIndexedElement(int index)
+    {
+        if ((uint)index >= (uint)_elements.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        var cache = Volatile.Read(ref _indexCache);
+        if (cache is null)
+        {
+            cache = new BsonValue[_elements.Count];
+            _elements.CopyTo(cache);
+            Volatile.Write(ref _indexCache, cache);
+        }
+
+        return cache[index];
+    }
+
     
     /// <summary>
     /// 获取指定索引的值
     /// </summary>
     public BsonValue Get(int index)
     {
-        return _elements[index];
+        return GetIndexedElement(index);
     }
 
     /// <summary>

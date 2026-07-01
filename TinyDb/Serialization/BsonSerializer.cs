@@ -718,7 +718,12 @@ public sealed class BsonWriter : IDisposable
     /// <summary>
     /// 写入 ObjectId
     /// </summary>
-    public void WriteObjectId(ObjectId value) => InternalWrite(value.ToByteArray());
+    public void WriteObjectId(ObjectId value)
+    {
+        Span<byte> bytes = stackalloc byte[12];
+        value.CopyTo(bytes);
+        InternalWrite(bytes);
+    }
 
     /// <summary>
     /// 写入 DateTime

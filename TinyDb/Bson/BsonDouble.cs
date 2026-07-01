@@ -8,14 +8,13 @@ namespace TinyDb.Bson;
 public sealed class BsonDouble : BsonValue
 {
     public override BsonType BsonType => BsonType.Double;
-    public override object? RawValue { get; }
+    public override object? RawValue => Value;
 
     public double Value { get; }
 
     public BsonDouble(double value)
     {
         Value = value;
-        RawValue = value;
     }
 
     public static implicit operator BsonDouble(double value) => new(value);

@@ -18,14 +18,13 @@ public sealed class BsonBoolean : BsonValue
     public static readonly BsonBoolean False = new(false);
 
     public override BsonType BsonType => BsonType.Boolean;
-    public override object? RawValue { get; }
+    public override object? RawValue => Value;
 
     public bool Value { get; }
 
     public BsonBoolean(bool value)
     {
         Value = value;
-        RawValue = value;
     }
 
     /// <summary>
