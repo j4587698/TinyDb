@@ -64,7 +64,7 @@ public sealed class DiskStreamAsyncCoverageTests
     }
 
     [Test]
-    public async Task PageReadWriteAsync_ShouldUseFileSemaphore()
+    public async Task PageReadWriteAsync_ShouldBypassMetadataSemaphore()
     {
         var path = Path.Combine(Path.GetTempPath(), $"diskstream_async_lock_{Guid.NewGuid():N}.db");
 
@@ -80,8 +80,8 @@ public sealed class DiskStreamAsyncCoverageTests
             try
             {
                 writeTask = stream.WritePageAsync(0, data);
-                await Task.Delay(50);
-                await Assert.That(writeTask.IsCompleted).IsFalse();
+                var completed = await Task.WhenAny(writeTask, Task.Delay(TimeSpan.FromSeconds(2)));
+                await Assert.That(ReferenceEquals(completed, writeTask)).IsTrue();
             }
             finally
             {
@@ -95,8 +95,8 @@ public sealed class DiskStreamAsyncCoverageTests
             try
             {
                 readTask = stream.ReadPageAsync(0, data.Length);
-                await Task.Delay(50);
-                await Assert.That(readTask.IsCompleted).IsFalse();
+                var completed = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromSeconds(2)));
+                await Assert.That(ReferenceEquals(completed, readTask)).IsTrue();
             }
             finally
             {

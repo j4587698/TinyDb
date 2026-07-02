@@ -231,16 +231,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
         {
-            var transactionUpdatedCount = 0;
-            foreach (var entity in entities)
-            {
-                if (entity != null)
-                {
-                    transactionUpdatedCount += Update(entity);
-                }
-            }
-
-            return transactionUpdatedCount;
+            return UpdateInTransaction(entities, (Transaction)currentTransaction);
         }
 
         int updatedCount = 0;
@@ -268,6 +259,58 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         }
 
         return updatedCount;
+    }
+
+    private int UpdateInTransaction(IEnumerable<T> entities, Transaction transaction)
+    {
+        var prepared = new List<(BsonDocument Document, BsonValue Id)>();
+        var ids = new List<BsonValue>();
+
+        foreach (var entity in entities)
+        {
+            if (entity == null) continue;
+
+            var document = PrepareDocumentForUpdate(entity, out var id);
+            prepared.Add((document, id));
+            ids.Add(id);
+        }
+
+        if (prepared.Count == 0)
+        {
+            return 0;
+        }
+
+        var originalDocuments = _engine.FindByIds(_name, ids);
+        return RecordPreparedUpdatesInTransaction(prepared, originalDocuments, transaction);
+    }
+
+    private int RecordPreparedUpdatesInTransaction(
+        IReadOnlyList<(BsonDocument Document, BsonValue Id)> prepared,
+        IReadOnlyList<BsonDocument?> originalDocuments,
+        Transaction transaction)
+    {
+        var currentDocuments = new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
+        for (int i = 0; i < prepared.Count; i++)
+        {
+            currentDocuments.TryAdd(prepared[i].Id, originalDocuments[i]);
+        }
+
+        foreach (var (document, id) in prepared)
+        {
+            currentDocuments.TryGetValue(id, out var originalDocument);
+            if (originalDocument == null)
+            {
+                transaction.RecordInsert(_name, document);
+            }
+            else
+            {
+                transaction.RecordUpdate(_name, originalDocument, document);
+            }
+
+            currentDocuments[id] = document;
+        }
+
+        return prepared.Count;
     }
 
     /// <summary>
@@ -1565,17 +1608,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         var currentTransaction = _engine.GetCurrentTransaction();
         if (currentTransaction != null)
         {
-            var transactionUpdatedCount = 0;
-            foreach (var entity in entities)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (entity != null)
-                {
-                    transactionUpdatedCount += await UpdateAsync(entity, cancellationToken).ConfigureAwait(false);
-                }
-            }
-
-            return transactionUpdatedCount;
+            return await UpdateInTransactionAsync(entities, (Transaction)currentTransaction, cancellationToken).ConfigureAwait(false);
         }
 
         int updatedCount = 0;
@@ -1604,6 +1637,33 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         }
 
         return updatedCount;
+    }
+
+    private async Task<int> UpdateInTransactionAsync(
+        IEnumerable<T> entities,
+        Transaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var prepared = new List<(BsonDocument Document, BsonValue Id)>();
+        var ids = new List<BsonValue>();
+
+        foreach (var entity in entities)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entity == null) continue;
+
+            var document = PrepareDocumentForUpdate(entity, out var id);
+            prepared.Add((document, id));
+            ids.Add(id);
+        }
+
+        if (prepared.Count == 0)
+        {
+            return 0;
+        }
+
+        var originalDocuments = await _engine.FindByIdsAsync(_name, ids, cancellationToken).ConfigureAwait(false);
+        return RecordPreparedUpdatesInTransaction(prepared, originalDocuments, transaction);
     }
 
     /// <summary>

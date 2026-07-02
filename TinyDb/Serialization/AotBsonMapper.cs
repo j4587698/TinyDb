@@ -398,9 +398,7 @@ public static class AotBsonMapper
     /// <returns>驼峰命名字符串。</returns>
     private static string ToCamelCase(string name)
     {
-        if (string.IsNullOrEmpty(name)) return name;
-        if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        return BsonFieldName.ToCamelCase(name);
     }
 
     /// <summary>

@@ -1405,6 +1405,7 @@ public sealed class PageManager : IDisposable
         foreach (var pageID in candidates)
         {
             var lockObj = _pageLocks[pageID % LockStripes];
+            Page? evictionCandidate = null;
             lock (lockObj)
             {
                 if (_pageCache.TryGetValue(pageID, out var page))
@@ -1412,17 +1413,49 @@ public sealed class PageManager : IDisposable
                     // 如果页面被锁定（PinCount > 0），不能驱逐
                     if (page.PinCount > 0) continue;
 
-                    if (_pageCache.TryRemove(pageID, out var removedPage))
-                    {
-                        if (removedPage.IsDirty)
-                        {
-                            SavePage(removedPage);
-                        }
-                        RemoveDirtyTracking(removedPage);
-                        _lruCache.Remove(pageID);
-                        return; // 成功驱逐一个，退出
-                    }
+                    page.Pin();
+                    evictionCandidate = page;
                 }
+            }
+
+            if (evictionCandidate == null)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (evictionCandidate.IsDirty)
+                {
+                    SavePage(evictionCandidate);
+                }
+
+                lock (lockObj)
+                {
+                    if (!_pageCache.TryGetValue(pageID, out var currentPage) ||
+                        !ReferenceEquals(currentPage, evictionCandidate))
+                    {
+                        continue;
+                    }
+
+                    if (currentPage.PinCount > 1 || currentPage.IsDirty)
+                    {
+                        continue;
+                    }
+
+                    if (!_pageCache.TryRemove(pageID, out var removedPage))
+                    {
+                        continue;
+                    }
+
+                    RemoveDirtyTracking(removedPage);
+                    _lruCache.Remove(pageID);
+                    return; // 成功驱逐一个，退出
+                }
+            }
+            finally
+            {
+                evictionCandidate.Unpin();
             }
         }
     }

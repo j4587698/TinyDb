@@ -5,6 +5,7 @@ using System.Reflection;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
+using TinyDb.Serialization;
 
 namespace TinyDb.Index;
 
@@ -74,7 +75,7 @@ public static class IndexScanner
 
         foreach (var (indexName, entries) in groupedIndexes)
         {
-            var fields = entries.Select(e => ToCamelCase(e.Property.Name)).ToArray();
+            var fields = entries.Select(e => BsonFieldName.ForProperty(e.Property, entityType)).ToArray();
             var unique = entries.Any(e => e.Attribute.Unique);
             var sparse = entries.Any(e => e.Attribute.Sparse);
 
@@ -140,7 +141,7 @@ public static class IndexScanner
                 indexes.Add(new EntityIndexInfo
                 {
                     Name = GenerateIndexName(indexAttr, property.Name),
-                    Fields = new[] { ToCamelCase(property.Name) },
+                    Fields = new[] { BsonFieldName.ForProperty(property, entityType) },
                     IsUnique = indexAttr.Unique,
                     IsSparse = indexAttr.Sparse,
                     SortDirection = indexAttr.SortDirection,
@@ -186,9 +187,7 @@ public static class IndexScanner
 
     private static string ToCamelCase(string name)
     {
-        if (string.IsNullOrEmpty(name)) return name;
-        if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        return BsonFieldName.ToCamelCase(name);
     }
 }
 
