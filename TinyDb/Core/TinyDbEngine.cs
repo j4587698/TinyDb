@@ -69,6 +69,7 @@ public sealed class TinyDbEngine : IDisposable
     private bool _isInitialized;
     private long _findByIdFullScanCount;
     private long _findByIdFullScanHitCount;
+    private long _findByIdStaleIndexHitCount;
 
     private const int DocumentLengthPrefixSize = sizeof(int);
     private const int MinimumFreeSpaceThreshold = DocumentLengthPrefixSize + 64;
@@ -100,6 +101,11 @@ public sealed class TinyDbEngine : IDisposable
     /// 获取 FindById 全扫描回退实际找回已存在文档的次数。
     /// </summary>
     public long FindByIdFullScanHitCount => Interlocked.Read(ref _findByIdFullScanHitCount);
+
+    /// <summary>
+    /// 获取 FindById 主键索引命中但指向记录失效或不匹配的次数。
+    /// </summary>
+    public long FindByIdStaleIndexHitCount => Interlocked.Read(ref _findByIdStaleIndexHitCount);
 
     public TinyDb.Metadata.MetadataManager MetadataManager => _metadataManager;
 
@@ -185,30 +191,6 @@ public sealed class TinyDbEngine : IDisposable
         _metadataManager = new TinyDb.Metadata.MetadataManager(this);
 
         InitializeDatabase();
-    }
-
-    private static uint ResolvePageSize(IDiskStream diskStream, uint configuredPageSize)
-    {
-        if (diskStream.Size < Page.DataStartOffset + DatabaseHeader.Size)
-        {
-            return configuredPageSize;
-        }
-
-        try
-        {
-            var headerBytes = diskStream.ReadPage(Page.DataStartOffset, DatabaseHeader.Size);
-            var header = DatabaseHeader.FromByteArray(headerBytes);
-            if (header.Magic == DatabaseHeader.MagicNumber && IsSupportedPageSize(header.PageSize))
-            {
-                return header.PageSize;
-            }
-        }
-        catch
-        {
-            // Fall through to the configured size; normal header validation will report corruption.
-        }
-
-        return configuredPageSize;
     }
 
     private static bool TryReadBootstrapHeader(IDiskStream diskStream, out DatabaseHeader header)
@@ -2346,6 +2328,8 @@ public sealed class TinyDbEngine : IDisposable
             {
                 return ResolveLargeDocument(document);
             }
+
+            RecordFindByIdStaleIndexHit(col, id);
         }
 
         return FindByIdFullScan(col, id, st);
@@ -2357,6 +2341,7 @@ public sealed class TinyDbEngine : IDisposable
 
         var st = GetCollectionState(col);
         var results = new BsonDocument?[ids.Count];
+        var indexHits = new bool[ids.Count];
         var pageLookups = new Dictionary<uint, List<(BsonValue Id, int Ordinal, DocumentLocation Location)>>();
 
         lock (st.PageState.SyncRoot)
@@ -2365,6 +2350,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 if (st.Index.TryGet(ids[i], out var location))
                 {
+                    indexHits[i] = true;
                     if (!pageLookups.TryGetValue(location.PageId, out var lookups))
                     {
                         lookups = new List<(BsonValue Id, int Ordinal, DocumentLocation Location)>();
@@ -2388,6 +2374,11 @@ public sealed class TinyDbEngine : IDisposable
 
         for (int i = 0; i < results.Length; i++)
         {
+            if (results[i] == null && indexHits[i])
+            {
+                RecordFindByIdStaleIndexHit(col, ids[i]);
+            }
+
             results[i] ??= FindByIdFullScan(col, ids[i], st);
             if (results[i] != null)
             {
@@ -2421,6 +2412,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             var indexedDocument = await TryReadCommittedByLocationAsync(col, id, st, location, cancellationToken).ConfigureAwait(false);
             if (indexedDocument != null) return indexedDocument;
+            RecordFindByIdStaleIndexHit(col, id);
         }
 
         return await FindByIdFullScanAsync(col, id, cancellationToken).ConfigureAwait(false);
@@ -2436,6 +2428,7 @@ public sealed class TinyDbEngine : IDisposable
 
         var st = GetCollectionState(col);
         var results = new BsonDocument?[ids.Count];
+        var indexHits = new bool[ids.Count];
         var pageLookups = new Dictionary<uint, List<(BsonValue Id, int Ordinal, DocumentLocation Location)>>();
 
         lock (st.PageState.SyncRoot)
@@ -2444,6 +2437,7 @@ public sealed class TinyDbEngine : IDisposable
             {
                 if (st.Index.TryGet(ids[i], out var location))
                 {
+                    indexHits[i] = true;
                     if (!pageLookups.TryGetValue(location.PageId, out var lookups))
                     {
                         lookups = new List<(BsonValue Id, int Ordinal, DocumentLocation Location)>();
@@ -2469,6 +2463,11 @@ public sealed class TinyDbEngine : IDisposable
         for (int i = 0; i < results.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (results[i] == null && indexHits[i])
+            {
+                RecordFindByIdStaleIndexHit(col, ids[i]);
+            }
+
             results[i] ??= await FindByIdFullScanAsync(col, ids[i], cancellationToken).ConfigureAwait(false);
             if (results[i] != null)
             {
@@ -3227,6 +3226,17 @@ public sealed class TinyDbEngine : IDisposable
             Log(
                 TinyDbLogLevel.Warning,
                 $"Primary key index miss in collection '{col}' for id '{id}'. Full-scan fallback found the document. HitCount={count}.");
+        }
+    }
+
+    private void RecordFindByIdStaleIndexHit(string col, BsonValue id)
+    {
+        var count = Interlocked.Increment(ref _findByIdStaleIndexHitCount);
+        if (count == 1 || IsPowerOfTwo(count))
+        {
+            Log(
+                TinyDbLogLevel.Warning,
+                $"Primary key index stale hit in collection '{col}' for id '{id}'. Falling back to full scan. StaleHitCount={count}.");
         }
     }
 

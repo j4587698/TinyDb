@@ -137,6 +137,40 @@ public class TransactionManagerAdditionalCoverageTests
     }
 
     [Test]
+    public async Task CommitExpiredTransaction_ShouldReportTimeoutReason()
+    {
+        var testDirectory = CreateTempDirectory();
+        try
+        {
+            var dbPath = Path.Combine(testDirectory, "test.db");
+            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
+            using var manager = new TransactionManager(engine, maxTransactions: 10, transactionTimeout: TimeSpan.FromTicks(-1));
+            using var transaction = manager.BeginTransaction();
+
+            var method = typeof(TransactionManager).GetMethod("CheckAndCleanupExpiredTransactions", BindingFlags.Instance | BindingFlags.NonPublic);
+            await Assert.That(method).IsNotNull();
+            method!.Invoke(manager, null);
+
+            InvalidOperationException? exception = null;
+            try
+            {
+                transaction.Commit();
+            }
+            catch (InvalidOperationException ex)
+            {
+                exception = ex;
+            }
+
+            await Assert.That(exception).IsNotNull();
+            await Assert.That(exception!.Message).Contains("timed out");
+        }
+        finally
+        {
+            TryDeleteDirectory(testDirectory);
+        }
+    }
+
+    [Test]
     public async Task Commit_ForeignKeyValidation_ShouldCover_FieldLookupBranches()
     {
         var testDirectory = CreateTempDirectory();

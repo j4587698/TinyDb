@@ -83,12 +83,13 @@ internal sealed class DataPageAccess
             offset += 4;
             
             if (offset + len > span.Length) break;
-            var bytes = span.Slice(offset, len).ToArray();
+            var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, len);
+            var bytes = rawDocument.Span.ToArray();
             offset += len;
             
             try
             {
-                var doc = BsonSerializer.DeserializeDocument(bytes);
+                var doc = BsonSerializer.DeserializeDocument(rawDocument);
                 bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
                 uint lId = isL ? (uint)doc["_largeDocumentIndex"].ToInt64(null) : 0;
                 int lS = isL ? (int)doc["_largeDocumentSize"].ToInt64(null) : 0;
@@ -127,10 +128,11 @@ internal sealed class DataPageAccess
         offset += 4;
         if (offset + targetLen > span.Length) return null;
 
-        var bytes = span.Slice(offset, targetLen).ToArray();
+        var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, targetLen);
+        var bytes = rawDocument.Span.ToArray();
         try
         {
-            var doc = BsonSerializer.DeserializeDocument(bytes);
+            var doc = BsonSerializer.DeserializeDocument(rawDocument);
             bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
             uint lId = isL ? (uint)doc["_largeDocumentIndex"].ToInt64(null) : 0;
             int lS = isL ? (int)doc["_largeDocumentSize"].ToInt64(null) : 0;
@@ -165,7 +167,7 @@ internal sealed class DataPageAccess
         offset += 4;
         if (offset + targetLen > span.Length) return null;
 
-        var bytes = span.Slice(offset, targetLen).ToArray();
+        var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, targetLen);
         try
         {
             // Always ensure system fields are loaded to check for large document
@@ -177,8 +179,8 @@ internal sealed class DataPageAccess
             }
 
             var doc = fields != null
-                ? BsonSerializer.DeserializeDocument(bytes, fields)
-                : BsonSerializer.DeserializeDocument(bytes);
+                ? BsonSerializer.DeserializeDocument(rawDocument, fields)
+                : BsonSerializer.DeserializeDocument(rawDocument);
 
             bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
             if (isL)

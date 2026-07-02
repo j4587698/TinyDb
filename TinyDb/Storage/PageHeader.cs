@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using TinyDb.Utils;
 
@@ -105,8 +106,7 @@ public class PageHeader
     {
         return PageID > 0 &&
                CreatedAt > 0 &&
-               ModifiedAt >= CreatedAt &&
-               Version >= 0; // Allow version 0
+               ModifiedAt >= CreatedAt;
     }
 
 
@@ -149,16 +149,16 @@ public class PageHeader
             throw new ArgumentException("Destination span is too small.", nameof(destination));
 
         destination[0] = (byte)PageType;
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(1), PageID);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5), PrevPageID);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(9), NextPageID);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(13), FreeBytes);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(15), ItemCount);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(17), Version);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(21), Checksum);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(25), CreatedAt);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(33), ModifiedAt);
-        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(41), LSN);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(1), PageID);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5), PrevPageID);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(9), NextPageID);
+        BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(13), FreeBytes);
+        BinaryPrimitives.WriteUInt16LittleEndian(destination.Slice(15), ItemCount);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(17), Version);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(21), Checksum);
+        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(25), CreatedAt);
+        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(33), ModifiedAt);
+        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(41), LSN);
     }
 
     /// <summary>
@@ -176,28 +176,34 @@ public class PageHeader
     /// </summary>
     public static PageHeader FromByteArray(byte[] data)
     {
-        if (data == null || data.Length < Size)
+        if (data == null)
             throw new ArgumentException("Invalid data size for PageHeader", nameof(data));
 
-        using var stream = new MemoryStream(data, 0, Size);
-        using var reader = new BinaryReader(stream);
+        return FromSpan(data);
+    }
 
-        var header = new PageHeader
+    /// <summary>
+    /// 从字节 Span 创建页面头部
+    /// </summary>
+    public static PageHeader FromSpan(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < Size)
+            throw new ArgumentException("Invalid data size for PageHeader", nameof(data));
+
+        return new PageHeader
         {
-            PageType = (PageType)reader.ReadByte(),
-            PageID = reader.ReadUInt32(),
-            PrevPageID = reader.ReadUInt32(),
-            NextPageID = reader.ReadUInt32(),
-            FreeBytes = reader.ReadUInt16(),
-            ItemCount = reader.ReadUInt16(),
-            Version = reader.ReadUInt32(),
-            Checksum = reader.ReadUInt32(),
-            CreatedAt = reader.ReadInt64(),
-            ModifiedAt = reader.ReadInt64(),
-            LSN = reader.ReadInt64()
+            PageType = (PageType)data[0],
+            PageID = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(1)),
+            PrevPageID = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(5)),
+            NextPageID = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(9)),
+            FreeBytes = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(13)),
+            ItemCount = BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(15)),
+            Version = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(17)),
+            Checksum = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(21)),
+            CreatedAt = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(25)),
+            ModifiedAt = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(33)),
+            LSN = BinaryPrimitives.ReadInt64LittleEndian(data.Slice(41))
         };
-
-        return header;
     }
 
     /// <summary>

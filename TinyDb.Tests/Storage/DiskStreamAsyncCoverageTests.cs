@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Storage;
 using TUnit.Assertions;
@@ -54,6 +55,55 @@ public sealed class DiskStreamAsyncCoverageTests
             var read = await stream.ReadPageAsync(12, data.Length);
 
             await Assert.That(stream.Position).IsEqualTo(9);
+            await Assert.That(read.SequenceEqual(data)).IsTrue();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
+
+    [Test]
+    public async Task PageReadWriteAsync_ShouldUseFileSemaphore()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"diskstream_async_lock_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var stream = new DiskStream(path, FileAccess.ReadWrite, FileShare.ReadWrite);
+            var semaphoreField = typeof(DiskStream).GetField("_semaphore", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var semaphore = (SemaphoreSlim)semaphoreField!.GetValue(stream)!;
+            var data = new byte[] { 1, 2, 3, 4 };
+
+            await semaphore.WaitAsync();
+            Task writeTask = Task.CompletedTask;
+            try
+            {
+                writeTask = stream.WritePageAsync(0, data);
+                await Task.Delay(50);
+                await Assert.That(writeTask.IsCompleted).IsFalse();
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+
+            await writeTask;
+
+            await semaphore.WaitAsync();
+            Task<byte[]> readTask = Task.FromResult(Array.Empty<byte>());
+            try
+            {
+                readTask = stream.ReadPageAsync(0, data.Length);
+                await Task.Delay(50);
+                await Assert.That(readTask.IsCompleted).IsFalse();
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+
+            var read = await readTask;
             await Assert.That(read.SequenceEqual(data)).IsTrue();
         }
         finally
