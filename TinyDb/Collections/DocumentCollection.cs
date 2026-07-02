@@ -78,22 +78,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (currentTransaction != null)
         {
             // 在事务中，记录操作而不是直接写入
-            var documentId = ((Transaction)currentTransaction).RecordInsert(_name, document);
-
-            // 更新实体的ID（如果需要）
-            UpdateEntityId(entity, documentId);
-
-            return documentId;
+            return ((Transaction)currentTransaction).RecordInsert(_name, document);
         }
         else
         {
             // 不在事务中，直接插入到数据库
-            var id = _engine.InsertDocument(_name, document);
-
-            // 更新实体的ID（如果需要）
-            UpdateEntityId(entity, id);
-
-            return id;
+            return _engine.InsertDocument(_name, document);
         }
     }
 
@@ -115,7 +105,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         int totalInserted = 0;
         const int BatchSize = 1000;
-        var entityBatch = new List<T>(BatchSize);
         var docBatch = new List<BsonDocument>(BatchSize);
 
         foreach (var entity in entities)
@@ -124,35 +113,29 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
             var document = PrepareDocumentForInsert(entity);
             
-            entityBatch.Add(entity);
             docBatch.Add(document);
 
-            if (entityBatch.Count >= BatchSize)
+            if (docBatch.Count >= BatchSize)
             {
-                totalInserted += InsertBatch(entityBatch, docBatch);
-                entityBatch.Clear();
+                totalInserted += InsertDocumentBatch(docBatch);
                 docBatch.Clear();
             }
         }
 
-        if (entityBatch.Count > 0)
+        if (docBatch.Count > 0)
         {
-            totalInserted += InsertBatch(entityBatch, docBatch);
+            totalInserted += InsertDocumentBatch(docBatch);
         }
 
         return totalInserted;
     }
 
-    private int InsertBatch(List<T> entities, List<BsonDocument> documents)
+    private int InsertDocumentBatch(List<BsonDocument> documents)
     {
         if (documents.Count == 0) return 0;
 
         // 批量插入到数据库
-        var insertedCount = _engine.InsertDocuments(_name, documents);
-
-        UpdateEntityIds(entities, documents, insertedCount);
-
-        return insertedCount;
+        return _engine.InsertDocuments(_name, documents);
     }
 
     private int InsertInTransaction(IEnumerable<T> entities, Transaction transaction, CancellationToken cancellationToken = default)
@@ -165,7 +148,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
             var document = PrepareDocumentForInsert(entity);
             var documentId = transaction.RecordInsert(_name, document);
-            UpdateEntityId(entity, documentId);
             insertedCount++;
         }
 
@@ -196,18 +178,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         id = AotIdAccessor<T>.GetId(entity);
         return AotBsonMapper.ToDocument(entity);
-    }
-
-    private void UpdateEntityIds(List<T> entities, List<BsonDocument> documents, int count)
-    {
-        for (int i = 0; i < Math.Min(count, entities.Count); i++)
-        {
-            var entity = entities[i];
-            if (entity != null && documents.Count > i && documents[i].TryGetValue("_id", out var id))
-            {
-                UpdateEntityId(entity, id);
-            }
-        }
     }
 
     /// <summary>
@@ -916,7 +886,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         const int BatchSize = 1000;
         var insertedCount = 0;
         var updatedCount = 0;
-        var entityBatch = new List<T>(BatchSize);
         var docBatch = new List<BsonDocument>(BatchSize);
 
         foreach (var entity in entities)
@@ -924,16 +893,13 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             if (entity == null) continue;
 
             var document = PrepareDocumentForInsert(entity);
-            entityBatch.Add(entity);
             docBatch.Add(document);
 
             if (docBatch.Count >= BatchSize)
             {
                 var result = _engine.UpsertDocuments(_name, docBatch);
-                UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
                 insertedCount += result.InsertedCount;
                 updatedCount += result.UpdatedCount;
-                entityBatch.Clear();
                 docBatch.Clear();
             }
         }
@@ -941,7 +907,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (docBatch.Count > 0)
         {
             var result = _engine.UpsertDocuments(_name, docBatch);
-            UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
             insertedCount += result.InsertedCount;
             updatedCount += result.UpdatedCount;
         }
@@ -1491,16 +1456,12 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (currentTransaction != null)
         {
             // 在事务中，记录操作而不是直接写入（事务不支持异步）
-            var documentId = ((Transaction)currentTransaction).RecordInsert(_name, document);
-            UpdateEntityId(entity, documentId);
-            return documentId;
+            return ((Transaction)currentTransaction).RecordInsert(_name, document);
         }
         else
         {
             // 不在事务中，异步插入到数据库
-            var id = await _engine.InsertDocumentAsync(_name, document, cancellationToken).ConfigureAwait(false);
-            UpdateEntityId(entity, id);
-            return id;
+            return await _engine.InsertDocumentAsync(_name, document, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -1523,7 +1484,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         int totalInserted = 0;
         const int BatchSize = 1000;
-        var entityBatch = new List<T>(BatchSize);
         var docBatch = new List<BsonDocument>(BatchSize);
 
         foreach (var entity in entities)
@@ -1533,34 +1493,28 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
             var document = PrepareDocumentForInsert(entity);
             
-            entityBatch.Add(entity);
             docBatch.Add(document);
 
-            if (entityBatch.Count >= BatchSize)
+            if (docBatch.Count >= BatchSize)
             {
-                totalInserted += await InsertBatchAsync(entityBatch, docBatch, cancellationToken).ConfigureAwait(false);
-                entityBatch.Clear();
+                totalInserted += await InsertDocumentBatchAsync(docBatch, cancellationToken).ConfigureAwait(false);
                 docBatch.Clear();
             }
         }
 
-        if (entityBatch.Count > 0)
+        if (docBatch.Count > 0)
         {
-            totalInserted += await InsertBatchAsync(entityBatch, docBatch, cancellationToken).ConfigureAwait(false);
+            totalInserted += await InsertDocumentBatchAsync(docBatch, cancellationToken).ConfigureAwait(false);
         }
 
         return totalInserted;
     }
 
-    private async Task<int> InsertBatchAsync(List<T> entities, List<BsonDocument> documents, CancellationToken cancellationToken)
+    private async Task<int> InsertDocumentBatchAsync(List<BsonDocument> documents, CancellationToken cancellationToken)
     {
         if (documents.Count == 0) return 0;
 
-        var insertedCount = await _engine.InsertDocumentsAsync(_name, documents, cancellationToken).ConfigureAwait(false);
-
-        UpdateEntityIds(entities, documents, insertedCount);
-
-        return insertedCount;
+        return await _engine.InsertDocumentsAsync(_name, documents, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1976,7 +1930,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         const int BatchSize = 1000;
         var insertedCount = 0;
         var updatedCount = 0;
-        var entityBatch = new List<T>(BatchSize);
         var docBatch = new List<BsonDocument>(BatchSize);
 
         foreach (var entity in entities)
@@ -1985,16 +1938,13 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             if (entity == null) continue;
 
             var document = PrepareDocumentForInsert(entity);
-            entityBatch.Add(entity);
             docBatch.Add(document);
 
             if (docBatch.Count >= BatchSize)
             {
                 var result = await _engine.UpsertDocumentsAsync(_name, docBatch, cancellationToken).ConfigureAwait(false);
-                UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
                 insertedCount += result.InsertedCount;
                 updatedCount += result.UpdatedCount;
-                entityBatch.Clear();
                 docBatch.Clear();
             }
         }
@@ -2002,7 +1952,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (docBatch.Count > 0)
         {
             var result = await _engine.UpsertDocumentsAsync(_name, docBatch, cancellationToken).ConfigureAwait(false);
-            UpdateEntityIds(entityBatch, docBatch, docBatch.Count);
             insertedCount += result.InsertedCount;
             updatedCount += result.UpdatedCount;
         }

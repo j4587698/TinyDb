@@ -29,6 +29,9 @@ public class QueryExecutorIndexSeekTests : IDisposable
         
         // Create a non-unique index on Category
         _engine.EnsureIndex(_users.CollectionName, "Category", "idx_category", unique: false);
+
+        // Create a non-unique index on Score for ordered query planning tests
+        _engine.EnsureIndex(_users.CollectionName, "Score", "idx_score", unique: false);
         
         SeedData();
     }
@@ -143,6 +146,31 @@ public class QueryExecutorIndexSeekTests : IDisposable
 
         await Assert.That(result.Count).IsEqualTo(1);
         await Assert.That(result[0].Name).IsEqualTo("Alice");
+    }
+
+    [Test]
+    public async Task ExecuteShaped_FilterIndexAndDifferentOrderIndex_ShouldFilterBeforeOrdering()
+    {
+        var executor = new QueryExecutor(_engine);
+        Expression<Func<User, bool>> predicate = u => u.Category == "Admin";
+        var shape = new QueryShape<User>
+        {
+            Predicate = predicate,
+            PushedWhereCount = 1,
+            Sort = new[] { new QuerySortField(nameof(User.Score), typeof(int), descending: false) }
+        };
+
+        var filtered = executor.ExecuteShaped(_users.CollectionName, shape, out var pushdown).ToList();
+        var publicOrderedIds = _users.Query()
+            .Where(predicate)
+            .OrderBy(u => u.Score)
+            .Select(u => u.Id)
+            .ToList();
+
+        await Assert.That(pushdown.WherePushed).IsTrue();
+        await Assert.That(pushdown.OrderPushed).IsFalse();
+        await Assert.That(filtered.Select(u => u.Id).OrderBy(id => id).SequenceEqual(new[] { 1, 4 })).IsTrue();
+        await Assert.That(publicOrderedIds.SequenceEqual(new[] { 4, 1 })).IsTrue();
     }
 
     #endregion

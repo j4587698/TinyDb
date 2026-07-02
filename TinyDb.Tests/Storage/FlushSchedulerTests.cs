@@ -78,16 +78,21 @@ public class FlushSchedulerTests
     }
 
     [Test]
-    public async Task FlushScheduler_Journaled_WhenWalDisabled_ShouldFallbackToPageFlush()
+    public async Task FlushScheduler_Journaled_WhenWalDisabled_ShouldNoOp()
     {
         var isolatedDbFile = Path.Combine(Path.GetTempPath(), $"fs_wal_disabled_{Guid.NewGuid():N}.db");
         var isolatedWalFile = Path.Combine(Path.GetDirectoryName(isolatedDbFile)!, $"{Path.GetFileNameWithoutExtension(isolatedDbFile)}-wal.db");
         try
         {
+            using var trackingStream = new TrackingDiskStream(new DiskStream(isolatedDbFile));
+            using var pageManager = new PageManager(trackingStream);
             using var walDisabled = new WriteAheadLog(isolatedDbFile, 8192, false);
-            using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero);
+            using var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.Zero);
 
             await fs.EnsureDurabilityAsync(WriteConcern.Journaled, CancellationToken.None);
+
+            await Assert.That(trackingStream.FlushCount).IsEqualTo(0);
+            await Assert.That(trackingStream.FlushAsyncCount).IsEqualTo(0);
         }
         finally
         {
@@ -214,16 +219,22 @@ public class FlushSchedulerTests
     }
 
     [Test]
-    public async Task FlushScheduler_Journaled_WhenWalDisabled_Sync_ShouldFallbackToPageFlush()
+    public async Task FlushScheduler_Journaled_WhenWalDisabled_Sync_ShouldNoOp()
     {
         var isolatedDbFile = Path.Combine(Path.GetTempPath(), $"fs_sync_wal_disabled_{Guid.NewGuid():N}.db");
         var isolatedWalFile = Path.Combine(Path.GetDirectoryName(isolatedDbFile)!, $"{Path.GetFileNameWithoutExtension(isolatedDbFile)}-wal.db");
         try
         {
+            using var trackingStream = new TrackingDiskStream(new DiskStream(isolatedDbFile));
+            using var pageManager = new PageManager(trackingStream);
             using var walDisabled = new WriteAheadLog(isolatedDbFile, 8192, false);
-            using var fs = new FlushScheduler(_pageManager, walDisabled, TimeSpan.Zero);
+            using var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.Zero);
+
             fs.EnsureDurability(WriteConcern.Journaled);
+
             await Assert.That(walDisabled.HasPendingEntries).IsFalse();
+            await Assert.That(trackingStream.FlushCount).IsEqualTo(0);
+            await Assert.That(trackingStream.FlushAsyncCount).IsEqualTo(0);
         }
         finally
         {
@@ -437,6 +448,49 @@ public class FlushSchedulerTests
 
         public void Flush() => _inner.Flush();
         public Task FlushAsync(CancellationToken cancellationToken = default) => _inner.FlushAsync(cancellationToken);
+        public void SetLength(long length) => _inner.SetLength(length);
+        public DiskStreamStatistics GetStatistics() => _inner.GetStatistics();
+
+        public void Dispose() => _inner.Dispose();
+    }
+
+    private sealed class TrackingDiskStream : IDiskStream
+    {
+        private readonly IDiskStream _inner;
+
+        public TrackingDiskStream(IDiskStream inner)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        }
+
+        public int FlushCount { get; private set; }
+        public int FlushAsyncCount { get; private set; }
+        public string FilePath => _inner.FilePath;
+        public long Size => _inner.Size;
+        public bool IsReadable => _inner.IsReadable;
+        public bool IsWritable => _inner.IsWritable;
+
+        public byte[] ReadPage(long pageOffset, int pageSize) => _inner.ReadPage(pageOffset, pageSize);
+        public void WritePage(long pageOffset, byte[] pageData) => _inner.WritePage(pageOffset, pageData);
+
+        public Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default)
+            => _inner.ReadPageAsync(pageOffset, pageSize, cancellationToken);
+
+        public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
+            => _inner.WritePageAsync(pageOffset, pageData, cancellationToken);
+
+        public void Flush()
+        {
+            FlushCount++;
+            _inner.Flush();
+        }
+
+        public Task FlushAsync(CancellationToken cancellationToken = default)
+        {
+            FlushAsyncCount++;
+            return _inner.FlushAsync(cancellationToken);
+        }
+
         public void SetLength(long length) => _inner.SetLength(length);
         public DiskStreamStatistics GetStatistics() => _inner.GetStatistics();
 

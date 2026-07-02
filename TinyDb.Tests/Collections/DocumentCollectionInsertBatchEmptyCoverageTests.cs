@@ -1,10 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
-using System.Threading;
 using TinyDb.Bson;
-using TinyDb.Collections;
 using TinyDb.Core;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -15,7 +11,7 @@ namespace TinyDb.Tests.Collections;
 public class DocumentCollectionInsertBatchEmptyCoverageTests
 {
     [Test]
-    public async Task InsertBatchAsync_WhenDocumentsEmpty_ShouldReturnZero()
+    public async Task InsertAsync_WithEmptyEnumerable_ShouldReturnZero()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinydb_insertbatch_{Guid.NewGuid():N}");
         var dbPath = Path.Combine(dir, "db.db");
@@ -25,15 +21,8 @@ public class DocumentCollectionInsertBatchEmptyCoverageTests
             Directory.CreateDirectory(dir);
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
 
-            var collection = (DocumentCollection<BsonDocument>)engine.GetBsonCollection("c");
-            var method = typeof(DocumentCollection<BsonDocument>).GetMethod("InsertBatchAsync", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(method).IsNotNull();
-
-            var task = (Task<int>)method!.Invoke(
-                collection,
-                new object[] { new List<BsonDocument>(), new List<BsonDocument>(), CancellationToken.None })!;
-
-            var inserted = await task.ConfigureAwait(false);
+            var collection = engine.GetBsonCollection("c");
+            var inserted = await collection.InsertAsync(Array.Empty<BsonDocument>()).ConfigureAwait(false);
             await Assert.That(inserted).IsEqualTo(0);
         }
         finally

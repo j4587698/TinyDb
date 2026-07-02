@@ -14,6 +14,8 @@ namespace TinyDb.SourceGenerator;
 [Generator(LanguageNames.CSharp)]
 public class TinyDbSourceGenerator : IIncrementalGenerator
 {
+    private const string EntityAttributeMetadataName = "TinyDb.Attributes.EntityAttribute";
+
     /// <summary>
     /// BsonRef 引用类型缺少 Entity 特性的错误诊断描述符
     /// </summary>
@@ -55,9 +57,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     /// </summary>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
-        // 查找所有类声明
+        // 查找带有 [Entity] 特性的类声明
         var classDeclarations = context.SyntaxProvider
-            .CreateSyntaxProvider(
+            .ForAttributeWithMetadataName(
+                EntityAttributeMetadataName,
                 predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax,
                 transform: static (ctx, _) => GetClassInfo(ctx))
             .Where(static m => m is not null)
@@ -136,9 +139,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     /// <summary>
     /// 获取类信息
     /// </summary>
-    private static ClassInfo? GetClassInfo(GeneratorSyntaxContext context)
+    private static ClassInfo? GetClassInfo(GeneratorAttributeSyntaxContext context)
     {
-        var classDeclaration = (TypeDeclarationSyntax)context.Node;
+        var classDeclaration = (TypeDeclarationSyntax)context.TargetNode;
         var semanticModel = context.SemanticModel;
 
         // 获取类的完整名称
@@ -147,7 +150,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         var className = classDeclaration.Identifier.Text;
 
         // 获取类符号信息
-        var classSymbol = semanticModel.GetDeclaredSymbol(classDeclaration);
+        var classSymbol = context.TargetSymbol as INamedTypeSymbol
+            ?? semanticModel.GetDeclaredSymbol(classDeclaration);
 
         // 如果没有找到命名空间声明，使用符号信息获取命名空间
         if (string.IsNullOrEmpty(namespaceName))
@@ -168,15 +172,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 检查是否是值类型
         var isValueType = classSymbol?.IsValueType ?? false;
 
-        // 检查是否有Entity属性
-        var hasEntityAttribute = classSymbol?.GetAttributes()
-            .Any(attr => attr.AttributeClass?.Name == "EntityAttribute") ?? false;
-
-        if (!hasEntityAttribute) return null;
-
         // 获取Entity属性信息
-        var entityAttribute = classSymbol?.GetAttributes()
-            .FirstOrDefault(attr => attr.AttributeClass?.Name == "EntityAttribute");
+        var entityAttribute = context.Attributes.FirstOrDefault();
 
         // 优先从构造函数参数获取Name，否则从命名参数获取
         var collectionName = entityAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
@@ -214,7 +211,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     continue;
                 }
 
-                // AOT æºç”Ÿæˆæ˜¯ç¡¬ç¼–ç è®¿é—®ï¼Œä¸åšåå°„å›žé€€ï¼Œå› æ­¤ä»…å¤„ç†å¯ç›´æŽ¥è®¿é—®çš„å±žæ€§ã€‚
+                // AOT 源生成是硬编码访问，不做反射回退，因此仅处理可直接访问的属性。
                 if (propertySymbol.DeclaredAccessibility != Accessibility.Public ||
                     propertySymbol.IsStatic ||
                     propertySymbol.IsIndexer ||

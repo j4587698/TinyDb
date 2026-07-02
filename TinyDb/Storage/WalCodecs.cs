@@ -63,6 +63,8 @@ internal sealed class AesGcmWalCodec : IWalCodec, IDisposable
 
     public int MaxOverhead => MagicLength + EncryptionMetadata.NonceLength + EncryptionMetadata.TagLength;
 
+    private int AadLength => AadPrefix.Length + _databaseId.Length + 1 + sizeof(uint) + sizeof(long);
+
     public byte[] Encode(byte entryType, uint pageId, long recordOffset, byte[] payload)
     {
         if (payload == null) throw new ArgumentNullException(nameof(payload));
@@ -74,8 +76,10 @@ internal sealed class AesGcmWalCodec : IWalCodec, IDisposable
         var ciphertext = frame.AsSpan(MagicLength + EncryptionMetadata.NonceLength, payload.Length);
         var tag = frame.AsSpan(MagicLength + EncryptionMetadata.NonceLength + payload.Length, EncryptionMetadata.TagLength);
 
+        Span<byte> aad = stackalloc byte[AadLength];
+        WriteAad(entryType, pageId, recordOffset, aad);
         using var aes = new AesGcm(_key, EncryptionMetadata.TagLength);
-        aes.Encrypt(nonce, payload, ciphertext, tag, BuildAad(entryType, pageId, recordOffset));
+        aes.Encrypt(nonce, payload, ciphertext, tag, aad);
         return frame;
     }
 
@@ -112,8 +116,10 @@ internal sealed class AesGcmWalCodec : IWalCodec, IDisposable
 
         try
         {
+            Span<byte> aad = stackalloc byte[AadLength];
+            WriteAad(entryType, pageId, recordOffset, aad);
             using var aes = new AesGcm(_key, EncryptionMetadata.TagLength);
-            aes.Decrypt(nonce, ciphertext, tag, plaintext, BuildAad(entryType, pageId, recordOffset));
+            aes.Decrypt(nonce, ciphertext, tag, plaintext, aad);
             return plaintext;
         }
         catch (CryptographicException ex)
@@ -122,16 +128,19 @@ internal sealed class AesGcmWalCodec : IWalCodec, IDisposable
         }
     }
 
-    private byte[] BuildAad(byte entryType, uint pageId, long recordOffset)
+    private void WriteAad(byte entryType, uint pageId, long recordOffset, Span<byte> destination)
     {
-        var aad = new byte[AadPrefix.Length + _databaseId.Length + 1 + sizeof(uint) + sizeof(long)];
-        AadPrefix.CopyTo(aad, 0);
-        _databaseId.CopyTo(aad.AsSpan(AadPrefix.Length));
+        if (destination.Length != AadLength)
+        {
+            throw new ArgumentException("AAD length does not match codec configuration.", nameof(destination));
+        }
+
+        AadPrefix.CopyTo(destination);
+        _databaseId.CopyTo(destination.Slice(AadPrefix.Length));
         var offset = AadPrefix.Length + _databaseId.Length;
-        aad[offset] = entryType;
-        BinaryPrimitives.WriteUInt32LittleEndian(aad.AsSpan(offset + 1, sizeof(uint)), pageId);
-        BinaryPrimitives.WriteInt64LittleEndian(aad.AsSpan(offset + 1 + sizeof(uint), sizeof(long)), recordOffset);
-        return aad;
+        destination[offset] = entryType;
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(offset + 1, sizeof(uint)), pageId);
+        BinaryPrimitives.WriteInt64LittleEndian(destination.Slice(offset + 1 + sizeof(uint), sizeof(long)), recordOffset);
     }
 
     public void Dispose()

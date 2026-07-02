@@ -13,6 +13,8 @@ internal interface IPageCodec
     bool IsEncrypted { get; }
     byte[] Decode(uint pageId, byte[] frame);
     byte[] Encode(uint pageId, byte[] logicalPage);
+    void DecodeTo(uint pageId, ReadOnlySpan<byte> frame, Span<byte> destination);
+    void EncodeTo(uint pageId, ReadOnlySpan<byte> logicalPage, Span<byte> destination);
 }
 
 internal sealed class NoOpPageCodec : IPageCodec
@@ -35,7 +37,7 @@ internal sealed class NoOpPageCodec : IPageCodec
         if (frame.Length == LogicalPageSize) return frame;
 
         var logical = new byte[LogicalPageSize];
-        Array.Copy(frame, logical, Math.Min(frame.Length, logical.Length));
+        DecodeTo(pageId, frame, logical);
         return logical;
     }
 
@@ -48,6 +50,36 @@ internal sealed class NoOpPageCodec : IPageCodec
         }
 
         return logicalPage;
+    }
+
+    public void DecodeTo(uint pageId, ReadOnlySpan<byte> frame, Span<byte> destination)
+    {
+        if (destination.Length != (int)LogicalPageSize)
+        {
+            throw new ArgumentException("Logical page size does not match codec configuration.", nameof(destination));
+        }
+
+        if (frame.Length != (int)PhysicalPageSize)
+        {
+            throw new ArgumentException("Physical page frame size does not match codec configuration.", nameof(frame));
+        }
+
+        frame.Slice(0, destination.Length).CopyTo(destination);
+    }
+
+    public void EncodeTo(uint pageId, ReadOnlySpan<byte> logicalPage, Span<byte> destination)
+    {
+        if (logicalPage.Length != (int)LogicalPageSize)
+        {
+            throw new ArgumentException("Logical page size does not match codec configuration.", nameof(logicalPage));
+        }
+
+        if (destination.Length != (int)PhysicalPageSize)
+        {
+            throw new ArgumentException("Physical page frame size does not match codec configuration.", nameof(destination));
+        }
+
+        logicalPage.CopyTo(destination);
     }
 }
 
@@ -89,6 +121,8 @@ internal sealed class AesGcmPageCodec : IPageCodec, IDisposable
 
     public bool IsEncrypted => true;
 
+    private int AadLength => AadPrefix.Length + _databaseId.Length + sizeof(uint) + sizeof(uint);
+
     public byte[] Decode(uint pageId, byte[] frame)
     {
         if (frame == null) throw new ArgumentNullException(nameof(frame));
@@ -98,21 +132,38 @@ internal sealed class AesGcmPageCodec : IPageCodec, IDisposable
         }
 
         var logical = new byte[LogicalPageSize];
-        if (pageId == 1)
+        DecodeTo(pageId, frame, logical);
+        return logical;
+    }
+
+    public void DecodeTo(uint pageId, ReadOnlySpan<byte> frame, Span<byte> destination)
+    {
+        if (frame.Length != (int)PhysicalPageSize)
         {
-            Array.Copy(frame, logical, logical.Length);
-            return logical;
+            throw new ArgumentException("Physical page frame size does not match codec configuration.", nameof(frame));
         }
 
-        var nonce = frame.AsSpan(0, EncryptionMetadata.NonceLength);
-        var ciphertext = frame.AsSpan(EncryptionMetadata.NonceLength, (int)LogicalPageSize);
-        var tag = frame.AsSpan(EncryptionMetadata.NonceLength + (int)LogicalPageSize, EncryptionMetadata.TagLength);
+        if (destination.Length != (int)LogicalPageSize)
+        {
+            throw new ArgumentException("Logical page size does not match codec configuration.", nameof(destination));
+        }
+
+        if (pageId == 1)
+        {
+            frame.Slice(0, destination.Length).CopyTo(destination);
+            return;
+        }
+
+        var nonce = frame.Slice(0, EncryptionMetadata.NonceLength);
+        var ciphertext = frame.Slice(EncryptionMetadata.NonceLength, (int)LogicalPageSize);
+        var tag = frame.Slice(EncryptionMetadata.NonceLength + (int)LogicalPageSize, EncryptionMetadata.TagLength);
 
         try
         {
+            Span<byte> aad = stackalloc byte[AadLength];
+            WriteAad(pageId, aad);
             using var aes = new AesGcm(_key, EncryptionMetadata.TagLength);
-            aes.Decrypt(nonce, ciphertext, tag, logical, BuildAad(pageId));
-            return logical;
+            aes.Decrypt(nonce, ciphertext, tag, destination, aad);
         }
         catch (CryptographicException ex)
         {
@@ -129,20 +180,38 @@ internal sealed class AesGcmPageCodec : IPageCodec, IDisposable
         }
 
         var frame = new byte[PhysicalPageSize];
-        if (pageId == 1)
+        EncodeTo(pageId, logicalPage, frame);
+        return frame;
+    }
+
+    public void EncodeTo(uint pageId, ReadOnlySpan<byte> logicalPage, Span<byte> destination)
+    {
+        if (logicalPage.Length != (int)LogicalPageSize)
         {
-            Array.Copy(logicalPage, frame, logicalPage.Length);
-            return frame;
+            throw new ArgumentException("Logical page size does not match codec configuration.", nameof(logicalPage));
         }
 
-        var nonce = frame.AsSpan(0, EncryptionMetadata.NonceLength);
-        FillNonce(nonce);
-        var ciphertext = frame.AsSpan(EncryptionMetadata.NonceLength, logicalPage.Length);
-        var tag = frame.AsSpan(EncryptionMetadata.NonceLength + logicalPage.Length, EncryptionMetadata.TagLength);
+        if (destination.Length != (int)PhysicalPageSize)
+        {
+            throw new ArgumentException("Physical page frame size does not match codec configuration.", nameof(destination));
+        }
 
+        if (pageId == 1)
+        {
+            logicalPage.CopyTo(destination);
+            destination.Slice(logicalPage.Length).Clear();
+            return;
+        }
+
+        var nonce = destination.Slice(0, EncryptionMetadata.NonceLength);
+        FillNonce(nonce);
+        var ciphertext = destination.Slice(EncryptionMetadata.NonceLength, logicalPage.Length);
+        var tag = destination.Slice(EncryptionMetadata.NonceLength + logicalPage.Length, EncryptionMetadata.TagLength);
+
+        Span<byte> aad = stackalloc byte[AadLength];
+        WriteAad(pageId, aad);
         using var aes = new AesGcm(_key, EncryptionMetadata.TagLength);
-        aes.Encrypt(nonce, logicalPage, ciphertext, tag, BuildAad(pageId));
-        return frame;
+        aes.Encrypt(nonce, logicalPage, ciphertext, tag, aad);
     }
 
     private void FillNonce(Span<byte> nonce)
@@ -162,15 +231,18 @@ internal sealed class AesGcmPageCodec : IPageCodec, IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(sizeof(ulong), sizeof(uint)), (uint)counter);
     }
 
-    private byte[] BuildAad(uint pageId)
+    private void WriteAad(uint pageId, Span<byte> destination)
     {
-        var aad = new byte[AadPrefix.Length + _databaseId.Length + sizeof(uint) + sizeof(uint)];
-        AadPrefix.CopyTo(aad, 0);
-        _databaseId.CopyTo(aad.AsSpan(AadPrefix.Length));
+        if (destination.Length != AadLength)
+        {
+            throw new ArgumentException("AAD length does not match codec configuration.", nameof(destination));
+        }
+
+        AadPrefix.CopyTo(destination);
+        _databaseId.CopyTo(destination.Slice(AadPrefix.Length));
         var offset = AadPrefix.Length + _databaseId.Length;
-        BinaryPrimitives.WriteUInt32LittleEndian(aad.AsSpan(offset, sizeof(uint)), pageId);
-        BinaryPrimitives.WriteUInt32LittleEndian(aad.AsSpan(offset + sizeof(uint), sizeof(uint)), LogicalPageSize);
-        return aad;
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(offset, sizeof(uint)), pageId);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(offset + sizeof(uint), sizeof(uint)), LogicalPageSize);
     }
 
     public void Dispose()

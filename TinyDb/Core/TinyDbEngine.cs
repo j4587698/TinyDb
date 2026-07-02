@@ -1918,7 +1918,7 @@ public sealed class TinyDbEngine : IDisposable
             return 0;
         }
 
-        var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(preparedPayloads.Count);
+        var insertedPayloads = new List<PreparedInsertPayload>(preparedPayloads.Count);
         int insertedCount = 0;
         var usedPagesChanged = false;
 
@@ -1996,7 +1996,7 @@ public sealed class TinyDbEngine : IDisposable
                             _dataPageAccess.AppendDocumentToPage(currentPage, span);
                             st.Index.Set(payload.Id, new DocumentLocation(currentPage.PageID, i));
 
-                            docsToUpdateIndex.Add((doc, payload.Id));
+                            insertedPayloads.Add(payload);
                             insertedCount++;
                         }
                         catch (Exception ex)
@@ -2016,11 +2016,11 @@ public sealed class TinyDbEngine : IDisposable
                     _dataPageAccess.PersistPageDeferred(page, pageBeforeImages[page]);
                 }
 
-                foreach (var (doc, id) in docsToUpdateIndex)
+                foreach (var payload in insertedPayloads)
                 {
                     try
                     {
-                        idx.InsertDocument(doc, id);
+                        idx.InsertDocument(payload.Document, payload.Id);
                     }
                     catch (Exception ex)
                     {
@@ -2030,7 +2030,7 @@ public sealed class TinyDbEngine : IDisposable
 
                 if (exceptions.Count > 0)
                 {
-                    RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
+                    RollbackInsertedDocuments(col, insertedPayloads.Select(static payload => payload.Id), exceptions);
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 
@@ -2091,7 +2091,7 @@ public sealed class TinyDbEngine : IDisposable
             return 0;
         }
 
-        var docsToUpdateIndex = new List<(BsonDocument Doc, BsonValue Id)>(preparedPayloads.Count);
+        var insertedPayloads = new List<PreparedInsertPayload>(preparedPayloads.Count);
         int insertedCount = 0;
         var usedPagesChanged = false;
 
@@ -2175,7 +2175,7 @@ public sealed class TinyDbEngine : IDisposable
                             _dataPageAccess.AppendDocumentToPage(currentPage, span);
                             st.Index.Set(payload.Id, new DocumentLocation(currentPage.PageID, i));
 
-                            docsToUpdateIndex.Add((doc, payload.Id));
+                            insertedPayloads.Add(payload);
                             insertedCount++;
                         }
                         catch (Exception ex)
@@ -2195,11 +2195,11 @@ public sealed class TinyDbEngine : IDisposable
                     _dataPageAccess.PersistPageDeferred(page, pageBeforeImages[page]);
                 }
 
-                foreach (var (doc, id) in docsToUpdateIndex)
+                foreach (var payload in insertedPayloads)
                 {
                     try
                     {
-                        idx.InsertDocument(doc, id);
+                        idx.InsertDocument(payload.Document, payload.Id);
                     }
                     catch (Exception ex)
                     {
@@ -2212,7 +2212,7 @@ public sealed class TinyDbEngine : IDisposable
                     var cancellationException = exceptions.Count == 1
                         ? exceptions[0] as OperationCanceledException
                         : null;
-                    RollbackInsertedDocuments(col, docsToUpdateIndex.Select(item => item.Id), exceptions);
+                    RollbackInsertedDocuments(col, insertedPayloads.Select(static payload => payload.Id), exceptions);
                     if (cancellationException != null && exceptions.Count == 1)
                     {
                         throw cancellationException;
@@ -2382,25 +2382,7 @@ public sealed class TinyDbEngine : IDisposable
 
             lock (st.PageState.SyncRoot)
             {
-                if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
-                {
-                    continue;
-                }
-
-                var entries = _dataPageAccess.ReadDocumentsFromPage(page);
-                foreach (var lookup in lookups)
-                {
-                    if (lookup.Location.EntryIndex >= entries.Count)
-                    {
-                        continue;
-                    }
-
-                    var document = entries[lookup.Location.EntryIndex].Document;
-                    if (IsCommittedDocumentMatch(col, lookup.Id, document))
-                    {
-                        results[lookup.Ordinal] = document;
-                    }
-                }
+                ReadCommittedPageLookups(col, page, lookups, results);
             }
         }
 
@@ -2480,25 +2462,7 @@ public sealed class TinyDbEngine : IDisposable
 
             lock (st.PageState.SyncRoot)
             {
-                if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
-                {
-                    continue;
-                }
-
-                var entries = _dataPageAccess.ReadDocumentsFromPage(page);
-                foreach (var lookup in lookups)
-                {
-                    if (lookup.Location.EntryIndex >= entries.Count)
-                    {
-                        continue;
-                    }
-
-                    var document = entries[lookup.Location.EntryIndex].Document;
-                    if (IsCommittedDocumentMatch(col, lookup.Id, document))
-                    {
-                        results[lookup.Ordinal] = document;
-                    }
-                }
+                ReadCommittedPageLookups(col, page, lookups, results);
             }
         }
 
@@ -3179,6 +3143,63 @@ public sealed class TinyDbEngine : IDisposable
                BsonValuesEqual(documentId, id) &&
                (!document.TryGetValue("_collection", out var collectionValue) ||
                 collectionValue.ToString() == collectionName);
+    }
+
+    private void ReadCommittedPageLookups(
+        string collectionName,
+        Page page,
+        List<(BsonValue Id, int Ordinal, DocumentLocation Location)> lookups,
+        BsonDocument?[] results)
+    {
+        if (page.PageType != PageType.Data || page.Header.ItemCount == 0)
+        {
+            return;
+        }
+
+        if (ShouldReadCommittedLookupsSparse(lookups.Count, page.Header.ItemCount))
+        {
+            foreach (var lookup in lookups)
+            {
+                if (lookup.Location.EntryIndex >= page.Header.ItemCount)
+                {
+                    continue;
+                }
+
+                var entry = _dataPageAccess.ReadDocumentAt(page, lookup.Location.EntryIndex);
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                var document = entry.Value.Document;
+                if (IsCommittedDocumentMatch(collectionName, lookup.Id, document))
+                {
+                    results[lookup.Ordinal] = document;
+                }
+            }
+
+            return;
+        }
+
+        var entries = _dataPageAccess.ReadDocumentsFromPage(page);
+        foreach (var lookup in lookups)
+        {
+            if (lookup.Location.EntryIndex >= entries.Count)
+            {
+                continue;
+            }
+
+            var document = entries[lookup.Location.EntryIndex].Document;
+            if (IsCommittedDocumentMatch(collectionName, lookup.Id, document))
+            {
+                results[lookup.Ordinal] = document;
+            }
+        }
+    }
+
+    private static bool ShouldReadCommittedLookupsSparse(int lookupCount, int itemCount)
+    {
+        return lookupCount * 4 <= itemCount;
     }
 
     private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st)

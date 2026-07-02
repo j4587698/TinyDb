@@ -370,23 +370,28 @@ public sealed class DiskStream : IDiskStream
     {
         ThrowIfDisposed();
         var buffer = new byte[pageSize];
+        ReadPage(pageOffset, buffer);
+        return buffer;
+    }
+
+    public void ReadPage(long pageOffset, Span<byte> destination)
+    {
+        ThrowIfDisposed();
         var bytesRead = 0;
-        while (bytesRead < pageSize)
+        while (bytesRead < destination.Length)
         {
             var read = RandomAccess.Read(
                 _fileStream.SafeFileHandle,
-                buffer.AsSpan(bytesRead, pageSize - bytesRead),
+                destination.Slice(bytesRead),
                 pageOffset + bytesRead);
             if (read == 0) break;
             bytesRead += read;
         }
 
-        if (bytesRead != pageSize)
+        if (bytesRead != destination.Length)
         {
-            throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
+            throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {destination.Length} bytes, got {bytesRead} bytes.");
         }
-
-        return buffer;
     }
 
     /// <summary>
@@ -395,6 +400,12 @@ public sealed class DiskStream : IDiskStream
     /// <param name="pageOffset">页面偏移量</param>
     /// <param name="pageData">页面数据</param>
     public void WritePage(long pageOffset, byte[] pageData)
+    {
+        ThrowIfDisposed();
+        RandomAccess.Write(_fileStream.SafeFileHandle, pageData, pageOffset);
+    }
+
+    public void WritePage(long pageOffset, ReadOnlySpan<byte> pageData)
     {
         ThrowIfDisposed();
         RandomAccess.Write(_fileStream.SafeFileHandle, pageData, pageOffset);
@@ -411,24 +422,29 @@ public sealed class DiskStream : IDiskStream
     {
         ThrowIfDisposed();
         var buffer = new byte[pageSize];
+        await ReadPageAsync(pageOffset, buffer, cancellationToken).ConfigureAwait(false);
+        return buffer;
+    }
+
+    public async Task ReadPageAsync(long pageOffset, Memory<byte> destination, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
         var bytesRead = 0;
-        while (bytesRead < pageSize)
+        while (bytesRead < destination.Length)
         {
             var read = await RandomAccess.ReadAsync(
                 _fileStream.SafeFileHandle,
-                buffer.AsMemory(bytesRead, pageSize - bytesRead),
+                destination.Slice(bytesRead),
                 pageOffset + bytesRead,
                 cancellationToken).ConfigureAwait(false);
             if (read == 0) break;
             bytesRead += read;
         }
 
-        if (bytesRead != pageSize)
+        if (bytesRead != destination.Length)
         {
-            throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
+            throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {destination.Length} bytes, got {bytesRead} bytes.");
         }
-
-        return buffer;
     }
 
     /// <summary>
@@ -439,6 +455,12 @@ public sealed class DiskStream : IDiskStream
     /// <param name="cancellationToken">取消令牌</param>
     /// <returns>任务</returns>
     public async Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await RandomAccess.WriteAsync(_fileStream.SafeFileHandle, pageData, pageOffset, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task WritePageAsync(long pageOffset, ReadOnlyMemory<byte> pageData, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         await RandomAccess.WriteAsync(_fileStream.SafeFileHandle, pageData, pageOffset, cancellationToken).ConfigureAwait(false);

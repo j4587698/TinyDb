@@ -144,7 +144,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         if (!_wal.IsEnabled)
         {
-            return _pageManager.FlushDirtyPagesAsync(cancellationToken);
+            return Task.CompletedTask;
         }
 
         if (!_wal.HasPendingEntries)
@@ -185,7 +185,6 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         if (!_wal.IsEnabled)
         {
-            _pageManager.FlushDirtyPages();
             return;
         }
 
