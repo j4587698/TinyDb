@@ -13,6 +13,7 @@ public sealed class TransactionManager : IDisposable
 {
     internal readonly TinyDbEngine _engine;
     private readonly Dictionary<Guid, Transaction> _activeTransactions;
+    private readonly Dictionary<Guid, DateTime> _timedOutTransactions;
     private readonly ConcurrentDictionary<string, List<ForeignKeyDefinition>> _foreignKeyCache = new(StringComparer.Ordinal);
     private readonly object _foreignKeyCacheLock = new();
     private readonly object _lock = new();
@@ -56,6 +57,7 @@ public sealed class TransactionManager : IDisposable
         MaxTransactions = maxTransactions;
         TransactionTimeout = transactionTimeout ?? TimeSpan.FromMinutes(5);
         _activeTransactions = new Dictionary<Guid, Transaction>();
+        _timedOutTransactions = new Dictionary<Guid, DateTime>();
 
         // 启动超时检查任务
         _ = StartTimeoutCheckTask();
@@ -93,10 +95,7 @@ public sealed class TransactionManager : IDisposable
         TransactionOperation[] operations;
         lock (_lock)
         {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            {
-                throw new InvalidOperationException("Transaction is not active");
-            }
+            EnsureTransactionActive(transaction);
 
             lock (transaction.SyncRoot)
             {
@@ -216,10 +215,7 @@ public sealed class TransactionManager : IDisposable
 
         lock (_lock)
         {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            {
-                throw new InvalidOperationException("Transaction is not active");
-            }
+            EnsureTransactionActive(transaction);
 
             try
             {
@@ -256,10 +252,7 @@ public sealed class TransactionManager : IDisposable
 
         lock (_lock)
         {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            {
-                throw new InvalidOperationException("Transaction is not active");
-            }
+            EnsureTransactionActive(transaction);
 
             var savepoint = new TransactionSavepoint(name, transaction.GetOperationsSnapshot().Length);
             transaction.Savepoints[savepoint.SavepointId] = savepoint;
@@ -279,10 +272,7 @@ public sealed class TransactionManager : IDisposable
 
         lock (_lock)
         {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            {
-                throw new InvalidOperationException("Transaction is not active");
-            }
+            EnsureTransactionActive(transaction);
 
             if (!transaction.Savepoints.TryGetValue(savepointId, out var savepoint))
             {
@@ -321,10 +311,7 @@ public sealed class TransactionManager : IDisposable
 
         lock (_lock)
         {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            {
-                throw new InvalidOperationException("Transaction is not active");
-            }
+            EnsureTransactionActive(transaction);
 
             transaction.Savepoints.Remove(savepointId);
         }
@@ -343,10 +330,7 @@ public sealed class TransactionManager : IDisposable
 
         lock (_lock)
         {
-            if (!_activeTransactions.ContainsKey(transaction.TransactionId))
-            {
-                throw new InvalidOperationException("Transaction is not active");
-            }
+            EnsureTransactionActive(transaction);
 
             lock (transaction.SyncRoot)
             {
@@ -797,18 +781,65 @@ public sealed class TransactionManager : IDisposable
     {
         lock (_lock)
         {
+            var now = DateTime.UtcNow;
             var expiredTransactions = _activeTransactions
                 .Where(kvp => kvp.Value.State == TransactionState.Active &&
-                              DateTime.UtcNow - kvp.Value.StartTime > TransactionTimeout)
+                              now - kvp.Value.StartTime > TransactionTimeout)
                 .Select(kvp => kvp.Value)
                 .ToList();
 
             foreach (var expiredTransaction in expiredTransactions)
             {
                 if (expiredTransaction.State != TransactionState.Active) continue;
+                var failureReason = CreateTransactionTimeoutMessage(expiredTransaction.TransactionId, now);
                 expiredTransaction.State = TransactionState.Failed;
+                expiredTransaction.FailureReason = failureReason;
                 _activeTransactions.Remove(expiredTransaction.TransactionId);
+                _timedOutTransactions[expiredTransaction.TransactionId] = now;
             }
+
+            PruneTimedOutTransactionRecords(now);
+        }
+    }
+
+    private void EnsureTransactionActive(Transaction transaction)
+    {
+        if (_activeTransactions.ContainsKey(transaction.TransactionId))
+        {
+            return;
+        }
+
+        if (_timedOutTransactions.TryGetValue(transaction.TransactionId, out var timedOutAt))
+        {
+            throw new InvalidOperationException(CreateTransactionTimeoutMessage(transaction.TransactionId, timedOutAt));
+        }
+
+        throw new InvalidOperationException("Transaction is not active");
+    }
+
+    private string CreateTransactionTimeoutMessage(Guid transactionId, DateTime timedOutAt)
+    {
+        return $"Transaction {transactionId} timed out at {timedOutAt:O} after exceeding the configured timeout of {TransactionTimeout}.";
+    }
+
+    private void PruneTimedOutTransactionRecords(DateTime now)
+    {
+        if (_timedOutTransactions.Count == 0)
+        {
+            return;
+        }
+
+        var retention = TransactionTimeout > TimeSpan.FromMinutes(5)
+            ? TransactionTimeout
+            : TimeSpan.FromMinutes(5);
+        var expiredKeys = _timedOutTransactions
+            .Where(kvp => now - kvp.Value > retention)
+            .Select(kvp => kvp.Key)
+            .ToList();
+
+        foreach (var transactionId in expiredKeys)
+        {
+            _timedOutTransactions.Remove(transactionId);
         }
     }
 

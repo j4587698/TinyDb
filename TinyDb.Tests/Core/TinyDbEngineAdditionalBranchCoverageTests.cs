@@ -231,6 +231,48 @@ public class TinyDbEngineAdditionalBranchCoverageTests
     }
 
     [Test]
+    public async Task FindById_WhenPrimaryIndexHitIsStale_ShouldCountAndLogSeparately()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinydb_findbyid_stale_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(dir, "db.db");
+        var logs = new List<(TinyDbLogLevel Level, string Message)>();
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            using var engine = new TinyDbEngine(
+                dbPath,
+                new TinyDbOptions
+                {
+                    EnableJournaling = false,
+                    Logger = (level, message, _) => logs.Add((level, message))
+                });
+
+            var collectionName = "stale_hits";
+            var collection = engine.GetBsonCollection(collectionName);
+            collection.Insert(new BsonDocument().Set("_id", 7).Set("v", "stored"));
+
+            var state = GetCollectionState(engine, collectionName);
+            state.Index.Set(new BsonInt32(7), new DocumentLocation(1, 0));
+            logs.Clear();
+            var baselineStaleHits = engine.FindByIdStaleIndexHitCount;
+
+            var recovered = engine.FindById(collectionName, new BsonInt32(7));
+
+            await Assert.That(recovered).IsNotNull();
+            await Assert.That(recovered!["v"].ToString()).IsEqualTo("stored");
+            await Assert.That(engine.FindByIdStaleIndexHitCount).IsEqualTo(baselineStaleHits + 1);
+            await Assert.That(logs.Any(log =>
+                log.Level == TinyDbLogLevel.Warning &&
+                log.Message.Contains("Primary key index stale hit"))).IsTrue();
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Test]
     public async Task UpdateAndDeleteAsync_WhenExistingIsLargeDocument_ShouldSucceed()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinydb_large_update_delete_{Guid.NewGuid():N}");

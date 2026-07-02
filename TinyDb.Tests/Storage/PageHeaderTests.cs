@@ -245,4 +245,39 @@ public class PageHeaderTests
         await Assert.That(() => PageHeader.FromByteArray(new byte[PageHeader.Size - 1]))
             .Throws<ArgumentException>();
     }
+
+    [Test]
+    public async Task FromSpan_Should_Read_Header_Without_Array_Copy()
+    {
+        var header = new PageHeader
+        {
+            PageType = PageType.Index,
+            PageID = 42,
+            PrevPageID = 7,
+            NextPageID = 9,
+            FreeBytes = 100,
+            ItemCount = 3,
+            Version = 11,
+            Checksum = 1234,
+            CreatedAt = 5678,
+            ModifiedAt = 6789,
+            LSN = 99
+        };
+        var buffer = new byte[PageHeader.Size + 4];
+        header.WriteTo(buffer.AsSpan(2));
+
+        var parsed = PageHeader.FromSpan(buffer.AsSpan(2, PageHeader.Size));
+
+        await Assert.That(parsed.PageType).IsEqualTo(header.PageType);
+        await Assert.That(parsed.PageID).IsEqualTo(header.PageID);
+        await Assert.That(parsed.PrevPageID).IsEqualTo(header.PrevPageID);
+        await Assert.That(parsed.NextPageID).IsEqualTo(header.NextPageID);
+        await Assert.That(parsed.FreeBytes).IsEqualTo(header.FreeBytes);
+        await Assert.That(parsed.ItemCount).IsEqualTo(header.ItemCount);
+        await Assert.That(parsed.Version).IsEqualTo(header.Version);
+        await Assert.That(parsed.Checksum).IsEqualTo(header.Checksum);
+        await Assert.That(parsed.CreatedAt).IsEqualTo(header.CreatedAt);
+        await Assert.That(parsed.ModifiedAt).IsEqualTo(header.ModifiedAt);
+        await Assert.That(parsed.LSN).IsEqualTo(header.LSN);
+    }
 }

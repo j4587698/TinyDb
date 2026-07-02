@@ -15,16 +15,10 @@ public sealed class DiskBTree : IDisposable
     private readonly PageManager _pm;
     private readonly uint _rootPageId;
     private readonly int _maxKeys;
-    private readonly ReaderWriterLockSlim _lock = new();
     private bool _disposed;
 
     [ThreadStatic]
     private static PageLease? _currentLease;
-
-    public void EnterReadLock() => _lock.EnterReadLock();
-    public void ExitReadLock() => _lock.ExitReadLock();
-    public void EnterWriteLock() => _lock.EnterWriteLock();
-    public void ExitWriteLock() => _lock.ExitWriteLock();
 
     internal sealed class IndexScanBatch
     {
@@ -1626,7 +1620,6 @@ public sealed class DiskBTree : IDisposable
         var visited = new HashSet<uint>();
         FreeSubtree(_rootPageId, visited);
         _disposed = true;
-        _lock.Dispose();
     }
 
     private void FreeSubtree(uint pageId, HashSet<uint> visited)
@@ -2050,7 +2043,6 @@ public sealed class DiskBTree : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _lock.Dispose();
     }
     private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(DiskBTree)); }
 }

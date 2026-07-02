@@ -116,31 +116,6 @@ public sealed class DiskBTreeCoverageTests
     }
 
     [Test]
-    public async Task LockWrapperMethods_ShouldWork()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"btree_cov_lock_{Guid.NewGuid():N}.db");
-
-        try
-        {
-            using var ds = new DiskStream(path);
-            using var pm = new PageManager(ds, 4096);
-            using var tree = DiskBTree.Create(pm, maxKeys: 3);
-
-            tree.EnterReadLock();
-            tree.ExitReadLock();
-
-            tree.EnterWriteLock();
-            tree.ExitWriteLock();
-
-            await Assert.That(tree.RootPageId).IsGreaterThan(0u);
-        }
-        finally
-        {
-            try { if (File.Exists(path)) File.Delete(path); } catch { }
-        }
-    }
-
-    [Test]
     public async Task Contains_DuplicateKeyAcrossSiblings_ShouldTraversePrevSiblings()
     {
         var path = Path.Combine(Path.GetTempPath(), $"btree_cov_contains_dup_{Guid.NewGuid():N}.db");

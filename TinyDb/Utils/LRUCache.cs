@@ -340,22 +340,6 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     }
 
     /// <summary>
-    /// 内部方法：标记为最近使用
-    /// </summary>
-    /// <param name="key">键</param>
-    private void TouchInternal(TKey key)
-    {
-        lock (_lruList)
-        {
-            if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
-            {
-                _lruList.Remove(node);
-                _lruList.AddFirst(node);
-            }
-        }
-    }
-
-    /// <summary>
     /// 缓存项
     /// </summary>
     private sealed class CacheItem

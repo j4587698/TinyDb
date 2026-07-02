@@ -276,6 +276,47 @@ public class WriteAheadLogReplayEdgeCaseTests
     }
 
     [Test]
+    public async Task ReplayAsync_LegacyDataOnlyCrc_ShouldApplyAndLogWarning()
+    {
+        var walFile = GetWalFile(_dbFile);
+        var testData = new byte[] { 1, 2, 3, 4 };
+        var legacyCrc = TinyCrc32.HashToUInt32(testData);
+        var headerBuffer = new byte[13];
+        headerBuffer[0] = 0x01;
+        BinaryPrimitives.WriteUInt32LittleEndian(headerBuffer.AsSpan(1, 4), 7);
+        BinaryPrimitives.WriteInt32LittleEndian(headerBuffer.AsSpan(5, 4), testData.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(headerBuffer.AsSpan(9, 4), legacyCrc);
+
+        var fileContent = new byte[headerBuffer.Length + testData.Length];
+        Array.Copy(headerBuffer, fileContent, headerBuffer.Length);
+        Array.Copy(testData, 0, fileContent, headerBuffer.Length, testData.Length);
+        File.WriteAllBytes(walFile, fileContent);
+
+        var messages = new List<string>();
+        using var wal = new WriteAheadLog(
+            _dbFile,
+            PageSize,
+            enabled: true,
+            logger: (level, message, _) =>
+            {
+                if (level == TinyDb.Core.TinyDbLogLevel.Warning)
+                {
+                    messages.Add(message);
+                }
+            });
+        var appliedPages = new List<uint>();
+
+        await wal.ReplayAsync((pageId, _) =>
+        {
+            appliedPages.Add(pageId);
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(appliedPages).Contains(7u);
+        await Assert.That(messages.Any(message => message.Contains("legacy data-only CRC"))).IsTrue();
+    }
+
+    [Test]
     public async Task ReplayAsync_MultipleEntries_ShouldApplyAll()
     {
         using (var wal = new WriteAheadLog(_dbFile, PageSize, true))

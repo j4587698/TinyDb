@@ -891,18 +891,8 @@ public sealed class WriteAheadLog : IDisposable
 
                 if (expectedCrc.HasValue)
                 {
-                    var actualCrc = TinyCrc32.HashToUInt32(headerBuffer.AsSpan(0, HeaderSize), buffer);
-                    var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
-                    if (actualCrc != expectedCrc.Value && legacyDataOnlyCrc != expectedCrc.Value)
+                    if (!ValidateRecordCrc(headerBuffer, buffer, expectedCrc.Value, currentEntryStart))
                     {
-                        if (_walCodec.IsEncrypted)
-                        {
-                            Log(TinyDbLogLevel.Warning, $"Encrypted WAL CRC mismatch at {currentEntryStart}.");
-                            replayStoppedAtInvalidRecord = true;
-                            break;
-                        }
-
-                        Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         replayStoppedAtInvalidRecord = true;
                         break;
                     }
@@ -1123,18 +1113,8 @@ public sealed class WriteAheadLog : IDisposable
                 // 验证校验和 (如果存在)
                 if (expectedCrc.HasValue)
                 {
-                    var actualCrc = TinyCrc32.HashToUInt32(headerBuffer.AsSpan(0, HeaderSize), buffer);
-                    var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
-                    if (actualCrc != expectedCrc.Value && legacyDataOnlyCrc != expectedCrc.Value)
+                    if (!ValidateRecordCrc(headerBuffer, buffer, expectedCrc.Value, currentEntryStart))
                     {
-                        if (_walCodec.IsEncrypted)
-                        {
-                            Log(TinyDbLogLevel.Warning, $"Encrypted WAL CRC mismatch at {currentEntryStart}.");
-                            replayStoppedAtInvalidRecord = true;
-                            break;
-                        }
-
-                        Log(TinyDbLogLevel.Warning, $"CRC mismatch at {currentEntryStart}.");
                         replayStoppedAtInvalidRecord = true;
                         break;
                     }
@@ -1260,6 +1240,31 @@ public sealed class WriteAheadLog : IDisposable
         {
             _mutex.Release();
         }
+    }
+
+    private bool ValidateRecordCrc(byte[] headerBuffer, byte[] buffer, uint expectedCrc, long recordOffset)
+    {
+        var actualCrc = TinyCrc32.HashToUInt32(headerBuffer.AsSpan(0, HeaderSize), buffer);
+        if (actualCrc == expectedCrc)
+        {
+            return true;
+        }
+
+        var legacyDataOnlyCrc = TinyCrc32.HashToUInt32(buffer);
+        if (legacyDataOnlyCrc == expectedCrc)
+        {
+            Log(TinyDbLogLevel.Warning, $"WAL record at {recordOffset} matched legacy data-only CRC; header-inclusive CRC mismatch.");
+            return true;
+        }
+
+        if (_walCodec.IsEncrypted)
+        {
+            Log(TinyDbLogLevel.Warning, $"Encrypted WAL CRC mismatch at {recordOffset}.");
+            return false;
+        }
+
+        Log(TinyDbLogLevel.Warning, $"CRC mismatch at {recordOffset}.");
+        return false;
     }
 
     public async Task TruncateAsync(CancellationToken cancellationToken = default)

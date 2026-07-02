@@ -23,6 +23,8 @@ internal sealed class Transaction : ITransaction
     /// </summary>
     public TransactionState State { get; internal set; }
 
+    internal string? FailureReason { get; set; }
+
     /// <summary>
     /// 开始时间
     /// </summary>
@@ -69,6 +71,11 @@ internal sealed class Transaction : ITransaction
         ThrowIfDisposed();
         if (State != TransactionState.Active)
         {
+            if (FailureReason != null)
+            {
+                throw new InvalidOperationException(FailureReason);
+            }
+
             throw new InvalidOperationException($"Transaction cannot be committed in state {State}");
         }
 

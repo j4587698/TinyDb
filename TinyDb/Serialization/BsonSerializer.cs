@@ -216,6 +216,21 @@ public static class BsonSerializer
     }
 
     /// <summary>
+    /// 反序列化为 BsonDocument（仅加载指定字段）
+    /// </summary>
+    /// <param name="data">内存块</param>
+    /// <param name="fields">需要加载的字段集合</param>
+    /// <returns>BSON 文档</returns>
+    public static BsonDocument DeserializeDocument(ReadOnlyMemory<byte> data, HashSet<string> fields)
+    {
+        if (fields == null) throw new ArgumentNullException(nameof(fields));
+        if (data.IsEmpty) return new BsonDocument();
+
+        var reader = new BsonSpanReader(data.Span);
+        return reader.ReadDocument(fields);
+    }
+
+    /// <summary>
     /// 序列化 BsonArray
     /// </summary>
     /// <param name="array">BSON 数组</param>

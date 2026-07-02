@@ -247,23 +247,18 @@ public sealed class PageManager : IDisposable
 
     private void ScanFreePages()
     {
-        uint lastFreeId = 0;
+        var freePageIds = new List<uint>();
         uint skippedPages = 0;
         for (uint i = 2; i <= _nextPageID; i++)
         {
             try
             {
-                var p = GetPage(i, false);
-                if (p.Header.PageType == PageType.Empty)
+                var pageOffset = CalculatePageOffset(i);
+                var pageData = ReadLogicalPageData(i, pageOffset);
+                var header = PageHeader.FromSpan(pageData);
+                if (header.PageType == PageType.Empty)
                 {
-                    if (_firstFreePageID == 0) _firstFreePageID = i;
-                    if (lastFreeId != 0)
-                    {
-                        var lastPage = GetPage(lastFreeId, false);
-                        lastPage.Header.NextPageID = i;
-                        SavePage(lastPage);
-                    }
-                    lastFreeId = i;
+                    freePageIds.Add(i);
                 }
             }
             catch (Exception ex)
@@ -274,12 +269,48 @@ public sealed class PageManager : IDisposable
             }
         }
 
+        _firstFreePageID = freePageIds.Count > 0 ? freePageIds[0] : 0;
+        for (var index = 0; index < freePageIds.Count; index++)
+        {
+            var pageId = freePageIds[index];
+            var nextPageId = index + 1 < freePageIds.Count ? freePageIds[index + 1] : 0;
+            try
+            {
+                WriteFreePageLink(pageId, nextPageId);
+            }
+            catch (Exception ex)
+            {
+                skippedPages++;
+                Log(TinyDbLogLevel.Warning, $"Skipping page {pageId} while rebuilding the free list.", ex);
+            }
+        }
+
         if (skippedPages > 0)
         {
             Log(
                 TinyDbLogLevel.Warning,
                 $"Free list rebuild skipped {skippedPages} unreadable page(s). The pages were left allocated to avoid reusing corrupted data; run CompactDatabase to reclaim space.");
         }
+    }
+
+    private void WriteFreePageLink(uint pageId, uint nextPageId)
+    {
+        var pageOffset = CalculatePageOffset(pageId);
+        var pageData = ReadLogicalPageData(pageId, pageOffset);
+        var header = PageHeader.FromSpan(pageData);
+        if (header.PageType != PageType.Empty || header.NextPageID == nextPageId)
+        {
+            return;
+        }
+
+        header.NextPageID = nextPageId;
+        header.Checksum = 0;
+        header.WriteTo(pageData);
+        header.Checksum = TinyCrc32.HashToUInt32WithZeroedRange(pageData, 21, sizeof(uint));
+        header.WriteTo(pageData);
+
+        WriteEncodedPageToDisk(pageId, pageOffset, pageData);
+        RemoveFromCache(pageId);
     }
 
     /// <summary>
