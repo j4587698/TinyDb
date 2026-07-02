@@ -97,13 +97,10 @@ public class AotBsonMapperAdditionalCoverageTests
     }
 
     [Test]
-    public async Task ConvertValue_ArrayList_FromBsonArray_ShouldConvert()
+    public async Task ConvertValue_ArrayList_FromBsonArray_ShouldThrow()
     {
         var arr = new BsonArray().AddValue(1).AddValue("a");
-        var result = (System.Collections.ArrayList)AotBsonMapper.ConvertValue(arr, typeof(System.Collections.ArrayList))!;
-
-        await Assert.That(result.Count).IsEqualTo(2);
-        await Assert.That(result[0]).IsEqualTo(1);
-        await Assert.That(result[1]).IsEqualTo("a");
+        await Assert.That(() => AotBsonMapper.ConvertValue(arr, typeof(System.Collections.ArrayList)))
+            .Throws<NotSupportedException>();
     }
 }

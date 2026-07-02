@@ -75,6 +75,21 @@ public class DiskStreamTests : IDisposable
     }
 
     [Test]
+    public async Task PageReadWrite_Should_Not_Move_Position()
+    {
+        using var ds = new DiskStream(_testDbPath);
+        ds.SetLength(32);
+        ds.Seek(5, SeekOrigin.Begin);
+
+        var data = new byte[] { 10, 20, 30, 40 };
+        ds.WritePage(8, data);
+        var read = ds.ReadPage(8, data.Length);
+
+        await Assert.That(ds.Position).IsEqualTo(5);
+        await Assert.That(read.SequenceEqual(data)).IsTrue();
+    }
+
+    [Test]
     public async Task GetStatistics_Should_Return_Values()
     {
         using var ds = new DiskStream(_testDbPath);

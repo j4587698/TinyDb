@@ -796,6 +796,20 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task BsonDocumentHashCode_ShouldReduceSymmetricCollisions()
+    {
+        var first = new BsonDocument()
+            .Set("a", new BsonInt32(1))
+            .Set("b", new BsonInt32(2));
+        var second = new BsonDocument()
+            .Set("a", new BsonInt32(2))
+            .Set("b", new BsonInt32(1));
+
+        await Assert.That(first.Equals(second)).IsFalse();
+        await Assert.That(first.GetHashCode()).IsNotEqualTo(second.GetHashCode());
+    }
+
+    [Test]
     public async Task PrimaryKeyLookup_ShouldUseBsonNumericValueEquality()
     {
         using var engine = CreateEngine("primary-key-numeric-equality.db");
@@ -806,6 +820,84 @@ public sealed class ReviewReportRegressionTests : IDisposable
         var found = collection.FindById(new BsonInt64(10));
         await Assert.That(found).IsNotNull();
         await Assert.That(found!.Score).IsEqualTo(5);
+    }
+
+    [Test]
+    public async Task TransactionFindAll_ShouldMergeNumericEquivalentIds()
+    {
+        const string collectionName = "tx_numeric_merge";
+        using var engine = CreateEngine("tx-numeric-merge.db");
+        var collection = engine.GetCollection<NumericIdOrderDocument>(collectionName);
+
+        engine.InsertDocument(collectionName, new BsonDocument()
+            .Set("_id", new BsonInt64(5))
+            .Set("Score", 10));
+
+        using var tx = engine.BeginTransaction();
+        collection.Update(new NumericIdOrderDocument { Id = 5, Score = 20 });
+
+        var rows = collection.FindAll().ToList();
+
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0].Id).IsEqualTo(5);
+        await Assert.That(rows[0].Score).IsEqualTo(20);
+    }
+
+    [Test]
+    public async Task OrderIndexTransactionOverlay_ShouldHideCommittedNumericEquivalentId()
+    {
+        const string collectionName = "tx_numeric_order";
+        using var engine = CreateEngine("tx-numeric-order.db");
+        var collection = engine.GetCollection<NumericIdOrderDocument>(collectionName);
+        engine.EnsureIndex(collectionName, "Score", "idx_score");
+
+        engine.InsertDocument(collectionName, new BsonDocument()
+            .Set("_id", new BsonInt64(5))
+            .Set("Score", 10));
+
+        using var tx = engine.BeginTransaction();
+        collection.Update(new NumericIdOrderDocument { Id = 5, Score = 20 });
+
+        var rows = collection.Query().OrderBy(static x => x.Score).ToList();
+
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0].Id).IsEqualTo(5);
+        await Assert.That(rows[0].Score).IsEqualTo(20);
+    }
+
+    [Test]
+    public async Task TransactionWriteConflict_ShouldUseBsonNumericValueEquality()
+    {
+        const string collectionName = "tx_numeric_write_conflict";
+        using var engine = CreateEngine("tx-numeric-write-conflict.db");
+        var collection = engine.GetBsonCollection(collectionName);
+
+        collection.Insert(new BsonDocument()
+            .Set("_id", new BsonInt64(1))
+            .Set("Score", new BsonInt64(5))
+            .Set("Values", new BsonArray(new BsonValue[] { new BsonInt64(10) })));
+
+        using var tx = (Transaction)engine.BeginTransaction();
+        tx.Operations.Add(new TransactionOperation(
+            TransactionOperationType.Update,
+            collectionName,
+            new BsonInt32(1),
+            originalDocument: new BsonDocument()
+                .Set("_id", new BsonInt32(1))
+                .Set("_collection", collectionName)
+                .Set("Score", new BsonInt32(5))
+                .Set("Values", new BsonArray(new BsonValue[] { new BsonInt32(10) })),
+            newDocument: new BsonDocument()
+                .Set("_id", new BsonInt32(1))
+                .Set("_collection", collectionName)
+                .Set("Score", new BsonInt32(6))
+                .Set("Values", new BsonArray(new BsonValue[] { new BsonInt32(11) }))));
+
+        await Assert.That(() => tx.Commit()).ThrowsNothing();
+
+        var updated = collection.FindById(new BsonInt64(1));
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!["Score"]).IsEqualTo(new BsonInt32(6));
     }
 
     [Test]
@@ -1013,6 +1105,13 @@ public sealed class TransactionDocument
 {
     public int Id { get; set; }
     public int Value { get; set; }
+}
+
+[Entity]
+public sealed class NumericIdOrderDocument
+{
+    public int Id { get; set; }
+    public int Score { get; set; }
 }
 
 [Entity("IndexedValueDocuments")]

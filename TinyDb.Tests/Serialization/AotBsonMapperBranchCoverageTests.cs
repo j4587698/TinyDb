@@ -59,12 +59,11 @@ public class AotBsonMapperBranchCoverageTests
     }
 
     [Test]
-    public async Task ConvertValue_BsonArray_ToCustomCollectionWithoutDefaultCtor_ShouldUseListCtor()
+    public async Task ConvertValue_BsonArray_ToCustomCollectionWithoutDefaultCtor_ShouldThrow()
     {
         var array = new BsonArray(new BsonValue[] { 1, 2, 3 });
-        var result = (IntCollectionWithListCtor)AotBsonMapper.ConvertValue(array, typeof(IntCollectionWithListCtor))!;
-
-        await Assert.That(result.ToArray().SequenceEqual(new[] { 1, 2, 3 })).IsTrue();
+        await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(IntCollectionWithListCtor)))
+            .Throws<NotSupportedException>();
     }
 
     [Test]

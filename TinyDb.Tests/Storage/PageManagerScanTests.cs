@@ -67,10 +67,21 @@ public class PageManagerScanTests : IDisposable
     {
         const uint pageSize = 4096;
         using var ds = new ThrowOnWriteDiskStream("mem://scan", initialSize: (long)pageSize * 3);
-        var pm = new PageManager(ds, pageSize);
+        var warnings = new List<string>();
+        var pm = new PageManager(
+            ds,
+            pageSize,
+            logger: (level, message, _) =>
+            {
+                if (level == TinyDbLogLevel.Warning)
+                {
+                    warnings.Add(message);
+                }
+            });
         try
         {
             await Assert.That(() => pm.Initialize(3, 0)).ThrowsNothing();
+            await Assert.That(warnings.Any(static message => message.Contains("Free list rebuild skipped 1 unreadable page(s)."))).IsTrue();
         }
         finally
         {

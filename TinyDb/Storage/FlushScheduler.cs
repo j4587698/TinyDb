@@ -240,7 +240,6 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             return;
         }
 
-        bool joinAsyncBatch;
         lock (_flushLock)
         {
             if (Volatile.Read(ref _disposed) != 0)
@@ -249,15 +248,9 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             }
 
             ThrowIfBackgroundFailed();
-            joinAsyncBatch = _syncedWorkerRunning || _syncedRequests > 0;
-            if (!joinAsyncBatch)
-            {
-                _wal.Synchronize(() => _pageManager.FlushDirtyPages(), truncateLog: false);
-                return;
-            }
         }
 
-        EnsureSyncedFlushAsync(CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
+        _wal.Synchronize(() => _pageManager.FlushDirtyPages(), truncateLog: false);
     }
 
     private async Task RunSyncedWorkerAsync()

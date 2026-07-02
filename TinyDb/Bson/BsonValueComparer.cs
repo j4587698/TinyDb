@@ -4,6 +4,13 @@ namespace TinyDb.Bson;
 
 internal static class BsonValueComparer
 {
+    public static IEqualityComparer<BsonValue> EqualityComparer { get; } = new BsonValueEqualityComparer();
+
+    public static bool ValueEquals(BsonValue? left, BsonValue? right)
+    {
+        return Compare(left, right) == 0;
+    }
+
     public static int Compare(BsonValue? left, BsonValue? right)
     {
         if (ReferenceEquals(left, right)) return 0;
@@ -158,6 +165,19 @@ internal static class BsonValueComparer
         {
             result = default;
             return false;
+        }
+    }
+
+    private sealed class BsonValueEqualityComparer : IEqualityComparer<BsonValue>
+    {
+        public bool Equals(BsonValue? x, BsonValue? y)
+        {
+            return ValueEquals(x, y);
+        }
+
+        public int GetHashCode(BsonValue obj)
+        {
+            return BsonValueComparer.GetHashCode(obj);
         }
     }
 }

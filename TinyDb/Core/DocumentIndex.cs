@@ -27,7 +27,7 @@ internal sealed class MemoryDocumentIndex : IDocumentIndex
 
     public MemoryDocumentIndex()
     {
-        _index = new ConcurrentDictionary<BsonValue, DocumentLocation>(BsonValueEqualityComparer.Instance);
+        _index = new ConcurrentDictionary<BsonValue, DocumentLocation>(BsonValueComparer.EqualityComparer);
     }
 
     public int Count => _index.Count;
@@ -55,20 +55,5 @@ internal sealed class MemoryDocumentIndex : IDocumentIndex
     public IEnumerable<KeyValuePair<BsonValue, DocumentLocation>> GetAll()
     {
         return _index;
-    }
-
-    private sealed class BsonValueEqualityComparer : IEqualityComparer<BsonValue>
-    {
-        internal static readonly BsonValueEqualityComparer Instance = new();
-
-        public bool Equals(BsonValue? x, BsonValue? y)
-        {
-            return BsonValueComparer.Compare(x, y) == 0;
-        }
-
-        public int GetHashCode(BsonValue obj)
-        {
-            return BsonValueComparer.GetHashCode(obj);
-        }
     }
 }

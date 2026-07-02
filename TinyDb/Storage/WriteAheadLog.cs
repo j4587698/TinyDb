@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO;
 using System.Threading;
@@ -514,16 +515,25 @@ public sealed class WriteAheadLog : IDisposable
         var stream = _stream!;
         var recordOffset = stream.Position;
         var payload = _walCodec.Encode(entryType, pageId, recordOffset, data);
-        
-        byte[] header = new byte[HeaderSize + 4];
-        header[0] = entryType;
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(1, 4), pageId);
-        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(5, 4), payload.Length);
-        var crc32 = TinyCrc32.HashToUInt32(header.AsSpan(0, HeaderSize), payload);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(9, 4), crc32);
-        
-        await stream.WriteAsync(header, 0, header.Length, cancellationToken).ConfigureAwait(false);
-        await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
+
+        const int headerLength = HeaderSize + 4;
+        var header = ArrayPool<byte>.Shared.Rent(headerLength);
+        try
+        {
+            var headerSpan = header.AsSpan(0, headerLength);
+            headerSpan[0] = entryType;
+            BinaryPrimitives.WriteUInt32LittleEndian(headerSpan[1..5], pageId);
+            BinaryPrimitives.WriteInt32LittleEndian(headerSpan[5..9], payload.Length);
+            var crc32 = TinyCrc32.HashToUInt32(headerSpan[..HeaderSize], payload);
+            BinaryPrimitives.WriteUInt32LittleEndian(headerSpan[9..13], crc32);
+
+            await stream.WriteAsync(header, 0, headerLength, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(header);
+        }
     }
 
     public async Task FlushToLSNAsync(long targetLSN, CancellationToken cancellationToken = default)
@@ -1217,12 +1227,6 @@ public sealed class WriteAheadLog : IDisposable
             else if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
-                stream.SetLength(0);
-                stream.Flush(true);
-            }
-            else if (lastSuccessfulPosition > 0)
-            {
-                // 全部重放成功，清空日志
                 stream.SetLength(0);
                 stream.Flush(true);
             }

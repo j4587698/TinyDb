@@ -301,15 +301,11 @@ public class AotBsonMapperFallbackBranchCoverageTests
     }
 
     [Test]
-    public async Task ConvertValue_ShouldWrap_ToTargetCollection_WhenNoDefaultCtor()
+    public async Task ConvertValue_ShouldThrow_WhenTargetCollectionNeedsWrapperCtor()
     {
         var arr = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2) });
-        var wrapped = (ListWrappingCollection<int>)AotBsonMapper.ConvertValue(arr, typeof(ListWrappingCollection<int>))!;
-        var list = wrapped.ToList();
-
-        await Assert.That(list.Count).IsEqualTo(2);
-        await Assert.That(list[0]).IsEqualTo(1);
-        await Assert.That(list[1]).IsEqualTo(2);
+        await Assert.That(() => AotBsonMapper.ConvertValue(arr, typeof(ListWrappingCollection<int>)))
+            .Throws<NotSupportedException>();
     }
 
     [Test]

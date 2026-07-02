@@ -64,6 +64,25 @@ public class IdGeneratorExtendedTests
     }
 
     [Test]
+    public async Task IdentityGenerator_Int_ShouldThrowOnOverflow()
+    {
+        var generator = new IdentityGenerator();
+        var propInfo = typeof(TinyDb.Tests.TestEntities.UserWithIntId).GetProperty("Id")!;
+        var sequencesField = typeof(IdentityGenerator).GetField(
+            "_sequences",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var sequences = (ConcurrentDictionary<string, long>)sequencesField.GetValue(generator)!;
+
+        sequences["overflow_seq"] = int.MaxValue;
+
+        await Assert.That(() => generator.GenerateId(
+                typeof(TinyDb.Tests.TestEntities.UserWithIntId),
+                propInfo,
+                "overflow_seq"))
+            .Throws<OverflowException>();
+    }
+
+    [Test]
     public async Task GuidV4Generator_ShouldGenerateUniqueIds()
     {
         var generator = new GuidV4Generator();

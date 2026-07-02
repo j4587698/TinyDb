@@ -71,6 +71,30 @@ public class BsonSerializerTests
     }
 
     [Test]
+    public async Task SerializeDocumentAndArray_ShouldPatchLengthAndRoundTrip()
+    {
+        var document = new BsonDocument()
+            .Set("name", "patched")
+            .Set("payload", new string('x', 5000))
+            .Set("nested", new BsonDocumentValue(new BsonDocument().Set("ok", true)));
+        var array = new BsonArray()
+            .AddValue("first")
+            .AddValue(new BsonDocument().Set("n", 2))
+            .AddValue(new BsonArray().AddValue(3).AddValue(4));
+
+        var documentBytes = BsonSerializer.SerializeDocument(document);
+        var arrayBytes = BsonSerializer.SerializeArray(array);
+        var documentRoundTrip = BsonSerializer.DeserializeDocument(documentBytes);
+        var arrayRoundTrip = BsonSerializer.DeserializeArray(arrayBytes);
+
+        await Assert.That(BitConverter.ToInt32(documentBytes, 0)).IsEqualTo(documentBytes.Length);
+        await Assert.That(BitConverter.ToInt32(arrayBytes, 0)).IsEqualTo(arrayBytes.Length);
+        await Assert.That(documentRoundTrip["payload"].ToString()).IsEqualTo(new string('x', 5000));
+        await Assert.That(((BsonDocument)arrayRoundTrip[1])["n"].ToInt32()).IsEqualTo(2);
+        await Assert.That(((BsonArray)arrayRoundTrip[2]).Count).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Serialize_Should_Convert_BsonArray_To_Bytes()
     {
         // Arrange

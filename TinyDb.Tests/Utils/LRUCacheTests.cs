@@ -127,4 +127,32 @@ public class LRUCacheTests
         cache.Clear();
         await Assert.That(cache.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task LRUCache_ConcurrentAccess_ShouldKeepMapAndListConsistent()
+    {
+        var cache = new LRUCache<int, string>(32);
+
+        var tasks = Enumerable.Range(0, 8).Select(worker => Task.Run(() =>
+        {
+            for (int i = 0; i < 500; i++)
+            {
+                var key = (worker * 500 + i) % 128;
+                cache.Put(key, key.ToString());
+                cache.TryGetValue(key, out _);
+                cache.ContainsKey(key);
+                cache.GetKeys().ToList();
+            }
+        })).ToArray();
+
+        await Task.WhenAll(tasks);
+
+        var keys = cache.GetKeys().ToList();
+        var values = cache.GetValues().ToList();
+
+        await Assert.That(cache.Count).IsLessThanOrEqualTo(cache.Capacity);
+        await Assert.That(keys.Count).IsEqualTo(cache.Count);
+        await Assert.That(values.Count).IsEqualTo(cache.Count);
+        await Assert.That(keys.Distinct().Count()).IsEqualTo(keys.Count);
+    }
 }

@@ -633,56 +633,80 @@ public static class BsonConversion
         {
             if (bsonValue is BsonArray listArray)
             {
-                var elementType = targetType.GetGenericArguments()[0];
-                var list = (System.Collections.IList)Activator.CreateInstance(targetType)!;
-
-                foreach (var item in listArray)
+                if (targetType == typeof(List<int>))
                 {
-                    list.Add(FromBsonValueForCollectionElement(item, elementType));
+                    var list = new List<int>(listArray.Count);
+                    foreach (var item in listArray)
+                    {
+                        list.Add(FromBsonValue<int>(item));
+                    }
+
+                    return list;
                 }
 
-                return list;
+                if (targetType == typeof(List<string>))
+                {
+                    var list = new List<string>(listArray.Count);
+                    foreach (var item in listArray)
+                    {
+                        list.Add(FromBsonValue<string>(item) ?? string.Empty);
+                    }
+
+                    return list;
+                }
+
+                if (targetType == typeof(List<double>))
+                {
+                    var list = new List<double>(listArray.Count);
+                    foreach (var item in listArray)
+                    {
+                        list.Add(FromBsonValue<double>(item));
+                    }
+
+                    return list;
+                }
+
+                throw new NotSupportedException($"List element type '{targetType.GetGenericArguments()[0].FullName}' is not supported in AOT mode.");
             }
         }
         else if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>))
         {
             if (bsonValue is BsonDocument bsonDoc)
             {
-                var keyType = targetType.GetGenericArguments()[0];
-                var valueType = targetType.GetGenericArguments()[1];
-                var dict = (System.Collections.IDictionary)Activator.CreateInstance(targetType)!;
-                
-                foreach (var element in bsonDoc)
+                if (targetType == typeof(Dictionary<string, int>))
                 {
-                    object key;
-                    if (keyType.IsEnum)
+                    var dict = new Dictionary<string, int>(bsonDoc.Count, StringComparer.Ordinal);
+                    foreach (var element in bsonDoc)
                     {
-                        var underlyingKeyType = Enum.GetUnderlyingType(keyType);
-                        var underlyingKey = Convert.ChangeType(element.Key, underlyingKeyType, CultureInfo.InvariantCulture);
-                        key = Enum.ToObject(keyType, underlyingKey!);
-                    }
-                    else
-                    {
-                        key = Convert.ChangeType(element.Key, keyType, CultureInfo.InvariantCulture);
+                        dict[element.Key] = (int)FromBsonValue(element.Value, typeof(int))!;
                     }
 
-                    object? value;
-                    if (valueType == typeof(int))
-                    {
-                        value = FromBsonValue(element.Value, typeof(int));
-                    }
-                    else if (valueType == typeof(string))
-                    {
-                        value = FromBsonValue(element.Value, typeof(string));
-                    }
-                    else
-                    {
-                        throw new NotSupportedException($"Dictionary value type '{valueType.FullName}' is not supported in AOT mode.");
-                    }
-
-                    dict.Add(key, value);
+                    return dict;
                 }
-                return dict;
+
+                if (targetType == typeof(Dictionary<string, string>))
+                {
+                    var dict = new Dictionary<string, string?>(bsonDoc.Count, StringComparer.Ordinal);
+                    foreach (var element in bsonDoc)
+                    {
+                        dict[element.Key] = (string?)FromBsonValue(element.Value, typeof(string));
+                    }
+
+                    return dict;
+                }
+
+                if (targetType == typeof(Dictionary<string, object>))
+                {
+                    var dict = new Dictionary<string, object?>(bsonDoc.Count, StringComparer.Ordinal);
+                    foreach (var element in bsonDoc)
+                    {
+                        dict[element.Key] = FromBsonValue(element.Value, typeof(object));
+                    }
+
+                    return dict;
+                }
+
+                throw new NotSupportedException($"Dictionary type '{targetType.FullName}' is not supported in AOT mode. Supported key/value pairs are string/int, string/string, and string/object.");
             }
         }
 
@@ -868,23 +892,6 @@ public static class BsonConversion
                 },
             _ => bsonValue.ToString()
         };
-    }
-
-    [UnconditionalSuppressMessage(
-        "Trimming",
-        "IL2062",
-        Justification = "Collection element conversion uses explicit scalar conversions or registered AOT adapters; unsupported dynamic types fail deterministically.")]
-    [UnconditionalSuppressMessage(
-        "Trimming",
-        "IL2067",
-        Justification = "Collection element conversion uses explicit scalar conversions or registered AOT adapters; unsupported dynamic types fail deterministically.")]
-    [UnconditionalSuppressMessage(
-        "AOT",
-        "IL2067",
-        Justification = "Collection element conversion uses explicit scalar conversions or registered AOT adapters; unsupported dynamic types fail deterministically.")]
-    private static object? FromBsonValueForCollectionElement(BsonValue bsonValue, Type elementType)
-    {
-        return FromBsonValue(bsonValue, elementType);
     }
 
     /// <summary>

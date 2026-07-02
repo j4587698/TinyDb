@@ -2002,6 +2002,40 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             SymbolDisplayFormat.FullyQualifiedFormat.MiscellaneousOptions |
             SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
 
+    private static string ToFullyQualifiedNonNullableTypeName(ITypeSymbol typeSymbol)
+    {
+        if (typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            typeSymbol = namedType.TypeArguments[0];
+        }
+
+        return typeSymbol
+            .ToDisplayString(FullyQualifiedNullableDisplayFormat)
+            .TrimEnd('?');
+    }
+
+    private static bool TryGetTypeSymbol(
+        IReadOnlyDictionary<string, ITypeSymbol> typeSymbols,
+        string typeName,
+        out ITypeSymbol typeSymbol)
+    {
+        if (typeSymbols.TryGetValue(typeName, out typeSymbol))
+        {
+            return true;
+        }
+
+        if (typeName.EndsWith("?", StringComparison.Ordinal) &&
+            typeSymbols.TryGetValue(typeName.TrimEnd('?'), out typeSymbol))
+        {
+            return true;
+        }
+
+        typeSymbol = null!;
+        return false;
+    }
+
     private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol)
     {
         if (typeSymbol == null)
@@ -2026,8 +2060,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         if (typeSymbol is IArrayTypeSymbol arrayType)
         {
             var elementType = arrayType.ElementType;
-            var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
             var isElementComplex = IsComplexObjectType(elementType);
+            var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
             var isElementValueType = elementType.IsValueType;
             return new TypeAnalysisResult(false, true, false, true, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
         }
@@ -2038,9 +2072,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             var typeArgs = GetDictionaryTypeArguments(dictType);
             if (typeArgs != null)
             {
+                var isValueComplex = IsComplexObjectType(typeArgs.Value.ValueType);
                 var keyTypeName = typeArgs.Value.KeyType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var valueTypeName = typeArgs.Value.ValueType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
-                var isValueComplex = IsComplexObjectType(typeArgs.Value.ValueType);
                 var isValueValueType = typeArgs.Value.ValueType.IsValueType;
                 return new TypeAnalysisResult(false, false, true, false, null, false, false, keyTypeName, valueTypeName, isValueComplex, isValueValueType);
             }
@@ -2052,8 +2086,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             var elementType = GetCollectionElementType(collectionType);
             if (elementType != null)
             {
-                var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isElementComplex = IsComplexObjectType(elementType);
+                var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isElementValueType = elementType.IsValueType;
                 return new TypeAnalysisResult(false, true, false, false, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
             }
@@ -2418,17 +2452,17 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             ITypeSymbol? propTypeSymbol = null;
             
             // 获取属性的类型符号
-            if (prop.IsComplexType && typeSymbols.TryGetValue(prop.FullyQualifiedNonNullableType, out var directType))
+            if (prop.IsComplexType && TryGetTypeSymbol(typeSymbols, prop.FullyQualifiedNonNullableType, out var directType))
             {
                 propTypeSymbol = directType;
             }
             else if (prop.IsCollection && prop.IsElementComplexType && !string.IsNullOrEmpty(prop.ElementType) &&
-                     typeSymbols.TryGetValue(prop.ElementType!, out var elementType))
+                     TryGetTypeSymbol(typeSymbols, prop.ElementType!, out var elementType))
             {
                 propTypeSymbol = elementType;
             }
             else if (prop.IsDictionary && prop.IsDictionaryValueComplexType && !string.IsNullOrEmpty(prop.DictionaryValueType) &&
-                     typeSymbols.TryGetValue(prop.DictionaryValueType!, out var valueType))
+                     TryGetTypeSymbol(typeSymbols, prop.DictionaryValueType!, out var valueType))
             {
                 propTypeSymbol = valueType;
             }
@@ -2605,12 +2639,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             if (prop.IsComplexType && !string.IsNullOrEmpty(prop.FullyQualifiedNonNullableType))
             {
                 var typeName = prop.FullyQualifiedNonNullableType;
-                if (typeSymbols.TryGetValue(typeName, out var typeSymbol) && 
-                    !HasEntityAttribute(typeSymbol) && 
-                    !visited.Contains(typeName))
+                if (TryGetTypeSymbol(typeSymbols, typeName, out var typeSymbol))
                 {
-                    visited.Add(typeName);
-                    toProcess.Enqueue((typeName, typeSymbol, new List<string> { typeName }));
+                    QueueDirectDependency(typeSymbol);
                 }
             }
 
@@ -2618,12 +2649,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             if (prop.IsCollection && prop.IsElementComplexType && !string.IsNullOrEmpty(prop.ElementType))
             {
                 var typeName = prop.ElementType!;
-                if (typeSymbols.TryGetValue(typeName, out var typeSymbol) && 
-                    !HasEntityAttribute(typeSymbol) && 
-                    !visited.Contains(typeName))
+                if (TryGetTypeSymbol(typeSymbols, typeName, out var typeSymbol))
                 {
-                    visited.Add(typeName);
-                    toProcess.Enqueue((typeName, typeSymbol, new List<string> { typeName }));
+                    QueueDirectDependency(typeSymbol);
                 }
             }
 
@@ -2631,17 +2659,28 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             if (prop.IsDictionary && prop.IsDictionaryValueComplexType && !string.IsNullOrEmpty(prop.DictionaryValueType))
             {
                 var typeName = prop.DictionaryValueType!;
-                if (typeSymbols.TryGetValue(typeName, out var typeSymbol) && 
-                    !HasEntityAttribute(typeSymbol) && 
-                    !visited.Contains(typeName))
+                if (TryGetTypeSymbol(typeSymbols, typeName, out var typeSymbol))
                 {
-                    visited.Add(typeName);
-                    toProcess.Enqueue((typeName, typeSymbol, new List<string> { typeName }));
+                    QueueDirectDependency(typeSymbol);
                 }
             }
         }
 
         // BFS处理所有依赖类型
+        void QueueDirectDependency(ITypeSymbol typeSymbol)
+        {
+            if (HasEntityAttribute(typeSymbol))
+            {
+                return;
+            }
+
+            var typeName = ToFullyQualifiedNonNullableTypeName(typeSymbol);
+            if (visited.Add(typeName))
+            {
+                toProcess.Enqueue((typeName, typeSymbol, new List<string> { typeName }));
+            }
+        }
+
         while (toProcess.Count > 0)
         {
             var (fullName, typeSymbol, path) = toProcess.Dequeue();
@@ -2709,7 +2748,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                         return;
                     }
 
-                    var dependencyFullName = dependencyTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    var dependencyFullName = ToFullyQualifiedNonNullableTypeName(dependencyTypeSymbol);
 
                     if (currentPath.Contains(dependencyFullName))
                     {

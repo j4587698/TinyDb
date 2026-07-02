@@ -3,8 +3,6 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
-using System.Linq;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Globalization;
 using TinyDb.Attributes;
@@ -287,7 +285,7 @@ public static class AotBsonMapper
                 return null;
             }
 
-            return Activator.CreateInstance(targetType);
+            return CreateDefaultValue(targetType);
         }
 
         var nonNullableType = Nullable.GetUnderlyingType(targetType) ?? targetType;
@@ -337,6 +335,36 @@ public static class AotBsonMapper
         }
 
         return ConvertPrimitiveValue(bsonValue, nonNullableType);
+    }
+
+    private static object CreateDefaultValue(Type targetType)
+    {
+        if (targetType.IsEnum)
+        {
+            return Enum.ToObject(targetType, 0);
+        }
+
+        return targetType switch
+        {
+            var t when t == typeof(bool) => false,
+            var t when t == typeof(byte) => default(byte),
+            var t when t == typeof(sbyte) => default(sbyte),
+            var t when t == typeof(short) => default(short),
+            var t when t == typeof(ushort) => default(ushort),
+            var t when t == typeof(int) => default(int),
+            var t when t == typeof(uint) => default(uint),
+            var t when t == typeof(long) => default(long),
+            var t when t == typeof(ulong) => default(ulong),
+            var t when t == typeof(float) => default(float),
+            var t when t == typeof(double) => default(double),
+            var t when t == typeof(decimal) => default(decimal),
+            var t when t == typeof(char) => default(char),
+            var t when t == typeof(DateTime) => default(DateTime),
+            var t when t == typeof(Guid) => default(Guid),
+            var t when t == typeof(ObjectId) => default(ObjectId),
+            var t when t == typeof(Decimal128) => default(Decimal128),
+            _ => throw new NotSupportedException($"AOT fallback does not support default value creation for type '{targetType.FullName}'.")
+        };
     }
 
     /// <summary>
@@ -500,11 +528,29 @@ public static class AotBsonMapper
             throw new NotSupportedException($"AOT 回退模式仅支持字符串键的字典，但实际键类型为 {keyType.FullName}。");
         }
 
-        var instance = Activator.CreateInstance(dictionaryType)!;
-
-        if (instance is not IDictionary dictionary)
+        object instance;
+        IDictionary dictionary;
+        if (dictionaryType == typeof(Dictionary<string, int>))
         {
-            throw new NotSupportedException($"字典类型 {dictionaryType.FullName} 未实现 IDictionary 接口，无法在 AOT 回退模式下填充数据。");
+            var typedDictionary = new Dictionary<string, int>(document.Count, StringComparer.Ordinal);
+            instance = typedDictionary;
+            dictionary = typedDictionary;
+        }
+        else if (dictionaryType == typeof(Dictionary<string, string>))
+        {
+            var typedDictionary = new Dictionary<string, string?>(document.Count, StringComparer.Ordinal);
+            instance = typedDictionary;
+            dictionary = typedDictionary;
+        }
+        else if (dictionaryType == typeof(Dictionary<string, object>))
+        {
+            var typedDictionary = new Dictionary<string, object?>(document.Count, StringComparer.Ordinal);
+            instance = typedDictionary;
+            dictionary = typedDictionary;
+        }
+        else
+        {
+            throw new NotSupportedException($"AOT fallback does not support dictionary type '{dictionaryType.FullName}'.");
         }
 
         if (valueType == typeof(int))
@@ -545,22 +591,6 @@ public static class AotBsonMapper
         if (targetCollectionType == null) throw new ArgumentNullException(nameof(targetCollectionType));
         if (sourceCollection == null) throw new ArgumentNullException(nameof(sourceCollection));
 
-        var sourceType = sourceCollection.GetType();
-
-        foreach (var ctor in targetCollectionType.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
-        {
-            var parameters = ctor.GetParameters();
-            if (parameters.Length != 1)
-            {
-                continue;
-            }
-
-            if (parameters[0].ParameterType == sourceType)
-            {
-                return ctor.Invoke(new[] { sourceCollection });
-            }
-        }
-
         return null;
     }
 
@@ -568,60 +598,6 @@ public static class AotBsonMapper
     {
         if (collectionType == null) throw new ArgumentNullException(nameof(collectionType));
         if (array == null) return null;
-
-        Type? elementType = null;
-
-        if (collectionType.IsGenericType && collectionType.GetGenericArguments().Length == 1)
-        {
-            elementType = collectionType.GetGenericArguments()[0];
-        }
-        else
-        {
-            var enumerableInterface = collectionType.GetInterfaces()
-                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
-            if (enumerableInterface != null)
-            {
-                elementType = enumerableInterface.GetGenericArguments()[0];
-            }
-        }
-
-        if (elementType == null)
-        {
-            return null;
-        }
-
-        if (elementType == typeof(int))
-        {
-            var list = new List<int>(array.Count);
-            foreach (var bsonValue in array)
-            {
-                list.Add((int)ConvertFromBsonValue(bsonValue, typeof(int))!);
-            }
-
-            return TryWrapWithTargetCollection(collectionType, list);
-        }
-
-        if (elementType == typeof(string))
-        {
-            var list = new List<string?>(array.Count);
-            foreach (var bsonValue in array)
-            {
-                list.Add((string?)ConvertFromBsonValue(bsonValue, typeof(string)));
-            }
-
-            return TryWrapWithTargetCollection(collectionType, list);
-        }
-
-        if (elementType == typeof(object))
-        {
-            var list = new List<object?>(array.Count);
-            foreach (var bsonValue in array)
-            {
-                list.Add(ConvertFromBsonValue(bsonValue, typeof(object)));
-            }
-
-            return TryWrapWithTargetCollection(collectionType, list);
-        }
 
         return null;
     }
@@ -662,60 +638,40 @@ public static class AotBsonMapper
             throw new NotSupportedException($"AOT 回退模式不支持接口/抽象集合类型 {collectionType.FullName}，请使用具体的 List<T> 或 ArrayList。");
         }
 
-        var wrapped = TryCreateCollectionFromListCtor(collectionType, array);
-        if (wrapped != null)
+        if (collectionType == typeof(List<int>))
         {
-            return wrapped;
-        }
-
-        if (collectionType.GetConstructor(Type.EmptyTypes) == null)
-        {
-            throw new NotSupportedException(
-                $"AOT fallback does not support collection type '{collectionType.FullName}' without a public parameterless constructor or List<T> constructor.");
-        }
-
-        var instance = Activator.CreateInstance(collectionType)!;
-
-        if (instance is not IList list)
-        {
-            throw new NotSupportedException($"AOT 回退模式仅支持实现 IList 的集合类型，但 {collectionType.FullName} 不支持。");
-        }
-
-        var elementType = collectionType.IsGenericType && collectionType.GetGenericArguments().Length == 1
-            ? collectionType.GetGenericArguments()[0]
-            : typeof(object);
-
-        if (elementType == typeof(int))
-        {
+            var list = new List<int>(array.Count);
             foreach (var bsonValue in array)
             {
-                list.Add(ConvertFromBsonValue(bsonValue, typeof(int)));
+                list.Add((int)ConvertFromBsonValue(bsonValue, typeof(int))!);
             }
 
-            return instance;
+            return list;
         }
 
-        if (elementType == typeof(string))
+        if (collectionType == typeof(List<string>))
         {
+            var list = new List<string?>(array.Count);
             foreach (var bsonValue in array)
             {
-                list.Add(ConvertFromBsonValue(bsonValue, typeof(string)));
+                list.Add((string?)ConvertFromBsonValue(bsonValue, typeof(string)));
             }
 
-            return instance;
+            return list;
         }
 
-        if (elementType == typeof(object))
+        if (collectionType == typeof(List<object>))
         {
+            var list = new List<object?>(array.Count);
             foreach (var bsonValue in array)
             {
                 list.Add(ConvertFromBsonValue(bsonValue, typeof(object)));
             }
 
-            return instance;
+            return list;
         }
 
-        throw new NotSupportedException($"AOT 回退模式不支持集合元素类型 '{elementType.FullName}'。");
+        throw new NotSupportedException($"AOT fallback does not support collection type '{collectionType.FullName}'.");
     }
 
 

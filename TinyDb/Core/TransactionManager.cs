@@ -107,8 +107,7 @@ public sealed class TransactionManager : IDisposable
 
         try
         {
-            using var collectionLocks = _engine.EnterCollectionWriteLocks(
-                operations.Select(static operation => operation.CollectionName));
+            using var collectionLocks = _engine.EnterCollectionWriteLocks(GetTransactionLockCollectionNames(operations));
 
             // 验证所有操作
             ValidateOperations(operations);
@@ -175,6 +174,35 @@ public sealed class TransactionManager : IDisposable
                 _activeTransactions.Remove(transaction.TransactionId);
             }
         }
+    }
+
+    private IEnumerable<string> GetTransactionLockCollectionNames(IReadOnlyList<TransactionOperation> operations)
+    {
+        var collectionNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var operation in operations)
+        {
+            if (!string.IsNullOrWhiteSpace(operation.CollectionName))
+            {
+                collectionNames.Add(operation.CollectionName);
+            }
+
+            if (operation.NewDocument == null ||
+                operation.OperationType is not (TransactionOperationType.Insert or TransactionOperationType.Update))
+            {
+                continue;
+            }
+
+            foreach (var foreignKey in GetForeignKeyDefinitions(operation.CollectionName))
+            {
+                if (!string.IsNullOrWhiteSpace(foreignKey.ReferencedCollection))
+                {
+                    collectionNames.Add(foreignKey.ReferencedCollection);
+                }
+            }
+        }
+
+        return collectionNames;
     }
 
     /// <summary>
@@ -432,11 +460,53 @@ public sealed class TransactionManager : IDisposable
                 continue;
             }
 
-            if (committedDocument == null || !committedDocument.Equals(op.OriginalDocument))
+            if (committedDocument == null || !BsonDocumentsValueEqual(committedDocument, op.OriginalDocument))
             {
                 throw new InvalidOperationException($"Write conflict: document '{op.DocumentId}' changed in collection '{op.CollectionName}'.");
             }
         }
+    }
+
+    private static bool BsonDocumentsValueEqual(BsonDocument? left, BsonDocument? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is null || right is null || left.Count != right.Count) return false;
+
+        foreach (var (key, leftValue) in left)
+        {
+            if (!right.TryGetValue(key, out var rightValue)) return false;
+            if (!BsonValuesValueEqual(leftValue, rightValue)) return false;
+        }
+
+        return true;
+    }
+
+    private static bool BsonArraysValueEqual(BsonArray left, BsonArray right)
+    {
+        if (left.Count != right.Count) return false;
+
+        for (int i = 0; i < left.Count; i++)
+        {
+            if (!BsonValuesValueEqual(left[i], right[i])) return false;
+        }
+
+        return true;
+    }
+
+    private static bool BsonValuesValueEqual(BsonValue? left, BsonValue? right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is BsonDocument leftDocument && right is BsonDocument rightDocument)
+        {
+            return BsonDocumentsValueEqual(leftDocument, rightDocument);
+        }
+
+        if (left is BsonArray leftArray && right is BsonArray rightArray)
+        {
+            return BsonArraysValueEqual(leftArray, rightArray);
+        }
+
+        return BsonValueComparer.ValueEquals(left, right);
     }
 
     private static string ToCamelCase(string name)

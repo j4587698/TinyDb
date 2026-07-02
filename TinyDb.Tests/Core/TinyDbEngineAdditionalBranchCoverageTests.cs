@@ -186,6 +186,51 @@ public class TinyDbEngineAdditionalBranchCoverageTests
     }
 
     [Test]
+    public async Task FindById_WhenPrimaryIndexMisses_ShouldCountFallbackAndLogRecoveredHit()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"tinydb_findbyid_fallback_{Guid.NewGuid():N}");
+        var dbPath = Path.Combine(dir, "db.db");
+        var logs = new List<(TinyDbLogLevel Level, string Message)>();
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            using var engine = new TinyDbEngine(
+                dbPath,
+                new TinyDbOptions
+                {
+                    EnableJournaling = false,
+                    Logger = (level, message, _) => logs.Add((level, message))
+                });
+
+            var collectionName = "fallback_hits";
+            var collection = engine.GetBsonCollection(collectionName);
+            collection.Insert(new BsonDocument().Set("_id", 7).Set("v", "stored"));
+
+            var state = GetCollectionState(engine, collectionName);
+            state.Index.Clear();
+            logs.Clear();
+            var baselineFallbacks = engine.FindByIdFullScanCount;
+            var baselineHits = engine.FindByIdFullScanHitCount;
+
+            var recovered = engine.FindById(collectionName, new BsonInt32(7));
+            var missing = engine.FindById(collectionName, new BsonInt32(404));
+
+            await Assert.That(recovered).IsNotNull();
+            await Assert.That(recovered!["v"].ToString()).IsEqualTo("stored");
+            await Assert.That(missing).IsNull();
+            await Assert.That(engine.FindByIdFullScanCount).IsEqualTo(baselineFallbacks + 2);
+            await Assert.That(engine.FindByIdFullScanHitCount).IsEqualTo(baselineHits + 1);
+            await Assert.That(logs.Count(log => log.Level == TinyDbLogLevel.Warning)).IsEqualTo(1);
+            await Assert.That(logs[0].Message).Contains("Full-scan fallback found the document");
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Test]
     public async Task UpdateAndDeleteAsync_WhenExistingIsLargeDocument_ShouldSucceed()
     {
         var dir = Path.Combine(Path.GetTempPath(), $"tinydb_large_update_delete_{Guid.NewGuid():N}");

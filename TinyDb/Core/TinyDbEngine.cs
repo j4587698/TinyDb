@@ -67,6 +67,8 @@ public sealed class TinyDbEngine : IDisposable
     private EncryptionContext? _encryptionContext;
     private int _disposed;
     private bool _isInitialized;
+    private long _findByIdFullScanCount;
+    private long _findByIdFullScanHitCount;
 
     private const int DocumentLengthPrefixSize = sizeof(int);
     private const int MinimumFreeSpaceThreshold = DocumentLengthPrefixSize + 64;
@@ -88,6 +90,16 @@ public sealed class TinyDbEngine : IDisposable
     /// 获取此数据库实例使用的选项。
     /// </summary>
     public TinyDbOptions Options => _options;
+
+    /// <summary>
+    /// 获取 FindById 查询回退到全集合扫描的次数。
+    /// </summary>
+    public long FindByIdFullScanCount => Interlocked.Read(ref _findByIdFullScanCount);
+
+    /// <summary>
+    /// 获取 FindById 全扫描回退实际找回已存在文档的次数。
+    /// </summary>
+    public long FindByIdFullScanHitCount => Interlocked.Read(ref _findByIdFullScanHitCount);
 
     public TinyDb.Metadata.MetadataManager MetadataManager => _metadataManager;
 
@@ -1458,7 +1470,7 @@ public sealed class TinyDbEngine : IDisposable
 
         public static PreparedInsertPayload Create(BsonDocument document, BsonValue id)
         {
-            var buffer = new PooledBufferWriter(BsonSerializer.CalculateDocumentSize(document));
+            var buffer = new PooledBufferWriter();
             try
             {
                 BsonSerializer.SerializeDocumentToBuffer(document, buffer);
@@ -1473,7 +1485,7 @@ public sealed class TinyDbEngine : IDisposable
 
         public void ReplaceDocument(BsonDocument document)
         {
-            var nextBuffer = new PooledBufferWriter(BsonSerializer.CalculateDocumentSize(document));
+            var nextBuffer = new PooledBufferWriter();
             try
             {
                 BsonSerializer.SerializeDocumentToBuffer(document, nextBuffer);
@@ -2505,6 +2517,8 @@ public sealed class TinyDbEngine : IDisposable
 
     private async Task<BsonDocument?> FindByIdFullScanAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
+        RecordFindByIdFullScan();
+
         var idPredicate = new[]
         {
             new ScanPredicate(
@@ -2528,6 +2542,7 @@ public sealed class TinyDbEngine : IDisposable
             doc = await ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
             if (doc.TryGetValue("_id", out var documentId) && BsonValuesEqual(documentId, id))
             {
+                RecordFindByIdFullScanHit(col, id);
                 return doc;
             }
         }
@@ -3156,7 +3171,7 @@ public sealed class TinyDbEngine : IDisposable
         return new BsonDocument(dict);
     }
 
-    private static bool BsonValuesEqual(BsonValue? left, BsonValue? right) => BsonValueComparer.Compare(left, right) == 0;
+    private static bool BsonValuesEqual(BsonValue? left, BsonValue? right) => BsonValueComparer.ValueEquals(left, right);
 
     private static bool IsCommittedDocumentMatch(string collectionName, BsonValue id, BsonDocument document)
     {
@@ -3166,7 +3181,35 @@ public sealed class TinyDbEngine : IDisposable
                 collectionValue.ToString() == collectionName);
     }
 
-    private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st) => FindAll(col).FirstOrDefault(d => BsonValuesEqual(d["_id"], id));
+    private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st)
+    {
+        RecordFindByIdFullScan();
+        var document = FindAll(col).FirstOrDefault(d => BsonValuesEqual(d["_id"], id));
+        if (document != null)
+        {
+            RecordFindByIdFullScanHit(col, id);
+        }
+
+        return document;
+    }
+
+    private void RecordFindByIdFullScan()
+    {
+        Interlocked.Increment(ref _findByIdFullScanCount);
+    }
+
+    private void RecordFindByIdFullScanHit(string col, BsonValue id)
+    {
+        var count = Interlocked.Increment(ref _findByIdFullScanHitCount);
+        if (count == 1 || IsPowerOfTwo(count))
+        {
+            Log(
+                TinyDbLogLevel.Warning,
+                $"Primary key index miss in collection '{col}' for id '{id}'. Full-scan fallback found the document. HitCount={count}.");
+        }
+    }
+
+    private static bool IsPowerOfTwo(long value) => (value & (value - 1)) == 0;
 
     private bool TryResolveDocumentLocation(string col, CollectionState st, BsonValue id, out Page p, out List<PageDocumentEntry> e, out ushort i)
     {
@@ -3241,7 +3284,7 @@ public sealed class TinyDbEngine : IDisposable
 
     private IEnumerable<BsonDocument> MergeTransactionOperations(string col, IEnumerable<BsonDocument> ds, Transaction tx)
     {
-        var dict = new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
+        var dict = new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
 
         foreach (var document in ds)
         {
