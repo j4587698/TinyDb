@@ -1,5 +1,6 @@
 using TinyDb.Bson;
 using TinyDb.Storage;
+using TinyDb.Serialization;
 using System.Buffers;
 using System.Collections.Concurrent;
 
@@ -151,9 +152,7 @@ public sealed class IndexManager : IDisposable
 
     private static string ToCamelCase(string name)
     {
-        if (string.IsNullOrEmpty(name)) return name;
-        if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        return BsonFieldName.ToCamelCase(name);
     }
 
     private void LoadPersistedIndexes(IReadOnlyList<PersistedIndexDefinition>? definitions)

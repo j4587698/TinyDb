@@ -320,7 +320,7 @@ public sealed class QueryExecutor
         };
     }
 
-    private bool TryCreatePredicateIndexBeforeOrderPlan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+    private bool TryCreatePredicateIndexBeforeOrderPlan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         QueryShape<T> shape,
         [NotNullWhen(true)] out QueryExecutionPlan? predicatePlan)

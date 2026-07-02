@@ -298,14 +298,9 @@ public sealed class QueryOptimizer
         // 获取集合的索引管理器
         var indexManager = _engine.GetIndexManager(collectionName);
         // 分析可用的索引
-        var availableIndexes = (planningMetadataOnly
+        var availableIndexes = planningMetadataOnly
             ? indexManager.GetPlanningStatistics()
-            : indexManager.GetAllStatistics()).ToList();
-        if (!availableIndexes.Any())
-        {
-            plan.Strategy = QueryExecutionStrategy.FullTableScan;
-            return plan;
-        }
+            : indexManager.GetAllStatistics();
 
         // 尝试找到最适合的索引
         var comparisons = ExtractComparisonMap(queryExpression);
@@ -366,14 +361,9 @@ public sealed class QueryOptimizer
         }
 
         var indexManager = _engine.GetIndexManager(collectionName);
-        var availableIndexes = (planningMetadataOnly
+        var availableIndexes = planningMetadataOnly
             ? indexManager.GetPlanningStatistics()
-            : indexManager.GetAllStatistics()).ToList();
-        if (!availableIndexes.Any())
-        {
-            plan.Strategy = QueryExecutionStrategy.FullTableScan;
-            return plan;
-        }
+            : indexManager.GetAllStatistics();
 
         var comparisons = ExtractComparisonMap(queryExpression);
         var bestIndex = SelectBestIndex(availableIndexes, comparisons);
@@ -454,27 +444,28 @@ public sealed class QueryOptimizer
         IEnumerable<IndexStatistics> availableIndexes,
         IReadOnlyDictionary<string, FieldComparison> comparisons)
     {
-        var candidateIndexes = new List<IndexCandidate>();
+        IndexStatistics? bestIndex = null;
+        var bestScore = 0;
 
         // 分析每个索引与查询的匹配度
         foreach (var indexStat in availableIndexes)
         {
             var matchScore = CalculateIndexMatchScoreCore(indexStat, comparisons);
-            if (matchScore > 0)
+            if (matchScore <= 0)
             {
-                candidateIndexes.Add(new IndexCandidate
-                {
-                    Index = indexStat,
-                    MatchScore = matchScore
-                });
+                continue;
+            }
+
+            if (bestIndex == null ||
+                matchScore > bestScore ||
+                matchScore == bestScore && indexStat.EntryCount < bestIndex.EntryCount)
+            {
+                bestIndex = indexStat;
+                bestScore = matchScore;
             }
         }
 
-        // 返回匹配度最高的索引
-        return candidateIndexes
-            .OrderByDescending(c => c.MatchScore)
-            .ThenBy(c => c.Index.EntryCount) // 优先选择条目数较少的索引
-            .FirstOrDefault()?.Index;
+        return bestIndex;
     }
 
     /// <summary>
@@ -737,14 +728,6 @@ public sealed class QueryOptimizer
         return ComparisonType.Equal;
     }
 
-    /// <summary>
-    /// 索引候选者
-    /// </summary>
-    private class IndexCandidate
-    {
-        public IndexStatistics Index { get; set; } = null!;
-        public int MatchScore { get; set; }
-    }
 }
 
 /// <summary>

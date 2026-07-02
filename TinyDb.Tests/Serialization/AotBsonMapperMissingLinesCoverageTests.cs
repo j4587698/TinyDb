@@ -315,6 +315,9 @@ public class AotBsonMapperMissingLinesCoverageTests
         await Assert.That(InvokePrivateStatic<string>("ToCamelCase", string.Empty)).IsEqualTo(string.Empty);
         await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "A")).IsEqualTo("a");
         await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "Abc")).IsEqualTo("abc");
+        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "ID")).IsEqualTo("id");
+        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "URLValue")).IsEqualTo("urlValue");
+        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "_Id")).IsEqualTo("_id");
 
         await Assert.That(InvokePrivateStatic<object?>("UnwrapBsonValue", BsonNull.Value)).IsNull();
 

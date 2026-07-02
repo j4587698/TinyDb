@@ -715,6 +715,40 @@ public class DocumentCollectionEdgeCaseTests
     }
 
     [Test]
+    public async Task UpdateBatch_InTransaction_ShouldPreserveInputOrderForDuplicateIds()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_txn_update_batch_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath);
+            var collection = (DocumentCollection<TestEntity>)engine.GetCollection<TestEntity>();
+
+            var id = ObjectId.NewObjectId();
+            collection.Insert(new TestEntity { Id = id, Name = "Original", Value = 1 });
+
+            using var transaction = engine.BeginTransaction();
+
+            var updated = collection.Update(new[]
+            {
+                new TestEntity { Id = id, Name = "Step1", Value = 10 },
+                new TestEntity { Id = id, Name = "Step2", Value = 20 }
+            });
+
+            await Assert.That(updated).IsEqualTo(2);
+            await Assert.That(collection.FindById(id)!.Name).IsEqualTo("Step2");
+
+            transaction.Commit();
+
+            await Assert.That(collection.FindById(id)!.Name).IsEqualTo("Step2");
+            await Assert.That(collection.FindById(id)!.Value).IsEqualTo(20);
+        }
+        finally
+        {
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Test]
     public async Task Delete_InTransaction_ShouldRecordOperation()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_txn_del_{Guid.NewGuid():N}.db");

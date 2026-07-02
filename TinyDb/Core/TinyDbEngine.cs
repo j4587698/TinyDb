@@ -1185,6 +1185,7 @@ public sealed class TinyDbEngine : IDisposable
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
 
+        const int CopyBatchSize = 1000;
         var names = collectionNames ?? GetCollectionNames(includeSystemCollections: true)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(static name => name, StringComparer.Ordinal)
@@ -1192,7 +1193,6 @@ public sealed class TinyDbEngine : IDisposable
 
         foreach (var collectionName in names)
         {
-            var documents = FindAll(collectionName).ToList();
             target.RegisterCollection(collectionName);
 
             var sourceIndexManager = GetIndexManager(collectionName);
@@ -1202,10 +1202,39 @@ public sealed class TinyDbEngine : IDisposable
                 targetIndexManager.CreateIndex(stat.Name, stat.Fields, stat.IsUnique, stat.IsSparse);
             }
 
-            if (documents.Count > 0)
+            var documentBatch = new List<BsonDocument>(CopyBatchSize);
+            foreach (var document in StreamCollectionDocumentsForCopy(collectionName))
             {
-                target.InsertDocuments(collectionName, documents);
+                documentBatch.Add(document);
+                if (documentBatch.Count < CopyBatchSize)
+                {
+                    continue;
+                }
+
+                target.InsertDocuments(collectionName, documentBatch);
+                documentBatch.Clear();
             }
+
+            if (documentBatch.Count > 0)
+            {
+                target.InsertDocuments(collectionName, documentBatch);
+            }
+        }
+    }
+
+    private IEnumerable<BsonDocument> StreamCollectionDocumentsForCopy(string collectionName)
+    {
+        var state = GetCollectionState(collectionName);
+        foreach (var result in StreamRawScanResultPages(collectionName, state, null))
+        {
+            var document = DeserializeDocumentOrThrow(result.Slice);
+            if (document.TryGetValue("_collection", out var collectionValue) &&
+                collectionValue.ToString() != collectionName)
+            {
+                continue;
+            }
+
+            yield return ResolveLargeDocument(document);
         }
     }
 
@@ -2295,6 +2324,46 @@ public sealed class TinyDbEngine : IDisposable
         return FindCommittedById(col, id);
     }
 
+    internal List<BsonDocument?> FindByIds(string col, IReadOnlyList<BsonValue> ids)
+    {
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+        if (ids.Count == 0) return new List<BsonDocument?>();
+
+        var tx = GetCurrentTransaction();
+        if (tx == null)
+        {
+            return FindCommittedByIds(col, ids);
+        }
+
+        var results = new BsonDocument?[ids.Count];
+        var committedIds = new List<BsonValue>(ids.Count);
+        var committedOrdinals = new List<int>(ids.Count);
+
+        var operations = tx.GetOperationsSnapshot();
+        for (int i = 0; i < ids.Count; i++)
+        {
+            if (TryGetTransactionDocument(operations, col, ids[i], out var transactionDocument))
+            {
+                results[i] = transactionDocument;
+                continue;
+            }
+
+            committedOrdinals.Add(i);
+            committedIds.Add(ids[i]);
+        }
+
+        if (committedIds.Count > 0)
+        {
+            var committedDocuments = FindCommittedByIds(col, committedIds);
+            for (int i = 0; i < committedDocuments.Count; i++)
+            {
+                results[committedOrdinals[i]] = committedDocuments[i];
+            }
+        }
+
+        return results.ToList();
+    }
+
     internal BsonDocument? FindCommittedById(string col, BsonValue id)
     {
         var st = GetCollectionState(col);
@@ -2416,6 +2485,51 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         return await FindByIdFullScanAsync(col, id, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<List<BsonDocument?>> FindByIdsAsync(
+        string col,
+        IReadOnlyList<BsonValue> ids,
+        CancellationToken cancellationToken = default)
+    {
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ids.Count == 0) return new List<BsonDocument?>();
+
+        var tx = GetCurrentTransaction();
+        if (tx == null)
+        {
+            return await FindCommittedByIdsAsync(col, ids, cancellationToken).ConfigureAwait(false);
+        }
+
+        var results = new BsonDocument?[ids.Count];
+        var committedIds = new List<BsonValue>(ids.Count);
+        var committedOrdinals = new List<int>(ids.Count);
+
+        var operations = tx.GetOperationsSnapshot();
+        for (int i = 0; i < ids.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryGetTransactionDocument(operations, col, ids[i], out var transactionDocument))
+            {
+                results[i] = transactionDocument;
+                continue;
+            }
+
+            committedOrdinals.Add(i);
+            committedIds.Add(ids[i]);
+        }
+
+        if (committedIds.Count > 0)
+        {
+            var committedDocuments = await FindCommittedByIdsAsync(col, committedIds, cancellationToken).ConfigureAwait(false);
+            for (int i = 0; i < committedDocuments.Count; i++)
+            {
+                results[committedOrdinals[i]] = committedDocuments[i];
+            }
+        }
+
+        return results.ToList();
     }
 
     internal async Task<List<BsonDocument?>> FindCommittedByIdsAsync(
@@ -3344,11 +3458,20 @@ public sealed class TinyDbEngine : IDisposable
 
     private static bool TryGetTransactionDocument(Transaction tx, string collectionName, BsonValue id, out BsonDocument? document)
     {
-        document = null;
         var operations = tx.GetOperationsSnapshot();
-        if (operations.Length == 0) return false;
+        return TryGetTransactionDocument(operations, collectionName, id, out document);
+    }
 
-        for (int i = operations.Length - 1; i >= 0; i--)
+    private static bool TryGetTransactionDocument(
+        IReadOnlyList<TransactionOperation> operations,
+        string collectionName,
+        BsonValue id,
+        out BsonDocument? document)
+    {
+        document = null;
+        if (operations.Count == 0) return false;
+
+        for (int i = operations.Count - 1; i >= 0; i--)
         {
             var op = operations[i];
             if (op.CollectionName != collectionName) continue;
