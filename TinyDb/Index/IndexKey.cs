@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -9,22 +10,25 @@ namespace TinyDb.Index;
 /// <summary>
 /// 索引键，支持多个字段的复合索引
 /// </summary>
-public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
+public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>, IReadOnlyList<BsonValue>
 {
-    private readonly BsonValue[] _values;
+    private readonly BsonValue? _singleValue;
+    private readonly BsonValue[]? _values;
+    private readonly int _length;
     private int _hashCode;
     private int _hashCodeComputed;
 
     /// <summary>
     /// 索引键值数组
     /// </summary>
-    public IReadOnlyList<BsonValue> Values => _values;
-    internal ReadOnlySpan<BsonValue> ValuesSpan => _values;
+    public IReadOnlyList<BsonValue> Values => this;
 
     /// <summary>
     /// 索引键长度（字段数量）
     /// </summary>
-    public int Length => _values.Length;
+    public int Length => _length;
+
+    int IReadOnlyCollection<BsonValue>.Count => _length;
 
     /// <summary>
     /// 初始化索引键
@@ -32,7 +36,24 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// <param name="values">键值数组</param>
     public IndexKey(params BsonValue[] values)
     {
-        _values = values ?? throw new ArgumentNullException(nameof(values));
+        if (values == null) throw new ArgumentNullException(nameof(values));
+
+        if (values.Length == 1)
+        {
+            _singleValue = values[0];
+            _length = 1;
+        }
+        else
+        {
+            _values = values;
+            _length = values.Length;
+        }
+    }
+
+    private IndexKey(BsonValue value)
+    {
+        _singleValue = value;
+        _length = 1;
     }
 
     /// <summary>
@@ -40,7 +61,14 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// </summary>
     /// <param name="index">位置索引</param>
     /// <returns>键值</returns>
-    public BsonValue this[int index] => _values[index];
+    public BsonValue this[int index]
+    {
+        get
+        {
+            if ((uint)index >= (uint)_length) throw new ArgumentOutOfRangeException(nameof(index));
+            return _values != null ? _values[index] : _singleValue!;
+        }
+    }
 
     /// <summary>
     /// 比较两个索引键
@@ -53,15 +81,15 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
         if (ReferenceEquals(this, other)) return 0;
 
         // 按字段顺序比较
-        var minLength = Math.Min(_values.Length, other._values.Length);
+        var minLength = Math.Min(_length, other._length);
         for (int i = 0; i < minLength; i++)
         {
-            var comparison = CompareValues(_values[i], other._values[i]);
+            var comparison = CompareValues(this[i], other[i]);
             if (comparison != 0) return comparison;
         }
 
         // 如果所有字段都相等，较短的键排在前面
-        return _values.Length.CompareTo(other._values.Length);
+        return _length.CompareTo(other._length);
     }
 
     /// <summary>
@@ -85,11 +113,11 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
         if (other is null) return false;
         if (ReferenceEquals(this, other)) return true;
 
-        if (_values.Length != other._values.Length) return false;
+        if (_length != other._length) return false;
 
-        for (int i = 0; i < _values.Length; i++)
+        for (int i = 0; i < _length; i++)
         {
-            if (CompareValues(_values[i], other._values[i]) != 0) return false;
+            if (CompareValues(this[i], other[i]) != 0) return false;
         }
 
         return true;
@@ -129,9 +157,9 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     private int CalculateHashCode()
     {
         var hash = 17;
-        foreach (var value in _values)
+        for (int i = 0; i < _length; i++)
         {
-            hash = hash * 31 + BsonValueComparer.GetHashCode(value);
+            hash = hash * 31 + BsonValueComparer.GetHashCode(this[i]);
         }
         return hash;
     }
@@ -190,7 +218,7 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// <returns>字符串表示</returns>
     public override string ToString()
     {
-        return $"IndexKey[{string.Join(", ", _values.Select(v => v?.ToString() ?? "null"))}]";
+        return $"IndexKey[{string.Join(", ", Values.Select(v => v?.ToString() ?? "null"))}]";
     }
 
     /// <summary>
@@ -199,7 +227,9 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     /// <returns>新的索引键</returns>
     public IndexKey Clone()
     {
-        return new IndexKey(_values.ToArray());
+        return _values != null
+            ? new IndexKey(_values.ToArray())
+            : new IndexKey(_singleValue!);
     }
 
     /// <summary>
@@ -220,6 +250,23 @@ public sealed class IndexKey : IComparable<IndexKey>, IEquatable<IndexKey>
     public static IndexKey Create(params BsonValue[] values)
     {
         return new IndexKey(values);
+    }
+
+    public IEnumerator<BsonValue> GetEnumerator()
+    {
+        if (_values != null)
+        {
+            return ((IEnumerable<BsonValue>)_values).GetEnumerator();
+        }
+
+        return EnumerateSingle(_singleValue!).GetEnumerator();
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    private static IEnumerable<BsonValue> EnumerateSingle(BsonValue value)
+    {
+        yield return value;
     }
 
     /// <summary>

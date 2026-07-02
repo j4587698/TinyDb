@@ -169,12 +169,26 @@ public sealed class Page : IDisposable
     /// <param name="pageID">预期的页面 ID。</param>
     /// <param name="data">页面二进制数据。</param>
     public Page(uint pageID, byte[] data)
+        : this(pageID, data, takeOwnership: false)
+    {
+    }
+
+    internal static Page FromOwnedBuffer(uint pageID, byte[] data)
+    {
+        return new Page(pageID, data, takeOwnership: true);
+    }
+
+    private Page(uint pageID, byte[] data, bool takeOwnership)
     {
         if (data == null) throw new ArgumentNullException(nameof(data));
         if (data.Length <= DataStartOffset) throw new ArgumentException("Data too small", nameof(data));
         PageSize = data.Length;
-        _data = new byte[PageSize];
-        Array.Copy(data, _data, PageSize);
+        _data = takeOwnership ? data : new byte[PageSize];
+        if (!takeOwnership)
+        {
+            Array.Copy(data, _data, PageSize);
+        }
+
         Header = PageHeader.FromByteArray(_data);
         if (Header.PageID != pageID) throw new InvalidOperationException("Page ID mismatch");
     }
@@ -334,6 +348,28 @@ public sealed class Page : IDisposable
             return snapshot;
         }
     }
+
+    internal bool WriteForDiskWithoutSnapshot(Action<byte[]> write)
+    {
+        if (write == null) throw new ArgumentNullException(nameof(write));
+
+        ThrowIfDisposed();
+        lock (_lock)
+        {
+            UpdateChecksumCore();
+            var dirtyGeneration = _dirtyGeneration;
+            write(_data);
+
+            if (_dirtyGeneration != dirtyGeneration)
+            {
+                return false;
+            }
+
+            MarkCleanCore();
+            return true;
+        }
+    }
+
     public bool VerifyIntegrity() { lock(_lock) { return Header.IsValid() && Header.VerifyChecksum(_data); } }
     // 在 _lock 内翻转 IsDirty 并回调，使脏标记与 PageManager 的脏页集合增删原子化，避免 MarkDirty/MarkClean 竞态导致脏页丢失
     public void MarkClean()

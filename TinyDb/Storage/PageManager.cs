@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using TinyDb.Core;
 using TinyDb.Utils;
 
@@ -358,14 +360,14 @@ public sealed class PageManager : IDisposable
 
         try
         {
-            var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
-            if (IsZeroFilledPage(frame))
+            var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
+            if (read == null)
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
 
-            var pageData = _pageCodec.Decode(pageID, frame);
-            var page = new Page(pageID, pageData);
+            var pageData = read.Value.Data;
+            var page = CreateLoadedPage(pageID, read.Value);
             ValidateLoadedPage(page, pageData, pageOffset);
 
             // 如果是空页面，初始化为 Empty 类型
@@ -413,14 +415,14 @@ public sealed class PageManager : IDisposable
             return false;
         }
 
-        var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
-        if (IsZeroFilledPage(frame))
+        var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
+        if (read == null)
         {
             pageData = Array.Empty<byte>();
             return false;
         }
 
-        pageData = _pageCodec.Decode(pageID, frame);
+        pageData = read.Value.Data;
         return true;
     }
 
@@ -451,14 +453,14 @@ public sealed class PageManager : IDisposable
 
         try
         {
-            var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
-            if (IsZeroFilledPage(frame))
+            var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
+            if (read == null)
             {
                 return CreateNewPage(pageID, PageType.Empty, pinned: true);
             }
 
-            var pageData = _pageCodec.Decode(pageID, frame);
-            var page = new Page(pageID, pageData);
+            var pageData = read.Value.Data;
+            var page = CreateLoadedPage(pageID, read.Value);
             ValidateLoadedPage(page, pageData, pageOffset);
 
             if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
@@ -506,17 +508,16 @@ public sealed class PageManager : IDisposable
             return CreateNewPage(pageID, PageType.Empty);
         }
 
-        var frame = await _diskStream.ReadPageAsync(pageOffset, (int)_physicalPageSize, cancellationToken);
-
         try
         {
-            if (IsZeroFilledPage(frame))
+            var read = await ReadLogicalPageDataOrNullAsync(pageID, pageOffset, cancellationToken).ConfigureAwait(false);
+            if (read == null)
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
 
-            var pageData = _pageCodec.Decode(pageID, frame);
-            var page = new Page(pageID, pageData);
+            var pageData = read.Value.Data;
+            var page = CreateLoadedPage(pageID, read.Value);
             ValidateLoadedPage(page, pageData, pageOffset);
 
             // 如果是空页面，初始化为 Empty 类型
@@ -533,13 +534,13 @@ public sealed class PageManager : IDisposable
 
             return page;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             throw new InvalidDataException($"Failed to parse page {pageID} at offset {pageOffset}.", ex);
         }
     }
 
-    private static bool IsZeroFilledPage(byte[] pageData)
+    private static bool IsZeroFilledPage(ReadOnlySpan<byte> pageData)
     {
         for (int i = 0; i < pageData.Length; i++)
         {
@@ -549,16 +550,134 @@ public sealed class PageManager : IDisposable
         return true;
     }
 
+    private readonly struct LogicalPageRead
+    {
+        public LogicalPageRead(byte[] data, bool ownsBuffer)
+        {
+            Data = data;
+            OwnsBuffer = ownsBuffer;
+        }
+
+        public byte[] Data { get; }
+        public bool OwnsBuffer { get; }
+    }
+
+    private static Page CreateLoadedPage(uint pageID, LogicalPageRead read)
+    {
+        return read.OwnsBuffer
+            ? Page.FromOwnedBuffer(pageID, read.Data)
+            : new Page(pageID, read.Data);
+    }
+
+    private LogicalPageRead? ReadLogicalPageDataOrNull(uint pageID, long pageOffset)
+    {
+        var logicalLength = (int)_pageSize;
+
+        if (CanWriteLogicalPageDirectly() && _diskStream is DiskStream directDiskStream)
+        {
+            var logicalPage = new byte[logicalLength];
+            directDiskStream.ReadPage(pageOffset, logicalPage);
+            return IsZeroFilledPage(logicalPage) ? null : new LogicalPageRead(logicalPage, ownsBuffer: true);
+        }
+
+        if (_diskStream is DiskStream diskStream)
+        {
+            var frameLength = (int)_physicalPageSize;
+            var buffer = ArrayPool<byte>.Shared.Rent(frameLength);
+            var frame = buffer.AsSpan(0, frameLength);
+            try
+            {
+                diskStream.ReadPage(pageOffset, frame);
+                if (IsZeroFilledPage(frame))
+                {
+                    return null;
+                }
+
+                var logicalPage = new byte[logicalLength];
+                _pageCodec.DecodeTo(pageID, frame, logicalPage);
+                return new LogicalPageRead(logicalPage, ownsBuffer: true);
+            }
+            finally
+            {
+                if (_pageCodec.IsEncrypted)
+                {
+                    CryptographicOperations.ZeroMemory(frame);
+                }
+
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        var fallbackFrame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
+        if (IsZeroFilledPage(fallbackFrame))
+        {
+            return null;
+        }
+
+        return new LogicalPageRead(_pageCodec.Decode(pageID, fallbackFrame), ownsBuffer: false);
+    }
+
+    private async Task<LogicalPageRead?> ReadLogicalPageDataOrNullAsync(
+        uint pageID,
+        long pageOffset,
+        CancellationToken cancellationToken)
+    {
+        var logicalLength = (int)_pageSize;
+
+        if (CanWriteLogicalPageDirectly() && _diskStream is DiskStream directDiskStream)
+        {
+            var logicalPage = new byte[logicalLength];
+            await directDiskStream.ReadPageAsync(pageOffset, logicalPage, cancellationToken).ConfigureAwait(false);
+            return IsZeroFilledPage(logicalPage) ? null : new LogicalPageRead(logicalPage, ownsBuffer: true);
+        }
+
+        if (_diskStream is DiskStream diskStream)
+        {
+            var frameLength = (int)_physicalPageSize;
+            var buffer = ArrayPool<byte>.Shared.Rent(frameLength);
+            var frame = buffer.AsMemory(0, frameLength);
+            try
+            {
+                await diskStream.ReadPageAsync(pageOffset, frame, cancellationToken).ConfigureAwait(false);
+                if (IsZeroFilledPage(frame.Span))
+                {
+                    return null;
+                }
+
+                var logicalPage = new byte[logicalLength];
+                _pageCodec.DecodeTo(pageID, frame.Span, logicalPage);
+                return new LogicalPageRead(logicalPage, ownsBuffer: true);
+            }
+            finally
+            {
+                if (_pageCodec.IsEncrypted)
+                {
+                    CryptographicOperations.ZeroMemory(frame.Span);
+                }
+
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        var fallbackFrame = await _diskStream.ReadPageAsync(pageOffset, (int)_physicalPageSize, cancellationToken).ConfigureAwait(false);
+        if (IsZeroFilledPage(fallbackFrame))
+        {
+            return null;
+        }
+
+        return new LogicalPageRead(_pageCodec.Decode(pageID, fallbackFrame), ownsBuffer: false);
+    }
+
     private byte[] ReadLogicalPageData(uint pageID, long pageOffset)
     {
-        var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
-        if (IsZeroFilledPage(frame))
+        var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
+        if (read == null)
         {
             var page = new Page(pageID, (int)_pageSize, PageType.Empty);
             return page.Buffer;
         }
 
-        return _pageCodec.Decode(pageID, frame);
+        return read.Value.Data;
     }
 
     /// <summary>
@@ -686,20 +805,7 @@ public sealed class PageManager : IDisposable
 
         lock (_allocationLock)
         {
-            var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
-            var pageOffset = CalculatePageOffset(page.PageID);
-            _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, snapshot));
-
-            if (forceFlush)
-            {
-                _diskStream.Flush();
-            }
-
-            // 标记页面为干净
-            if (MarkPageClean(page, dirtyGeneration))
-            {
-                _deferredWalPages.TryRemove(page.PageID, out _);
-            }
+            WritePageToDisk(page, forceFlush);
         }
     }
 
@@ -774,16 +880,15 @@ public sealed class PageManager : IDisposable
         }
 
         long pageOffset;
-        byte[] encoded;
         long dirtyGeneration;
+        byte[] snapshot;
         lock (_allocationLock)
         {
-            var snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
+            snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
             pageOffset = CalculatePageOffset(page.PageID);
-            encoded = _pageCodec.Encode(page.PageID, snapshot);
         }
 
-        await _diskStream.WritePageAsync(pageOffset, encoded, cancellationToken).ConfigureAwait(false);
+        await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
 
         if (forceFlush)
         {
@@ -798,10 +903,28 @@ public sealed class PageManager : IDisposable
 
     private void WritePageToDisk(Page page, bool forceFlush)
     {
+        if (CanWriteLogicalPageDirectly())
+        {
+            var directPageOffset = CalculatePageOffset(page.PageID);
+            var directWriteCleanedPage = page.WriteForDiskWithoutSnapshot(data => _diskStream.WritePage(directPageOffset, data));
+
+            if (forceFlush)
+            {
+                _diskStream.Flush();
+            }
+
+            if (directWriteCleanedPage)
+            {
+                _deferredWalPages.TryRemove(page.PageID, out _);
+            }
+
+            return;
+        }
+
         var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
 
         var pageOffset = CalculatePageOffset(page.PageID);
-        _diskStream.WritePage(pageOffset, _pageCodec.Encode(page.PageID, snapshot));
+        WriteEncodedPageToDisk(page.PageID, pageOffset, snapshot);
 
         if (forceFlush)
         {
@@ -812,6 +935,75 @@ public sealed class PageManager : IDisposable
         {
             _deferredWalPages.TryRemove(page.PageID, out _);
         }
+    }
+
+    private bool CanWriteLogicalPageDirectly()
+    {
+        return !_pageCodec.IsEncrypted && _pageCodec.PhysicalPageSize == _pageCodec.LogicalPageSize;
+    }
+
+    private void WriteEncodedPageToDisk(uint pageId, long pageOffset, byte[] logicalPage)
+    {
+        if (CanWriteLogicalPageDirectly())
+        {
+            _diskStream.WritePage(pageOffset, logicalPage);
+            return;
+        }
+
+        if (_diskStream is DiskStream diskStream)
+        {
+            var frameLength = (int)_pageCodec.PhysicalPageSize;
+            var buffer = ArrayPool<byte>.Shared.Rent(frameLength);
+            var frame = buffer.AsSpan(0, frameLength);
+            try
+            {
+                _pageCodec.EncodeTo(pageId, logicalPage, frame);
+                diskStream.WritePage(pageOffset, frame);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(frame);
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            return;
+        }
+
+        _diskStream.WritePage(pageOffset, _pageCodec.Encode(pageId, logicalPage));
+    }
+
+    private async Task WriteEncodedPageToDiskAsync(
+        uint pageId,
+        long pageOffset,
+        byte[] logicalPage,
+        CancellationToken cancellationToken)
+    {
+        if (CanWriteLogicalPageDirectly())
+        {
+            await _diskStream.WritePageAsync(pageOffset, logicalPage, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (_diskStream is DiskStream diskStream)
+        {
+            var frameLength = (int)_pageCodec.PhysicalPageSize;
+            var buffer = ArrayPool<byte>.Shared.Rent(frameLength);
+            var frame = buffer.AsMemory(0, frameLength);
+            try
+            {
+                _pageCodec.EncodeTo(pageId, logicalPage, frame.Span);
+                await diskStream.WritePageAsync(pageOffset, frame, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(frame.Span);
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+
+            return;
+        }
+
+        await _diskStream.WritePageAsync(pageOffset, _pageCodec.Encode(pageId, logicalPage), cancellationToken).ConfigureAwait(false);
     }
 
     private bool TryWriteDeferredWalPage(Page page)
@@ -863,16 +1055,15 @@ public sealed class PageManager : IDisposable
         }
 
         long pageOffset;
-        byte[] encoded;
         long dirtyGeneration;
+        byte[] snapshot;
         lock (_allocationLock)
         {
-            var snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
+            snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
             pageOffset = CalculatePageOffset(page.PageID);
-            encoded = _pageCodec.Encode(page.PageID, snapshot);
         }
 
-        await _diskStream.WritePageAsync(pageOffset, encoded, cancellationToken).ConfigureAwait(false);
+        await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
         if (MarkPageClean(page, dirtyGeneration))
         {
             _deferredWalPages.TryRemove(page.PageID, out _);
@@ -888,13 +1079,7 @@ public sealed class PageManager : IDisposable
             return null;
         }
 
-        var frame = _diskStream.ReadPage(pageOffset, (int)_physicalPageSize);
-        if (IsZeroFilledPage(frame))
-        {
-            return null;
-        }
-
-        return _pageCodec.Decode(pageID, frame);
+        return ReadLogicalPageDataOrNull(pageID, pageOffset)?.Data;
     }
 
     private async Task<byte[]?> ReadPageSnapshotForWalAsync(uint pageID, CancellationToken cancellationToken)
@@ -905,13 +1090,7 @@ public sealed class PageManager : IDisposable
             return null;
         }
 
-        var frame = await _diskStream.ReadPageAsync(pageOffset, (int)_physicalPageSize, cancellationToken).ConfigureAwait(false);
-        if (IsZeroFilledPage(frame))
-        {
-            return null;
-        }
-
-        return _pageCodec.Decode(pageID, frame);
+        return (await ReadLogicalPageDataOrNullAsync(pageID, pageOffset, cancellationToken).ConfigureAwait(false))?.Data;
     }
 
     /// <summary>
@@ -1044,7 +1223,7 @@ public sealed class PageManager : IDisposable
             buffer = restoredPage.Buffer;
 
             var pageOffset = CalculatePageOffset(pageID);
-            _diskStream.WritePage(pageOffset, _pageCodec.Encode(pageID, buffer));
+            WriteEncodedPageToDisk(pageID, pageOffset, buffer);
             _diskStream.Flush();
 
             RemoveFromCache(pageID);

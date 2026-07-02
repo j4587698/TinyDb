@@ -94,6 +94,31 @@ public sealed class AsyncQueryExecutionTests
     }
 
     [Test]
+    public async Task FindAsync_IndexMatchWithResidualPredicate_ShouldFilterCommittedDocuments()
+    {
+        using var disk = new TrackingDiskStream();
+        using var engine = CreateEngine(disk);
+        var collection = engine.GetCollection<AsyncQueryDoc>("async_query_index_residual");
+
+        engine.EnsureIndex(collection.CollectionName, "Category", "idx_category_residual");
+
+        collection.Insert(new[]
+        {
+            new AsyncQueryDoc { Id = 1, Category = "hit", Value = 1 },
+            new AsyncQueryDoc { Id = 2, Category = "hit", Value = 2 },
+            new AsyncQueryDoc { Id = 3, Category = "miss", Value = 3 },
+            new AsyncQueryDoc { Id = 4, Category = "hit", Value = 4 },
+        });
+
+        using var _ = ForceDiskReads(engine, disk);
+
+        var result = await collection.FindAsync(x => x.Category == "hit" && x.Value > 2);
+
+        await Assert.That(result.Select(x => x.Id).OrderBy(x => x).SequenceEqual(new[] { 4 })).IsTrue();
+        await Assert.That(disk.AsyncReadCount).IsGreaterThan(0);
+    }
+
+    [Test]
     public async Task FindAsync_TransactionOverlay_ShouldMatchSyncQuery()
     {
         using var disk = new TrackingDiskStream();

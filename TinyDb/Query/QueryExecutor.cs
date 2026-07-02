@@ -47,13 +47,7 @@ public sealed class QueryExecutor
 
         var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression);
 
-        return executionPlan.Strategy switch
-        {
-            QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookup<T>(executionPlan),
-            QueryExecutionStrategy.IndexScan => ExecuteIndexScan<T>(executionPlan),
-            QueryExecutionStrategy.IndexSeek => ExecuteIndexSeek<T>(executionPlan),
-            _ => ExecuteFullTableScan<T>(collectionName, expression)
-        };
+        return ExecutePlanned(executionPlan, collectionName, expression);
     }
 
     internal IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
@@ -86,13 +80,7 @@ public sealed class QueryExecutor
 
         var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, expression, planningMetadataOnly: true);
 
-        return executionPlan.Strategy switch
-        {
-            QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookupAsync<T>(executionPlan, cancellationToken),
-            QueryExecutionStrategy.IndexScan => ExecuteIndexScanAsync<T>(executionPlan, cancellationToken),
-            QueryExecutionStrategy.IndexSeek => ExecuteIndexSeekAsync<T>(executionPlan, cancellationToken),
-            _ => ExecuteFullTableScanAsync<T>(collectionName, expression, cancellationToken)
-        };
+        return ExecutePlannedAsync(executionPlan, collectionName, expression, cancellationToken);
     }
 
     internal IEnumerable<T> ExecuteShaped<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
@@ -155,6 +143,15 @@ public sealed class QueryExecutor
         }
 
         var tx = _engine.GetCurrentTransaction();
+
+        if (TryCreatePredicateIndexBeforeOrderPlan(collectionName, shape, out var predicatePlan))
+        {
+            pushdown = new QueryPushdownInfo
+            {
+                WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0
+            };
+            return ExecutePlanned(predicatePlan, collectionName, shape.Predicate);
+        }
 
         if (TryGetOrderIndex(collectionName, shape.Sort, out var orderIndex, out var allDescending))
         {
@@ -247,6 +244,15 @@ public sealed class QueryExecutor
 
         var tx = _engine.GetCurrentTransaction();
 
+        if (TryCreatePredicateIndexBeforeOrderPlan(collectionName, shape, out var predicatePlan))
+        {
+            pushdown = new QueryPushdownInfo
+            {
+                WherePushedCount = shape.Predicate != null ? shape.PushedWhereCount : 0
+            };
+            return ExecutePlannedAsync(predicatePlan, collectionName, shape.Predicate, cancellationToken);
+        }
+
         if (TryGetOrderIndex(collectionName, shape.Sort, out var orderIndex, out var allDescending))
         {
             if (tx == null)
@@ -282,6 +288,98 @@ public sealed class QueryExecutor
     internal IEnumerable<BsonDocument> ExecuteIndexScanForTests(QueryExecutionPlan executionPlan) => ExecuteIndexScan<BsonDocument>(executionPlan);
     internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecutePrimaryKeyLookup<T>(executionPlan);
     internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecuteIndexSeek<T>(executionPlan);
+
+    private IEnumerable<T> ExecutePlanned<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan,
+        string collectionName,
+        Expression<Func<T, bool>>? fallbackExpression)
+        where T : class, new()
+    {
+        return executionPlan.Strategy switch
+        {
+            QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookup<T>(executionPlan),
+            QueryExecutionStrategy.IndexScan => ExecuteIndexScan<T>(executionPlan),
+            QueryExecutionStrategy.IndexSeek => ExecuteIndexSeek<T>(executionPlan),
+            _ => ExecuteFullTableScan(collectionName, fallbackExpression)
+        };
+    }
+
+    private IAsyncEnumerable<T> ExecutePlannedAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan,
+        string collectionName,
+        Expression<Func<T, bool>>? fallbackExpression,
+        CancellationToken cancellationToken)
+        where T : class, new()
+    {
+        return executionPlan.Strategy switch
+        {
+            QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookupAsync<T>(executionPlan, cancellationToken),
+            QueryExecutionStrategy.IndexScan => ExecuteIndexScanAsync<T>(executionPlan, cancellationToken),
+            QueryExecutionStrategy.IndexSeek => ExecuteIndexSeekAsync<T>(executionPlan, cancellationToken),
+            _ => ExecuteFullTableScanAsync(collectionName, fallbackExpression, cancellationToken)
+        };
+    }
+
+    private bool TryCreatePredicateIndexBeforeOrderPlan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string collectionName,
+        QueryShape<T> shape,
+        [NotNullWhen(true)] out QueryExecutionPlan? predicatePlan)
+        where T : class, new()
+    {
+        if (shape.Predicate == null || shape.Sort.Count == 0 || shape.Take.HasValue)
+        {
+            predicatePlan = null;
+            return false;
+        }
+
+        predicatePlan = _queryOptimizer.CreateExecutionPlan(
+            collectionName,
+            shape.Predicate,
+            planningMetadataOnly: true);
+
+        if (predicatePlan.Strategy == QueryExecutionStrategy.FullTableScan)
+        {
+            predicatePlan = null;
+            return false;
+        }
+
+        if (predicatePlan.Strategy == QueryExecutionStrategy.PrimaryKeyLookup)
+        {
+            return true;
+        }
+
+        if (predicatePlan.UseIndex == null || predicatePlan.IndexScanKeys.Count == 0)
+        {
+            predicatePlan = null;
+            return false;
+        }
+
+        if (IsSortPrefixOfIndex(shape.Sort, predicatePlan.UseIndex.Fields))
+        {
+            predicatePlan = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsSortPrefixOfIndex(IReadOnlyList<QuerySortField> sort, IReadOnlyList<string> indexFields)
+    {
+        if (sort.Count == 0 || indexFields.Count < sort.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < sort.Count; i++)
+        {
+            if (!string.Equals(sort[i].FieldName, indexFields[i], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static async IAsyncEnumerable<T> AsyncEmpty<T>()
     {
@@ -499,6 +597,7 @@ public sealed class QueryExecutor
         var range = BuildIndexScanRange(executionPlan);
 
         var qe = GetPlanQueryExpression<T>(executionPlan);
+        var committedPostFilter = BuildCommittedPostFilter(executionPlan, qe);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
         var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
@@ -511,7 +610,7 @@ public sealed class QueryExecutor
             {
                 if (committedIds.Count > 0)
                 {
-                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, committedPostFilter, cancellationToken).ConfigureAwait(false);
                     committedIds.Clear();
                     foreach (var item in batch)
                     {
@@ -531,7 +630,7 @@ public sealed class QueryExecutor
             committedIds.Add(id);
             if (committedIds.Count >= CommittedLookupBatchSize)
             {
-                var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, committedPostFilter, cancellationToken).ConfigureAwait(false);
                 committedIds.Clear();
                 foreach (var item in batch)
                 {
@@ -542,7 +641,7 @@ public sealed class QueryExecutor
 
         if (committedIds.Count > 0)
         {
-            var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+            var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, committedPostFilter, cancellationToken).ConfigureAwait(false);
             committedIds.Clear();
             foreach (var item in batch)
             {
@@ -582,8 +681,9 @@ public sealed class QueryExecutor
 
         var range = BuildIndexScanRange(executionPlan);
         var ids = index.FindRange(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax);
-        
+
         var qe = GetPlanQueryExpression<T>(executionPlan);
+        var committedPostFilter = BuildCommittedPostFilter(executionPlan, qe);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
         var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
@@ -592,7 +692,7 @@ public sealed class QueryExecutor
         {
             if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
             {
-                foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, committedPostFilter))
                 {
                     yield return item;
                 }
@@ -610,7 +710,7 @@ public sealed class QueryExecutor
             committedIds.Add(id);
             if (committedIds.Count >= CommittedLookupBatchSize)
             {
-                foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, committedPostFilter))
                 {
                     yield return item;
                 }
@@ -618,7 +718,7 @@ public sealed class QueryExecutor
             }
         }
 
-        foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+        foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, committedPostFilter))
         {
             yield return item;
         }
@@ -675,6 +775,7 @@ public sealed class QueryExecutor
         }
 
         var qe = GetPlanQueryExpression<T>(executionPlan);
+        var committedPostFilter = BuildCommittedPostFilter(executionPlan, qe);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
 
@@ -698,7 +799,7 @@ public sealed class QueryExecutor
                 if (!usedTxDoc)
                 {
                     var doc = await _engine.FindByIdAsync(executionPlan.CollectionName, id, cancellationToken).ConfigureAwait(false);
-                    if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+                    if (doc != null && (committedPostFilter == null || ExpressionEvaluator.Evaluate(committedPostFilter, doc)))
                     {
                         var entity = AotBsonMapper.FromDocument<T>(doc);
                         if (entity != null) yield return entity;
@@ -717,7 +818,7 @@ public sealed class QueryExecutor
                 {
                     if (committedIds.Count > 0)
                     {
-                        var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                        var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, committedPostFilter, cancellationToken).ConfigureAwait(false);
                         committedIds.Clear();
                         foreach (var item in batch)
                         {
@@ -737,7 +838,7 @@ public sealed class QueryExecutor
                 committedIds.Add(id);
                 if (committedIds.Count >= CommittedLookupBatchSize)
                 {
-                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, committedPostFilter, cancellationToken).ConfigureAwait(false);
                     committedIds.Clear();
                     foreach (var item in batch)
                     {
@@ -748,7 +849,7 @@ public sealed class QueryExecutor
 
             if (committedIds.Count > 0)
             {
-                var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, qe, cancellationToken).ConfigureAwait(false);
+                var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, committedPostFilter, cancellationToken).ConfigureAwait(false);
                 committedIds.Clear();
                 foreach (var item in batch)
                 {
@@ -795,6 +896,7 @@ public sealed class QueryExecutor
         }
 
         var qe = GetPlanQueryExpression<T>(executionPlan);
+        var committedPostFilter = BuildCommittedPostFilter(executionPlan, qe);
 
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
 
@@ -818,7 +920,7 @@ public sealed class QueryExecutor
                 if (!usedTxDoc)
                 {
                     var doc = _engine.FindById(executionPlan.CollectionName, id);
-                    if (doc != null && (qe == null || ExpressionEvaluator.Evaluate(qe, doc)))
+                    if (doc != null && (committedPostFilter == null || ExpressionEvaluator.Evaluate(committedPostFilter, doc)))
                     {
                         var entity = AotBsonMapper.FromDocument<T>(doc);
                         if (entity != null) yield return entity;
@@ -833,7 +935,7 @@ public sealed class QueryExecutor
             {
                 if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
                 {
-                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, committedPostFilter))
                     {
                         yield return item;
                     }
@@ -851,7 +953,7 @@ public sealed class QueryExecutor
                 committedIds.Add(id);
                 if (committedIds.Count >= CommittedLookupBatchSize)
                 {
-                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, committedPostFilter))
                     {
                         yield return item;
                     }
@@ -859,7 +961,7 @@ public sealed class QueryExecutor
                 }
             }
 
-            foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, qe))
+            foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, committedPostFilter))
             {
                 yield return item;
             }
@@ -2490,7 +2592,7 @@ public sealed class QueryExecutor
 
         if (fields.Count == 1)
         {
-            return doc.TryGetValue(fields[0], out var v) && v != null ? new IndexKey(v) : new IndexKey(BsonNull.Value);
+            return doc.TryGetValue(fields[0], out var v) && v != null ? IndexKey.Create(v) : IndexKey.Create(BsonNull.Value);
         }
 
         var values = new BsonValue[fields.Count];
@@ -2642,6 +2744,201 @@ public sealed class QueryExecutor
     }
 
     // 构建索引扫描范围
+    private static QueryExpression? BuildCommittedPostFilter(QueryExecutionPlan executionPlan, QueryExpression? queryExpression)
+    {
+        if (queryExpression == null ||
+            executionPlan.UseIndex == null ||
+            executionPlan.IndexScanKeys.Count == 0)
+        {
+            return queryExpression;
+        }
+
+        return RemoveIndexCoveredPredicates(queryExpression, executionPlan.IndexScanKeys);
+    }
+
+    private static QueryExpression? RemoveIndexCoveredPredicates(
+        QueryExpression expression,
+        IReadOnlyList<IndexScanKey> scanKeys)
+    {
+        if (expression is BinaryExpression binary &&
+            binary.NodeType == System.Linq.Expressions.ExpressionType.AndAlso)
+        {
+            var left = RemoveIndexCoveredPredicates(binary.Left, scanKeys);
+            var right = RemoveIndexCoveredPredicates(binary.Right, scanKeys);
+
+            if (left == null) return right;
+            if (right == null) return left;
+            if (ReferenceEquals(left, binary.Left) && ReferenceEquals(right, binary.Right)) return expression;
+
+            return new BinaryExpression(System.Linq.Expressions.ExpressionType.AndAlso, left, right);
+        }
+
+        return IsPredicateCoveredByIndex(expression, scanKeys) ? null : expression;
+    }
+
+    private static bool IsPredicateCoveredByIndex(QueryExpression expression, IReadOnlyList<IndexScanKey> scanKeys)
+    {
+        if (expression is not BinaryExpression binary ||
+            !TryExtractIndexedComparison(binary, out var fieldName, out var comparisonType, out var value))
+        {
+            return false;
+        }
+
+        foreach (var scanKey in scanKeys)
+        {
+            if (!string.Equals(scanKey.FieldName, fieldName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (IsComparisonCoveredByScanKey(comparisonType, value, scanKey))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractIndexedComparison(
+        BinaryExpression expression,
+        [NotNullWhen(true)] out string? fieldName,
+        out ComparisonType comparisonType,
+        [NotNullWhen(true)] out BsonValue? value)
+    {
+        if (!TryMapComparisonType(expression.NodeType, reversed: false, out var leftComparisonType) ||
+            !TryMapComparisonType(expression.NodeType, reversed: true, out var rightComparisonType))
+        {
+            fieldName = null;
+            comparisonType = default;
+            value = null;
+            return false;
+        }
+
+        if (expression.Left is MemberExpression leftMember &&
+            TryConvertConstantExpression(expression.Right, out var rightValue))
+        {
+            fieldName = leftMember.MemberName;
+            comparisonType = leftComparisonType;
+            value = rightValue;
+            return true;
+        }
+
+        if (expression.Right is MemberExpression rightMember &&
+            TryConvertConstantExpression(expression.Left, out var leftValue))
+        {
+            fieldName = rightMember.MemberName;
+            comparisonType = rightComparisonType;
+            value = leftValue;
+            return true;
+        }
+
+        fieldName = null;
+        comparisonType = default;
+        value = null;
+        return false;
+    }
+
+    private static bool TryMapComparisonType(
+        System.Linq.Expressions.ExpressionType nodeType,
+        bool reversed,
+        out ComparisonType comparisonType)
+    {
+        if (reversed)
+        {
+            nodeType = nodeType switch
+            {
+                System.Linq.Expressions.ExpressionType.GreaterThan => System.Linq.Expressions.ExpressionType.LessThan,
+                System.Linq.Expressions.ExpressionType.GreaterThanOrEqual => System.Linq.Expressions.ExpressionType.LessThanOrEqual,
+                System.Linq.Expressions.ExpressionType.LessThan => System.Linq.Expressions.ExpressionType.GreaterThan,
+                System.Linq.Expressions.ExpressionType.LessThanOrEqual => System.Linq.Expressions.ExpressionType.GreaterThanOrEqual,
+                _ => nodeType
+            };
+        }
+
+        comparisonType = nodeType switch
+        {
+            System.Linq.Expressions.ExpressionType.Equal => ComparisonType.Equal,
+            System.Linq.Expressions.ExpressionType.GreaterThan => ComparisonType.GreaterThan,
+            System.Linq.Expressions.ExpressionType.GreaterThanOrEqual => ComparisonType.GreaterThanOrEqual,
+            System.Linq.Expressions.ExpressionType.LessThan => ComparisonType.LessThan,
+            System.Linq.Expressions.ExpressionType.LessThanOrEqual => ComparisonType.LessThanOrEqual,
+            _ => default
+        };
+
+        return nodeType is System.Linq.Expressions.ExpressionType.Equal
+            or System.Linq.Expressions.ExpressionType.GreaterThan
+            or System.Linq.Expressions.ExpressionType.GreaterThanOrEqual
+            or System.Linq.Expressions.ExpressionType.LessThan
+            or System.Linq.Expressions.ExpressionType.LessThanOrEqual;
+    }
+
+    private static bool TryConvertConstantExpression(
+        QueryExpression expression,
+        [NotNullWhen(true)] out BsonValue? value)
+    {
+        if (expression is ConstantExpression constant)
+        {
+            try
+            {
+                value = constant.Value == null ? BsonNull.Value : BsonConversion.ToBsonValue(constant.Value);
+                return true;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or InvalidCastException or FormatException or OverflowException or ArgumentException)
+            {
+                value = null;
+                return false;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static bool IsComparisonCoveredByScanKey(
+        ComparisonType comparisonType,
+        BsonValue value,
+        IndexScanKey scanKey)
+    {
+        if (comparisonType == ComparisonType.Equal)
+        {
+            return scanKey.ComparisonType == ComparisonType.Equal &&
+                   BsonValueComparer.ValueEquals(scanKey.Value, value);
+        }
+
+        if (scanKey.ComparisonType == comparisonType &&
+            BsonValueComparer.ValueEquals(scanKey.Value, value))
+        {
+            return true;
+        }
+
+        if (scanKey.ComparisonType != ComparisonType.Range)
+        {
+            return false;
+        }
+
+        return comparisonType switch
+        {
+            ComparisonType.GreaterThan =>
+                scanKey.LowerValue != null &&
+                !scanKey.IncludeLower &&
+                BsonValueComparer.ValueEquals(scanKey.LowerValue, value),
+            ComparisonType.GreaterThanOrEqual =>
+                scanKey.LowerValue != null &&
+                scanKey.IncludeLower &&
+                BsonValueComparer.ValueEquals(scanKey.LowerValue, value),
+            ComparisonType.LessThan =>
+                scanKey.UpperValue != null &&
+                !scanKey.IncludeUpper &&
+                BsonValueComparer.ValueEquals(scanKey.UpperValue, value),
+            ComparisonType.LessThanOrEqual =>
+                scanKey.UpperValue != null &&
+                scanKey.IncludeUpper &&
+                BsonValueComparer.ValueEquals(scanKey.UpperValue, value),
+            _ => false
+        };
+    }
+
     private static IndexScanRange BuildIndexScanRange(QueryExecutionPlan executionPlan)
     {
         if (executionPlan.IndexScanKeys.Count == 0)
@@ -2730,8 +3027,8 @@ public sealed class QueryExecutor
 
         return new IndexScanRange
         {
-            MinKey = new IndexKey(minValues.ToArray()),
-            MaxKey = new IndexKey(maxValues.ToArray()),
+            MinKey = CreateIndexKey(minValues),
+            MaxKey = CreateIndexKey(maxValues),
             IncludeMin = includeMin,
             IncludeMax = includeMax
         };
@@ -2746,6 +3043,13 @@ public sealed class QueryExecutor
             if (key.ComparisonType != ComparisonType.Equal) return null;
             values.Add(key.Value);
         }
-        return new IndexKey(values.ToArray());
+        return CreateIndexKey(values);
+    }
+
+    private static IndexKey CreateIndexKey(List<BsonValue> values)
+    {
+        return values.Count == 1
+            ? IndexKey.Create(values[0])
+            : new IndexKey(values.ToArray());
     }
 }

@@ -186,11 +186,10 @@ public sealed class DiskBTreeNode : IDisposable
 
         foreach (var key in Keys)
         {
-            var keyValues = key.ValuesSpan;
-            WriteInt32(buffer, keyValues.Length);
-            for (int i = 0; i < keyValues.Length; i++)
+            WriteInt32(buffer, key.Length);
+            for (int i = 0; i < key.Length; i++)
             {
-                var val = keyValues[i];
+                var val = key[i];
                 WriteByte(buffer, (byte)val.BsonType);
                 bsonWriter.WriteValue(val);
             }
@@ -311,11 +310,10 @@ public sealed class DiskBTreeNode : IDisposable
         foreach (var key in Keys)
         {
             size += 4; // Values count in key
-            var keyValues = key.ValuesSpan;
-            for (int i = 0; i < keyValues.Length; i++)
+            for (int i = 0; i < key.Length; i++)
             {
                 size += 1; // Type byte
-                size += GetBsonValueSize(keyValues[i]);
+                size += GetBsonValueSize(key[i]);
             }
         }
 
@@ -521,6 +519,13 @@ public sealed class DiskBTreeNode : IDisposable
             {
                 int valCount = reader.ReadInt32();
                 if ((uint)valCount > maxKeyValueCount) throw new InvalidDataException($"Invalid key value count: {valCount}");
+
+                if (valCount == 1)
+                {
+                    var type = (BsonType)reader.ReadByte();
+                    Keys.Add(IndexKey.Create(reader.ReadValue(type)));
+                    continue;
+                }
 
                 var keyVals = new BsonValue[valCount];
                 for (int j = 0; j < valCount; j++)

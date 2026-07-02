@@ -181,7 +181,7 @@ public class DocumentCollectionAdditionalCoverageTests
     }
 
     [Test]
-    public async Task InsertBatch_WithEmptyDocuments_ShouldReturnZero()
+    public async Task Insert_WithEmptyEnumerable_ShouldReturnZero()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_empty_batch_{Guid.NewGuid():N}.db");
 
@@ -190,10 +190,7 @@ public class DocumentCollectionAdditionalCoverageTests
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
             var col = (DocumentCollection<PlainEntity>)engine.GetCollection<PlainEntity>("plain");
 
-            var insertBatch = typeof(DocumentCollection<PlainEntity>).GetMethod("InsertBatch", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(insertBatch).IsNotNull();
-
-            var inserted = (int)insertBatch!.Invoke(col, new object[] { new List<PlainEntity>(), new List<BsonDocument>() })!;
+            var inserted = col.Insert(Array.Empty<PlainEntity>());
             await Assert.That(inserted).IsEqualTo(0);
         }
         finally

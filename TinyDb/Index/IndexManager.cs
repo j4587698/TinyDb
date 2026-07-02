@@ -1,5 +1,6 @@
 using TinyDb.Bson;
 using TinyDb.Storage;
+using System.Buffers;
 using System.Collections.Concurrent;
 
 namespace TinyDb.Index;
@@ -402,44 +403,47 @@ public sealed class IndexManager : IDisposable
     public void InsertDocument(BsonDocument document, BsonValue documentId)
     {
         _rwLock.EnterReadLock();
+        (BTreeIndex Index, IndexKey Key)[]? inserted = null;
+        var insertedCount = 0;
         try
         {
-            var prepared = new List<(BTreeIndex Index, IndexKey Key)>(_indexes.Count);
+            var indexCount = _indexes.Count;
             foreach (var index in _indexes.Values)
             {
-                var key = ExtractIndexKey(index, document);
-                if (key != null)
-                {
-                    prepared.Add((index, key));
-                }
-            }
-
-            var inserted = new List<(BTreeIndex Index, IndexKey Key)>(prepared.Count);
-            foreach (var (index, key) in prepared)
-            {
+                IndexKey? key = null;
                 try
                 {
+                    key = ExtractIndexKey(index, document);
+                    if (key == null) continue;
+
                     if (!index.Insert(key, documentId))
                     {
                         throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
                     }
-                    inserted.Add((index, key));
+
+                    inserted ??= ArrayPool<(BTreeIndex Index, IndexKey Key)>.Shared.Rent(indexCount);
+                    inserted[insertedCount++] = (index, key);
                 }
                 catch (InvalidOperationException ex)
                 {
-                    ThrowWithRollbackErrors(ex, RollbackInsertedIndexes(inserted, documentId));
+                    ThrowWithRollbackErrors(ex, RollbackInsertedIndexes(inserted, insertedCount, documentId));
                     throw;
                 }
                 catch (Exception ex)
                 {
                     var insertException = new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
-                    ThrowWithRollbackErrors(insertException, RollbackInsertedIndexes(inserted, documentId));
+                    ThrowWithRollbackErrors(insertException, RollbackInsertedIndexes(inserted, insertedCount, documentId));
                     throw insertException;
                 }
             }
         }
         finally
         {
+            if (inserted != null)
+            {
+                ArrayPool<(BTreeIndex Index, IndexKey Key)>.Shared.Return(inserted, clearArray: true);
+            }
+
             _rwLock.ExitReadLock();
         }
     }
@@ -574,10 +578,15 @@ public sealed class IndexManager : IDisposable
         }
     }
 
-    private static List<Exception> RollbackInsertedIndexes(List<(BTreeIndex Index, IndexKey Key)> inserted, BsonValue documentId)
+    private static List<Exception> RollbackInsertedIndexes(
+        (BTreeIndex Index, IndexKey Key)[]? inserted,
+        int insertedCount,
+        BsonValue documentId)
     {
         var errors = new List<Exception>();
-        for (int i = inserted.Count - 1; i >= 0; i--)
+        if (inserted == null) return errors;
+
+        for (int i = insertedCount - 1; i >= 0; i--)
         {
             try
             {
@@ -658,10 +667,10 @@ public sealed class IndexManager : IDisposable
         {
             if (doc.TryGetValue(index.Fields[0], out var val))
             {
-                return new IndexKey(val);
+                return IndexKey.Create(val);
             }
 
-            return index.IsSparse ? null : new IndexKey(BsonNull.Value);
+            return index.IsSparse ? null : IndexKey.Create(BsonNull.Value);
         }
 
         // 复合索引

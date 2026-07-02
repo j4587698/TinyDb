@@ -162,6 +162,16 @@ public sealed class EncryptionStorageTests : IDisposable
             await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(first.AsSpan(sizeof(ulong), sizeof(uint)))).IsEqualTo(1U);
             await Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(second.AsSpan(0, sizeof(ulong)))).IsEqualTo(42UL);
             await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(second.AsSpan(sizeof(ulong), sizeof(uint)))).IsEqualTo(2U);
+
+            var third = new byte[TinyDbOptions.DefaultPageSize + EncryptionMetadata.FrameOverhead];
+            pageCodec.EncodeTo(4, page, third);
+            await Assert.That(BinaryPrimitives.ReadUInt64LittleEndian(third.AsSpan(0, sizeof(ulong)))).IsEqualTo(42UL);
+            await Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(third.AsSpan(sizeof(ulong), sizeof(uint)))).IsEqualTo(3U);
+            await Assert.That(pageCodec.Decode(4, third).SequenceEqual(page)).IsTrue();
+
+            var decoded = new byte[(int)TinyDbOptions.DefaultPageSize];
+            pageCodec.DecodeTo(4, third, decoded);
+            await Assert.That(decoded.SequenceEqual(page)).IsTrue();
         }
 
         using (var walCodec = new AesGcmWalCodec(key, databaseId, nonceEpoch: 77))

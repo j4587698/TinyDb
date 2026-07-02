@@ -8,6 +8,7 @@ using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
+using TinyDb.Metadata;
 using TinyDb.Serialization;
 using TinyDb.Storage;
 
@@ -127,7 +128,7 @@ internal static class AllocationProbe
         {
             Console.WriteLine();
             Console.WriteLine("=== ArrayPool Smoke Test ===");
-            Console.WriteLine("æ³¨æ„ï¼šè¿™ä¸ªæµ‹è¯•åªæ˜¯ç”¨æ¥åˆ¤æ–­ Rent/Return æ˜¯å¦å¯¼è‡´å¤§é‡ GC åˆ†é…ã€‚");
+            Console.WriteLine("注意：这个测试只是用来判断 Rent/Return 是否导致大量 GC 分配。");
 
             const int poolIterations = 10_000;
             long alloc8k = 0;
@@ -146,8 +147,8 @@ internal static class AllocationProbe
                 alloc16k += GC.GetAllocatedBytesForCurrentThread() - before;
             }
 
-            Console.WriteLine($"Rent/Return 8KB å¹³å‡åˆ†é…: {alloc8k / (double)poolIterations:N2} bytes");
-            Console.WriteLine($"Rent/Return 16KB å¹³å‡åˆ†é…: {alloc16k / (double)poolIterations:N2} bytes");
+            Console.WriteLine($"Rent/Return 8KB 平均分配: {alloc8k / (double)poolIterations:N2} bytes");
+            Console.WriteLine($"Rent/Return 16KB 平均分配: {alloc16k / (double)poolIterations:N2} bytes");
         }
 
         var runIndexOnly = string.Equals(
@@ -209,6 +210,7 @@ internal static class AllocationProbe
 
         using var engine = new TinyDbEngine(databaseFile, options);
         _ = engine.GetCollection<QuickIndexBenchmark.QuickUser>();
+        EnsureBsonSchema(engine, noIndexCollection);
         _ = engine.GetCollection<BsonDocument>(noIndexCollection);
 
         var insertInternalMethod = typeof(TinyDbEngine).GetMethod(
@@ -271,7 +273,7 @@ internal static class AllocationProbe
         if (runAllocTicks)
         {
             Console.WriteLine("=== Allocation Ticks (Top Types) ===");
-            Console.WriteLine("æ³¨æ„ï¼šGCAllocationTick æ˜¯é‡‡æ ·äº‹ä»¶ï¼Œç»“æžœä»…ç”¨äºŽå®šæ€§åˆ†æžã€‚");
+            Console.WriteLine("注意：GCAllocationTick 是采样事件，结果仅用于定性分析。");
 
             const int tickIterations = 200;
             const string tickDatabaseFile = "alloc_ticks.db";
@@ -287,7 +289,7 @@ internal static class AllocationProbe
 
             if (tickInsertInternalMethod == null)
             {
-                throw new InvalidOperationException("æ— æ³•é€šè¿‡åå°„æ‰¾åˆ° TinyDbEngine.InsertDocumentInternal æ–¹æ³•ã€‚");
+                throw new InvalidOperationException("无法通过反射找到 TinyDbEngine.InsertDocumentInternal 方法。");
             }
 
             var tickInsertInternal = (Func<string, BsonDocument, BsonValue>)tickInsertInternalMethod.CreateDelegate(
@@ -327,5 +329,24 @@ internal static class AllocationProbe
         Console.WriteLine($"AotBsonMapper.ToDocument 平均分配: {toDocumentAllocated / (double)iterations:N0} bytes");
         Console.WriteLine($"InsertDocumentInternal(含索引) 平均分配: {insertAllocatedIndexed / (double)iterations:N0} bytes");
         Console.WriteLine($"InsertDocumentInternal(无索引) 平均分配: {insertAllocatedNoIndex / (double)iterations:N0} bytes");
+    }
+
+    private static void EnsureBsonSchema(TinyDbEngine engine, string collectionName)
+    {
+        if (engine.MetadataManager.GetMetadata(collectionName) != null) return;
+
+        engine.MetadataManager.SaveMetadata(new MetadataDocument
+        {
+            TableName = collectionName,
+            DisplayName = collectionName,
+            Columns = new BsonArray()
+                .AddValue(new BsonDocument()
+                    .Set("n", "_id")
+                    .Set("pn", "Id")
+                    .Set("t", typeof(ObjectId).FullName ?? "TinyDb.Bson.ObjectId")
+                    .Set("pk", true)
+                    .Set("r", true)
+                    .Set("o", 0))
+        });
     }
 }
