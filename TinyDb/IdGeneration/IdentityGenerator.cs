@@ -19,7 +19,13 @@ public class IdentityGenerator : IIdGenerator
 
         if (idProperty.PropertyType == typeof(int))
         {
-            return new BsonInt32((int)Math.Min(nextValue, int.MaxValue));
+            if (nextValue > int.MaxValue)
+            {
+                throw new OverflowException(
+                    $"Identity sequence '{key}' exceeded Int32.MaxValue. Use a long identity key for this collection.");
+            }
+
+            return new BsonInt32((int)nextValue);
         }
 
         if (idProperty.PropertyType == typeof(long))

@@ -213,7 +213,7 @@ internal sealed class Transaction : ITransaction
         {
             if (existingOperation.CollectionName == collectionName &&
                 existingOperation.DocumentId != null &&
-                existingOperation.DocumentId.Equals(documentId) &&
+                BsonValueComparer.ValueEquals(existingOperation.DocumentId, documentId) &&
                 existingOperation.OriginalDocument != null)
             {
                 effectiveOriginalDocument = existingOperation.OriginalDocument;

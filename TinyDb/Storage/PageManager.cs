@@ -246,6 +246,7 @@ public sealed class PageManager : IDisposable
     private void ScanFreePages()
     {
         uint lastFreeId = 0;
+        uint skippedPages = 0;
         for (uint i = 2; i <= _nextPageID; i++)
         {
             try
@@ -266,8 +267,16 @@ public sealed class PageManager : IDisposable
             catch (Exception ex)
             {
                 // Corrupted pages are not safe to add to the free list during recovery scanning.
-                _log(TinyDbLogLevel.Warning, $"Skipping page {i} while rebuilding the free list.", ex);
+                skippedPages++;
+                Log(TinyDbLogLevel.Warning, $"Skipping page {i} while rebuilding the free list.", ex);
             }
+        }
+
+        if (skippedPages > 0)
+        {
+            Log(
+                TinyDbLogLevel.Warning,
+                $"Free list rebuild skipped {skippedPages} unreadable page(s). The pages were left allocated to avoid reusing corrupted data; run CompactDatabase to reclaim space.");
         }
     }
 

@@ -26,6 +26,12 @@ internal static class UnsafeAccessors
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_journalRequests")]
         internal static extern ref int JournalRequests(FlushScheduler scheduler);
 
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_syncedRequests")]
+        internal static extern ref int SyncedRequests(FlushScheduler scheduler);
+
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_syncedWorkerRunning")]
+        internal static extern ref bool SyncedWorkerRunning(FlushScheduler scheduler);
+
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_cts")]
         internal static extern ref CancellationTokenSource Cts(FlushScheduler scheduler);
     }

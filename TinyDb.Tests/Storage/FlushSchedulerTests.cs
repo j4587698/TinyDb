@@ -171,6 +171,33 @@ public class FlushSchedulerTests
     }
 
     [Test]
+    public async Task FlushScheduler_SyncedSyncFlush_ShouldNotJoinAsyncBatch()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 3 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        UnsafeAccessors.FlushSchedulerAccessor.SyncedWorkerRunning(fs) = true;
+        UnsafeAccessors.FlushSchedulerAccessor.SyncedRequests(fs) = 1;
+
+        try
+        {
+            await Task.Run(() => fs.EnsureDurability(WriteConcern.Synced))
+                .WaitAsync(TimeSpan.FromSeconds(2));
+
+            await Assert.That(_wal.HasPendingEntries).IsFalse();
+        }
+        finally
+        {
+            UnsafeAccessors.FlushSchedulerAccessor.SyncedRequests(fs) = 0;
+            UnsafeAccessors.FlushSchedulerAccessor.SyncedWorkerRunning(fs) = false;
+        }
+    }
+
+    [Test]
     public async Task FlushScheduler_FlushPending_SyncBranches_ShouldWork()
     {
         using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);

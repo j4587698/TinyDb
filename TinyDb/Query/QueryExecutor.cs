@@ -1212,7 +1212,7 @@ public sealed class QueryExecutor
             return Enumerable.Empty<T>();
         }
 
-        var txOverlay = new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
+        var txOverlay = new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
         foreach (var op in tx.GetOperationsSnapshot())
         {
             if (op.CollectionName != collectionName) continue;
@@ -1452,7 +1452,7 @@ public sealed class QueryExecutor
             return AsyncEmpty<T>();
         }
 
-        var txOverlay = new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
+        var txOverlay = new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
         foreach (var op in tx.GetOperationsSnapshot())
         {
             if (op.CollectionName != collectionName) continue;
@@ -2439,7 +2439,7 @@ public sealed class QueryExecutor
             var op = operations[i];
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
-            if (!op.DocumentId.Equals(id)) continue;
+            if (!BsonValueComparer.ValueEquals(op.DocumentId, id)) continue;
 
             if (op.OperationType == TransactionOperationType.Delete)
             {
@@ -2469,7 +2469,7 @@ public sealed class QueryExecutor
             if (op.CollectionName != collectionName) continue;
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
 
-            overlay ??= new Dictionary<BsonValue, BsonDocument?>(EqualityComparer<BsonValue>.Default);
+            overlay ??= new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
 
             if (op.OperationType == TransactionOperationType.Delete)
             {

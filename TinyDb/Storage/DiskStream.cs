@@ -369,30 +369,24 @@ public sealed class DiskStream : IDiskStream
     public byte[] ReadPage(long pageOffset, int pageSize)
     {
         ThrowIfDisposed();
-        _semaphore.Wait();
-        try
+        var buffer = new byte[pageSize];
+        var bytesRead = 0;
+        while (bytesRead < pageSize)
         {
-            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
-            var buffer = new byte[pageSize];
-            var bytesRead = 0;
-            while (bytesRead < pageSize)
-            {
-                var read = _fileStream.Read(buffer, bytesRead, pageSize - bytesRead);
-                if (read == 0) break;
-                bytesRead += read;
-            }
-
-            if (bytesRead != pageSize)
-            {
-                throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
-            }
-
-            return buffer;
+            var read = RandomAccess.Read(
+                _fileStream.SafeFileHandle,
+                buffer.AsSpan(bytesRead, pageSize - bytesRead),
+                pageOffset + bytesRead);
+            if (read == 0) break;
+            bytesRead += read;
         }
-        finally
+
+        if (bytesRead != pageSize)
         {
-            _semaphore.Release();
+            throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
         }
+
+        return buffer;
     }
 
     /// <summary>
@@ -403,16 +397,7 @@ public sealed class DiskStream : IDiskStream
     public void WritePage(long pageOffset, byte[] pageData)
     {
         ThrowIfDisposed();
-        _semaphore.Wait();
-        try
-        {
-            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
-            _fileStream.Write(pageData, 0, pageData.Length);
-        }
-        finally
-        {
-            _semaphore.Release();
-        }
+        RandomAccess.Write(_fileStream.SafeFileHandle, pageData, pageOffset);
     }
 
     /// <summary>
@@ -425,28 +410,25 @@ public sealed class DiskStream : IDiskStream
     public async Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await _semaphore.WaitAsync(cancellationToken);
-        try
+        var buffer = new byte[pageSize];
+        var bytesRead = 0;
+        while (bytesRead < pageSize)
         {
-            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
-            var buffer = new byte[pageSize];
-            var bytesRead = 0;
-            while (bytesRead < pageSize)
-            {
-                var read = await _fileStream.ReadAsync(buffer, bytesRead, pageSize - bytesRead, cancellationToken);
-                if (read == 0) break;
-                bytesRead += read;
-            }
-            if (bytesRead != pageSize)
-            {
-                throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
-            }
-            return buffer;
+            var read = await RandomAccess.ReadAsync(
+                _fileStream.SafeFileHandle,
+                buffer.AsMemory(bytesRead, pageSize - bytesRead),
+                pageOffset + bytesRead,
+                cancellationToken).ConfigureAwait(false);
+            if (read == 0) break;
+            bytesRead += read;
         }
-        finally
+
+        if (bytesRead != pageSize)
         {
-            _semaphore.Release();
+            throw new EndOfStreamException($"Short read at offset {pageOffset}: expected {pageSize} bytes, got {bytesRead} bytes.");
         }
+
+        return buffer;
     }
 
     /// <summary>
@@ -459,16 +441,7 @@ public sealed class DiskStream : IDiskStream
     public async Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await _semaphore.WaitAsync(cancellationToken);
-        try
-        {
-            _fileStream.Seek(pageOffset, SeekOrigin.Begin);
-            await _fileStream.WriteAsync(pageData, 0, pageData.Length, cancellationToken);
-        }
-        finally
-        {
-            _semaphore.Release();
-        }
+        await RandomAccess.WriteAsync(_fileStream.SafeFileHandle, pageData, pageOffset, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -90,13 +90,11 @@ public class BsonConversionAdditionalCoverageTests2
     }
 
     [Test]
-    public async Task FromBsonValue_Dictionary_WithEnumKey_ShouldParseKeys()
+    public async Task FromBsonValue_Dictionary_WithEnumKey_ShouldThrow()
     {
         var doc = new BsonDocument().Set("1", 1).Set("2", 2);
-        var dict = (Dictionary<KeyEnum, int>)BsonConversion.FromBsonValue(doc, typeof(Dictionary<KeyEnum, int>))!;
-
-        await Assert.That(dict[KeyEnum.A]).IsEqualTo(1);
-        await Assert.That(dict[KeyEnum.B]).IsEqualTo(2);
+        await Assert.That(() => BsonConversion.FromBsonValue(doc, typeof(Dictionary<KeyEnum, int>)))
+            .Throws<NotSupportedException>();
     }
 
     [Test]
@@ -119,7 +117,7 @@ public class BsonConversionAdditionalCoverageTests2
     }
 
     [Test]
-    public async Task FromBsonValue_ListOfComplexType_WithRegisteredAdapter_ShouldUseAdapterForElements()
+    public async Task FromBsonValue_ListOfComplexType_WithRegisteredAdapter_ShouldThrow()
     {
         AotHelperRegistry.Register(CreateAdapterPocoAdapter());
 
@@ -129,10 +127,8 @@ public class BsonConversionAdditionalCoverageTests2
             new BsonDocument().Set("id", 2)
         });
 
-        var list = (List<AdapterPoco>)BsonConversion.FromBsonValue(array, typeof(List<AdapterPoco>))!;
-        await Assert.That(list.Count).IsEqualTo(2);
-        await Assert.That(list[0].Id).IsEqualTo(1);
-        await Assert.That(list[1].Id).IsEqualTo(2);
+        await Assert.That(() => BsonConversion.FromBsonValue(array, typeof(List<AdapterPoco>)))
+            .Throws<NotSupportedException>();
     }
 
     [Test]

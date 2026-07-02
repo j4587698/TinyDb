@@ -84,8 +84,7 @@ public static class BsonSerializer
         if (data == null) throw new ArgumentNullException(nameof(data));
         if (data.Length == 0) return BsonNull.Value;
 
-        using var stream = new MemoryStream(data);
-        using var reader = new BsonReader(stream);
+        var reader = new BsonSpanReader(data);
         var document = reader.ReadDocument();
         return document.ContainsKey("value") ? document["value"] : BsonNull.Value;
     }
@@ -146,10 +145,10 @@ public static class BsonSerializer
     {
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var buffer = new FixedBufferWriter(CalculateDocumentSize(document));
+        using var buffer = new PooledBufferWriter();
         using var writer = new BsonWriter(buffer);
         writer.WriteDocument(document);
-        return buffer.WrittenArray;
+        return buffer.WrittenSpan.ToArray();
     }
 
     /// <summary>
@@ -225,10 +224,10 @@ public static class BsonSerializer
     {
         if (array == null) throw new ArgumentNullException(nameof(array));
 
-        var buffer = new FixedBufferWriter(CalculateArraySize(array));
+        using var buffer = new PooledBufferWriter();
         using var writer = new BsonWriter(buffer);
         writer.WriteArray(array);
-        return buffer.WrittenArray;
+        return buffer.WrittenSpan.ToArray();
     }
 
     /// <summary>
@@ -241,8 +240,7 @@ public static class BsonSerializer
         if (data == null) throw new ArgumentNullException(nameof(data));
         if (data.Length == 0) return new BsonArray();
 
-        using var stream = new MemoryStream(data);
-        using var reader = new BsonReader(stream);
+        var reader = new BsonSpanReader(data);
         return reader.ReadArray();
     }
 

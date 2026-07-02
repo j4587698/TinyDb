@@ -37,4 +37,28 @@ public sealed class DiskStreamAsyncCoverageTests
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
     }
+
+    [Test]
+    public async Task PageReadWriteAsync_ShouldNotMovePosition()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"diskstream_async_position_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var stream = new DiskStream(path, FileAccess.ReadWrite, FileShare.ReadWrite);
+            stream.SetLength(32);
+            stream.Seek(9, SeekOrigin.Begin);
+
+            var data = new byte[] { 5, 6, 7, 8 };
+            await stream.WritePageAsync(12, data);
+            var read = await stream.ReadPageAsync(12, data.Length);
+
+            await Assert.That(stream.Position).IsEqualTo(9);
+            await Assert.That(read.SequenceEqual(data)).IsTrue();
+        }
+        finally
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
+        }
+    }
 }

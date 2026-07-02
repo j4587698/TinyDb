@@ -274,12 +274,22 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public override int GetHashCode()
     {
-        int hash = 0;
-        foreach (var kvp in _elements)
+        unchecked
         {
-            hash ^= HashCode.Combine(kvp.Key, kvp.Value);
+            long sum = 0;
+            long sumOfSquares = 0;
+            int xor = 0;
+
+            foreach (var kvp in _elements)
+            {
+                var elementHash = HashCode.Combine(StringComparer.Ordinal.GetHashCode(kvp.Key), kvp.Value.GetHashCode());
+                sum += elementHash;
+                sumOfSquares += (long)elementHash * elementHash;
+                xor ^= elementHash;
+            }
+
+            return HashCode.Combine(Count, sum, sumOfSquares, xor);
         }
-        return hash;
     }
 
     /// <summary>

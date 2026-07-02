@@ -285,12 +285,12 @@ public class AotBsonMapperMissingLinesCoverageTests
 
         await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(List<DateTime>))).Throws<NotSupportedException>();
 
-        var wrapper1 = (StringListWrapper)AotBsonMapper.ConvertValue(array, typeof(StringListWrapper))!;
-        await Assert.That(wrapper1.Items.Count).IsEqualTo(2);
+        await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(StringListWrapper)))
+            .Throws<NotSupportedException>();
 
         var objArray = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonString("x") });
-        var wrapper2 = (ObjectListWrapper)AotBsonMapper.ConvertValue(objArray, typeof(ObjectListWrapper))!;
-        await Assert.That(wrapper2.Items.Count).IsEqualTo(2);
+        await Assert.That(() => AotBsonMapper.ConvertValue(objArray, typeof(ObjectListWrapper)))
+            .Throws<NotSupportedException>();
 
         var doc = new BsonDocument().Set("a", 1).Set("b", "x").Set("c", BsonNull.Value);
 

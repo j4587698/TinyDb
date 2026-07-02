@@ -1,6 +1,3 @@
-using System.Collections.Concurrent;
-using System.Diagnostics.CodeAnalysis;
-
 namespace TinyDb.Utils;
 
 /// <summary>
@@ -11,7 +8,7 @@ namespace TinyDb.Utils;
 public sealed class LRUCache<TKey, TValue> where TKey : notnull
 {
     private int _capacity;
-    private readonly ConcurrentDictionary<TKey, LinkedListNode<CacheItem>> _cacheMap;
+    private readonly Dictionary<TKey, LinkedListNode<CacheItem>> _cacheMap;
     private readonly LinkedList<CacheItem> _lruList;
     private long _hits;
     private long _misses;
@@ -24,7 +21,16 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <summary>
     /// 当前缓存项数量
     /// </summary>
-    public int Count => _cacheMap.Count;
+    public int Count
+    {
+        get
+        {
+            lock (_lruList)
+            {
+                return _cacheMap.Count;
+            }
+        }
+    }
 
     /// <summary>
     /// 缓存命中次数
@@ -56,7 +62,7 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     {
         if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
         _capacity = capacity;
-        _cacheMap = new ConcurrentDictionary<TKey, LinkedListNode<CacheItem>>();
+        _cacheMap = new Dictionary<TKey, LinkedListNode<CacheItem>>();
         _lruList = new LinkedList<CacheItem>();
     }
 
@@ -147,8 +153,9 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     {
         lock (_lruList)
         {
-            if (_cacheMap.TryRemove(key, out var node))
+            if (_cacheMap.TryGetValue(key, out var node))
             {
+                _cacheMap.Remove(key);
                 _lruList.Remove(node);
                 return true;
             }
@@ -269,7 +276,10 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <returns>是否包含</returns>
     public bool ContainsKey(TKey key)
     {
-        return _cacheMap.ContainsKey(key);
+        lock (_lruList)
+        {
+            return _cacheMap.ContainsKey(key);
+        }
     }
 
     /// <summary>
@@ -278,7 +288,10 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <returns>键集合</returns>
     public IEnumerable<TKey> GetKeys()
     {
-        return _cacheMap.Keys.ToList();
+        lock (_lruList)
+        {
+            return _cacheMap.Keys.ToList();
+        }
     }
 
     /// <summary>
@@ -322,7 +335,7 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
             var key = lastNode.Value.Key;
 
             _lruList.RemoveLast();
-            _cacheMap.TryRemove(key, out _);
+            _cacheMap.Remove(key);
         }
     }
 
