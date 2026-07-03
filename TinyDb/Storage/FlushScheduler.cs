@@ -454,6 +454,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         CancelPendingBatchesForDispose();
 
         Exception? flushException = null;
+        var workerWaitErrors = new List<Exception>();
 
         try
         {
@@ -465,7 +466,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
         finally
         {
-            DisposeCancellationTokenSourceWhenWorkersComplete();
+            WaitForWorkersAndDisposeCancellationTokenSource(workerWaitErrors);
         }
 
         if (flushException == null &&
@@ -475,9 +476,12 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
         }
 
-        if (flushException != null)
+        if (flushException != null || workerWaitErrors.Count > 0)
         {
-            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", flushException);
+            var exceptions = new List<Exception>();
+            if (flushException != null) exceptions.Add(flushException);
+            exceptions.AddRange(workerWaitErrors);
+            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
         }
     }
 
@@ -507,42 +511,26 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         syncedBatchToCancel?.TrySetCanceled();
     }
 
-    private void DisposeCancellationTokenSourceWhenWorkersComplete()
+    private void WaitForWorkersAndDisposeCancellationTokenSource(List<Exception> workerWaitErrors)
     {
-        var workerTasks = GetWorkerTasks();
-        if (workerTasks.Length == 0)
+        try
         {
-            DisposeCancellationTokenSource();
-            return;
-        }
-
-        var allCompleted = true;
-        foreach (var task in workerTasks)
-        {
-            if (!task.IsCompleted)
+            foreach (var task in GetWorkerTasks())
             {
-                allCompleted = false;
-                break;
+                try
+                {
+                    task.GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    workerWaitErrors.Add(new InvalidOperationException("Flush worker stop failed.", ex));
+                }
             }
         }
-
-        if (allCompleted)
+        finally
         {
-            ObserveWorkerTaskFailures(workerTasks);
             DisposeCancellationTokenSource();
-            return;
         }
-
-        _ = Task.WhenAll(workerTasks).ContinueWith(
-            static (task, state) =>
-            {
-                _ = task.Exception;
-                ((FlushScheduler)state!).DisposeCancellationTokenSource();
-            },
-            this,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
     }
 
     private Task[] GetWorkerTasks()
@@ -552,17 +540,6 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         if (_syncedWorkerTask != null) tasks.Add(_syncedWorkerTask);
         if (_backgroundTask != null) tasks.Add(_backgroundTask);
         return tasks.ToArray();
-    }
-
-    private static void ObserveWorkerTaskFailures(IEnumerable<Task> tasks)
-    {
-        foreach (var task in tasks)
-        {
-            if (task.IsFaulted)
-            {
-                _ = task.Exception;
-            }
-        }
     }
 
     private void DisposeCancellationTokenSource()

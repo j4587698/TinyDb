@@ -607,22 +607,6 @@ public sealed class TransactionManager : IDisposable
         {
             var compensationErrors = new List<Exception>();
 
-            // 关键：当前操作可能已部分生效（例如写入页面后索引插入失败）。
-            // 先尝试对“失败的那一条”进行补偿，避免残留半应用状态。
-            try
-            {
-                if (appliedCount >= 0 && appliedCount < operations.Count)
-                {
-                    RollbackSingleOperation(operations[appliedCount]);
-                }
-            }
-            catch (Exception compensationEx)
-            {
-                compensationErrors.Add(new InvalidOperationException(
-                    "Rollback of failed operation during compensation failed.",
-                    compensationEx));
-            }
-
             // 如果应用过程中出错，回滚已经成功的操作
             for (int i = appliedCount - 1; i >= 0; i--)
             {

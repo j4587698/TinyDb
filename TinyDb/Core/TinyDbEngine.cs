@@ -416,12 +416,19 @@ public sealed class TinyDbEngine : IDisposable
                     if (!_header.IsValid()) throw new InvalidOperationException(CreateInvalidHeaderMessage(_header));
                     
                     // 初始化 PageManager (现有数据库)
-                    _pageManager.Initialize(_header.TotalPages, _header.FirstFreePage);
+                    _pageManager.Initialize(
+                        _header.TotalPages,
+                        _header.FirstFreePage,
+                        _header.FreePageCount,
+                        _header.HasFreePageCount);
                     
                     // 步骤 3: 状态一致性同步。
                     // 关键修复：如果在崩溃前分配了页面但 Header 未更新，
                     // WAL 重放后 PageManager 知道最新状态，需反向同步回 Header
-                    if (_pageManager.TotalPages > _header.TotalPages || _pageManager.FirstFreePageID != _header.FirstFreePage)
+                    if (_pageManager.TotalPages > _header.TotalPages ||
+                        _pageManager.FirstFreePageID != _header.FirstFreePage ||
+                        !_header.HasFreePageCount ||
+                        _pageManager.FreePageCount != _header.FreePageCount)
                     {
                         WriteHeader();
                     }
@@ -475,6 +482,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             _header.TotalPages = _pageManager.TotalPages;
             _header.FirstFreePage = _pageManager.FirstFreePageID;
+            _header.FreePageCount = _pageManager.FreePageCount;
             _header.UpdateModification();
             var p = _pageManager.GetPage(1);
             p.WriteData(0, _header.ToByteArray());

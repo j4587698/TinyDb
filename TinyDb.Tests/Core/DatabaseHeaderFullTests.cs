@@ -53,4 +53,27 @@ public class DatabaseHeaderFullTests
         await Assert.That(metadata2.Salt.SequenceEqual(salt)).IsTrue();
         await Assert.That(metadata2.KeyHash.SequenceEqual(hash)).IsTrue();
     }
+
+    [Test]
+    public async Task DatabaseHeader_FreePageCount_ShouldRoundTripAndSurviveSecurityMetadata()
+    {
+        var header = new DatabaseHeader();
+        header.FreePageCount = 42;
+
+        var salt = new byte[16];
+        var hash = new byte[32];
+        new Random().NextBytes(salt);
+        new Random().NextBytes(hash);
+        header.SetSecurityMetadata(new DatabaseSecurityMetadata(salt, hash));
+
+        var replayed = DatabaseHeader.FromByteArray(header.ToByteArray());
+
+        await Assert.That(replayed.HasFreePageCount).IsTrue();
+        await Assert.That(replayed.FreePageCount).IsEqualTo(42u);
+        await Assert.That(replayed.TryGetSecurityMetadata(out var metadata)).IsTrue();
+        await Assert.That(metadata.Salt.SequenceEqual(salt)).IsTrue();
+        await Assert.That(metadata.KeyHash.SequenceEqual(hash)).IsTrue();
+        await Assert.That(DatabaseHeader.ReservedHeaderExtensionBytes).IsGreaterThanOrEqualTo(8);
+        await Assert.That(DatabaseHeader.TrailingHeaderExtensionBytes).IsEqualTo(11);
+    }
 }

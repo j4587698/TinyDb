@@ -169,15 +169,29 @@ public sealed class PageManagerCoverageEdgeCasesTests
     }
 
     [Test]
-    public async Task GetStatistics_WhenFreeListTraversalReadFails_ShouldWrap()
+    public async Task GetStatistics_WithPersistedFreePageCount_ShouldNotTraverseFreeList()
     {
         var stream = new ThrowOnReadDiskStream(size: 4096L * 8L);
         using var manager = new PageManager(stream, 4096);
 
-        manager.Initialize(totalPages: 8, firstFreePageID: 2);
+        manager.Initialize(totalPages: 8, firstFreePageID: 2, freePageCount: 3, hasFreePageCount: true);
 
-        await Assert.That(() => manager.GetStatistics())
-            .Throws<InvalidOperationException>();
+        var stats = manager.GetStatistics();
+
+        await Assert.That(stats.FreePages).IsEqualTo(3u);
+    }
+
+    [Test]
+    public async Task Initialize_WithPersistedZeroFreePageCount_ShouldNotScanPages()
+    {
+        var stream = new ThrowOnReadDiskStream(size: 4096L * 8L);
+        using var manager = new PageManager(stream, 4096);
+
+        manager.Initialize(totalPages: 8, firstFreePageID: 0, freePageCount: 0, hasFreePageCount: true);
+
+        var stats = manager.GetStatistics();
+
+        await Assert.That(stats.FreePages).IsEqualTo(0u);
     }
 
     [Test]
