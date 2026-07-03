@@ -244,7 +244,7 @@ public class FlushSchedulerTests
     }
 
     [Test]
-    public async Task FlushScheduler_BackgroundLoop_WhenFlushThrows_ShouldSurfaceExceptionOnDispose()
+    public async Task FlushScheduler_BackgroundLoop_WhenFlushThrows_ShouldSurfaceExceptionOnDisposeAsync()
     {
         var dbFile = Path.Combine(Path.GetTempPath(), $"fs_throw_{Guid.NewGuid():N}.db");
         try
@@ -259,7 +259,7 @@ public class FlushSchedulerTests
             page.WriteData(0, new byte[] { 1 }); // Mark dirty; don't save, let background loop try
 
             await Task.Delay(250);
-            await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
+            await Assert.That(async () => await fs.DisposeAsync()).Throws<AggregateException>();
         }
         finally
         {
@@ -283,7 +283,7 @@ public class FlushSchedulerTests
 
             // Give the background loop a chance to run and hit the catch-all branch.
             await Task.Delay(200);
-            await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
+            await Assert.That(async () => await fs.DisposeAsync()).Throws<AggregateException>();
         }
         finally
         {
@@ -403,12 +403,12 @@ public class FlushSchedulerTests
         await Assert.That(async () => await fs.EnsureDurabilityAsync(WriteConcern.Journaled))
             .Throws<ObjectDisposedException>();
 
-        await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
+        await Assert.That(async () => await fs.DisposeAsync()).Throws<AggregateException>();
     }
 
     [Test]
     [SkipInAot]
-    public async Task FlushScheduler_Dispose_WhenWorkerWaitFaults_ShouldCoverWaitCatchBranches()
+    public async Task FlushScheduler_DisposeAsync_WhenWorkerWaitFaults_ShouldCoverWaitCatchBranches()
     {
         var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromHours(1));
 
@@ -420,7 +420,30 @@ public class FlushSchedulerTests
         journalTaskField.SetValue(fs, Task.FromException(new InvalidOperationException("journal wait failed")));
         backgroundTaskField.SetValue(fs, Task.FromException(new InvalidOperationException("background wait failed")));
 
-        await Assert.That(() => fs.Dispose()).Throws<AggregateException>();
+        await Assert.That(async () => await fs.DisposeAsync()).Throws<AggregateException>();
+    }
+
+    [Test]
+    [SkipInAot]
+    public async Task FlushScheduler_Dispose_ShouldNotWaitForWorkerTasks()
+    {
+        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromHours(1));
+
+        var journalTaskField = typeof(FlushScheduler).GetField("_journalWorkerTask", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingFieldException(typeof(FlushScheduler).FullName, "_journalWorkerTask");
+        var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        journalTaskField.SetValue(fs, blocker.Task);
+
+        try
+        {
+            await Task.Run(() => fs.Dispose()).WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            blocker.TrySetResult();
+        }
+
+        await Assert.That(() => fs.Dispose()).ThrowsNothing();
     }
 
     private sealed class ThrowingWriteAsyncDiskStream : IDiskStream

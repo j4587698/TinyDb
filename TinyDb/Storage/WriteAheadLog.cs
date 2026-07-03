@@ -1279,6 +1279,27 @@ public sealed class WriteAheadLog : IDisposable
             stream.Seek(0, SeekOrigin.End);
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             SetHasPendingEntries(false);
+            _flushedLSN = stream.Position;
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
+    public void Truncate()
+    {
+        if (!IsEnabled) return;
+
+        _mutex.Wait();
+        try
+        {
+            var stream = _stream!;
+            stream.SetLength(0);
+            stream.Seek(0, SeekOrigin.End);
+            stream.Flush(true);
+            SetHasPendingEntries(false);
+            _flushedLSN = stream.Position;
         }
         finally
         {

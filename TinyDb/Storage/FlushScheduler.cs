@@ -19,6 +19,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     private readonly object _flushLock = new();
     private static readonly TimeSpan GroupCommitDelay = TimeSpan.FromMilliseconds(1);
     private int _disposed;
+    private int _ctsDisposed;
     private Exception? _backgroundFailure;
     private int _foregroundFlushFailureObserved;
     
@@ -450,37 +451,9 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
 
-        Exception? journalWaitException = null;
-        Exception? syncedWaitException = null;
-        Exception? backgroundWaitException = null;
+        CancelPendingBatchesForDispose();
+
         Exception? flushException = null;
-
-        try
-        {
-            _journalWorkerTask?.ConfigureAwait(false).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            journalWaitException = new InvalidOperationException("Journal worker stop failed.", ex);
-        }
-
-        try
-        {
-            _syncedWorkerTask?.ConfigureAwait(false).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            syncedWaitException = new InvalidOperationException("Synced worker stop failed.", ex);
-        }
-
-        try
-        {
-            _backgroundTask?.ConfigureAwait(false).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            backgroundWaitException = new InvalidOperationException("Background worker stop failed.", ex);
-        }
 
         try
         {
@@ -492,7 +465,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
         finally
         {
-            _cts.Dispose();
+            DisposeCancellationTokenSourceWhenWorkersComplete();
         }
 
         if (flushException == null &&
@@ -502,14 +475,101 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
         }
 
-        if (journalWaitException != null || syncedWaitException != null || backgroundWaitException != null || flushException != null)
+        if (flushException != null)
         {
-            var exceptions = new List<Exception>();
-            if (journalWaitException != null) exceptions.Add(journalWaitException);
-            if (syncedWaitException != null) exceptions.Add(syncedWaitException);
-            if (backgroundWaitException != null) exceptions.Add(backgroundWaitException);
-            if (flushException != null) exceptions.Add(flushException);
-            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", flushException);
+        }
+    }
+
+    private void CancelPendingBatchesForDispose()
+    {
+        TaskCompletionSource? journalBatchToCancel = null;
+        TaskCompletionSource? syncedBatchToCancel = null;
+
+        lock (_flushLock)
+        {
+            if (_journalRequests > 0)
+            {
+                journalBatchToCancel = _journalBatchTcs;
+                _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _journalRequests = 0;
+            }
+
+            if (_syncedRequests > 0)
+            {
+                syncedBatchToCancel = _syncedBatchTcs;
+                _syncedBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _syncedRequests = 0;
+            }
+        }
+
+        journalBatchToCancel?.TrySetCanceled();
+        syncedBatchToCancel?.TrySetCanceled();
+    }
+
+    private void DisposeCancellationTokenSourceWhenWorkersComplete()
+    {
+        var workerTasks = GetWorkerTasks();
+        if (workerTasks.Length == 0)
+        {
+            DisposeCancellationTokenSource();
+            return;
+        }
+
+        var allCompleted = true;
+        foreach (var task in workerTasks)
+        {
+            if (!task.IsCompleted)
+            {
+                allCompleted = false;
+                break;
+            }
+        }
+
+        if (allCompleted)
+        {
+            ObserveWorkerTaskFailures(workerTasks);
+            DisposeCancellationTokenSource();
+            return;
+        }
+
+        _ = Task.WhenAll(workerTasks).ContinueWith(
+            static (task, state) =>
+            {
+                _ = task.Exception;
+                ((FlushScheduler)state!).DisposeCancellationTokenSource();
+            },
+            this,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private Task[] GetWorkerTasks()
+    {
+        var tasks = new List<Task>(3);
+        if (_journalWorkerTask != null) tasks.Add(_journalWorkerTask);
+        if (_syncedWorkerTask != null) tasks.Add(_syncedWorkerTask);
+        if (_backgroundTask != null) tasks.Add(_backgroundTask);
+        return tasks.ToArray();
+    }
+
+    private static void ObserveWorkerTaskFailures(IEnumerable<Task> tasks)
+    {
+        foreach (var task in tasks)
+        {
+            if (task.IsFaulted)
+            {
+                _ = task.Exception;
+            }
+        }
+    }
+
+    private void DisposeCancellationTokenSource()
+    {
+        if (Interlocked.Exchange(ref _ctsDisposed, 1) == 0)
+        {
+            _cts.Dispose();
         }
     }
 
@@ -517,6 +577,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
+        CancelPendingBatchesForDispose();
 
         Exception? journalWaitException = null;
         Exception? syncedWaitException = null;
@@ -569,7 +630,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
         finally
         {
-            _cts.Dispose();
+            DisposeCancellationTokenSource();
         }
 
         if (flushException == null &&

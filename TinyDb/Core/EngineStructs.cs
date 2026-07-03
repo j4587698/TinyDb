@@ -51,20 +51,43 @@ internal readonly struct DocumentLocation : IEquatable<DocumentLocation>
 
 internal readonly struct PageDocumentEntry
 {
+    private readonly byte[]? _rawBytes;
+
     public PageDocumentEntry(BsonDocument document, byte[] rawBytes, bool isLargeDocument = false, uint largeDocumentIndexPageId = 0, int largeDocumentSize = 0)
+        : this(document, rawBytes, rawBytes, isLargeDocument, largeDocumentIndexPageId, largeDocumentSize)
+    {
+    }
+
+    public PageDocumentEntry(BsonDocument document, ReadOnlyMemory<byte> rawBytes, bool isLargeDocument = false, uint largeDocumentIndexPageId = 0, int largeDocumentSize = 0)
+        : this(document, rawBytes, null, isLargeDocument, largeDocumentIndexPageId, largeDocumentSize)
+    {
+    }
+
+    private PageDocumentEntry(BsonDocument document, ReadOnlyMemory<byte> rawBytes, byte[]? stableRawBytes, bool isLargeDocument, uint largeDocumentIndexPageId, int largeDocumentSize)
     {
         Document = document;
-        RawBytes = rawBytes;
+        RawMemory = rawBytes;
+        _rawBytes = stableRawBytes;
         IsLargeDocument = isLargeDocument;
         LargeDocumentIndexPageId = largeDocumentIndexPageId;
         LargeDocumentSize = largeDocumentSize;
     }
+
     public BsonDocument Document { get; }
-    public byte[] RawBytes { get; }
+    public ReadOnlyMemory<byte> RawMemory { get; }
+    public int RawLength => RawMemory.Length;
+    public byte[] RawBytes => _rawBytes ?? RawMemory.ToArray();
     public bool IsLargeDocument { get; }
     public uint LargeDocumentIndexPageId { get; }
     public int LargeDocumentSize { get; }
     public BsonValue Id => Document.TryGetValue("_id", out var id) ? id : BsonNull.Value;
+
+    public PageDocumentEntry ToStableRawBytes()
+    {
+        return _rawBytes != null
+            ? this
+            : new PageDocumentEntry(Document, RawMemory.ToArray(), IsLargeDocument, LargeDocumentIndexPageId, LargeDocumentSize);
+    }
 }
 
 internal readonly record struct CollectionDocumentLockKey(string CollectionName, BsonValue DocumentId);

@@ -28,6 +28,9 @@ public sealed class PageManager : IDisposable
     private uint _firstFreePageID; // Head of free page linked list
     private long _fileSize;
     private bool _disposed;
+    private readonly SemaphoreSlim _backgroundWritebackGate = new(1, 1);
+    private readonly ManualResetEventSlim _backgroundWritebackIdle = new(true);
+    private int _backgroundWritebackScheduled;
 
     private Action<long>? _flushLogToLsn;
     private Func<long, CancellationToken, Task>? _flushLogToLsnAsync;
@@ -1218,7 +1221,11 @@ public sealed class PageManager : IDisposable
     public void FlushDirtyPages()
     {
         ThrowIfDisposed();
+        FlushDirtyPagesCore(skipUnsafeDeferredWalPages: false);
+    }
 
+    private void FlushDirtyPagesCore(bool skipUnsafeDeferredWalPages)
+    {
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
         {
@@ -1232,10 +1239,28 @@ public sealed class PageManager : IDisposable
                 continue;
             }
 
+            if (skipUnsafeDeferredWalPages && IsDeferredWalPagePending(page))
+            {
+                continue;
+            }
+
             SavePage(page);
         }
 
         _diskStream.Flush();
+    }
+
+    private bool IsDeferredWalPagePending(Page page)
+    {
+        if (!_deferredWalPages.TryGetValue(page.PageID, out var loggedLsn))
+        {
+            return false;
+        }
+
+        var currentLsn = page.Header.LSN;
+        return loggedLsn < 0
+            ? currentLsn < 0
+            : currentLsn != loggedLsn;
     }
 
     /// <summary>
@@ -1245,7 +1270,11 @@ public sealed class PageManager : IDisposable
     public async Task FlushDirtyPagesAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        await FlushDirtyPagesAsyncCore(skipUnsafeDeferredWalPages: false, cancellationToken).ConfigureAwait(false);
+    }
 
+    private async Task FlushDirtyPagesAsyncCore(bool skipUnsafeDeferredWalPages, CancellationToken cancellationToken)
+    {
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
         {
@@ -1256,6 +1285,11 @@ public sealed class PageManager : IDisposable
             }
 
             if (await TryWriteDeferredWalPageAsync(page, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            if (skipUnsafeDeferredWalPages && IsDeferredWalPagePending(page))
             {
                 continue;
             }
@@ -1458,9 +1492,9 @@ public sealed class PageManager : IDisposable
     /// <summary>
     /// 驱逐最少使用的页面
     /// </summary>
-    private void EvictLeastRecentlyUsed()
+    private bool EvictLeastRecentlyUsed()
     {
-        // 尝试从 LRU 获取多个候选者，以防第一个被 Pin 住
+        // 尝试从 LRU 获取多个候选者，以防第一个被 Pin 住。
         var candidates = _lruCache.GetLeastRecentlyUsed(10);
         foreach (var pageID in candidates)
         {
@@ -1487,6 +1521,7 @@ public sealed class PageManager : IDisposable
             {
                 if (evictionCandidate.IsDirty)
                 {
+                    ScheduleBackgroundWriteback();
                     SavePage(evictionCandidate);
                 }
 
@@ -1510,13 +1545,64 @@ public sealed class PageManager : IDisposable
 
                     RemoveDirtyTracking(removedPage);
                     _lruCache.Remove(pageID);
-                    return; // 成功驱逐一个，退出
+                    return true; // 成功驱逐一个，退出
                 }
             }
             finally
             {
                 evictionCandidate.Unpin();
             }
+        }
+
+        return false;
+    }
+
+    private void ScheduleBackgroundWriteback()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _backgroundWritebackScheduled, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _backgroundWritebackIdle.Reset();
+        _ = RunBackgroundWritebackAsync();
+    }
+
+    private async Task RunBackgroundWritebackAsync()
+    {
+        try
+        {
+            await _backgroundWritebackGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                await FlushDirtyPagesAsyncCore(skipUnsafeDeferredWalPages: true, CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                _backgroundWritebackGate.Release();
+            }
+        }
+        catch (ObjectDisposedException) when (_disposed)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log(TinyDbLogLevel.Warning, "Background page writeback failed.", ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _backgroundWritebackScheduled, 0);
+            _backgroundWritebackIdle.Set();
         }
     }
 
@@ -1553,33 +1639,46 @@ public sealed class PageManager : IDisposable
             Exception? cleanupException = null;
             try
             {
+                _backgroundWritebackGate.Wait();
                 try
                 {
-                    // 刷新所有脏页面
-                    FlushDirtyPages();
+                    try
+                    {
+                        try
+                        {
+                            // 刷新所有脏页面
+                            FlushDirtyPages();
+                        }
+                        catch (Exception ex)
+                        {
+                            flushException = new InvalidOperationException("Flush dirty pages during PageManager dispose failed.", ex);
+                        }
+
+                        // 清理缓存
+                        ClearCache();
+
+                        foreach (var gate in _pageLoadStripes)
+                        {
+                            gate.Dispose();
+                        }
+
+                        _diskStream.Dispose();
+                    }
+                    finally
+                    {
+                        _disposed = true;
+                    }
                 }
-                catch (Exception ex)
+                finally
                 {
-                    flushException = new InvalidOperationException("Flush dirty pages during PageManager dispose failed.", ex);
+                    _backgroundWritebackGate.Release();
                 }
 
-                // 清理缓存
-                ClearCache();
-
-                foreach (var gate in _pageLoadStripes)
-                {
-                    gate.Dispose();
-                }
-
-                _diskStream.Dispose();
+                _backgroundWritebackIdle.Wait();
             }
             catch (Exception ex)
             {
                 cleanupException = new InvalidOperationException("PageManager dispose failed.", ex);
-            }
-            finally
-            {
-                _disposed = true;
             }
 
             if (flushException != null || cleanupException != null)
