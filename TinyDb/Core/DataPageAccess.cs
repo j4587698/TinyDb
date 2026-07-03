@@ -446,10 +446,11 @@ internal sealed class DataPageAccess
     {
         if (st.PageId != 0)
         {
-            var p = _pm.GetPage((uint)st.PageId);
+            var p = _pm.GetPagePinned((uint)st.PageId);
             if (p.Header.PageType == PageType.Data && p.Header.FreeBytes >= req) return (p, false);
+            p.Unpin();
         }
-        var n = _pm.NewPage(PageType.Data);
+        var n = _pm.NewPagePinned(PageType.Data);
         n.ResetBytes(InternalReserved);
         st.PageId = n.PageID;
         return (n, true);

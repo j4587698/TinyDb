@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
+using TinyDb.Serialization;
 
 namespace TinyDb.Query;
 
@@ -16,7 +17,7 @@ public sealed class QueryOptimizer
 
     private static Dictionary<string, FieldComparison> ExtractComparisonMap(QueryExpression queryExpression)
     {
-        var comparisons = new Dictionary<string, FieldComparison>(StringComparer.OrdinalIgnoreCase);
+        var comparisons = new Dictionary<string, FieldComparison>(StringComparer.Ordinal);
         AddComparisons(queryExpression, comparisons);
         return comparisons;
     }
@@ -482,7 +483,7 @@ public sealed class QueryOptimizer
         // 单字段索引匹配
         if (indexStat.Fields.Length == 1)
         {
-            if (comparisons.ContainsKey(indexStat.Fields[0]))
+            if (TryGetComparisonForIndexField(comparisons, indexStat.Fields[0], out _))
             {
                 score = 10; // 单字段精确匹配
                 if (indexStat.IsUnique)
@@ -497,7 +498,7 @@ public sealed class QueryOptimizer
             var matchedFields = 0;
             for (int i = 0; i < indexStat.Fields.Length; i++)
             {
-                if (comparisons.ContainsKey(indexStat.Fields[i]))
+                if (TryGetComparisonForIndexField(comparisons, indexStat.Fields[i], out _))
                 {
                     matchedFields++;
                     score += 10; // 前缀匹配每个字段加分
@@ -567,7 +568,7 @@ public sealed class QueryOptimizer
         {
             var fieldName = indexStat.Fields[i];
 
-            if (comparisons.TryGetValue(fieldName, out var comparison))
+            if (TryGetComparisonForIndexField(comparisons, fieldName, out var comparison))
             {
                 scanKeys.Add(comparison.ToIndexScanKey(fieldName));
             }
@@ -578,6 +579,43 @@ public sealed class QueryOptimizer
         }
 
         return scanKeys;
+    }
+
+    private static bool TryGetComparisonForIndexField(
+        IReadOnlyDictionary<string, FieldComparison> comparisons,
+        string indexFieldName,
+        out FieldComparison comparison)
+    {
+        if (comparisons.TryGetValue(indexFieldName, out comparison!))
+        {
+            return true;
+        }
+
+        FieldComparison? matched = null;
+        foreach (var candidate in comparisons)
+        {
+            if (!string.Equals(BsonFieldName.ToCamelCase(candidate.Key), indexFieldName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (matched != null)
+            {
+                comparison = null!;
+                return false;
+            }
+
+            matched = candidate.Value;
+        }
+
+        if (matched == null)
+        {
+            comparison = null!;
+            return false;
+        }
+
+        comparison = matched;
+        return true;
     }
 
     /// <summary>

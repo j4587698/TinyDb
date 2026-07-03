@@ -71,7 +71,7 @@ public static class BsonScanner
 
             int nameLen = nameEnd - offset;
             var nameSpan = document.Slice(offset, nameLen);
-            string currentName = Encoding.UTF8.GetString(nameSpan);
+            string currentName = BsonFieldName.Decode(nameSpan);
             
             offset = nameEnd + 1;
 

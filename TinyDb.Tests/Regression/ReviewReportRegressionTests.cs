@@ -1029,6 +1029,87 @@ public sealed class ReviewReportRegressionTests : IDisposable
             .Throws<InvalidOperationException>();
     }
 
+    [Test]
+    public async Task LargeDocument_ShouldPopulateSecondaryIndexesFromOriginalDocument()
+    {
+        const string collectionName = "large_indexed_documents";
+        using var engine = CreateEngine("large-secondary-index.db");
+        var collection = engine.GetCollection<LargeIndexedDocument>(collectionName);
+
+        engine.EnsureIndex(collectionName, "Category", "idx_large_category");
+
+        collection.Insert(new LargeIndexedDocument
+        {
+            Id = 1,
+            Category = "target",
+            Payload = new string('x', 20_000)
+        });
+
+        var rows = collection.Find(static x => x.Category == "target").ToList();
+
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0].Payload.Length).IsEqualTo(20_000);
+    }
+
+    [Test]
+    public async Task TransactionOverlay_ShouldNotMergeStringAndNumericIdsWithSameText()
+    {
+        const string collectionName = "tx_mixed_id_overlay";
+        using var engine = CreateEngine("tx-mixed-id-overlay.db");
+        var collection = engine.GetBsonCollection(collectionName);
+
+        collection.Insert(new BsonDocument()
+            .Set("_id", new BsonString("123"))
+            .Set("Name", "string-id"));
+        collection.Insert(new BsonDocument()
+            .Set("_id", new BsonInt32(123))
+            .Set("Name", "numeric-id"));
+
+        using var tx = engine.BeginTransaction();
+        collection.Update(new BsonDocument()
+            .Set("_id", new BsonInt32(123))
+            .Set("Name", "numeric-updated"));
+
+        var rows = collection.FindAll().ToList();
+
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows.Any(static doc =>
+            doc["_id"] is BsonString id &&
+            id.Value == "123" &&
+            doc["Name"].ToString() == "string-id")).IsTrue();
+        await Assert.That(rows.Any(static doc =>
+            doc["_id"] is BsonInt32 id &&
+            id.Value == 123 &&
+            doc["Name"].ToString() == "numeric-updated")).IsTrue();
+    }
+
+    [Test]
+    public async Task QueryOptimizer_ShouldKeepCaseSensitiveFieldComparisonsSeparate()
+    {
+        const string collectionName = "case_sensitive_fields";
+        using var engine = CreateEngine("case-sensitive-optimizer.db");
+        engine.GetIndexManager(collectionName)
+            .CreateIndex("idx_case_fields", new[] { "myField" });
+
+        var optimizer = new QueryOptimizer(engine);
+        var query = new BinaryExpression(
+            ExpressionType.AndAlso,
+            new BinaryExpression(
+                ExpressionType.Equal,
+                new MemberExpression("MyField"),
+                new ConstantExpression(1)),
+            new BinaryExpression(
+                ExpressionType.Equal,
+                new MemberExpression("myField"),
+                new ConstantExpression(2)));
+
+        var plan = optimizer.CreateExecutionPlan(collectionName, query);
+
+        await Assert.That(plan.IndexScanKeys.Count).IsEqualTo(1);
+        await Assert.That(plan.IndexScanKeys[0].FieldName).IsEqualTo("myField");
+        await Assert.That(plan.IndexScanKeys[0].Value).IsEqualTo(new BsonInt32(2));
+    }
+
     private TinyDbEngine CreateEngine(string fileName)
     {
         return new TinyDbEngine(Path.Combine(_directory, fileName));
@@ -1144,4 +1225,12 @@ public sealed class CultureStringDocument
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
+}
+
+[Entity("LargeIndexedDocuments")]
+public sealed class LargeIndexedDocument
+{
+    public int Id { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string Payload { get; set; } = string.Empty;
 }

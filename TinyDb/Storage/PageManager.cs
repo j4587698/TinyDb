@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Threading;
 using TinyDb.Core;
 using TinyDb.Utils;
 
@@ -21,6 +22,8 @@ public sealed class PageManager : IDisposable
     private readonly object _cacheLock = new();
     private readonly LRUCache<uint, Page> _lruCache;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
+    private const int PageLoadStripeCount = 64;
+    private readonly SemaphoreSlim[] _pageLoadStripes;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private long _fileSize;
@@ -177,6 +180,11 @@ public sealed class PageManager : IDisposable
         _pageCache = new ConcurrentDictionary<uint, Page>();
         _dirtyPageIds = new ConcurrentDictionary<uint, byte>();
         _lruCache = new LRUCache<uint, Page>(maxCacheSize);
+        _pageLoadStripes = new SemaphoreSlim[PageLoadStripeCount];
+        for (var i = 0; i < _pageLoadStripes.Length; i++)
+        {
+            _pageLoadStripes[i] = new SemaphoreSlim(1, 1);
+        }
         _fileSize = _diskStream.Size;
         _nextPageID = 0;
         _firstFreePageID = 0;
@@ -399,45 +407,59 @@ public sealed class PageManager : IDisposable
             return cachedPage;
         }
 
-        // 从磁盘读取
-        var pageOffset = CalculatePageOffset(pageID);
-
-        // 检查是否超出文件大小
-        if (pageOffset + _physicalPageSize > _fileSize)
-        {
-            // 文件不存在该页面，创建新页面
-            return CreateNewPage(pageID, PageType.Empty);
-        }
-
+        var loadGate = GetPageLoadGate(pageID);
+        loadGate.Wait();
         try
         {
-            var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
-            if (read == null)
+            if (useCache && TryGetCachedPage(pageID, pin: false, out cachedPage))
             {
+                return cachedPage;
+            }
+
+            // 从磁盘读取
+            var pageOffset = CalculatePageOffset(pageID);
+
+            // 检查是否超出文件大小
+            if (pageOffset + _physicalPageSize > _fileSize)
+            {
+                // 文件不存在该页面，创建新页面
                 return CreateNewPage(pageID, PageType.Empty);
             }
 
-            var pageData = read.Value.Data;
-            var page = CreateLoadedPage(pageID, read.Value);
-            ValidateLoadedPage(page, pageData, pageOffset);
-
-            // 如果是空页面，初始化为 Empty 类型
-            if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+            try
             {
-                page.UpdatePageType(PageType.Empty);
-            }
+                var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
+                if (read == null)
+                {
+                    return CreateNewPage(pageID, PageType.Empty);
+                }
 
-            // 添加到缓存
-            if (useCache)
+                var pageData = read.Value.Data;
+                var page = CreateLoadedPage(pageID, read.Value);
+                ValidateLoadedPage(page, pageData, pageOffset);
+
+                // 如果是空页面，初始化为 Empty 类型
+                if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+                {
+                    page.UpdatePageType(PageType.Empty);
+                }
+
+                // 添加到缓存
+                if (useCache)
+                {
+                    return AddToCache(page);
+                }
+
+                return page;
+            }
+            catch (Exception ex)
             {
-                return AddToCache(page);
+                throw new InvalidDataException($"Failed to load page {pageID} at offset {pageOffset}.", ex);
             }
-
-            return page;
         }
-        catch (Exception ex)
+        finally
         {
-            throw new InvalidDataException($"Failed to load page {pageID} at offset {pageOffset}.", ex);
+            loadGate.Release();
         }
     }
 
@@ -474,6 +496,11 @@ public sealed class PageManager : IDisposable
         return false;
     }
 
+    private SemaphoreSlim GetPageLoadGate(uint pageID)
+    {
+        return _pageLoadStripes[(int)(pageID % PageLoadStripeCount)];
+    }
+
     internal bool TryReadLogicalPageSnapshot(uint pageID, out byte[] pageData)
     {
         ThrowIfDisposed();
@@ -507,40 +534,54 @@ public sealed class PageManager : IDisposable
             return cachedPage;
         }
 
-        var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > _fileSize)
-        {
-            return CreateNewPage(pageID, PageType.Empty, pinned: true);
-        }
-
+        var loadGate = GetPageLoadGate(pageID);
+        loadGate.Wait();
         try
         {
-            var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
-            if (read == null)
+            if (useCache && TryGetCachedPage(pageID, pin: true, out cachedPage))
+            {
+                return cachedPage;
+            }
+
+            var pageOffset = CalculatePageOffset(pageID);
+            if (pageOffset + _physicalPageSize > _fileSize)
             {
                 return CreateNewPage(pageID, PageType.Empty, pinned: true);
             }
 
-            var pageData = read.Value.Data;
-            var page = CreateLoadedPage(pageID, read.Value);
-            ValidateLoadedPage(page, pageData, pageOffset);
-
-            if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+            try
             {
-                page.UpdatePageType(PageType.Empty);
-            }
+                var read = ReadLogicalPageDataOrNull(pageID, pageOffset);
+                if (read == null)
+                {
+                    return CreateNewPage(pageID, PageType.Empty, pinned: true);
+                }
 
-            if (useCache)
+                var pageData = read.Value.Data;
+                var page = CreateLoadedPage(pageID, read.Value);
+                ValidateLoadedPage(page, pageData, pageOffset);
+
+                if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+                {
+                    page.UpdatePageType(PageType.Empty);
+                }
+
+                if (useCache)
+                {
+                    return AddToCache(page, pinned: true);
+                }
+
+                page.Pin();
+                return page;
+            }
+            catch (Exception ex)
             {
-                return AddToCache(page, pinned: true);
+                throw new InvalidDataException($"Failed to load page {pageID} at offset {pageOffset}.", ex);
             }
-
-            page.Pin();
-            return page;
         }
-        catch (Exception ex)
+        finally
         {
-            throw new InvalidDataException($"Failed to load page {pageID} at offset {pageOffset}.", ex);
+            loadGate.Release();
         }
     }
 
@@ -562,42 +603,56 @@ public sealed class PageManager : IDisposable
             return cachedPage;
         }
 
-        // 从磁盘异步读取
-        var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > _fileSize)
-        {
-            return CreateNewPage(pageID, PageType.Empty);
-        }
-
+        var loadGate = GetPageLoadGate(pageID);
+        await loadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var read = await ReadLogicalPageDataOrNullAsync(pageID, pageOffset, cancellationToken).ConfigureAwait(false);
-            if (read == null)
+            if (useCache && TryGetCachedPage(pageID, pin: false, out cachedPage))
+            {
+                return cachedPage;
+            }
+
+            // 从磁盘异步读取
+            var pageOffset = CalculatePageOffset(pageID);
+            if (pageOffset + _physicalPageSize > _fileSize)
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
 
-            var pageData = read.Value.Data;
-            var page = CreateLoadedPage(pageID, read.Value);
-            ValidateLoadedPage(page, pageData, pageOffset);
-
-            // 如果是空页面，初始化为 Empty 类型
-            if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+            try
             {
-                page.UpdatePageType(PageType.Empty);
-            }
+                var read = await ReadLogicalPageDataOrNullAsync(pageID, pageOffset, cancellationToken).ConfigureAwait(false);
+                if (read == null)
+                {
+                    return CreateNewPage(pageID, PageType.Empty);
+                }
 
-            // 添加到缓存
-            if (useCache)
+                var pageData = read.Value.Data;
+                var page = CreateLoadedPage(pageID, read.Value);
+                ValidateLoadedPage(page, pageData, pageOffset);
+
+                // 如果是空页面，初始化为 Empty 类型
+                if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+                {
+                    page.UpdatePageType(PageType.Empty);
+                }
+
+                // 添加到缓存
+                if (useCache)
+                {
+                    return AddToCache(page);
+                }
+
+                return page;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                return AddToCache(page);
+                throw new InvalidDataException($"Failed to parse page {pageID} at offset {pageOffset}.", ex);
             }
-
-            return page;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        finally
         {
-            throw new InvalidDataException($"Failed to parse page {pageID} at offset {pageOffset}.", ex);
+            loadGate.Release();
         }
     }
 
@@ -945,24 +1000,6 @@ public sealed class PageManager : IDisposable
 
     private void WritePageToDisk(Page page, bool forceFlush)
     {
-        if (CanWriteLogicalPageDirectly())
-        {
-            var directPageOffset = CalculatePageOffset(page.PageID);
-            var directWriteCleanedPage = page.WriteForDiskWithoutSnapshot(data => _diskStream.WritePage(directPageOffset, data));
-
-            if (forceFlush)
-            {
-                _diskStream.Flush();
-            }
-
-            if (directWriteCleanedPage)
-            {
-                _deferredWalPages.TryRemove(page.PageID, out _);
-            }
-
-            return;
-        }
-
         var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
 
         var pageOffset = CalculatePageOffset(page.PageID);
@@ -1528,6 +1565,11 @@ public sealed class PageManager : IDisposable
 
                 // 清理缓存
                 ClearCache();
+
+                foreach (var gate in _pageLoadStripes)
+                {
+                    gate.Dispose();
+                }
 
                 _diskStream.Dispose();
             }

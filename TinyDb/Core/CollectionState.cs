@@ -11,7 +11,8 @@ internal sealed class CollectionState
 {
     private int _cacheInitialized;
     private readonly ConcurrentDictionary<BsonValue, KeyedDocumentLock> _documentLocks = new(BsonValueComparer.EqualityComparer);
-    private readonly ConcurrentDictionary<uint, object> _pageMutationLocks = new();
+    private readonly ConcurrentDictionary<uint, KeyedPageLock> _pageMutationLocks = new();
+    private static readonly AsyncLocal<Dictionary<object, int>?> HeldDocumentLocks = new();
 
     public DataPageState PageState { get; } = new();
     public object CommitGate { get; } = new();
@@ -60,10 +61,10 @@ internal sealed class CollectionState
             .Where(static pageId => pageId != 0)
             .Distinct()
             .OrderBy(static pageId => pageId)
-            .Select(pageId => _pageMutationLocks.GetOrAdd(pageId, static _ => new object()))
+            .Select(AcquirePageLockReference)
             .ToArray();
 
-        return new MonitorLockScope(locks);
+        return new KeyedPageLockScope(this, locks);
     }
 
     private KeyedDocumentLock AcquireDocumentLockReference(BsonValue key)
@@ -100,7 +101,51 @@ internal sealed class CollectionState
             if (!removed)
             {
                 documentLock.IsRemoved = false;
+                return;
             }
+
+            documentLock.Semaphore.Dispose();
+        }
+    }
+
+    private KeyedPageLock AcquirePageLockReference(uint pageId)
+    {
+        while (true)
+        {
+            var pageLock = _pageMutationLocks.GetOrAdd(pageId, static id => new KeyedPageLock(id));
+            lock (pageLock.ReferenceSyncRoot)
+            {
+                if (pageLock.IsRemoved)
+                {
+                    continue;
+                }
+
+                pageLock.ReferenceCount++;
+                return pageLock;
+            }
+        }
+    }
+
+    private void ReleasePageLockReference(KeyedPageLock pageLock)
+    {
+        lock (pageLock.ReferenceSyncRoot)
+        {
+            pageLock.ReferenceCount--;
+            if (pageLock.ReferenceCount != 0)
+            {
+                return;
+            }
+
+            pageLock.IsRemoved = true;
+            var removed = ((ICollection<KeyValuePair<uint, KeyedPageLock>>)_pageMutationLocks)
+                .Remove(new KeyValuePair<uint, KeyedPageLock>(pageLock.PageId, pageLock));
+            if (!removed)
+            {
+                pageLock.IsRemoved = false;
+                return;
+            }
+
+            pageLock.Semaphore.Dispose();
         }
     }
 
@@ -112,7 +157,21 @@ internal sealed class CollectionState
         }
 
         public BsonValue Key { get; }
-        public object SyncRoot { get; } = new();
+        public SemaphoreSlim Semaphore { get; } = new(1, 1);
+        public object ReferenceSyncRoot { get; } = new();
+        public int ReferenceCount { get; set; }
+        public bool IsRemoved { get; set; }
+    }
+
+    private sealed class KeyedPageLock
+    {
+        public KeyedPageLock(uint pageId)
+        {
+            PageId = pageId;
+        }
+
+        public uint PageId { get; }
+        public SemaphoreSlim Semaphore { get; } = new(1, 1);
         public object ReferenceSyncRoot { get; } = new();
         public int ReferenceCount { get; set; }
         public bool IsRemoved { get; set; }
@@ -133,7 +192,7 @@ internal sealed class CollectionState
             {
                 for (var i = 0; i < _locks.Length; i++)
                 {
-                    Monitor.Enter(_locks[i].SyncRoot);
+                    EnterDocumentSemaphore(_locks[i]);
                     _entered++;
                 }
             }
@@ -151,7 +210,7 @@ internal sealed class CollectionState
 
             for (var i = _entered - 1; i >= 0; i--)
             {
-                Monitor.Exit(_locks[i].SyncRoot);
+                ExitDocumentSemaphore(_locks[i]);
             }
 
             _entered = 0;
@@ -208,6 +267,90 @@ internal sealed class CollectionState
             }
 
             _entered = 0;
+        }
+    }
+
+    private static void EnterDocumentSemaphore(KeyedDocumentLock documentLock)
+    {
+        var heldLocks = HeldDocumentLocks.Value;
+        if (heldLocks != null && heldLocks.TryGetValue(documentLock, out var count))
+        {
+            heldLocks[documentLock] = count + 1;
+            return;
+        }
+
+        documentLock.Semaphore.Wait();
+        heldLocks ??= new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
+        heldLocks[documentLock] = 1;
+        HeldDocumentLocks.Value = heldLocks;
+    }
+
+    private static void ExitDocumentSemaphore(KeyedDocumentLock documentLock)
+    {
+        var heldLocks = HeldDocumentLocks.Value;
+        if (heldLocks == null || !heldLocks.TryGetValue(documentLock, out var count))
+        {
+            documentLock.Semaphore.Release();
+            return;
+        }
+
+        if (count > 1)
+        {
+            heldLocks[documentLock] = count - 1;
+            return;
+        }
+
+        heldLocks.Remove(documentLock);
+        if (heldLocks.Count == 0)
+        {
+            HeldDocumentLocks.Value = null;
+        }
+
+        documentLock.Semaphore.Release();
+    }
+
+    private sealed class KeyedPageLockScope : IDisposable
+    {
+        private readonly CollectionState _state;
+        private readonly KeyedPageLock[] _locks;
+        private int _entered;
+        private bool _disposed;
+
+        public KeyedPageLockScope(CollectionState state, KeyedPageLock[] locks)
+        {
+            _state = state ?? throw new ArgumentNullException(nameof(state));
+            _locks = locks ?? throw new ArgumentNullException(nameof(locks));
+            try
+            {
+                for (var i = 0; i < _locks.Length; i++)
+                {
+                    _locks[i].Semaphore.Wait();
+                    _entered++;
+                }
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            for (var i = _entered - 1; i >= 0; i--)
+            {
+                _locks[i].Semaphore.Release();
+            }
+
+            _entered = 0;
+
+            for (var i = _locks.Length - 1; i >= 0; i--)
+            {
+                _state.ReleasePageLockReference(_locks[i]);
+            }
         }
     }
 }

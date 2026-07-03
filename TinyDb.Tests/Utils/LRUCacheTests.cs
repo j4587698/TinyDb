@@ -54,6 +54,130 @@ public class LRUCacheTests
     }
 
     [Test]
+    public async Task LRUCache_GetOrAdd_WhenFactoryBlocks_ShouldNotBlockUnrelatedOperations()
+    {
+        var cache = new LRUCache<int, string>(10);
+        using var factoryStarted = new ManualResetEventSlim();
+        using var releaseFactory = new ManualResetEventSlim();
+
+        var loadTask = Task.Run(() => cache.GetOrAdd(1, _ =>
+        {
+            factoryStarted.Set();
+            if (!releaseFactory.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException("Factory was not released.");
+            }
+
+            return "A";
+        }));
+
+        await Assert.That(factoryStarted.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+
+        var unrelatedTask = Task.Run(() =>
+        {
+            cache.Put(2, "B");
+            return cache.ContainsKey(2);
+        });
+
+        var completedWithoutFactoryRelease = await Task.WhenAny(unrelatedTask, Task.Delay(500)) == unrelatedTask;
+        releaseFactory.Set();
+
+        var loaded = await loadTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var unrelatedCompleted = await unrelatedTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(completedWithoutFactoryRelease).IsTrue();
+        await Assert.That(unrelatedCompleted).IsTrue();
+        await Assert.That(loaded).IsEqualTo("A");
+    }
+
+    [Test]
+    public async Task LRUCache_GetOrAdd_WhenSameKeyLoadsConcurrently_ShouldInvokeFactoryOnce()
+    {
+        var cache = new LRUCache<int, string>(10);
+        using var factoryStarted = new ManualResetEventSlim();
+        using var releaseFactory = new ManualResetEventSlim();
+        var calls = 0;
+
+        string Factory(int key)
+        {
+            Interlocked.Increment(ref calls);
+            factoryStarted.Set();
+            if (!releaseFactory.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException("Factory was not released.");
+            }
+
+            return "V" + key;
+        }
+
+        var first = Task.Run(() => cache.GetOrAdd(1, Factory));
+        await Assert.That(factoryStarted.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+
+        var second = Task.Run(() => cache.GetOrAdd(1, Factory));
+        releaseFactory.Set();
+
+        var results = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(results[0]).IsEqualTo("V1");
+        await Assert.That(results[1]).IsEqualTo("V1");
+        await Assert.That(calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task LRUCache_GetOrAdd_WhenFactoryThrows_ShouldRemoveFailedValueAndAllowRetry()
+    {
+        var cache = new LRUCache<int, string>(10);
+        var calls = 0;
+
+        await Assert.That(() => cache.GetOrAdd(1, _ =>
+        {
+            calls++;
+            throw new InvalidOperationException("Factory failed.");
+        })).Throws<InvalidOperationException>();
+
+        var value = cache.GetOrAdd(1, _ =>
+        {
+            calls++;
+            return "Recovered";
+        });
+
+        await Assert.That(value).IsEqualTo("Recovered");
+        await Assert.That(calls).IsEqualTo(2);
+        await Assert.That(cache.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task LRUCache_GetOrAdd_WhenPutReplacesPendingValue_ShouldNotOverwritePut()
+    {
+        var cache = new LRUCache<int, string>(10);
+        using var factoryStarted = new ManualResetEventSlim();
+        using var releaseFactory = new ManualResetEventSlim();
+
+        var loadTask = Task.Run(() => cache.GetOrAdd(1, _ =>
+        {
+            factoryStarted.Set();
+            if (!releaseFactory.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException("Factory was not released.");
+            }
+
+            return "Factory";
+        }));
+
+        await Assert.That(factoryStarted.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+
+        cache.Put(1, "Put");
+        releaseFactory.Set();
+
+        var loaded = await loadTask.WaitAsync(TimeSpan.FromSeconds(2));
+        var found = cache.TryGetValue(1, out var cached);
+
+        await Assert.That(loaded).IsEqualTo("Factory");
+        await Assert.That(found).IsTrue();
+        await Assert.That(cached).IsEqualTo("Put");
+    }
+
+    [Test]
     public async Task LRUCache_Put_WhenOverCapacity_ShouldEvictLeastRecentlyUsed()
     {
         var cache = new LRUCache<int, string>(1);

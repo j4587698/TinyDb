@@ -82,10 +82,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 if (!_cts.IsCancellationRequested || ex is not ObjectDisposedException)
                 {
                     RecordBackgroundFailure(ex);
+                    Log(TinyDbLogLevel.Warning, "Background flush attempt failed.", ex);
                 }
-
-                Log(TinyDbLogLevel.Warning, "Background flush loop failed.", ex);
-                break;
             }
         }
     }
@@ -316,8 +314,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             }
             catch (Exception ex)
             {
-                RecordBackgroundFailure(ex);
                 Volatile.Write(ref _foregroundFlushFailureObserved, 1);
+                RecordBackgroundFailure(ex);
                 tcsToComplete.TrySetException(ex);
                 FaultPendingSyncedBatch(ex);
                 return;
@@ -611,10 +609,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     private void ThrowIfBackgroundFailed()
     {
-        var failure = Volatile.Read(ref _backgroundFailure);
-        if (failure != null)
-        {
-            throw new InvalidOperationException("A background flush operation failed.", failure);
-        }
+        // Background failures are retained for Dispose/DisposeAsync. Runtime flush
+        // requests must be able to retry instead of being permanently poisoned by
+        // an earlier background attempt.
     }
 }

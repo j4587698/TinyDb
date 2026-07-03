@@ -63,7 +63,7 @@ internal sealed class PooledBufferWriter : IPatchableBufferWriter, IDisposable
         int newSize = Math.Max(_buffer.Length * 2, _index + required);
         var newBuffer = ArrayPool<byte>.Shared.Rent(newSize);
         Buffer.BlockCopy(_buffer, 0, newBuffer, 0, _index);
-        ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
+        ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
         _buffer = newBuffer;
     }
 
@@ -71,7 +71,7 @@ internal sealed class PooledBufferWriter : IPatchableBufferWriter, IDisposable
     {
         if (_buffer.Length == 0) return;
 
-        ArrayPool<byte>.Shared.Return(_buffer, clearArray: true);
+        ArrayPool<byte>.Shared.Return(_buffer, clearArray: false);
         _buffer = Array.Empty<byte>();
         _index = 0;
     }

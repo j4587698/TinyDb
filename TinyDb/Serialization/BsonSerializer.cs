@@ -508,19 +508,16 @@ public sealed class BsonWriter : IDisposable
         if (_stream != null)
         {
             // 旧的 Stream 逻辑：使用 Seek 更新长度
-            _writer!.Flush();
             var sizePosition = _stream.Position;
             _writer.Write(0); // 占位符
 
             foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
             _writer.Write((byte)BsonType.End);
 
-            _writer.Flush();
             var endPosition = _stream.Position;
             var documentSize = (int)(endPosition - sizePosition);
             _stream.Seek(sizePosition, SeekOrigin.Begin);
             _writer.Write(documentSize);
-            _writer.Flush();
             _stream.Seek(endPosition, SeekOrigin.Begin);
         }
         else
@@ -565,19 +562,16 @@ public sealed class BsonWriter : IDisposable
         {
         if (_stream != null)
         {
-            _writer!.Flush();
             var sizePosition = _stream.Position;
             _writer.Write(0); // 占位符
 
             for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
             _writer.Write((byte)BsonType.End);
 
-            _writer.Flush();
             var endPosition = _stream.Position;
             var arraySize = (int)(endPosition - sizePosition);
             _stream.Seek(sizePosition, SeekOrigin.Begin);
             _writer.Write(arraySize);
-            _writer.Flush();
             _stream.Seek(endPosition, SeekOrigin.Begin);
         }
         else
@@ -809,12 +803,10 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (_stream != null)
         {
-            _writer!.Flush();
             var sizePosition = _stream.Position;
             _writer.Write(0);
             WriteString(code);
             WriteDocument(scope);
-            _writer.Flush();
             var endPosition = _stream.Position;
             _stream.Seek(sizePosition, SeekOrigin.Begin);
             _writer.Write((int)(endPosition - sizePosition));
@@ -1238,7 +1230,7 @@ public sealed class BsonReader : IDisposable
                 buffer[count++] = b;
             }
 
-            return Encoding.UTF8.GetString(buffer, 0, count);
+            return BsonFieldName.Decode(buffer.AsSpan(0, count));
         }
         finally
         {
