@@ -75,17 +75,23 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     public bool TryGetValue(TKey key, out TValue? value)
     {
         value = default;
+        CacheValue? valueHolder = null;
 
         lock (_lruList)
         {
             if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
             {
-                value = node.Value.Value;
+                valueHolder = node.Value.Value;
                 _lruList.Remove(node);
                 _lruList.AddFirst(node);
                 Interlocked.Increment(ref _hits);
-                return true;
             }
+        }
+
+        if (valueHolder != null)
+        {
+            value = GetValueOrRemoveFailed(key, valueHolder);
+            return true;
         }
 
         Interlocked.Increment(ref _misses);
@@ -100,14 +106,27 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <returns>值</returns>
     public TValue GetOrAdd(TKey key, Func<TKey, TValue> valueFactory)
     {
-        if (TryGetValue(key, out var value))
+        ArgumentNullException.ThrowIfNull(valueFactory);
+        CacheValue valueHolder;
+
+        lock (_lruList)
         {
-            return value!;
+            if (_cacheMap.TryGetValue(key, out var node) && node.List == _lruList)
+            {
+                _lruList.Remove(node);
+                _lruList.AddFirst(node);
+                Interlocked.Increment(ref _hits);
+                valueHolder = node.Value.Value;
+            }
+            else
+            {
+                Interlocked.Increment(ref _misses);
+                valueHolder = CacheValue.FromFactory(() => valueFactory(key));
+                AddNewNode(key, valueHolder);
+            }
         }
 
-        var newValue = valueFactory(key);
-        Put(key, newValue);
-        return newValue;
+        return GetValueOrRemoveFailed(key, valueHolder);
     }
 
     /// <summary>
@@ -122,24 +141,14 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
             if (_cacheMap.TryGetValue(key, out var existingNode))
             {
                 // 更新现有项
-                existingNode.Value.Value = value;
+                existingNode.Value.Value = CreateCompletedValue(value);
                 _lruList.Remove(existingNode);
                 _lruList.AddFirst(existingNode);
             }
             else
             {
                 // 添加新项
-                var cacheItem = new CacheItem(key, value);
-                var newNode = new LinkedListNode<CacheItem>(cacheItem);
-
-                _lruList.AddFirst(newNode);
-                _cacheMap[key] = newNode;
-
-                // 检查是否超出容量
-                if (_cacheMap.Count > _capacity)
-                {
-                    Evict();
-                }
+                AddNewNode(key, CreateCompletedValue(value));
             }
         }
     }
@@ -220,19 +229,25 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <returns>是否获取成功</returns>
     public bool TryGetLeastRecentlyUsed(out TKey key, out TValue? value)
     {
+        CacheValue? valueHolder;
+
         lock (_lruList)
         {
             if (_lruList.Last != null)
             {
                 key = _lruList.Last.Value.Key;
-                value = _lruList.Last.Value.Value;
-                return true;
+                valueHolder = _lruList.Last.Value.Value;
+            }
+            else
+            {
+                key = default!;
+                value = default;
+                return false;
             }
         }
 
-        key = default!;
-        value = default;
-        return false;
+        value = GetValueOrRemoveFailed(key, valueHolder);
+        return true;
     }
 
     /// <summary>
@@ -300,10 +315,14 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <returns>值集合</returns>
     public IEnumerable<TValue> GetValues()
     {
+        List<KeyValuePair<TKey, CacheValue>> values;
+
         lock (_lruList)
         {
-            return _lruList.Select(item => item.Value).ToList();
+            values = _lruList.Select(item => new KeyValuePair<TKey, CacheValue>(item.Key, item.Value)).ToList();
         }
+
+        return values.Select(item => GetValueOrRemoveFailed(item.Key, item.Value)).ToList();
     }
 
     /// <summary>
@@ -339,15 +358,122 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
         }
     }
 
+    private void AddNewNode(TKey key, CacheValue value)
+    {
+        var cacheItem = new CacheItem(key, value);
+        var newNode = new LinkedListNode<CacheItem>(cacheItem);
+
+        _lruList.AddFirst(newNode);
+        _cacheMap[key] = newNode;
+
+        if (_cacheMap.Count > _capacity)
+        {
+            Evict();
+        }
+    }
+
+    private static CacheValue CreateCompletedValue(TValue value)
+    {
+        return CacheValue.FromValue(value);
+    }
+
+    private TValue GetValueOrRemoveFailed(TKey key, CacheValue valueHolder)
+    {
+        try
+        {
+            return valueHolder.GetValue();
+        }
+        catch
+        {
+            RemoveIfSameValueHolder(key, valueHolder);
+            throw;
+        }
+    }
+
+    private void RemoveIfSameValueHolder(TKey key, CacheValue valueHolder)
+    {
+        lock (_lruList)
+        {
+            if (_cacheMap.TryGetValue(key, out var node) &&
+                node.List == _lruList &&
+                ReferenceEquals(node.Value.Value, valueHolder))
+            {
+                _cacheMap.Remove(key);
+                _lruList.Remove(node);
+            }
+        }
+    }
+
+    private sealed class CacheValue
+    {
+        private readonly object _sync = new();
+        private Func<TValue>? _factory;
+        private TValue? _value;
+        private System.Runtime.ExceptionServices.ExceptionDispatchInfo? _failure;
+        private volatile bool _hasValue;
+
+        private CacheValue(TValue value)
+        {
+            _value = value;
+            _hasValue = true;
+        }
+
+        private CacheValue(Func<TValue> factory)
+        {
+            _factory = factory;
+        }
+
+        public static CacheValue FromValue(TValue value)
+        {
+            return new CacheValue(value);
+        }
+
+        public static CacheValue FromFactory(Func<TValue> factory)
+        {
+            return new CacheValue(factory);
+        }
+
+        public TValue GetValue()
+        {
+            if (_hasValue)
+            {
+                return _value!;
+            }
+
+            lock (_sync)
+            {
+                if (_hasValue)
+                {
+                    return _value!;
+                }
+
+                _failure?.Throw();
+
+                try
+                {
+                    _value = _factory!();
+                    _factory = null;
+                    _hasValue = true;
+                    return _value!;
+                }
+                catch (Exception ex)
+                {
+                    _failure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
+                    throw;
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// 缓存项
     /// </summary>
     private sealed class CacheItem
     {
         public TKey Key { get; }
-        public TValue Value { get; set; }
+        public CacheValue Value { get; set; }
 
-        public CacheItem(TKey key, TValue value)
+        public CacheItem(TKey key, CacheValue value)
         {
             Key = key;
             Value = value;

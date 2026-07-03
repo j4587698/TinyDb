@@ -142,29 +142,46 @@ internal static class BsonValueComparer
 
     private static bool TryGetDecimal(BsonValue value, out decimal result)
     {
-        try
+        switch (value)
         {
-            result = value.ToDecimal(CultureInfo.InvariantCulture);
-            return true;
-        }
-        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
-        {
-            result = default;
-            return false;
+            case BsonInt32 int32:
+                result = int32.Value;
+                return true;
+            case BsonInt64 int64:
+                result = int64.Value;
+                return true;
+            case BsonDouble doubleValue when double.IsFinite(doubleValue.Value) &&
+                                            doubleValue.Value <= (double)decimal.MaxValue &&
+                                            doubleValue.Value >= (double)decimal.MinValue:
+                result = (decimal)doubleValue.Value;
+                return true;
+            case BsonDecimal128 decimal128:
+                return decimal128.Value.TryToDecimal(out result);
+            default:
+                result = default;
+                return false;
         }
     }
 
     private static bool TryGetDouble(BsonValue value, out double result)
     {
-        try
+        switch (value)
         {
-            result = value.ToDouble(CultureInfo.InvariantCulture);
-            return true;
-        }
-        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
-        {
-            result = default;
-            return false;
+            case BsonInt32 int32:
+                result = int32.Value;
+                return true;
+            case BsonInt64 int64:
+                result = int64.Value;
+                return true;
+            case BsonDouble doubleValue:
+                result = doubleValue.Value;
+                return true;
+            case BsonDecimal128 decimal128:
+                result = decimal128.Value.ToDouble(CultureInfo.InvariantCulture);
+                return true;
+            default:
+                result = default;
+                return false;
         }
     }
 

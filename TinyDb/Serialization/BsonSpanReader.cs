@@ -253,7 +253,7 @@ public ref struct BsonSpanReader
         int idx = span.IndexOf((byte)0);
         if (idx < 0) throw new EndOfStreamException("CString null terminator not found");
 
-        string s = Encoding.UTF8.GetString(span.Slice(0, idx));
+        string s = BsonFieldName.Decode(span.Slice(0, idx));
         _position += idx + 1;
         return s;
     }

@@ -92,20 +92,30 @@ public class LargeDocumentStorage
             throw new InvalidOperationException($"Large document size exceeds {MaxLargeDocumentBytes} bytes.");
 
         var requiredPages = CalculateRequiredPages(totalLength);
+        var allocatedPages = new List<uint>(requiredPages + 1);
 
-        var indexPage = _pageManager.NewPage(PageType.LargeDocumentIndex);
-        var firstDataPageId = CreateDataPagesChain(documentBytes, requiredPages);
-
-        WriteIndexPageHeader(indexPage, totalLength, requiredPages, firstDataPageId);
-
-        var collectionBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
-        if (collectionBytes.Length > 0 && indexPage.DataSize > LargeDocumentHeaderSize + collectionBytes.Length)
+        try
         {
-            indexPage.WriteData(LargeDocumentHeaderSize, collectionBytes);
-        }
+            var indexPage = _pageManager.NewPage(PageType.LargeDocumentIndex);
+            allocatedPages.Add(indexPage.PageID);
+            var firstDataPageId = CreateDataPagesChain(documentBytes, requiredPages, allocatedPages);
 
-        _pageManager.SavePage(indexPage);
-        return indexPage.PageID;
+            WriteIndexPageHeader(indexPage, totalLength, requiredPages, firstDataPageId);
+
+            var collectionBytes = System.Text.Encoding.UTF8.GetBytes(collectionName);
+            if (collectionBytes.Length > 0 && indexPage.DataSize > LargeDocumentHeaderSize + collectionBytes.Length)
+            {
+                indexPage.WriteData(LargeDocumentHeaderSize, collectionBytes);
+            }
+
+            _pageManager.SavePage(indexPage);
+            return indexPage.PageID;
+        }
+        catch
+        {
+            CleanupAllocatedPages(allocatedPages);
+            throw;
+        }
     }
 
     /// <summary>
@@ -305,14 +315,15 @@ public class LargeDocumentStorage
         };
     }
 
-    private uint CreateDataPagesChain(ReadOnlySpan<byte> documentBytes, int pageCount)
+    private uint CreateDataPagesChain(ReadOnlySpan<byte> documentBytes, int pageCount, List<uint> allocatedPages)
     {
         uint firstPageId = 0;
-        uint previousPageId = 0;
+        Page? previousPage = null;
 
         for (int i = 0; i < pageCount; i++)
         {
             var page = _pageManager.NewPage(PageType.LargeDocumentData);
+            allocatedPages.Add(page.PageID);
 
             var startOffset = i * _dataPayloadSize;
             var endOffset = Math.Min(startOffset + _dataPayloadSize, documentBytes.Length);
@@ -324,9 +335,8 @@ public class LargeDocumentStorage
                 page.WriteData(DataPageHeaderSize, documentBytes.Slice(startOffset, chunkSize));
             }
 
-            if (previousPageId != 0)
+            if (previousPage != null)
             {
-                var previousPage = _pageManager.GetPage(previousPageId);
                 UpdateDataPageHeaderNextPage(previousPage, page.PageID);
                 _pageManager.SavePage(previousPage);
             }
@@ -335,11 +345,30 @@ public class LargeDocumentStorage
                 firstPageId = page.PageID;
             }
 
-            _pageManager.SavePage(page);
-            previousPageId = page.PageID;
+            previousPage = page;
+        }
+
+        if (previousPage != null)
+        {
+            _pageManager.SavePage(previousPage);
         }
 
         return firstPageId;
+    }
+
+    private void CleanupAllocatedPages(List<uint> allocatedPages)
+    {
+        for (var i = allocatedPages.Count - 1; i >= 0; i--)
+        {
+            try
+            {
+                _pageManager.FreePage(allocatedPages[i]);
+            }
+            catch (Exception ex)
+            {
+                _log(TinyDbLogLevel.Warning, $"Failed to clean up orphaned large-document page {allocatedPages[i]}.", ex);
+            }
+        }
     }
 
     private int CalculateRequiredPages(int documentSize)

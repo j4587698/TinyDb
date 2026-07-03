@@ -28,7 +28,9 @@ public sealed class BTreeIndex : IDisposable
     private readonly PageManager? _tempPm;
     private readonly int _maxKeys;
     private readonly ReaderWriterLockSlim _lock = new();
-    private readonly SemaphoreSlim _asyncReadGate = new(1, 1);
+    private const int MaxConcurrentAsyncReaders = 64;
+    private readonly SemaphoreSlim _asyncReadGate = new(MaxConcurrentAsyncReaders, MaxConcurrentAsyncReaders);
+    private readonly SemaphoreSlim _asyncWriteGate = new(1, 1);
     private const int DefaultScanBatchSize = 1024;
 
     public string Name => _name;
@@ -129,8 +131,7 @@ public sealed class BTreeIndex : IDisposable
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
-        _asyncReadGate.Wait();
-        try
+        using (EnterAsyncWriteGate())
         {
             _lock.EnterWriteLock();
             try
@@ -155,18 +156,13 @@ public sealed class BTreeIndex : IDisposable
                 _lock.ExitWriteLock();
             }
         }
-        finally
-        {
-            _asyncReadGate.Release();
-        }
     }
 
     public bool Delete(IndexKey key, BsonValue documentId)
     {
         if (key == null) throw new ArgumentNullException(nameof(key));
 
-        _asyncReadGate.Wait();
-        try
+        using (EnterAsyncWriteGate())
         {
             _lock.EnterWriteLock();
             try
@@ -179,10 +175,6 @@ public sealed class BTreeIndex : IDisposable
             {
                 _lock.ExitWriteLock();
             }
-        }
-        finally
-        {
-            _asyncReadGate.Release();
         }
     }
 
@@ -406,8 +398,7 @@ public sealed class BTreeIndex : IDisposable
 
     public void Clear()
     {
-        _asyncReadGate.Wait();
-        try
+        using (EnterAsyncWriteGate())
         {
             _lock.EnterWriteLock();
             try
@@ -420,16 +411,11 @@ public sealed class BTreeIndex : IDisposable
                 _lock.ExitWriteLock();
             }
         }
-        finally
-        {
-            _asyncReadGate.Release();
-        }
     }
 
     internal void DropStorage()
     {
-        _asyncReadGate.Wait();
-        try
+        using (EnterAsyncWriteGate())
         {
             _lock.EnterWriteLock();
             try
@@ -441,9 +427,54 @@ public sealed class BTreeIndex : IDisposable
                 _lock.ExitWriteLock();
             }
         }
-        finally
+    }
+
+    private IDisposable EnterAsyncWriteGate()
+    {
+        _asyncWriteGate.Wait();
+        var acquired = 0;
+        try
         {
-            _asyncReadGate.Release();
+            for (; acquired < MaxConcurrentAsyncReaders; acquired++)
+            {
+                _asyncReadGate.Wait();
+            }
+
+            return new AsyncWriteGateScope(this);
+        }
+        catch
+        {
+            for (var i = 0; i < acquired; i++)
+            {
+                _asyncReadGate.Release();
+            }
+
+            _asyncWriteGate.Release();
+            throw;
+        }
+    }
+
+    private void ExitAsyncWriteGate()
+    {
+        _asyncReadGate.Release(MaxConcurrentAsyncReaders);
+        _asyncWriteGate.Release();
+    }
+
+    private sealed class AsyncWriteGateScope : IDisposable
+    {
+        private readonly BTreeIndex _owner;
+        private bool _disposed;
+
+        public AsyncWriteGateScope(BTreeIndex owner)
+        {
+            _owner = owner;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _owner.ExitAsyncWriteGate();
         }
     }
 
@@ -458,9 +489,10 @@ public sealed class BTreeIndex : IDisposable
     {
         if (!_disposed)
         {
-            _lock.Dispose();
-            _asyncReadGate.Dispose();
-            _tree.Dispose();
+                _lock.Dispose();
+                _asyncReadGate.Dispose();
+                _asyncWriteGate.Dispose();
+                _tree.Dispose();
             if (_ownsPageManager)
             {
                 _tempPm!.Dispose();

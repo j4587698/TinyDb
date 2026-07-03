@@ -74,12 +74,27 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     /// </summary>
     public decimal ToDecimal()
     {
-        if (!TryDecodeFinite(out var sign, out var exponent, out var significand))
+        if (TryToDecimal(out var result))
         {
-            throw new OverflowException("Decimal128 Infinity or NaN cannot be converted to decimal.");
+            return result;
         }
 
-        if (significand.IsZero) return 0m;
+        throw new OverflowException("Decimal128 value cannot be converted to decimal.");
+    }
+
+    public bool TryToDecimal(out decimal result)
+    {
+        if (!TryDecodeFinite(out var sign, out var exponent, out var significand))
+        {
+            result = default;
+            return false;
+        }
+
+        if (significand.IsZero)
+        {
+            result = 0m;
+            return true;
+        }
 
         var scale = -exponent;
         if (scale < 0)
@@ -96,18 +111,21 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
         if (scale > 28)
         {
-            throw new OverflowException($"Decimal128 scale {scale} is out of range for decimal.");
+            result = default;
+            return false;
         }
 
         if (significand > UInt96Max)
         {
-            throw new OverflowException("Decimal128 value is too large for decimal.");
+            result = default;
+            return false;
         }
 
         uint low = (uint)(significand & 0xFFFFFFFF);
         uint mid = (uint)((significand >> 32) & 0xFFFFFFFF);
         uint high = (uint)((significand >> 64) & 0xFFFFFFFF);
-        return new decimal((int)low, (int)mid, (int)high, sign, (byte)scale);
+        result = new decimal((int)low, (int)mid, (int)high, sign, (byte)scale);
+        return true;
     }
 
     public override string ToString()

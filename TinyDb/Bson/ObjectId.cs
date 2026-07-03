@@ -258,14 +258,23 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
     /// </summary>
     public override string ToString()
     {
-        Span<byte> bytes = stackalloc byte[ObjectIdSize];
-        CopyTo(bytes);
-        var sb = new StringBuilder(24);
-        foreach (var b in bytes)
+        return string.Create(ObjectIdSize * 2, this, static (chars, objectId) =>
         {
-            sb.Append(b.ToString("x2"));
-        }
-        return sb.ToString();
+            Span<byte> bytes = stackalloc byte[ObjectIdSize];
+            objectId.CopyTo(bytes);
+
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                var value = bytes[i];
+                chars[i * 2] = ToHexChar(value >> 4);
+                chars[i * 2 + 1] = ToHexChar(value & 0x0F);
+            }
+        });
+    }
+
+    private static char ToHexChar(int value)
+    {
+        return (char)(value < 10 ? '0' + value : 'a' + value - 10);
     }
 
     /// <summary>

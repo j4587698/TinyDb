@@ -1007,21 +1007,8 @@ public sealed class QueryExecutor
 
         IEnumerable<T> Iterator()
         {
-            Dictionary<string, BsonDocument?>? txOverlay = null;
             var tx = _engine.GetCurrentTransaction();
-            if (tx != null)
-            {
-                txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
-                foreach (var op in tx.GetOperationsSnapshot())
-                {
-                    if (op.CollectionName != collectionName) continue;
-                    var key = op.DocumentId?.ToString() ?? string.Empty;
-                    if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
-                    else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
-                }
-
-                if (txOverlay.Count == 0) txOverlay = null;
-            }
+            var txOverlay = tx != null ? BuildTransactionOverlay(tx, collectionName) : null;
 
             foreach (var result in _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates))
             {
@@ -1036,10 +1023,10 @@ public sealed class QueryExecutor
 
                 if (txOverlay != null)
                 {
-                    var idKey = doc["_id"].ToString();
-                    if (txOverlay.TryGetValue(idKey, out var txDoc))
+                    var idValue = doc["_id"];
+                    if (txOverlay.TryGetValue(idValue, out var txDoc))
                     {
-                        txOverlay.Remove(idKey);
+                        txOverlay.Remove(idValue);
                         if (txDoc == null) continue;
                         doc = txDoc;
                         requiresPostFilter = true;
@@ -1090,21 +1077,8 @@ public sealed class QueryExecutor
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
 
-        Dictionary<string, BsonDocument?>? txOverlay = null;
         var tx = _engine.GetCurrentTransaction();
-        if (tx != null)
-        {
-            txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
-            foreach (var op in tx.GetOperationsSnapshot())
-            {
-                if (op.CollectionName != collectionName) continue;
-                var key = op.DocumentId?.ToString() ?? string.Empty;
-                if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
-                else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
-            }
-
-            if (txOverlay.Count == 0) txOverlay = null;
-        }
+        var txOverlay = tx != null ? BuildTransactionOverlay(tx, collectionName) : null;
 
         await foreach (var result in _engine.FindAllRawWithPredicateInfoAsync(collectionName, pushDownPredicates, cancellationToken).ConfigureAwait(false))
         {
@@ -1121,10 +1095,10 @@ public sealed class QueryExecutor
 
             if (txOverlay != null)
             {
-                var idKey = doc["_id"].ToString();
-                if (txOverlay.TryGetValue(idKey, out var txDoc))
+                var idValue = doc["_id"];
+                if (txOverlay.TryGetValue(idValue, out var txDoc))
                 {
-                    txOverlay.Remove(idKey);
+                    txOverlay.Remove(idValue);
                     if (txDoc == null) continue;
                     doc = txDoc;
                     requiresPostFilter = true;
@@ -1737,21 +1711,8 @@ public sealed class QueryExecutor
             var heap = new List<TopKRow>(Math.Min(k, 256));
             long sequence = 0;
 
-            Dictionary<string, BsonDocument?>? txOverlay = null;
             var tx = _engine.GetCurrentTransaction();
-            if (tx != null)
-            {
-                txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
-                foreach (var op in tx.GetOperationsSnapshot())
-                {
-                    if (op.CollectionName != collectionName) continue;
-                    var key = op.DocumentId?.ToString() ?? "";
-                    if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
-                    else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
-                }
-
-                if (txOverlay.Count == 0) txOverlay = null;
-            }
+            var txOverlay = tx != null ? BuildTransactionOverlay(tx, collectionName) : null;
 
             foreach (var result in _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates))
             {
@@ -1767,10 +1728,9 @@ public sealed class QueryExecutor
                 {
                     if (TryReadBsonValue(span, SortFieldBytes.Id, out var idValue))
                     {
-                        var idKey = idValue.ToString();
-                        if (txOverlay.TryGetValue(idKey, out var txDoc))
+                        if (txOverlay.TryGetValue(idValue, out var txDoc))
                         {
-                            txOverlay.Remove(idKey);
+                            txOverlay.Remove(idValue);
                             if (txDoc == null) continue;
                             ConsiderDocument(txDoc, requiresPostFilter: true);
                             continue;
@@ -1986,21 +1946,8 @@ public sealed class QueryExecutor
             var heap = new List<TopKRow>(Math.Min(k, 256));
             long sequence = 0;
 
-            Dictionary<string, BsonDocument?>? txOverlay = null;
             var tx = _engine.GetCurrentTransaction();
-            if (tx != null)
-            {
-                txOverlay = new Dictionary<string, BsonDocument?>(StringComparer.Ordinal);
-                foreach (var op in tx.GetOperationsSnapshot())
-                {
-                    if (op.CollectionName != collectionName) continue;
-                    var key = op.DocumentId?.ToString() ?? string.Empty;
-                    if (op.OperationType == TransactionOperationType.Delete) txOverlay[key] = null;
-                    else if (op.NewDocument != null) txOverlay[key] = op.NewDocument;
-                }
-
-                if (txOverlay.Count == 0) txOverlay = null;
-            }
+            var txOverlay = tx != null ? BuildTransactionOverlay(tx, collectionName) : null;
 
             await foreach (var result in _engine.FindAllRawWithPredicateInfoAsync(collectionName, scanPredicates, ct).ConfigureAwait(false))
             {
@@ -2017,10 +1964,9 @@ public sealed class QueryExecutor
 
                 if (txOverlay != null && doc.TryGetValue("_id", out var idValue))
                 {
-                    var idKey = idValue.ToString();
-                    if (txOverlay.TryGetValue(idKey, out var txDoc))
+                    if (txOverlay.TryGetValue(idValue, out var txDoc))
                     {
-                        txOverlay.Remove(idKey);
+                        txOverlay.Remove(idValue);
                         if (txDoc == null) continue;
                         ConsiderDocument(txDoc, requiresPostFilter: true);
                         continue;
