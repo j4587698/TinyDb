@@ -309,7 +309,7 @@ public sealed class TinyDbEngine : IDisposable
             .OrderBy(static name => name, StringComparer.Ordinal)
             .ToArray();
 
-        using var collectionLocks = EnterCollectionWriteLocks(collectionNames);
+        using var collectionLocks = EnterCollectionCommitGates(collectionNames);
 
         lock (_lock)
         {
@@ -776,7 +776,7 @@ public sealed class TinyDbEngine : IDisposable
         ThrowIfDisposed();
         EnsureInitialized();
 
-        using var collectionLock = EnterCollectionWriteLocks(new[] { n });
+        using var collectionLock = EnterCollectionCommitGates(new[] { n });
         bool r = _collections.TryRemove(n, out var col);
         if (r)
         {
@@ -1411,42 +1411,45 @@ public sealed class TinyDbEngine : IDisposable
         return new CollectionState { Index = new MemoryDocumentIndex() };
     }
 
-    internal IDisposable EnterCollectionWriteLocks(IEnumerable<string> collectionNames)
+    internal IDisposable EnterCollectionCommitGates(IEnumerable<string> collectionNames)
     {
         if (collectionNames == null) throw new ArgumentNullException(nameof(collectionNames));
 
-        var states = collectionNames
+        var gates = collectionNames
             .Where(static name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.Ordinal)
             .OrderBy(static name => name, StringComparer.Ordinal)
             .Select(GetCollectionState)
+            .Select(static state => state.CommitGate)
             .ToArray();
 
-        return new CollectionWriteLockScope(states);
+        return new CollectionState.MonitorLockScope(gates);
     }
 
-    private sealed class CollectionWriteLockScope : IDisposable
+    internal IDisposable EnterCollectionDocumentLocks(IEnumerable<CollectionDocumentLockKey> lockKeys)
     {
-        private readonly CollectionState[] _states;
-        private int _entered;
+        if (lockKeys == null) throw new ArgumentNullException(nameof(lockKeys));
+
+        var scopes = lockKeys
+            .Where(static key => !string.IsNullOrWhiteSpace(key.CollectionName) &&
+                                 key.DocumentId != null &&
+                                 !key.DocumentId.IsNull)
+            .GroupBy(static key => key.CollectionName, StringComparer.Ordinal)
+            .OrderBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(group => GetCollectionState(group.Key).EnterDocumentLocks(group.Select(static key => key.DocumentId)))
+            .ToArray();
+
+        return new DisposableListScope(scopes);
+    }
+
+    private sealed class DisposableListScope : IDisposable
+    {
+        private readonly IDisposable[] _scopes;
         private bool _disposed;
 
-        public CollectionWriteLockScope(CollectionState[] states)
+        public DisposableListScope(IDisposable[] scopes)
         {
-            _states = states;
-            try
-            {
-                for (var i = 0; i < _states.Length; i++)
-                {
-                    Monitor.Enter(_states[i].WriteSyncRoot);
-                    _entered++;
-                }
-            }
-            catch
-            {
-                Dispose();
-                throw;
-            }
+            _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         }
 
         public void Dispose()
@@ -1454,13 +1457,114 @@ public sealed class TinyDbEngine : IDisposable
             if (_disposed) return;
             _disposed = true;
 
-            for (var i = _entered - 1; i >= 0; i--)
+            for (var i = _scopes.Length - 1; i >= 0; i--)
             {
-                Monitor.Exit(_states[i].WriteSyncRoot);
+                _scopes[i].Dispose();
             }
-
-            _entered = 0;
         }
+    }
+
+    private sealed class PrefetchedDocumentLockScope : IDisposable
+    {
+        private readonly IDisposable _documentLocks;
+        private readonly Page[] _pinnedPages;
+        private bool _disposed;
+
+        public PrefetchedDocumentLockScope(IDisposable documentLocks, Page[] pinnedPages)
+        {
+            _documentLocks = documentLocks ?? throw new ArgumentNullException(nameof(documentLocks));
+            _pinnedPages = pinnedPages ?? throw new ArgumentNullException(nameof(pinnedPages));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            _documentLocks.Dispose();
+            foreach (var page in _pinnedPages)
+            {
+                page.Unpin();
+            }
+        }
+    }
+
+    private async Task<IDisposable> EnterDocumentLocksWithPrefetchedPagesAsync(
+        CollectionState st,
+        IEnumerable<BsonValue> ids,
+        CancellationToken cancellationToken)
+    {
+        if (st == null) throw new ArgumentNullException(nameof(st));
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+
+        var documentIds = ids
+            .Where(static id => id != null && !id.IsNull)
+            .Distinct(BsonValueComparer.EqualityComparer)
+            .ToArray();
+
+        if (documentIds.Length == 0)
+        {
+            return st.EnterDocumentLocks(documentIds);
+        }
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var pinnedPages = new Dictionary<uint, Page>();
+            IDisposable? documentLocks = null;
+            var transferOwnership = false;
+
+            try
+            {
+                foreach (var pageId in GetCurrentDocumentPageIds(st, documentIds))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (pinnedPages.ContainsKey(pageId))
+                    {
+                        continue;
+                    }
+
+                    var page = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    page.Pin();
+                    pinnedPages.Add(pageId, page);
+                }
+
+                documentLocks = st.EnterDocumentLocks(documentIds);
+
+                var currentPageIds = GetCurrentDocumentPageIds(st, documentIds);
+                if (currentPageIds.All(pinnedPages.ContainsKey))
+                {
+                    transferOwnership = true;
+                    return new PrefetchedDocumentLockScope(documentLocks, pinnedPages.Values.ToArray());
+                }
+            }
+            finally
+            {
+                if (!transferOwnership)
+                {
+                    documentLocks?.Dispose();
+                    foreach (var page in pinnedPages.Values)
+                    {
+                        page.Unpin();
+                    }
+                }
+            }
+        }
+    }
+
+    private static uint[] GetCurrentDocumentPageIds(CollectionState st, IReadOnlyList<BsonValue> ids)
+    {
+        var pageIds = new HashSet<uint>();
+        foreach (var id in ids)
+        {
+            if (st.Index.TryGet(id, out var location) && location.PageId != 0)
+            {
+                pageIds.Add(location.PageId);
+            }
+        }
+
+        return pageIds.OrderBy(static pageId => pageId).ToArray();
     }
 
     private sealed class PreparedInsertPayload : IDisposable
@@ -1519,6 +1623,14 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private sealed class WritableDataPageSelectionException : InvalidOperationException
+    {
+        public WritableDataPageSelectionException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
+
     internal BsonValue InsertDocument(string col, BsonDocument doc)
     {
         var st = GetCollectionState(col);
@@ -1527,12 +1639,10 @@ public sealed class TinyDbEngine : IDisposable
         using (var pr = PrepareSerializedInsertPayload(col, doc, out _))
         {
             _metadataManager.ValidateDocumentForWrite(col, pr.Document, _options.SchemaValidationMode);
-            lock (st.WriteSyncRoot)
-            {
-                using var durabilityScope = BeginImplicitWalTransaction();
-                res = InsertPreparedDocument(col, pr, st, idx, true);
-                durabilityScope?.Commit();
-            }
+            using var documentLock = st.EnterDocumentLock(pr.Id);
+            using var durabilityScope = BeginImplicitWalTransaction();
+            res = InsertPreparedDocument(col, pr, st, idx, true);
+            durabilityScope?.Commit();
         }
         EnsureWriteDurability();
         return res;
@@ -1553,12 +1663,10 @@ public sealed class TinyDbEngine : IDisposable
         using (var pr = PrepareSerializedInsertPayload(col, doc, out _))
         {
             _metadataManager.ValidateDocumentForWrite(col, pr.Document, _options.SchemaValidationMode);
-            lock (st.WriteSyncRoot)
-            {
-                using var durabilityScope = BeginImplicitWalTransaction();
-                res = InsertPreparedDocument(col, pr, st, idx, true);
-                durabilityScope?.Commit();
-            }
+            using var documentLock = st.EnterDocumentLock(pr.Id);
+            using var durabilityScope = BeginImplicitWalTransaction();
+            res = InsertPreparedDocument(col, pr, st, idx, true);
+            durabilityScope?.Commit();
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
@@ -1575,10 +1683,10 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         bool updated;
 
-        lock (st.WriteSyncRoot)
+        using (st.EnterDocumentLock(id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
-            updated = TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr);
+            updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
             if (updated) durabilityScope?.Commit();
         }
 
@@ -1607,10 +1715,10 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         bool updated;
 
-        lock (st.WriteSyncRoot)
+        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, new[] { id }, cancellationToken).ConfigureAwait(false))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
-            updated = TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr);
+            updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
             if (updated) durabilityScope?.Commit();
         }
 
@@ -1645,12 +1753,12 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         var updatedCount = 0;
 
-        lock (st.WriteSyncRoot)
+        using (st.EnterDocumentLocks(prepared.Select(static item => item.Id)))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
-                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
                 {
                     updatedCount++;
                 }
@@ -1692,13 +1800,13 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         var updatedCount = 0;
 
-        lock (st.WriteSyncRoot)
+        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared.Select(static item => item.Id), cancellationToken).ConfigureAwait(false))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
                 {
                     updatedCount++;
                 }
@@ -1754,12 +1862,12 @@ public sealed class TinyDbEngine : IDisposable
         var insertedCount = 0;
         var updatedCount = 0;
 
-        lock (st.WriteSyncRoot)
+        using (st.EnterDocumentLocks(prepared.Select(static item => item.Id)))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
-                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
                 {
                     updatedCount++;
                 }
@@ -1805,13 +1913,13 @@ public sealed class TinyDbEngine : IDisposable
         var insertedCount = 0;
         var updatedCount = 0;
 
-        lock (st.WriteSyncRoot)
+        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared.Select(static item => item.Id), cancellationToken).ConfigureAwait(false))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (TryUpdatePreparedDocumentLocked(col, doc, id, st, idxMgr))
+                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
                 {
                     updatedCount++;
                 }
@@ -1834,25 +1942,25 @@ public sealed class TinyDbEngine : IDisposable
 
     internal int DeleteDocument(string col, BsonValue id)
     {
+        if (id == null || id.IsNull) return 0;
+
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
-        lock (st.WriteSyncRoot)
+        using (st.EnterDocumentLock(id))
         {
-            lock (st.PageState.SyncRoot)
+            if (!st.Index.TryGet(id, out var loc)) return 0;
+
+            using var durabilityScope = BeginImplicitWalTransaction();
+            using (st.EnterPageMutationLock(loc.PageId))
             {
                 if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
                 if (i >= e.Count) return 0;
-                using var durabilityScope = BeginImplicitWalTransaction();
                 var entry = e[i];
                 e.RemoveAt(i);
                 st.Index.Remove(id);
                 if (e.Count == 0)
                 {
-                    st.OwnedPages.TryRemove(p.PageID, out _);
-                    if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
-
-                    _pageManager.FreePage(p.PageID);
-                    DecrementUsedPagesAndWriteHeader();
+                    FreeDataPage(st, p);
                 }
                 else
                 {
@@ -1876,24 +1984,25 @@ public sealed class TinyDbEngine : IDisposable
     /// <returns>删除的文档数量</returns>
     internal async Task<int> DeleteDocumentAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
+        if (id == null || id.IsNull) return 0;
+
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
-        lock (st.WriteSyncRoot)
+        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, new[] { id }, cancellationToken).ConfigureAwait(false))
         {
-            lock (st.PageState.SyncRoot)
+            if (!st.Index.TryGet(id, out var loc)) return 0;
+
+            using var durabilityScope = BeginImplicitWalTransaction();
+            using (st.EnterPageMutationLock(loc.PageId))
             {
                 if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
                 if (i >= e.Count) return 0;
-                using var durabilityScope = BeginImplicitWalTransaction();
                 var entry = e[i];
                 e.RemoveAt(i);
                 st.Index.Remove(id);
                 if (e.Count == 0)
                 {
-                    st.OwnedPages.TryRemove(p.PageID, out _);
-                    if (st.PageState.PageId == p.PageID) st.PageState.PageId = 0;
-                    _pageManager.FreePage(p.PageID);
-                    DecrementUsedPagesAndWriteHeader();
+                    FreeDataPage(st, p);
                 }
                 else
                 {
@@ -1931,107 +2040,20 @@ public sealed class TinyDbEngine : IDisposable
 
         var insertedPayloads = new List<PreparedInsertPayload>(preparedPayloads.Count);
         int insertedCount = 0;
-        var usedPagesChanged = false;
-
-        var pagesToPersist = new HashSet<Page>();
-        var pageBeforeImages = new Dictionary<Page, byte[]?>();
-        var pinnedPages = new List<Page>();
-
-        void TrackPageForPersist(Page page)
-        {
-            if (pagesToPersist.Add(page))
-            {
-                pageBeforeImages[page] = _dataPageAccess.CaptureBeforeImageForWal(page);
-                page.Pin();
-                pinnedPages.Add(page);
-            }
-        }
 
         try
         {
-            lock (st.WriteSyncRoot)
+            using (st.EnterDocumentLocks(preparedPayloads.Select(static payload => payload.Id)))
             {
                 using var durabilityScope = BeginImplicitWalTransaction();
-                lock (st.PageState.SyncRoot)
-                {
-                    Page? currentPage = null;
-                    if (st.PageState.PageId != 0)
-                    {
-                        try
-                        {
-                            currentPage = _pageManager.GetPage(st.PageState.PageId);
-                        }
-                        catch (Exception ex)
-                        {
-                            throw new InvalidOperationException(
-                                $"Failed to load writable page {st.PageState.PageId} for collection '{col}'.",
-                                ex);
-                        }
-                    }
 
-                    for (int docIndex = 0; docIndex < preparedPayloads.Count; docIndex++)
-                    {
-                        try
-                        {
-                            var payload = preparedPayloads[docIndex];
-                            var doc = payload.Document;
-
-                            if (LargeDocumentStorage.RequiresLargeDocumentStorage(payload.SerializedLength, _dataPageAccess.GetMaxDocumentSize()))
-                            {
-                                var originalLength = payload.SerializedLength;
-                                var lId = _largeDocumentStorage.StoreLargeDocument(payload.SerializedSpan, col);
-                                doc = CreateLargeDocumentIndexDocument(payload.Id, col, lId, originalLength);
-                                payload.ReplaceDocument(doc);
-                            }
-
-                            var span = payload.SerializedSpan;
-                            int len = payload.SerializedLength;
-                            int reqSize = DataPageAccess.GetEntrySize(len);
-
-                            if (currentPage == null ||
-                                currentPage.Header.PageType != PageType.Data ||
-                                currentPage.Header.FreeBytes < reqSize)
-                            {
-                                var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
-                                currentPage = p;
-                                st.OwnedPages.TryAdd(p.PageID, 0);
-                                if (isN)
-                                {
-                                    lock (_lock) { _header.UsedPages++; }
-                                    usedPagesChanged = true;
-                                }
-                            }
-
-                            ushort i = currentPage.Header.ItemCount;
-                            TrackPageForPersist(currentPage);
-                            _dataPageAccess.AppendDocumentToPage(currentPage, span);
-                            st.Index.Set(payload.Id, new DocumentLocation(currentPage.PageID, i));
-
-                            insertedPayloads.Add(payload);
-                            insertedCount++;
-                        }
-                        catch (Exception ex)
-                        {
-                            exceptions.Add(ex);
-                        }
-                    }
-
-                    if (usedPagesChanged)
-                    {
-                        lock (_lock) { WriteHeader(); }
-                    }
-                }
-
-                foreach (var page in pagesToPersist)
-                {
-                    _dataPageAccess.PersistPageDeferred(page, pageBeforeImages[page]);
-                }
-
-                foreach (var payload in insertedPayloads)
+                foreach (var payload in preparedPayloads)
                 {
                     try
                     {
-                        idx.InsertDocument(payload.Document, payload.Id);
+                        InsertPreparedDocument(col, payload, st, idx, true);
+                        insertedPayloads.Add(payload);
+                        insertedCount++;
                     }
                     catch (Exception ex)
                     {
@@ -2042,6 +2064,11 @@ public sealed class TinyDbEngine : IDisposable
                 if (exceptions.Count > 0)
                 {
                     RollbackInsertedDocuments(col, insertedPayloads.Select(static payload => payload.Id), exceptions);
+                    if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
+                    {
+                        throw pageSelectionException;
+                    }
+
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 
@@ -2053,11 +2080,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         finally
         {
-            foreach (var page in pinnedPages)
-            {
-                page.Unpin();
-            }
-
             foreach (var payload in preparedPayloads)
             {
                 payload.Dispose();
@@ -2104,113 +2126,26 @@ public sealed class TinyDbEngine : IDisposable
 
         var insertedPayloads = new List<PreparedInsertPayload>(preparedPayloads.Count);
         int insertedCount = 0;
-        var usedPagesChanged = false;
-
-        var pagesToPersist = new HashSet<Page>();
-        var pageBeforeImages = new Dictionary<Page, byte[]?>();
-        var pinnedPages = new List<Page>();
-
-        void TrackPageForPersist(Page page)
-        {
-            if (pagesToPersist.Add(page))
-            {
-                pageBeforeImages[page] = _dataPageAccess.CaptureBeforeImageForWal(page);
-                page.Pin();
-                pinnedPages.Add(page);
-            }
-        }
 
         try
         {
-            lock (st.WriteSyncRoot)
+            using (st.EnterDocumentLocks(preparedPayloads.Select(static payload => payload.Id)))
             {
                 using var durabilityScope = BeginImplicitWalTransaction();
-                lock (st.PageState.SyncRoot)
+
+                foreach (var payload in preparedPayloads)
                 {
-                    Page? currentPage = null;
-                    if (st.PageState.PageId != 0)
+                    if (cancellationToken.IsCancellationRequested)
                     {
-                        try
-                        {
-                            currentPage = _pageManager.GetPage(st.PageState.PageId);
-                        }
-                        catch (Exception ex)
-                        {
-                            throw new InvalidOperationException(
-                                $"Failed to load writable page {st.PageState.PageId} for collection '{col}'.",
-                                ex);
-                        }
+                        exceptions.Add(new OperationCanceledException(cancellationToken));
+                        break;
                     }
 
-                    for (int docIndex = 0; docIndex < preparedPayloads.Count; docIndex++)
-                    {
-                        if (cancellationToken.IsCancellationRequested)
-                        {
-                            exceptions.Add(new OperationCanceledException(cancellationToken));
-                            break;
-                        }
-
-                        try
-                        {
-                            var payload = preparedPayloads[docIndex];
-                            var doc = payload.Document;
-
-                            if (LargeDocumentStorage.RequiresLargeDocumentStorage(payload.SerializedLength, _dataPageAccess.GetMaxDocumentSize()))
-                            {
-                                var originalLength = payload.SerializedLength;
-                                var lId = _largeDocumentStorage.StoreLargeDocument(payload.SerializedSpan, col);
-                                doc = CreateLargeDocumentIndexDocument(payload.Id, col, lId, originalLength);
-                                payload.ReplaceDocument(doc);
-                            }
-
-                            var span = payload.SerializedSpan;
-                            int len = payload.SerializedLength;
-                            int reqSize = DataPageAccess.GetEntrySize(len);
-
-                            if (currentPage == null ||
-                                currentPage.Header.PageType != PageType.Data ||
-                                currentPage.Header.FreeBytes < reqSize)
-                            {
-                                var (p, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, reqSize);
-                                currentPage = p;
-                                st.OwnedPages.TryAdd(p.PageID, 0);
-                                if (isN)
-                                {
-                                    lock (_lock) { _header.UsedPages++; }
-                                    usedPagesChanged = true;
-                                }
-                            }
-
-                            ushort i = currentPage.Header.ItemCount;
-                            TrackPageForPersist(currentPage);
-                            _dataPageAccess.AppendDocumentToPage(currentPage, span);
-                            st.Index.Set(payload.Id, new DocumentLocation(currentPage.PageID, i));
-
-                            insertedPayloads.Add(payload);
-                            insertedCount++;
-                        }
-                        catch (Exception ex)
-                        {
-                            exceptions.Add(ex);
-                        }
-                    }
-
-                    if (usedPagesChanged)
-                    {
-                        lock (_lock) { WriteHeader(); }
-                    }
-                }
-
-                foreach (var page in pagesToPersist)
-                {
-                    _dataPageAccess.PersistPageDeferred(page, pageBeforeImages[page]);
-                }
-
-                foreach (var payload in insertedPayloads)
-                {
                     try
                     {
-                        idx.InsertDocument(payload.Document, payload.Id);
+                        InsertPreparedDocument(col, payload, st, idx, true);
+                        insertedPayloads.Add(payload);
+                        insertedCount++;
                     }
                     catch (Exception ex)
                     {
@@ -2229,6 +2164,11 @@ public sealed class TinyDbEngine : IDisposable
                         throw cancellationException;
                     }
 
+                    if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
+                    {
+                        throw pageSelectionException;
+                    }
+
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 
@@ -2240,11 +2180,6 @@ public sealed class TinyDbEngine : IDisposable
         }
         finally
         {
-            foreach (var page in pinnedPages)
-            {
-                page.Unpin();
-            }
-
             foreach (var payload in preparedPayloads)
             {
                 payload.Dispose();
@@ -2368,12 +2303,9 @@ public sealed class TinyDbEngine : IDisposable
     {
         var st = GetCollectionState(col);
         DocumentLocation? indexedLocation = null;
-        lock (st.PageState.SyncRoot)
+        if (st.Index.TryGet(id, out var loc))
         {
-            if (st.Index.TryGet(id, out var loc))
-            {
-                indexedLocation = loc;
-            }
+            indexedLocation = loc;
         }
 
         if (indexedLocation is { } location)
@@ -2381,7 +2313,7 @@ public sealed class TinyDbEngine : IDisposable
             var p = _pageManager.GetPage(location.PageId);
             BsonDocument? document = null;
 
-            lock (st.PageState.SyncRoot)
+            using (st.EnterPageMutationLock(location.PageId))
             {
                 if (p.PageType == PageType.Data && location.EntryIndex < p.Header.ItemCount)
                 {
@@ -2413,21 +2345,18 @@ public sealed class TinyDbEngine : IDisposable
         var indexHits = new bool[ids.Count];
         var pageLookups = new Dictionary<uint, List<(BsonValue Id, int Ordinal, DocumentLocation Location)>>();
 
-        lock (st.PageState.SyncRoot)
+        for (int i = 0; i < ids.Count; i++)
         {
-            for (int i = 0; i < ids.Count; i++)
+            if (st.Index.TryGet(ids[i], out var location))
             {
-                if (st.Index.TryGet(ids[i], out var location))
+                indexHits[i] = true;
+                if (!pageLookups.TryGetValue(location.PageId, out var lookups))
                 {
-                    indexHits[i] = true;
-                    if (!pageLookups.TryGetValue(location.PageId, out var lookups))
-                    {
-                        lookups = new List<(BsonValue Id, int Ordinal, DocumentLocation Location)>();
-                        pageLookups.Add(location.PageId, lookups);
-                    }
-
-                    lookups.Add((ids[i], i, location));
+                    lookups = new List<(BsonValue Id, int Ordinal, DocumentLocation Location)>();
+                    pageLookups.Add(location.PageId, lookups);
                 }
+
+                lookups.Add((ids[i], i, location));
             }
         }
 
@@ -2435,7 +2364,7 @@ public sealed class TinyDbEngine : IDisposable
         {
             var page = _pageManager.GetPage(pageId);
 
-            lock (st.PageState.SyncRoot)
+            using (st.EnterPageMutationLock(pageId))
             {
                 ReadCommittedPageLookups(col, page, lookups, results);
             }
@@ -2469,12 +2398,9 @@ public sealed class TinyDbEngine : IDisposable
 
         var st = GetCollectionState(col);
         DocumentLocation? indexedLocation = null;
-        lock (st.PageState.SyncRoot)
+        if (st.Index.TryGet(id, out var loc))
         {
-            if (st.Index.TryGet(id, out var loc))
-            {
-                indexedLocation = loc;
-            }
+            indexedLocation = loc;
         }
 
         if (indexedLocation is { } location)
@@ -2545,21 +2471,18 @@ public sealed class TinyDbEngine : IDisposable
         var indexHits = new bool[ids.Count];
         var pageLookups = new Dictionary<uint, List<(BsonValue Id, int Ordinal, DocumentLocation Location)>>();
 
-        lock (st.PageState.SyncRoot)
+        for (int i = 0; i < ids.Count; i++)
         {
-            for (int i = 0; i < ids.Count; i++)
+            if (st.Index.TryGet(ids[i], out var location))
             {
-                if (st.Index.TryGet(ids[i], out var location))
+                indexHits[i] = true;
+                if (!pageLookups.TryGetValue(location.PageId, out var lookups))
                 {
-                    indexHits[i] = true;
-                    if (!pageLookups.TryGetValue(location.PageId, out var lookups))
-                    {
-                        lookups = new List<(BsonValue Id, int Ordinal, DocumentLocation Location)>();
-                        pageLookups.Add(location.PageId, lookups);
-                    }
-
-                    lookups.Add((ids[i], i, location));
+                    lookups = new List<(BsonValue Id, int Ordinal, DocumentLocation Location)>();
+                    pageLookups.Add(location.PageId, lookups);
                 }
+
+                lookups.Add((ids[i], i, location));
             }
         }
 
@@ -2568,7 +2491,7 @@ public sealed class TinyDbEngine : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var page = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-            lock (st.PageState.SyncRoot)
+            using (st.EnterPageMutationLock(pageId))
             {
                 ReadCommittedPageLookups(col, page, lookups, results);
             }
@@ -2687,10 +2610,7 @@ public sealed class TinyDbEngine : IDisposable
     private IEnumerable<RawScanResult> StreamRawScanResultPages(string col, CollectionState st, ScanPredicate[]? predicates)
     {
         List<uint> pages;
-        lock (st.PageState.SyncRoot)
-        {
-            pages = st.OwnedPages.Keys.ToList();
-        }
+        pages = st.OwnedPages.Keys.ToList();
 
         pages.Sort();
 
@@ -2707,7 +2627,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     var p = _pageManager.GetPage(pageId);
 
-                    lock (st.PageState.SyncRoot)
+                    using (st.EnterPageMutationLock(pageId))
                     {
                         if (p.PageType != PageType.Data || p.Header.ItemCount == 0)
                         {
@@ -2768,10 +2688,7 @@ public sealed class TinyDbEngine : IDisposable
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         List<uint> pages;
-        lock (st.PageState.SyncRoot)
-        {
-            pages = st.OwnedPages.Keys.ToList();
-        }
+        pages = st.OwnedPages.Keys.ToList();
 
         pages.Sort();
 
@@ -2790,7 +2707,7 @@ public sealed class TinyDbEngine : IDisposable
                 {
                     var p = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                    lock (st.PageState.SyncRoot)
+                    using (st.EnterPageMutationLock(pageId))
                     {
                         if (p.PageType != PageType.Data || p.Header.ItemCount == 0)
                         {
@@ -2853,7 +2770,7 @@ public sealed class TinyDbEngine : IDisposable
         var page = await _pageManager.GetPageAsync(location.PageId, cancellationToken: cancellationToken).ConfigureAwait(false);
         BsonDocument? document = null;
 
-        lock (st.PageState.SyncRoot)
+        using (st.EnterPageMutationLock(location.PageId))
         {
             if (page.PageType != PageType.Data || location.EntryIndex >= page.Header.ItemCount)
             {
@@ -2922,7 +2839,7 @@ public sealed class TinyDbEngine : IDisposable
         var idx = GetIndexManager(col);
         using var pr = PrepareSerializedInsertPayload(col, d, out _);
         BsonValue result;
-        lock (st.WriteSyncRoot)
+        using (st.EnterDocumentLock(pr.Id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             result = InsertPreparedDocument(col, pr, st, idx, true);
@@ -2946,6 +2863,8 @@ public sealed class TinyDbEngine : IDisposable
     {
         var doc = prepared.Document;
 
+        ThrowIfPrimaryKeyExists(st, prepared.Id);
+
         if (LargeDocumentStorage.RequiresLargeDocumentStorage(prepared.SerializedLength, _dataPageAccess.GetMaxDocumentSize()))
         {
             var originalLength = prepared.SerializedLength;
@@ -2954,63 +2873,114 @@ public sealed class TinyDbEngine : IDisposable
             prepared.ReplaceDocument(doc);
         }
 
-        var span = prepared.SerializedSpan;
-
-        Page? p = null;
-        bool isNewPage = false;
-        ushort entryIndex;
-        byte[]? beforeImage;
-
-        lock (st.PageState.SyncRoot)
+        AppendDocumentBytesToWritableDataPage(st, prepared.Id, prepared.SerializedSpan);
+        if (u)
         {
-            var (page, isN) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, DataPageAccess.GetEntrySize(span.Length));
-            p = page;
-            p.Pin();
-            isNewPage = isN;
-            st.OwnedPages.TryAdd(p.PageID, 0);
-            entryIndex = p.Header.ItemCount;
-            beforeImage = _dataPageAccess.CaptureBeforeImageForWal(p);
-            _dataPageAccess.AppendDocumentToPage(p, span);
-            st.Index.Set(prepared.Id, new DocumentLocation(p.PageID, entryIndex));
-        }
-
             try
             {
-                // 在锁外处理全局状态和持久化
-            if (isNewPage)
-            {
-                lock (_lock) { _header.UsedPages++; WriteHeader(); }
+                idx.InsertDocument(doc, prepared.Id);
             }
-
-            _dataPageAccess.PersistPageDeferred(p!, beforeImage);
-
-            if (u)
+            catch
             {
-                try
-                {
-                    idx.InsertDocument(doc, prepared.Id);
-                }
-                catch
-                {
-                    DeleteDocument(col, prepared.Id);
-                    throw;
-                }
+                DeleteDocument(col, prepared.Id);
+                throw;
             }
-            return prepared.Id;
         }
-        finally
+
+        return prepared.Id;
+    }
+
+    private void ThrowIfPrimaryKeyExists(CollectionState st, BsonValue id)
+    {
+        if (st.Index.TryGet(id, out _))
         {
-            p?.Unpin();
+            throw new InvalidOperationException($"Duplicate document id '{id}'.");
         }
     }
 
-    private bool TryUpdatePreparedDocumentLocked(string col, BsonDocument doc, BsonValue id, CollectionState st, IndexManager idxMgr)
+    private (Page Page, bool IsNew) SelectWritableDataPage(CollectionState st, int requiredSize)
+    {
+        try
+        {
+            lock (st.PageState.SyncRoot)
+            {
+                var selected = _dataPageAccess.GetWritableDataPageLocked(st.PageState, requiredSize);
+                st.OwnedPages.TryAdd(selected.Page.PageID, 0);
+                if (selected.IsNew)
+                {
+                    IncrementUsedPagesAndWriteHeader();
+                }
+
+                return selected;
+            }
+        }
+        catch (Exception ex) when (ex is not WritableDataPageSelectionException)
+        {
+            throw new WritableDataPageSelectionException("Failed to select a writable data page.", ex);
+        }
+    }
+
+    private void MarkWritablePageUnavailable(CollectionState st, uint pageId)
+    {
+        Interlocked.CompareExchange(ref st.PageState.PageId, 0, pageId);
+    }
+
+    private void IncrementUsedPagesAndWriteHeader()
+    {
+        lock (_lock)
+        {
+            _header.UsedPages++;
+            WriteHeader();
+        }
+    }
+
+    private DocumentLocation AppendDocumentBytesToWritableDataPage(
+        CollectionState st,
+        BsonValue id,
+        ReadOnlySpan<byte> bytes)
+    {
+        var requiredSize = DataPageAccess.GetEntrySize(bytes.Length);
+
+        while (true)
+        {
+            var (page, _) = SelectWritableDataPage(st, requiredSize);
+            page.Pin();
+            try
+            {
+                using (st.EnterPageMutationLock(page.PageID))
+                {
+                    if (page.Header.PageType != PageType.Data || page.Header.FreeBytes < requiredSize)
+                    {
+                        MarkWritablePageUnavailable(st, page.PageID);
+                        continue;
+                    }
+
+                    var entryIndex = page.Header.ItemCount;
+                    var beforeImage = _dataPageAccess.CaptureBeforeImageForWal(page);
+                    _dataPageAccess.AppendDocumentToPage(page, bytes);
+                    var location = new DocumentLocation(page.PageID, entryIndex);
+                    st.Index.Set(id, location);
+                    _dataPageAccess.PersistPageDeferred(page, beforeImage);
+                    return location;
+                }
+            }
+            finally
+            {
+                page.Unpin();
+            }
+        }
+    }
+
+    private bool TryUpdatePreparedDocument(string col, BsonDocument doc, BsonValue id, CollectionState st, IndexManager idxMgr)
     {
         PageDocumentEntry old;
         var updatedDocument = doc;
         uint newLargeDocumentPageId = 0;
+        byte[]? relocationBytes = null;
 
-        lock (st.PageState.SyncRoot)
+        if (!st.Index.TryGet(id, out var initialLocation)) return false;
+
+        using (st.EnterPageMutationLock(initialLocation.PageId))
         {
             if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return false;
             if (i >= e.Count) return false;
@@ -3030,18 +3000,17 @@ public sealed class TinyDbEngine : IDisposable
             if (!_dataPageAccess.CanFitInPage(p, e))
             {
                 e[i] = old;
-                e.RemoveAt(i);
-                st.Index.Remove(id);
-
-                _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-
-                var prepared = PrepareDocumentForInsert(col, updatedDocument, out _);
-                InsertPreparedDocument(col, prepared, id, st, idxMgr, false);
+                relocationBytes = bs;
             }
             else
             {
                 _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
             }
+        }
+
+        if (relocationBytes != null)
+        {
+            MoveUpdatedDocumentToWritablePage(col, st, id, updatedDocument, relocationBytes);
         }
 
         try
@@ -3062,43 +3031,122 @@ public sealed class TinyDbEngine : IDisposable
         return true;
     }
 
+    private void MoveUpdatedDocumentToWritablePage(
+        string col,
+        CollectionState st,
+        BsonValue id,
+        BsonDocument updatedDocument,
+        byte[] updatedBytes)
+    {
+        var requiredSize = DataPageAccess.GetEntrySize(updatedBytes.Length);
+
+        while (true)
+        {
+            if (!st.Index.TryGet(id, out var oldLocation))
+            {
+                throw new InvalidOperationException($"Document '{id}' disappeared during update relocation.");
+            }
+
+            var (targetPage, _) = SelectWritableDataPage(st, requiredSize);
+            targetPage.Pin();
+            try
+            {
+                using (st.EnterPageMutationLocks(new[] { oldLocation.PageId, targetPage.PageID }))
+                {
+                    if (!st.Index.TryGet(id, out var currentLocation) ||
+                        currentLocation.PageId != oldLocation.PageId)
+                    {
+                        continue;
+                    }
+
+                    if (targetPage.Header.PageType != PageType.Data || targetPage.Header.FreeBytes < requiredSize)
+                    {
+                        MarkWritablePageUnavailable(st, targetPage.PageID);
+                        continue;
+                    }
+
+                    var oldPage = _pageManager.GetPage(currentLocation.PageId);
+                    var oldEntries = _dataPageAccess.ReadDocumentsFromPage(oldPage);
+                    if (currentLocation.EntryIndex >= oldEntries.Count)
+                    {
+                        throw new InvalidOperationException($"Primary index for document '{id}' points outside page {oldPage.PageID}.");
+                    }
+
+                    var currentOldEntry = oldEntries[currentLocation.EntryIndex];
+                    if (!BsonValuesEqual(currentOldEntry.Id, id))
+                    {
+                        throw new InvalidOperationException($"Primary index for document '{id}' points to a different document.");
+                    }
+
+                    oldEntries[currentLocation.EntryIndex] = new PageDocumentEntry(updatedDocument, updatedBytes);
+                    if (_dataPageAccess.CanFitInPage(oldPage, oldEntries))
+                    {
+                        _dataPageAccess.RewritePageWithDocuments(col, st, oldPage, oldEntries, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                        return;
+                    }
+
+                    oldEntries[currentLocation.EntryIndex] = currentOldEntry;
+                    oldEntries.RemoveAt(currentLocation.EntryIndex);
+                    st.Index.Remove(id);
+
+                    if (oldEntries.Count == 0 && oldPage.PageID != targetPage.PageID)
+                    {
+                        FreeDataPage(st, oldPage);
+                    }
+                    else
+                    {
+                        _dataPageAccess.RewritePageWithDocuments(col, st, oldPage, oldEntries, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    }
+
+                    var entryIndex = targetPage.Header.ItemCount;
+                    var beforeImage = _dataPageAccess.CaptureBeforeImageForWal(targetPage);
+                    _dataPageAccess.AppendDocumentToPage(targetPage, updatedBytes);
+                    st.Index.Set(id, new DocumentLocation(targetPage.PageID, entryIndex));
+                    _dataPageAccess.PersistPageDeferred(targetPage, beforeImage);
+                    return;
+                }
+            }
+            finally
+            {
+                targetPage.Unpin();
+            }
+        }
+    }
+
+    private void FreeDataPage(CollectionState st, Page page)
+    {
+        st.OwnedPages.TryRemove(page.PageID, out _);
+        Interlocked.CompareExchange(ref st.PageState.PageId, 0, page.PageID);
+
+        _pageManager.FreePage(page.PageID);
+        DecrementUsedPagesAndWriteHeader();
+    }
+
     private void RestoreDocumentDataWithoutIndexUpdate(string col, CollectionState st, BsonValue id, PageDocumentEntry oldEntry)
     {
-        lock (st.PageState.SyncRoot)
+        if (st.Index.TryGet(id, out var currentLocation))
         {
-            if (TryResolveDocumentLocation(col, st, id, out var currentPage, out var currentEntries, out var currentIndex) &&
-                currentIndex < currentEntries.Count)
+            using (st.EnterPageMutationLock(currentLocation.PageId))
             {
-                currentEntries.RemoveAt(currentIndex);
-                st.Index.Remove(id);
+                if (TryResolveDocumentLocation(col, st, id, out var currentPage, out var currentEntries, out var currentIndex) &&
+                    currentIndex < currentEntries.Count)
+                {
+                    currentEntries.RemoveAt(currentIndex);
+                    st.Index.Remove(id);
 
-                if (currentEntries.Count == 0)
-                {
-                    st.OwnedPages.TryRemove(currentPage.PageID, out _);
-                    if (st.PageState.PageId == currentPage.PageID) st.PageState.PageId = 0;
-                    _pageManager.FreePage(currentPage.PageID);
-                    DecrementUsedPagesAndWriteHeader();
-                }
-                else
-                {
-                    _dataPageAccess.RewritePageWithDocuments(col, st, currentPage, currentEntries, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    if (currentEntries.Count == 0)
+                    {
+                        FreeDataPage(st, currentPage);
+                    }
+                    else
+                    {
+                        _dataPageAccess.RewritePageWithDocuments(col, st, currentPage, currentEntries, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    }
                 }
             }
-
-            var requiredSize = DataPageAccess.GetEntrySize(oldEntry.RawBytes.Length);
-            var (page, isNewPage) = _dataPageAccess.GetWritableDataPageLocked(st.PageState, requiredSize);
-            st.OwnedPages.TryAdd(page.PageID, 0);
-
-            if (isNewPage)
-            {
-                lock (_lock) { _header.UsedPages++; WriteHeader(); }
-            }
-
-            var entryIndex = page.Header.ItemCount;
-            _dataPageAccess.AppendDocumentToPage(page, oldEntry.RawBytes);
-            st.Index.Set(id, new DocumentLocation(page.PageID, entryIndex));
-            _dataPageAccess.PersistPage(page);
         }
+
+        AppendDocumentBytesToWritableDataPage(st, id, oldEntry.RawBytes);
     }
 
     private static BsonDocument PrepareDocumentForUpdate(string col, BsonDocument doc, out BsonValue id)

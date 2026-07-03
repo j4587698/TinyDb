@@ -446,7 +446,7 @@ internal sealed class DataPageAccess
     {
         if (st.PageId != 0)
         {
-            var p = _pm.GetPage(st.PageId);
+            var p = _pm.GetPage((uint)st.PageId);
             if (p.Header.PageType == PageType.Data && p.Header.FreeBytes >= req) return (p, false);
         }
         var n = _pm.NewPage(PageType.Data);
