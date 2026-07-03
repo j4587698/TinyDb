@@ -49,7 +49,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
     }
 
     [Test]
-    public async Task FreePage_Should_Not_Hold_AllocationLock_While_Waiting_For_Wal()
+    public async Task FreePage_Should_Not_Hold_StateLock_While_Waiting_For_Wal()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"pm_freepage_wal_lock_{Guid.NewGuid():N}.db");
         var appendStarted = new ManualResetEventSlim(false);
@@ -76,7 +76,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
             mutex.Wait();
 
             Task? freeTask = null;
-            bool enteredAllocationLock = false;
+            bool enteredStateLock = false;
 
             try
             {
@@ -84,11 +84,11 @@ public sealed class PageManagerCoverageEdgeCasesTests
 
                 await Assert.That(appendStarted.Wait(TimeSpan.FromSeconds(5))).IsTrue();
 
-                var allocationLock = UnsafeAccessors.PageManagerAccessor.AllocationLock(manager);
-                enteredAllocationLock = Monitor.TryEnter(allocationLock);
-                if (enteredAllocationLock)
+                var stateLock = UnsafeAccessors.PageManagerAccessor.StateLock(manager);
+                enteredStateLock = Monitor.TryEnter(stateLock);
+                if (enteredStateLock)
                 {
-                    Monitor.Exit(allocationLock);
+                    Monitor.Exit(stateLock);
                 }
             }
             finally
@@ -97,7 +97,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
             }
 
             await freeTask!.WaitAsync(TimeSpan.FromSeconds(5));
-            await Assert.That(enteredAllocationLock).IsTrue();
+            await Assert.That(enteredStateLock).IsTrue();
         }
         finally
         {
@@ -108,7 +108,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
     }
 
     [Test]
-    public async Task FreePage_Should_Not_Dispose_Removed_PageReference()
+    public async Task FreePage_Should_Not_Dispose_Cached_PageReference()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"pm_freepage_lifetime_{Guid.NewGuid():N}.db");
 
@@ -123,7 +123,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
             manager.FreePage(page.PageID);
 
             await Assert.That(() => page.ReadBytes(0, 1)).ThrowsNothing();
-            await Assert.That(manager.CachedPages).IsEqualTo(0);
+            await Assert.That(manager.CachedPages).IsEqualTo(1);
         }
         finally
         {
@@ -230,7 +230,7 @@ public sealed class PageManagerCoverageEdgeCasesTests
 
         var addToCache = typeof(PageManager).GetMethod("AddToCache", BindingFlags.NonPublic | BindingFlags.Instance)
             ?? throw new MissingMethodException(typeof(PageManager).FullName, "AddToCache");
-        var addedPage = (Page)addToCache.Invoke(manager, new object[] { cachedPage })!;
+        var addedPage = (Page)addToCache.Invoke(manager, new object[] { cachedPage, false })!;
 
         await Assert.That(object.ReferenceEquals(addedPage, cachedPage)).IsTrue();
 

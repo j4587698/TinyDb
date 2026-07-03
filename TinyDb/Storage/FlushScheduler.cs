@@ -316,8 +316,11 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             }
             catch (Exception ex)
             {
+                RecordBackgroundFailure(ex);
                 Volatile.Write(ref _foregroundFlushFailureObserved, 1);
                 tcsToComplete.TrySetException(ex);
+                FaultPendingSyncedBatch(ex);
+                return;
             }
         }
     }
@@ -338,6 +341,24 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
 
         pendingToCancel?.TrySetCanceled();
+    }
+
+    private void FaultPendingSyncedBatch(Exception exception)
+    {
+        TaskCompletionSource? pendingToFault = null;
+        lock (_flushLock)
+        {
+            if (_syncedRequests > 0)
+            {
+                pendingToFault = _syncedBatchTcs;
+                _syncedBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _syncedRequests = 0;
+            }
+
+            _syncedWorkerRunning = false;
+        }
+
+        pendingToFault?.TrySetException(exception);
     }
 
     private async Task RunJournalWorkerAsync()
@@ -388,8 +409,28 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             {
                 RecordBackgroundFailure(ex);
                 tcsToComplete.TrySetException(ex);
+                FaultPendingJournalBatch(ex);
+                return;
             }
         }
+    }
+
+    private void FaultPendingJournalBatch(Exception exception)
+    {
+        TaskCompletionSource? pendingToFault = null;
+        lock (_flushLock)
+        {
+            if (_journalRequests > 0)
+            {
+                pendingToFault = _journalBatchTcs;
+                _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _journalRequests = 0;
+            }
+
+            _journalWorkerRunning = false;
+        }
+
+        pendingToFault?.TrySetException(exception);
     }
 
     public async Task FlushPendingAsync(CancellationToken cancellationToken = default)

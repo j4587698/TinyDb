@@ -182,6 +182,18 @@ public class QueryOptimizerEdgeCaseTests
     }
 
     [Test]
+    public async Task CreateExecutionPlan_WithCapturedObjectProperty_ShouldUseIndex()
+    {
+        _engine.EnsureIndex("TestEntity", "Age", "age_idx");
+        var request = new QueryRequest { Age = 25 };
+
+        var plan = _optimizer.CreateExecutionPlan<TestEntity>("TestEntity", e => e.Age == request.Age);
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexScan);
+        await Assert.That(plan.IndexScanKeys![0].Value.RawValue).IsEqualTo(25);
+    }
+
+    [Test]
     public async Task CreateExecutionPlan_WithLongValue_ShouldConvertCorrectly()
     {
         _engine.EnsureIndex("ProductEntity", "Stock", "stock_idx");
@@ -324,6 +336,11 @@ public class QueryOptimizerEdgeCaseTests
         public string Name { get; set; } = string.Empty;
         public int Age { get; set; }
         public string Email { get; set; } = string.Empty;
+    }
+
+    private sealed class QueryRequest
+    {
+        public int Age { get; init; }
     }
 
     private class ProductEntity

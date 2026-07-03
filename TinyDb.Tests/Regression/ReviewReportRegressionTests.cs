@@ -384,11 +384,13 @@ public sealed class ReviewReportRegressionTests : IDisposable
         pageManager.RegisterWAL(
             (walPage, _) =>
             {
-                if (walPage.PageID != page.PageID || competingFree != null) return;
+                if (walPage.PageID != page.PageID) return;
+
+                walNextPageId = walPage.Header.NextPageID;
+                if (competingFree != null) return;
 
                 competingFree = Task.Run(() => pageManager.FreePage(competingPage.PageID));
                 Thread.Sleep(100);
-                walNextPageId = walPage.Header.NextPageID;
             },
             _ => { });
 

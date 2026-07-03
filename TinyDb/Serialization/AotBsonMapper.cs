@@ -53,9 +53,12 @@ public static class AotBsonMapper
         }
 
         // 循环引用检测
-        _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var trackReference = !typeof(T).IsValueType;
+        var serializingObjects = trackReference
+            ? _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance)
+            : null;
         
-        if (!typeof(T).IsValueType && _serializingObjects.Contains(entity))
+        if (trackReference && serializingObjects!.Contains(entity))
         {
             // 检测到循环引用，返回空文档（或只包含ID的文档）
             if (AotHelperRegistry.TryGetAdapter<T>(out var circularAdapter))
@@ -69,9 +72,9 @@ public static class AotBsonMapper
             return new BsonDocument();
         }
 
-        if (!typeof(T).IsValueType)
+        if (trackReference)
         {
-            _serializingObjects.Add(entity);
+            serializingObjects!.Add(entity);
         }
 
         try
@@ -87,9 +90,13 @@ public static class AotBsonMapper
         }
         finally
         {
-            if (!typeof(T).IsValueType)
+            if (trackReference && _serializingObjects != null)
             {
                 _serializingObjects.Remove(entity);
+                if (_serializingObjects.Count == 0)
+                {
+                    _serializingObjects = null;
+                }
             }
         }
     }

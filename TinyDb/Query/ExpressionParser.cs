@@ -652,7 +652,7 @@ public sealed class ExpressionParser
             return null;
         }
 
-        throw new InvalidOperationException("Constant folding is not supported for this property in AOT-only mode.");
+        return value;
     }
 
     /// <summary>
