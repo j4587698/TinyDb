@@ -106,7 +106,9 @@ public sealed class TransactionManager : IDisposable
 
         try
         {
-            using var collectionLocks = _engine.EnterCollectionWriteLocks(GetTransactionLockCollectionNames(operations));
+            var transactionLockCollections = GetTransactionLockCollectionNames(operations).ToArray();
+            using var collectionLocks = _engine.EnterCollectionCommitGates(transactionLockCollections);
+            using var documentLocks = _engine.EnterCollectionDocumentLocks(GetTransactionDocumentLockKeys(operations));
 
             // 验证所有操作
             ValidateOperations(operations);
@@ -202,6 +204,35 @@ public sealed class TransactionManager : IDisposable
         }
 
         return collectionNames;
+    }
+
+    private IEnumerable<CollectionDocumentLockKey> GetTransactionDocumentLockKeys(IReadOnlyList<TransactionOperation> operations)
+    {
+        foreach (var operation in operations)
+        {
+            if (operation.DocumentId != null &&
+                !operation.DocumentId.IsNull &&
+                operation.OperationType is TransactionOperationType.Insert or TransactionOperationType.Update or TransactionOperationType.Delete)
+            {
+                yield return new CollectionDocumentLockKey(operation.CollectionName, operation.DocumentId);
+            }
+
+            if (operation.NewDocument == null ||
+                operation.OperationType is not (TransactionOperationType.Insert or TransactionOperationType.Update))
+            {
+                continue;
+            }
+
+            foreach (var foreignKey in GetForeignKeyDefinitions(operation.CollectionName))
+            {
+                if (string.IsNullOrWhiteSpace(foreignKey.ReferencedCollection)) continue;
+
+                if (TryGetForeignKeyValue(operation.NewDocument, foreignKey.FieldName, out var foreignKeyValue))
+                {
+                    yield return new CollectionDocumentLockKey(foreignKey.ReferencedCollection, foreignKeyValue);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -383,20 +414,7 @@ public sealed class TransactionManager : IDisposable
 
             foreach (var fk in foreignKeys)
             {
-                BsonValue? fkValue;
-                bool found = op.NewDocument.TryGetValue(fk.FieldName, out fkValue) && !fkValue.IsNull;
-                
-                if (!found)
-                {
-                    // Try camelCase
-                    var camelName = ToCamelCase(fk.FieldName);
-                    if (camelName != fk.FieldName)
-                    {
-                        found = op.NewDocument.TryGetValue(camelName, out fkValue) && !fkValue.IsNull;
-                    }
-                }
-
-                if (found)
+                if (TryGetForeignKeyValue(op.NewDocument, fk.FieldName, out var fkValue))
                 {
                     var referencedDoc = _engine.FindById(fk.ReferencedCollection, fkValue!);
 
@@ -411,6 +429,28 @@ public sealed class TransactionManager : IDisposable
                 }
             }
         }
+    }
+
+    private static bool TryGetForeignKeyValue(BsonDocument document, string fieldName, out BsonValue value)
+    {
+        if (document.TryGetValue(fieldName, out var directValue) && directValue != null && !directValue.IsNull)
+        {
+            value = directValue;
+            return true;
+        }
+
+        var camelName = ToCamelCase(fieldName);
+        if (camelName != fieldName &&
+            document.TryGetValue(camelName, out var camelValue) &&
+            camelValue != null &&
+            !camelValue.IsNull)
+        {
+            value = camelValue;
+            return true;
+        }
+
+        value = BsonNull.Value;
+        return false;
     }
 
     private void ValidateWriteConflicts(IReadOnlyList<TransactionOperation> operations)

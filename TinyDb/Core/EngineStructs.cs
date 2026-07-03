@@ -66,3 +66,5 @@ internal readonly struct PageDocumentEntry
     public int LargeDocumentSize { get; }
     public BsonValue Id => Document.TryGetValue("_id", out var id) ? id : BsonNull.Value;
 }
+
+internal readonly record struct CollectionDocumentLockKey(string CollectionName, BsonValue DocumentId);
