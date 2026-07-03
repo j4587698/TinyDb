@@ -17,12 +17,10 @@ public sealed class PageManager : IDisposable
     private readonly IPageCodec _pageCodec;
     private readonly ConcurrentDictionary<uint, Page> _pageCache;
     private readonly ConcurrentDictionary<uint, byte> _dirtyPageIds;
-    private readonly object _allocationLock = new(); // 用于分配新页面的锁
-    private readonly object _freeListLock = new();
-    private readonly object[] _pageLocks; // 分段锁，用于页面级别的同步
+    private readonly object _stateLock = new();
+    private readonly object _cacheLock = new();
     private readonly LRUCache<uint, Page> _lruCache;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
-    private const int LockStripes = 64; // 分段锁的数量
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private long _fileSize;
@@ -120,12 +118,21 @@ public sealed class PageManager : IDisposable
     /// <summary>
     /// 第一个空闲页面ID
     /// </summary>
-    public uint FirstFreePageID => _firstFreePageID;
+    public uint FirstFreePageID
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _firstFreePageID;
+            }
+        }
+    }
 
     /// <summary>
     /// 总页面数量
     /// </summary>
-    public uint TotalPages => (uint)(_fileSize / _physicalPageSize);
+    public uint TotalPages => (uint)(Volatile.Read(ref _fileSize) / _physicalPageSize);
 
     /// <summary>
     /// 最大缓存页面数
@@ -170,8 +177,6 @@ public sealed class PageManager : IDisposable
         _pageCache = new ConcurrentDictionary<uint, Page>();
         _dirtyPageIds = new ConcurrentDictionary<uint, byte>();
         _lruCache = new LRUCache<uint, Page>(maxCacheSize);
-        _pageLocks = new object[LockStripes];
-        for (int i = 0; i < LockStripes; i++) _pageLocks[i] = new object();
         _fileSize = _diskStream.Size;
         _nextPageID = 0;
         _firstFreePageID = 0;
@@ -229,27 +234,36 @@ public sealed class PageManager : IDisposable
     /// <param name="firstFreePageID">第一个空闲页面ID</param>
     public void Initialize(uint totalPages, uint firstFreePageID)
     {
-        lock (_allocationLock)
+        bool rebuildFreeList;
+        uint nextPageId;
+        lock (_stateLock)
         {
             // 如果文件大小不匹配 TotalPages，优先信任文件大小
             var calculatedTotal = (uint)(_fileSize / _physicalPageSize);
             _nextPageID = Math.Max(totalPages, calculatedTotal);
             _firstFreePageID = firstFreePageID;
+            nextPageId = _nextPageID;
 
             // 关键修复：如果 _firstFreePageID 为 0 但文件中有页面，
             // 可能是由于非正常关闭导致的空闲链表丢失，执行一次快速扫描恢复
-            if (_firstFreePageID == 0 && _nextPageID > 1)
+            rebuildFreeList = _firstFreePageID == 0 && _nextPageID > 1;
+        }
+
+        if (rebuildFreeList)
+        {
+            var rebuiltFirstFreePageId = ScanFreePages(nextPageId);
+            lock (_stateLock)
             {
-                ScanFreePages();
+                _firstFreePageID = rebuiltFirstFreePageId;
             }
         }
     }
 
-    private void ScanFreePages()
+    private uint ScanFreePages(uint nextPageId)
     {
         var freePageIds = new List<uint>();
         uint skippedPages = 0;
-        for (uint i = 2; i <= _nextPageID; i++)
+        for (uint i = 2; i <= nextPageId; i++)
         {
             try
             {
@@ -269,14 +283,13 @@ public sealed class PageManager : IDisposable
             }
         }
 
-        _firstFreePageID = freePageIds.Count > 0 ? freePageIds[0] : 0;
         for (var index = 0; index < freePageIds.Count; index++)
         {
             var pageId = freePageIds[index];
-            var nextPageId = index + 1 < freePageIds.Count ? freePageIds[index + 1] : 0;
+            var nextFreePageId = index + 1 < freePageIds.Count ? freePageIds[index + 1] : 0;
             try
             {
-                WriteFreePageLink(pageId, nextPageId);
+                WriteFreePageLink(pageId, nextFreePageId);
             }
             catch (Exception ex)
             {
@@ -291,6 +304,8 @@ public sealed class PageManager : IDisposable
                 TinyDbLogLevel.Warning,
                 $"Free list rebuild skipped {skippedPages} unreadable page(s). The pages were left allocated to avoid reusing corrupted data; run CompactDatabase to reclaim space.");
         }
+
+        return freePageIds.Count > 0 ? freePageIds[0] : 0;
     }
 
     private void WriteFreePageLink(uint pageId, uint nextPageId)
@@ -321,14 +336,21 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_allocationLock)
+        var dirtyPages = CountDirtyPages();
+        uint current;
+        uint nextPageId;
+        long fileSize;
+        lock (_stateLock)
         {
-            var dirtyPages = CountDirtyPages();
-            var totalPages = TotalPages;
+            current = _firstFreePageID;
+            nextPageId = _nextPageID;
+            fileSize = _fileSize;
+        }
+
+        var totalPages = (uint)(fileSize / _physicalPageSize);
             
             // 简单估算：扫描空闲链表长度
             uint freeCount = 0;
-            uint current = _firstFreePageID;
             var visited = new HashSet<uint>();
             while (current != 0 && visited.Add(current))
             {
@@ -355,10 +377,9 @@ public sealed class PageManager : IDisposable
                 DirtyPages = dirtyPages,
                 MaxCacheSize = MaxCacheSize,
                 CacheHitRatio = _lruCache.HitRatio,
-                FileSize = _fileSize,
-                NextPageID = _nextPageID
+                FileSize = fileSize,
+                NextPageID = nextPageId
             };
-        }
     }
 
     /// <summary>
@@ -373,9 +394,8 @@ public sealed class PageManager : IDisposable
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
         // 首先尝试从缓存获取
-        if (useCache && _pageCache.TryGetValue(pageID, out var cachedPage))
+        if (useCache && TryGetCachedPage(pageID, pin: false, out var cachedPage))
         {
-            _lruCache.TryTouch(pageID);
             return cachedPage;
         }
 
@@ -434,6 +454,26 @@ public sealed class PageManager : IDisposable
         }
     }
 
+    private bool TryGetCachedPage(uint pageID, bool pin, out Page page)
+    {
+        lock (_cacheLock)
+        {
+            if (_pageCache.TryGetValue(pageID, out page!))
+            {
+                if (pin)
+                {
+                    page.Pin();
+                }
+
+                _lruCache.TryTouch(pageID);
+                return true;
+            }
+        }
+
+        page = null!;
+        return false;
+    }
+
     internal bool TryReadLogicalPageSnapshot(uint pageID, out byte[] pageData)
     {
         ThrowIfDisposed();
@@ -462,18 +502,9 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
-        if (useCache)
+        if (useCache && TryGetCachedPage(pageID, pin: true, out var cachedPage))
         {
-            var lockObj = _pageLocks[pageID % LockStripes];
-            lock (lockObj)
-            {
-                if (_pageCache.TryGetValue(pageID, out var cachedPage))
-                {
-                    cachedPage.Pin();
-                    _lruCache.TryTouch(pageID);
-                    return cachedPage;
-                }
-            }
+            return cachedPage;
         }
 
         var pageOffset = CalculatePageOffset(pageID);
@@ -501,7 +532,7 @@ public sealed class PageManager : IDisposable
 
             if (useCache)
             {
-                page = AddToCache(page);
+                return AddToCache(page, pinned: true);
             }
 
             page.Pin();
@@ -526,9 +557,8 @@ public sealed class PageManager : IDisposable
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
         // 首先尝试从缓存获取
-        if (useCache && _pageCache.TryGetValue(pageID, out var cachedPage))
+        if (useCache && TryGetCachedPage(pageID, pin: false, out var cachedPage))
         {
-            _lruCache.TryTouch(pageID);
             return cachedPage;
         }
 
@@ -720,11 +750,9 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_freeListLock)
+        lock (_stateLock)
         {
-            lock (_allocationLock)
-            {
-                uint pageID;
+            uint pageID;
 
                 // 尝试从空闲页面链表获取
                 if (_firstFreePageID != 0)
@@ -743,9 +771,8 @@ public sealed class PageManager : IDisposable
                 }
 
                 // 分配新页面
-                pageID = ++_nextPageID;
-                return CreateNewPage(pageID, pageType);
-            }
+            pageID = ++_nextPageID;
+            return CreateNewPage(pageID, pageType);
         }
     }
 
@@ -753,11 +780,9 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_freeListLock)
+        lock (_stateLock)
         {
-            lock (_allocationLock)
-            {
-                uint pageID;
+            uint pageID;
 
                 if (_firstFreePageID != 0)
                 {
@@ -772,9 +797,8 @@ public sealed class PageManager : IDisposable
                     return freePage;
                 }
 
-                pageID = ++_nextPageID;
-                return CreateNewPage(pageID, pageType, pinned: true);
-            }
+            pageID = ++_nextPageID;
+            return CreateNewPage(pageID, pageType, pinned: true);
         }
     }
 
@@ -788,21 +812,20 @@ public sealed class PageManager : IDisposable
     {
         var page = new Page(pageID, (int)_pageSize, pageType);
         page.UpdateStats((ushort)Math.Min(page.DataSize, ushort.MaxValue), 0);
-        page = AddToCache(page);
-        if (pinned)
-        {
-            page.Pin();
-        }
+        page = AddToCache(page, pinned);
 
         // 计算新的文件大小
         var newFileSize = CalculatePageOffset(pageID) + _physicalPageSize;
 
         // 只有当新文件大小大于当前大小时才更新
-        if (newFileSize > _fileSize)
+        lock (_stateLock)
         {
-            _fileSize = newFileSize;
+            if (newFileSize > _fileSize)
+            {
+                _fileSize = newFileSize;
             // 确保磁盘流的大小也被正确设置
-            _diskStream.SetLength(_fileSize);
+                _diskStream.SetLength(_fileSize);
+            }
         }
 
         return page;
@@ -822,10 +845,7 @@ public sealed class PageManager : IDisposable
         byte[]? beforeImage = null;
         if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
         {
-            lock (_allocationLock)
-            {
-                beforeImage = ReadPageSnapshotForWal(page.PageID);
-            }
+            beforeImage = ReadPageSnapshotForWal(page.PageID);
         }
 
         _appendLogPage?.Invoke(page, beforeImage);
@@ -834,10 +854,7 @@ public sealed class PageManager : IDisposable
             _flushLogToLsn(page.Header.LSN);
         }
 
-        lock (_allocationLock)
-        {
-            WritePageToDisk(page, forceFlush);
-        }
+        WritePageToDisk(page, forceFlush);
     }
 
     internal byte[]? CaptureBeforeImageForWal(Page page)
@@ -910,14 +927,8 @@ public sealed class PageManager : IDisposable
             _flushLogToLsn(page.Header.LSN);
         }
 
-        long pageOffset;
-        long dirtyGeneration;
-        byte[] snapshot;
-        lock (_allocationLock)
-        {
-            snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
-            pageOffset = CalculatePageOffset(page.PageID);
-        }
+        var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
+        var pageOffset = CalculatePageOffset(page.PageID);
 
         await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
 
@@ -1057,10 +1068,7 @@ public sealed class PageManager : IDisposable
             return false;
         }
 
-        lock (_allocationLock)
-        {
-            WritePageToDisk(page, forceFlush: false);
-        }
+        WritePageToDisk(page, forceFlush: false);
 
         return true;
     }
@@ -1085,14 +1093,8 @@ public sealed class PageManager : IDisposable
             return false;
         }
 
-        long pageOffset;
-        long dirtyGeneration;
-        byte[] snapshot;
-        lock (_allocationLock)
-        {
-            snapshot = page.SnapshotForDiskWrite(out dirtyGeneration);
-            pageOffset = CalculatePageOffset(page.PageID);
-        }
+        var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
+        var pageOffset = CalculatePageOffset(page.PageID);
 
         await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
         if (MarkPageClean(page, dirtyGeneration))
@@ -1133,22 +1135,22 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
-        Page page;
+        var page = GetPage(pageID);
         byte[]? beforeImage = null;
-
-        lock (_freeListLock)
+        if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
         {
-            lock (_allocationLock)
-            {
-                page = GetPage(pageID);
-                if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
-                {
-                    beforeImage = ReadPageSnapshotForWal(pageID);
-                }
+            beforeImage = ReadPageSnapshotForWal(pageID);
+        }
 
+        while (true)
+        {
+            uint expectedFirstFreePageId;
+            lock (_stateLock)
+            {
+                expectedFirstFreePageId = _firstFreePageID;
                 page.ClearData();
                 page.UpdatePageType(PageType.Empty);
-                page.SetLinks(0, _firstFreePageID);
+                page.SetLinks(0, expectedFirstFreePageId);
                 page.Header.ItemCount = 0;
                 page.Header.FreeBytes = (ushort)(page.DataSize);
             }
@@ -1159,11 +1161,16 @@ public sealed class PageManager : IDisposable
                 _flushLogToLsn(page.Header.LSN);
             }
 
-            lock (_allocationLock)
+            lock (_stateLock)
             {
+                if (_firstFreePageID != expectedFirstFreePageId)
+                {
+                    continue;
+                }
+
                 WritePageToDisk(page, forceFlush: false);
                 _firstFreePageID = pageID;
-                RemoveFromCache(pageID);
+                return;
             }
         }
     }
@@ -1232,7 +1239,7 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
         if (pageData == null) throw new ArgumentNullException(nameof(pageData));
-        lock (_allocationLock)
+        lock (_stateLock)
         {
             byte[] buffer;
             if (pageData.Length == _pageSize)
@@ -1322,7 +1329,7 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_allocationLock)
+        lock (_cacheLock)
         {
             if (maxPagesToKeep <= 0)
             {
@@ -1370,14 +1377,22 @@ public sealed class PageManager : IDisposable
     /// 添加页面到缓存
     /// </summary>
     /// <param name="page">页面</param>
-    private Page AddToCache(Page page)
+    private Page AddToCache(Page page, bool pinned = false)
     {
         while (true)
         {
-            if (_pageCache.TryGetValue(page.PageID, out var cachedPage))
+            lock (_cacheLock)
             {
-                _lruCache.TryTouch(page.PageID);
-                return cachedPage;
+                if (_pageCache.TryGetValue(page.PageID, out var cachedPage))
+                {
+                    if (pinned)
+                    {
+                        cachedPage.Pin();
+                    }
+
+                    _lruCache.TryTouch(page.PageID);
+                    return cachedPage;
+                }
             }
 
             // 如果缓存已满，移除最少使用的页面
@@ -1386,11 +1401,19 @@ public sealed class PageManager : IDisposable
                 EvictLeastRecentlyUsed();
             }
 
-            if (_pageCache.TryAdd(page.PageID, page))
+            lock (_cacheLock)
             {
-                AttachDirtyTracking(page);
-                _lruCache.Put(page.PageID, page);
-                return page;
+                if (_pageCache.TryAdd(page.PageID, page))
+                {
+                    AttachDirtyTracking(page);
+                    if (pinned)
+                    {
+                        page.Pin();
+                    }
+
+                    _lruCache.Put(page.PageID, page);
+                    return page;
+                }
             }
         }
     }
@@ -1404,7 +1427,7 @@ public sealed class PageManager : IDisposable
         var candidates = _lruCache.GetLeastRecentlyUsed(10);
         foreach (var pageID in candidates)
         {
-            var lockObj = _pageLocks[pageID % LockStripes];
+            var lockObj = _cacheLock;
             Page? evictionCandidate = null;
             lock (lockObj)
             {
@@ -1462,11 +1485,15 @@ public sealed class PageManager : IDisposable
 
     private void RemoveFromCache(uint pageID)
     {
-        if (_pageCache.TryRemove(pageID, out var page))
+        lock (_cacheLock)
         {
-            RemoveDirtyTracking(page);
+            if (_pageCache.TryRemove(pageID, out var page))
+            {
+                RemoveDirtyTracking(page);
+            }
+
+            _lruCache.Remove(pageID);
         }
-        _lruCache.Remove(pageID);
     }
 
     /// <summary>

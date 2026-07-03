@@ -910,7 +910,7 @@ public sealed class TinyDbEngine : IDisposable
     private void BackfillIndex(string collectionName, IndexManager indexManager, string indexName)
     {
         var state = GetCollectionState(collectionName);
-        var existingDocuments = ReadAllDocumentsSnapshot(collectionName, state);
+        var existingDocuments = ReadAllDocumentsSnapshotFromPageSnapshots(collectionName, state);
         indexManager.RebuildIndex(indexName, existingDocuments);
     }
 
@@ -1334,7 +1334,7 @@ public sealed class TinyDbEngine : IDisposable
     {
         var state = GetCollectionState(collectionName);
         long max = 0;
-        foreach (var document in ReadAllDocumentsSnapshot(collectionName, state))
+        foreach (var document in ReadAllDocumentsSnapshotFromPageSnapshots(collectionName, state))
         {
             if (document.TryGetValue("_id", out var id) && TryConvertIdentityValue(id, out var value) && value > max)
             {
@@ -2255,7 +2255,7 @@ public sealed class TinyDbEngine : IDisposable
     internal IEnumerable<BsonDocument> FindAll(string col)
     {
         var st = GetCollectionState(col);
-        var ds = ReadAllDocumentsSnapshot(col, st);
+        var ds = ReadAllDocumentsSnapshotFromPageSnapshots(col, st);
         var tx = GetCurrentTransaction();
         // 即使 ds 为空，也需要合并事务挂起操作
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
@@ -2629,35 +2629,20 @@ public sealed class TinyDbEngine : IDisposable
 
     private List<BsonDocument> ReadAllDocumentsSnapshot(string col, CollectionState st, CancellationToken cancellationToken = default)
     {
+        return ReadAllDocumentsSnapshotFromPageSnapshots(col, st, cancellationToken);
+    }
+
+    private List<BsonDocument> ReadAllDocumentsSnapshotFromPageSnapshots(string col, CollectionState st, CancellationToken cancellationToken = default)
+    {
         var ds = new List<BsonDocument>();
 
-        lock (st.PageState.SyncRoot)
+        foreach (var result in StreamRawScanResultPages(col, st, null))
         {
-            // 固定当前集合页列表，避免读过程中页集合被并发写线程修改。
-            var pages = st.OwnedPages.Keys.ToList();
-            pages.Sort();
+            cancellationToken.ThrowIfCancellationRequested();
 
-            foreach (var pageId in pages)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                try
-                {
-                    var p = _pageManager.GetPage(pageId);
-                    if (p.PageType != PageType.Data || p.Header.ItemCount == 0) continue;
-
-                    foreach (var doc in _dataPageAccess.ScanDocumentsFromPage(p))
-                    {
-                        if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
-                        ds.Add(ResolveLargeDocument(doc));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to scan page {pageId} in collection '{col}'.", ex);
-                }
-            }
+            var doc = DeserializeDocumentOrThrow(result.Slice);
+            if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
+            ds.Add(ResolveLargeDocument(doc));
         }
 
         return ds;

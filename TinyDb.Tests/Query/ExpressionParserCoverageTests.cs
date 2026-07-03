@@ -671,7 +671,7 @@ public class ExpressionParserCoverageTests
     }
 
     [Test]
-    public async Task Parse_Constant_Member_Property_ShouldNotOptimize_InAotOnlyMode()
+    public async Task Parse_Constant_Member_Property_ShouldOptimize_InAotOnlyMode()
     {
         var holder = new Holder { Value = 7 };
         Expression<Func<int>> expr = () => holder.Value;
@@ -679,7 +679,8 @@ public class ExpressionParserCoverageTests
         var result = _parser.ParseExpression(expr.Body);
 
         await Assert.That(result).IsNotNull();
-        await Assert.That(result).IsTypeOf<MemberExpression>();
+        await Assert.That(result).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)result).Value).IsEqualTo(7);
     }
 
     [Test]

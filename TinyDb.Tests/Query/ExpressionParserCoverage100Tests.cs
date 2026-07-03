@@ -60,7 +60,7 @@ public sealed class ExpressionParserCoverage100Tests
         await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), date))).Value).IsEqualTo(dt.Date);
         await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), dayOfWeek))).Value).IsEqualTo((int)dt.DayOfWeek);
 
-        await Assert.That(Parse(Expression.Property(Expression.Constant(dt), ticks))).IsTypeOf<MemberExpression>();
+        await Assert.That(((ConstantExpression)Parse(Expression.Property(Expression.Constant(dt), ticks))).Value).IsEqualTo(dt.Ticks);
     }
 
     [Test]

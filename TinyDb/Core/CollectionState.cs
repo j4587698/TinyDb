@@ -16,7 +16,6 @@ internal sealed class CollectionState
     // 追踪集合拥有的页面ID，优化全表扫描
     public ConcurrentDictionary<uint, byte> OwnedPages { get; } = new();
     
-    public object CacheLock { get; } = new();
     public bool IsCacheInitialized => Volatile.Read(ref _cacheInitialized) == 1;
     public void MarkCacheInitialized() => Volatile.Write(ref _cacheInitialized, 1);
 }

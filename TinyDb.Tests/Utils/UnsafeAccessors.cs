@@ -47,7 +47,7 @@ internal static class UnsafeAccessors
 
     internal static class PageManagerAccessor
     {
-        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_allocationLock")]
-        internal static extern ref object AllocationLock(PageManager pageManager);
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_stateLock")]
+        internal static extern ref object StateLock(PageManager pageManager);
     }
 }

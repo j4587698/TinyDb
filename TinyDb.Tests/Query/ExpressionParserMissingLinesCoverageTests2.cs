@@ -52,7 +52,8 @@ public sealed class ExpressionParserMissingLinesCoverageTests2
         var holder = new Holder();
         var propExpr = Expression.Property(Expression.Constant(holder), HolderProperty);
         var parsedProp = parser.ParseExpression(propExpr);
-        await Assert.That(parsedProp).IsNotTypeOf<ConstantExpression>();
+        await Assert.That(parsedProp).IsTypeOf<ConstantExpression>();
+        await Assert.That(((ConstantExpression)parsedProp).Value).IsEqualTo(456);
     }
 
     [Test]
