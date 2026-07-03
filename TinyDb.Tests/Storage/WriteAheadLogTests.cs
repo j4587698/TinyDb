@@ -55,6 +55,10 @@ public class WriteAheadLogTests : IDisposable
         var page = new Page(1, 4096, PageType.Data);
         wal.AppendPage(page);
         
+        wal.Truncate();
+        await Assert.That(wal.HasPendingEntries).IsFalse();
+
+        wal.AppendPage(page);
         await wal.TruncateAsync();
         await Assert.That(wal.HasPendingEntries).IsFalse();
     }

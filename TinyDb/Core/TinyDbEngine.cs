@@ -370,7 +370,7 @@ public sealed class TinyDbEngine : IDisposable
                     {
                         // If the main database file was deleted but a stale WAL remains, replaying that WAL
                         // would resurrect pages from a different database generation and can corrupt the new header.
-                        _writeAheadLog.TruncateAsync().GetAwaiter().GetResult();
+                        _writeAheadLog.Truncate();
                     }
                     else
                     {
@@ -3184,7 +3184,7 @@ public sealed class TinyDbEngine : IDisposable
             }
         }
 
-        AppendDocumentBytesToWritableDataPage(st, id, oldEntry.RawBytes);
+        AppendDocumentBytesToWritableDataPage(st, id, oldEntry.RawMemory.Span);
     }
 
     private static BsonDocument PrepareDocumentForUpdate(string col, BsonDocument doc, out BsonValue id)

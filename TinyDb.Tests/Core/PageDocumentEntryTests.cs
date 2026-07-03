@@ -24,4 +24,23 @@ public class PageDocumentEntryTests
 
         await Assert.That(entry.Id).IsEqualTo(BsonNull.Value);
     }
+
+    [Test]
+    public async Task RawBytes_WhenBackedByMemory_ShouldReturnStableCopy()
+    {
+        var doc = new BsonDocument().Set("_id", 1);
+        var source = new byte[] { 1, 2, 3 };
+        var entry = new PageDocumentEntry(doc, source.AsMemory());
+
+        await Assert.That(entry.RawLength).IsEqualTo(3);
+        await Assert.That(entry.RawMemory.Span[1]).IsEqualTo((byte)2);
+
+        var copied = entry.RawBytes;
+        copied[1] = 9;
+        await Assert.That(source[1]).IsEqualTo((byte)2);
+
+        var stable = entry.ToStableRawBytes();
+        source[1] = 8;
+        await Assert.That(stable.RawMemory.Span[1]).IsEqualTo((byte)2);
+    }
 }

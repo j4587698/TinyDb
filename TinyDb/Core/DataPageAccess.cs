@@ -84,7 +84,6 @@ internal sealed class DataPageAccess
             
             if (offset + len > span.Length) break;
             var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, len);
-            var bytes = rawDocument.Span.ToArray();
             offset += len;
             
             try
@@ -93,7 +92,7 @@ internal sealed class DataPageAccess
                 bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
                 uint lId = isL ? (uint)doc["_largeDocumentIndex"].ToInt64(null) : 0;
                 int lS = isL ? (int)doc["_largeDocumentSize"].ToInt64(null) : 0;
-                res.Add(new PageDocumentEntry(doc, bytes, isL, lId, lS));
+                res.Add(new PageDocumentEntry(doc, rawDocument, isL, lId, lS));
             }
             catch (Exception ex)
             {
@@ -129,14 +128,13 @@ internal sealed class DataPageAccess
         if (offset + targetLen > span.Length) return null;
 
         var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, targetLen);
-        var bytes = rawDocument.Span.ToArray();
         try
         {
             var doc = BsonSerializer.DeserializeDocument(rawDocument);
             bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
             uint lId = isL ? (uint)doc["_largeDocumentIndex"].ToInt64(null) : 0;
             int lS = isL ? (int)doc["_largeDocumentSize"].ToInt64(null) : 0;
-            return new PageDocumentEntry(doc, bytes, isL, lId, lS);
+            return new PageDocumentEntry(doc, rawDocument, isL, lId, lS);
         }
         catch (Exception ex)
         {
@@ -438,7 +436,7 @@ internal sealed class DataPageAccess
     public bool CanFitInPage(Page p, List<PageDocumentEntry> docs)
     {
         long total = 0;
-        foreach (var d in docs) total += 4 + d.RawBytes.Length; // 4 bytes len + content
+        foreach (var d in docs) total += 4 + d.RawLength; // 4 bytes len + content
         return total <= p.DataCapacity;
     }
 
@@ -458,6 +456,11 @@ internal sealed class DataPageAccess
 
     public void RewritePageWithDocuments(string col, CollectionState st, Page p, List<PageDocumentEntry> docs, Action<BsonValue, uint, ushort> updIdx)
     {
+        for (var i = 0; i < docs.Count; i++)
+        {
+            docs[i] = docs[i].ToStableRawBytes();
+        }
+
         // Preserve Links: Read -> Reset -> Set
         uint prev = p.Header.PrevPageID;
         uint next = p.Header.NextPageID;
@@ -466,7 +469,7 @@ internal sealed class DataPageAccess
         
         for (ushort i = 0; i < docs.Count; i++)
         {
-            AppendDocumentToPage(p, docs[i].RawBytes);
+            AppendDocumentToPage(p, docs[i].RawMemory.Span);
             var id = docs[i].Id;
             if (id != null) updIdx(id, p.PageID, i);
         }
