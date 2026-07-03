@@ -70,7 +70,11 @@ public sealed class IndexManager : IDisposable
     {
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _tempFilePath = Path.Combine(Path.GetTempPath(), $"idx_mgr_{Guid.NewGuid():N}.db");
-        var ds = new DiskStream(_tempFilePath);
+        var ds = new DiskStream(
+            _tempFilePath,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete,
+            FileOptions.DeleteOnClose);
         _tempPm = new PageManager(ds);
         _pm = _tempPm;
         _indexes = new ConcurrentDictionary<string, BTreeIndex>();

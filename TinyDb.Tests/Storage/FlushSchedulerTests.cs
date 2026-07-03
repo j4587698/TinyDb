@@ -425,7 +425,7 @@ public class FlushSchedulerTests
 
     [Test]
     [SkipInAot]
-    public async Task FlushScheduler_Dispose_ShouldNotWaitForWorkerTasks()
+    public async Task FlushScheduler_Dispose_ShouldWaitForWorkerTasks()
     {
         var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromHours(1));
 
@@ -433,16 +433,31 @@ public class FlushSchedulerTests
             ?? throw new MissingFieldException(typeof(FlushScheduler).FullName, "_journalWorkerTask");
         var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         journalTaskField.SetValue(fs, blocker.Task);
+        var disposeStarted = new ManualResetEventSlim(false);
+        var disposeCompleted = false;
+
+        var disposeTask = Task.Run(() =>
+        {
+            disposeStarted.Set();
+            fs.Dispose();
+            disposeCompleted = true;
+        });
+
+        await Assert.That(disposeStarted.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+        await Task.Delay(100);
+        await Assert.That(disposeCompleted).IsFalse();
 
         try
         {
-            await Task.Run(() => fs.Dispose()).WaitAsync(TimeSpan.FromSeconds(2));
+            blocker.TrySetResult();
+            await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
         }
         finally
         {
-            blocker.TrySetResult();
+            disposeStarted.Dispose();
         }
 
+        await Assert.That(disposeCompleted).IsTrue();
         await Assert.That(() => fs.Dispose()).ThrowsNothing();
     }
 

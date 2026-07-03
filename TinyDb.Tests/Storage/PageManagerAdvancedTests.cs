@@ -103,10 +103,14 @@ public class PageManagerAdvancedTests
         // 2. Free it
         pm.FreePage(id1);
         await Assert.That(pm.FirstFreePageID).IsNotEqualTo(0u);
+        await Assert.That(pm.FreePageCount).IsEqualTo(1u);
+        await Assert.That(pm.GetStatistics().FreePages).IsEqualTo(1u);
         
         // 3. Allocate again - should reuse id1
         var page2 = pm.NewPage(PageType.Data);
         await Assert.That(page2.PageID).IsEqualTo(id1);
         await Assert.That(pm.FirstFreePageID).IsEqualTo(0u);
+        await Assert.That(pm.FreePageCount).IsEqualTo(0u);
+        await Assert.That(pm.GetStatistics().FreePages).IsEqualTo(0u);
     }
 }

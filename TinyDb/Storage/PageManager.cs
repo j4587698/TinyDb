@@ -26,6 +26,7 @@ public sealed class PageManager : IDisposable
     private readonly SemaphoreSlim[] _pageLoadStripes;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
+    private uint _freePageCount;
     private long _fileSize;
     private bool _disposed;
     private readonly SemaphoreSlim _backgroundWritebackGate = new(1, 1);
@@ -141,6 +142,20 @@ public sealed class PageManager : IDisposable
     public uint TotalPages => (uint)(Volatile.Read(ref _fileSize) / _physicalPageSize);
 
     /// <summary>
+    /// 空闲页面数量
+    /// </summary>
+    public uint FreePageCount
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _freePageCount;
+            }
+        }
+    }
+
+    /// <summary>
     /// 最大缓存页面数
     /// </summary>
     public int MaxCacheSize { get; }
@@ -191,6 +206,7 @@ public sealed class PageManager : IDisposable
         _fileSize = _diskStream.Size;
         _nextPageID = 0;
         _firstFreePageID = 0;
+        _freePageCount = 0;
     }
 
     private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
@@ -243,34 +259,66 @@ public sealed class PageManager : IDisposable
     /// </summary>
     /// <param name="totalPages">总页面数</param>
     /// <param name="firstFreePageID">第一个空闲页面ID</param>
-    public void Initialize(uint totalPages, uint firstFreePageID)
+    public void Initialize(uint totalPages, uint firstFreePageID, uint freePageCount = 0, bool hasFreePageCount = false)
     {
         bool rebuildFreeList;
+        bool countExistingFreeList;
         uint nextPageId;
+        uint initialFirstFreePageId;
         lock (_stateLock)
         {
             // 如果文件大小不匹配 TotalPages，优先信任文件大小
             var calculatedTotal = (uint)(_fileSize / _physicalPageSize);
             _nextPageID = Math.Max(totalPages, calculatedTotal);
             _firstFreePageID = firstFreePageID;
+            _freePageCount = _firstFreePageID == 0
+                ? 0
+                : ClampFreePageCount(freePageCount, _nextPageID);
             nextPageId = _nextPageID;
+            initialFirstFreePageId = _firstFreePageID;
 
             // 关键修复：如果 _firstFreePageID 为 0 但文件中有页面，
             // 可能是由于非正常关闭导致的空闲链表丢失，执行一次快速扫描恢复
-            rebuildFreeList = _firstFreePageID == 0 && _nextPageID > 1;
+            rebuildFreeList = _firstFreePageID == 0 &&
+                              _nextPageID > 1 &&
+                              (!hasFreePageCount || freePageCount > 0);
+            countExistingFreeList = !rebuildFreeList &&
+                                    _firstFreePageID != 0 &&
+                                    (!hasFreePageCount || _freePageCount == 0);
         }
 
         if (rebuildFreeList)
         {
-            var rebuiltFirstFreePageId = ScanFreePages(nextPageId);
+            var (rebuiltFirstFreePageId, countedFreePages) = ScanFreePages(nextPageId);
             lock (_stateLock)
             {
-                _firstFreePageID = rebuiltFirstFreePageId;
+                if (_firstFreePageID == initialFirstFreePageId)
+                {
+                    _firstFreePageID = rebuiltFirstFreePageId;
+                    _freePageCount = countedFreePages;
+                }
+            }
+        }
+        else if (countExistingFreeList)
+        {
+            var countedFreePages = CountFreePages(initialFirstFreePageId, nextPageId);
+            lock (_stateLock)
+            {
+                if (_firstFreePageID == initialFirstFreePageId)
+                {
+                    _freePageCount = countedFreePages;
+                }
             }
         }
     }
 
-    private uint ScanFreePages(uint nextPageId)
+    private static uint ClampFreePageCount(uint freePageCount, uint nextPageId)
+    {
+        var maxFreePages = nextPageId > 1 ? nextPageId - 1 : 0;
+        return Math.Min(freePageCount, maxFreePages);
+    }
+
+    private (uint FirstFreePageId, uint FreePageCount) ScanFreePages(uint nextPageId)
     {
         var freePageIds = new List<uint>();
         uint skippedPages = 0;
@@ -316,7 +364,34 @@ public sealed class PageManager : IDisposable
                 $"Free list rebuild skipped {skippedPages} unreadable page(s). The pages were left allocated to avoid reusing corrupted data; run CompactDatabase to reclaim space.");
         }
 
-        return freePageIds.Count > 0 ? freePageIds[0] : 0;
+        var firstFreePageId = freePageIds.Count > 0 ? freePageIds[0] : 0;
+        var freePageCount = (uint)freePageIds.Count;
+        return (firstFreePageId, freePageCount);
+    }
+
+    private uint CountFreePages(uint firstFreePageId, uint nextPageId)
+    {
+        uint count = 0;
+        var current = firstFreePageId;
+        var visited = new HashSet<uint>();
+
+        while (current != 0 && current <= nextPageId && visited.Add(current))
+        {
+            count++;
+            try
+            {
+                var pageOffset = CalculatePageOffset(current);
+                var pageData = ReadLogicalPageData(current, pageOffset);
+                var header = PageHeader.FromByteArray(pageData);
+                current = header.NextPageID;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to traverse free-page list at page {current}.", ex);
+            }
+        }
+
+        return count;
     }
 
     private void WriteFreePageLink(uint pageId, uint nextPageId)
@@ -348,49 +423,34 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
 
         var dirtyPages = CountDirtyPages();
-        uint current;
+        uint freeCount;
         uint nextPageId;
         long fileSize;
         lock (_stateLock)
         {
-            current = _firstFreePageID;
+            freeCount = _freePageCount;
             nextPageId = _nextPageID;
             fileSize = _fileSize;
         }
 
         var totalPages = (uint)(fileSize / _physicalPageSize);
-            
-            // 简单估算：扫描空闲链表长度
-            uint freeCount = 0;
-            var visited = new HashSet<uint>();
-            while (current != 0 && visited.Add(current))
-            {
-                freeCount++;
-                try { 
-                    var pOffset = CalculatePageOffset(current);
-                    var pData = ReadLogicalPageData(current, pOffset);
-                    var header = PageHeader.FromByteArray(pData);
-                    current = header.NextPageID;
-                }
-                catch (Exception ex)
-                {
-                    throw new InvalidOperationException($"Failed to traverse free-page list at page {current}.", ex);
-                }
-            }
+        var maxFreePages = totalPages;
+        freeCount = Math.Min(freeCount, maxFreePages);
+        var usedPages = totalPages > freeCount ? totalPages - freeCount : 0;
 
-            return new PageManagerStatistics
-            {
-                PageSize = _pageSize,
-                TotalPages = totalPages,
-                UsedPages = totalPages > 0 ? (totalPages - 1 - freeCount) : 0, // 减去头部
-                FreePages = freeCount,
-                CachedPages = _pageCache.Count,
-                DirtyPages = dirtyPages,
-                MaxCacheSize = MaxCacheSize,
-                CacheHitRatio = _lruCache.HitRatio,
-                FileSize = fileSize,
-                NextPageID = nextPageId
-            };
+        return new PageManagerStatistics
+        {
+            PageSize = _pageSize,
+            TotalPages = totalPages,
+            UsedPages = usedPages,
+            FreePages = freeCount,
+            CachedPages = _pageCache.Count,
+            DirtyPages = dirtyPages,
+            MaxCacheSize = MaxCacheSize,
+            CacheHitRatio = _lruCache.HitRatio,
+            FileSize = fileSize,
+            NextPageID = nextPageId
+        };
     }
 
     /// <summary>
@@ -819,6 +879,10 @@ public sealed class PageManager : IDisposable
                     // 读取该页面以获取下一个空闲页面ID
                     var freePage = GetPage(pageID);
                     _firstFreePageID = freePage.Header.NextPageID;
+                    if (_freePageCount > 0)
+                    {
+                        _freePageCount--;
+                    }
 
                     // 重置页面状态
                     freePage.ClearData();
@@ -847,6 +911,10 @@ public sealed class PageManager : IDisposable
                     pageID = _firstFreePageID;
                     var freePage = GetPagePinned(pageID);
                     _firstFreePageID = freePage.Header.NextPageID;
+                    if (_freePageCount > 0)
+                    {
+                        _freePageCount--;
+                    }
 
                     freePage.ClearData();
                     freePage.UpdatePageType(pageType);
@@ -1210,6 +1278,7 @@ public sealed class PageManager : IDisposable
 
                 WritePageToDisk(page, forceFlush: false);
                 _firstFreePageID = pageID;
+                _freePageCount++;
                 return;
             }
         }

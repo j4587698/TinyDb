@@ -113,7 +113,11 @@ public sealed class BTreeIndex : IDisposable
         _maxKeys = maxKeys;
 
         _tempFilePath = Path.Combine(Path.GetTempPath(), $"btree_idx_{Guid.NewGuid():N}.db");
-        var ds = new DiskStream(_tempFilePath);
+        var ds = new DiskStream(
+            _tempFilePath,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete,
+            FileOptions.DeleteOnClose);
         _tempPm = new PageManager(ds);
         _ownsPageManager = true;
 

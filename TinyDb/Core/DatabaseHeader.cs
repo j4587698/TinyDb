@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Text;
 using TinyDb.Utils;
@@ -34,7 +35,7 @@ public struct DatabaseHeader
         ModifiedAt = DateTime.UtcNow.Ticks;
         Checksum = 0;
         EnableJournaling = false;
-        _reserved = new byte[60];
+        _reserved = new byte[ReservedLength];
         _databaseName = new byte[64];
         _userData = new byte[64];
     }
@@ -118,12 +119,18 @@ public struct DatabaseHeader
     private const int SecuritySaltLength = DatabaseSecurityMetadata.SaltLength;
     private const int SecurityKeyLength = DatabaseSecurityMetadata.KeyHashLength;
     private const int SecurityBlockLength = SecurityMarkerLength + SecuritySaltLength + SecurityKeyLength;
+    private const int ReservedLength = 60;
+    private const int HeaderExtensionOffset = SecurityBlockLength;
+    private const int FreePageCountOffset = HeaderExtensionOffset;
+    private const int HeaderFlagsOffset = FreePageCountOffset + sizeof(uint);
+    private const int SerializedLength = 245;
+    private const uint HeaderFlagFreePageCount = 0x00000001;
     private static readonly byte[] SecurityMarker = { (byte)'S', (byte)'E', (byte)'C', (byte)'1' };
 
     /// <summary>
     /// 保留字段
     /// </summary>
-    private byte[] _reserved = new byte[60]; // 减少字节以容纳bool字段
+    private byte[] _reserved = new byte[ReservedLength]; // 减少字节以容纳bool字段
 
     /// <summary>
     /// 数据库名称（UTF-8编码，最多64字节）
@@ -198,6 +205,51 @@ public struct DatabaseHeader
     }
 
     /// <summary>
+    /// 空闲页数量。存储在保留区尾部，避免统计接口遍历空闲链表。
+    /// </summary>
+    public uint FreePageCount
+    {
+        get => ReadReservedUInt32(FreePageCountOffset);
+        set
+        {
+            WriteReservedUInt32(FreePageCountOffset, value);
+            HeaderFlags |= HeaderFlagFreePageCount;
+        }
+    }
+
+    /// <summary>
+    /// Header 扩展标记。当前使用保留区尾部，剩余头部空间继续留作后续扩展。
+    /// </summary>
+    public uint HeaderFlags
+    {
+        get => ReadReservedUInt32(HeaderFlagsOffset);
+        set => WriteReservedUInt32(HeaderFlagsOffset, value);
+    }
+
+    public bool HasFreePageCount => (HeaderFlags & HeaderFlagFreePageCount) != 0;
+
+    public static int ReservedHeaderExtensionBytes => ReservedLength - HeaderExtensionOffset;
+
+    public static int TrailingHeaderExtensionBytes => Size - SerializedLength;
+
+    private uint ReadReservedUInt32(int offset)
+    {
+        EnsureReservedBuffer();
+        return BinaryPrimitives.ReadUInt32LittleEndian(_reserved.AsSpan(offset, sizeof(uint)));
+    }
+
+    private void WriteReservedUInt32(int offset, uint value)
+    {
+        EnsureReservedBuffer();
+        BinaryPrimitives.WriteUInt32LittleEndian(_reserved.AsSpan(offset, sizeof(uint)), value);
+    }
+
+    private void EnsureReservedBuffer()
+    {
+        _reserved ??= new byte[ReservedLength];
+    }
+
+    /// <summary>
     /// 初始化数据库头部
     /// </summary>
     /// <param name="pageSize">页面大小</param>
@@ -223,7 +275,7 @@ public struct DatabaseHeader
         unsafe
         {
             // 清空保留字段
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < ReservedLength; i++)
             {
                 _reserved[i] = 0;
             }
@@ -234,12 +286,15 @@ public struct DatabaseHeader
                 _userData[i] = 0;
             }
         }
+
+        FreePageCount = 0;
     }
 
     public bool TryGetSecurityMetadata(out DatabaseSecurityMetadata metadata)
     {
         metadata = default;
 
+        EnsureReservedBuffer();
         var span = _reserved.AsSpan();
         if (!span.Slice(0, SecurityMarkerLength).SequenceEqual(SecurityMarker))
         {
@@ -257,15 +312,16 @@ public struct DatabaseHeader
 
     public void SetSecurityMetadata(in DatabaseSecurityMetadata metadata)
     {
+        EnsureReservedBuffer();
         var span = _reserved.AsSpan();
         SecurityMarker.CopyTo(span);
         metadata.Salt.CopyTo(span.Slice(SecurityMarkerLength, SecuritySaltLength));
         metadata.KeyHash.CopyTo(span.Slice(SecurityMarkerLength + SecuritySaltLength, SecurityKeyLength));
-        span.Slice(SecurityBlockLength).Clear();
     }
 
     public void ClearSecurityMetadata()
     {
+        EnsureReservedBuffer();
         _reserved.AsSpan(0, SecurityBlockLength).Clear();
     }
 
@@ -352,7 +408,7 @@ public struct DatabaseHeader
         unsafe
         {
             // 写入保留字段
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < ReservedLength; i++)
             {
                 writer.Write(_reserved[i]);
             }
@@ -406,7 +462,7 @@ public struct DatabaseHeader
         unsafe
         {
             // 读取保留字段
-            for (int i = 0; i < 60; i++)
+            for (int i = 0; i < ReservedLength; i++)
             {
                 header._reserved[i] = reader.ReadByte();
             }

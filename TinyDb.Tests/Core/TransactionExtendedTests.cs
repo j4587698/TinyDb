@@ -75,6 +75,25 @@ public class TransactionExtendedTests : IDisposable
     }
 
     [Test]
+    public async Task Commit_WhenInsertConflictsWithExistingDocument_ShouldNotDeleteExistingDocument()
+    {
+        var collection = _engine.GetCollection<UserWithIntId>();
+        collection.Insert(new UserWithIntId { Id = 20, Name = "Existing" });
+
+        using (var transaction = _engine.BeginTransaction())
+        {
+            collection.Insert(new UserWithIntId { Id = 21, Name = "AppliedBeforeFailure" });
+            collection.Insert(new UserWithIntId { Id = 20, Name = "DuplicateExisting" });
+
+            await Assert.That(() => transaction.Commit()).Throws<InvalidOperationException>();
+        }
+
+        await Assert.That(collection.FindById(20)!.Name).IsEqualTo("Existing");
+        await Assert.That(collection.FindById(21)).IsNull();
+        await Assert.That(collection.Count()).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Commit_Already_Committed_Transaction_Should_Throw()
     {
         using var transaction = _engine.BeginTransaction();

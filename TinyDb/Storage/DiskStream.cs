@@ -85,10 +85,14 @@ public sealed class DiskStream : IDiskStream
     /// <param name="filePath">文件路径</param>
     /// <param name="access">访问模式</param>
     /// <param name="share">共享模式</param>
-    public DiskStream(string filePath, FileAccess access = FileAccess.ReadWrite, FileShare share = FileShare.None)
+    public DiskStream(
+        string filePath,
+        FileAccess access = FileAccess.ReadWrite,
+        FileShare share = FileShare.None,
+        FileOptions options = FileOptions.None)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
-        _fileStream = new FileStream(filePath, FileMode.OpenOrCreate, access, share);
+        _fileStream = new FileStream(filePath, FileMode.OpenOrCreate, access, share, 4096, options);
     }
 
     // ... Read, Write, Flush, Seek, SetLength ... (keeping them as is, just need to match surrounding code for context in replace)
@@ -258,7 +262,7 @@ public sealed class DiskStream : IDiskStream
         /// </summary>
         internal sealed class ActiveRegionLock
         {
-            private readonly ManualResetEventSlim _releaseEvent = new(false);
+            private readonly TaskCompletionSource _releaseSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
             public long Start { get; }
             public long End { get; }
@@ -271,12 +275,12 @@ public sealed class DiskStream : IDiskStream
 
             public void WaitForRelease()
             {
-                _releaseEvent.Wait();
+                _releaseSignal.Task.GetAwaiter().GetResult();
             }
 
             public void SignalRelease()
             {
-                _releaseEvent.Set();
+                _releaseSignal.TrySetResult();
             }
         }
     }
