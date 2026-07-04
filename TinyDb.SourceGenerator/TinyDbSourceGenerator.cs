@@ -1046,6 +1046,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         var defaultSequenceName = ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}");
         var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
 
+        sb.AppendLine("                if (IdGenerationStrategy == global::TinyDb.Attributes.IdGenerationStrategy.IdentityInt ||");
+        sb.AppendLine("                    IdGenerationStrategy == global::TinyDb.Attributes.IdGenerationStrategy.IdentityLong)");
+        sb.AppendLine("                {");
+        sb.AppendLine("                    return false;");
+        sb.AppendLine("                }");
+
         sb.AppendLine($"                var generatedId = global::TinyDb.IdGeneration.AutoIdGenerator.CreateIdValue(typeof({idType}), IdGenerationStrategy, IdGenerationSequenceName, {defaultSequenceName});");
         sb.AppendLine("                if (generatedId == null) return false;");
 
@@ -1084,15 +1090,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
         {
-            sb.AppendLine($"            var nextValue = global::TinyDb.IdGeneration.AutoIdGenerator.GetNextIdentityValue({ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}_int")});");
-            sb.AppendLine("            if (nextValue > int.MaxValue) return false;");
-            sb.AppendLine($"            entity.{idProperty.Name} = (int)nextValue;");
-            sb.AppendLine("            return true;");
+            sb.AppendLine("            return false;");
         }
         else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
         {
-            sb.AppendLine($"            entity.{idProperty.Name} = global::TinyDb.IdGeneration.AutoIdGenerator.GetNextIdentityValue({ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}_long")});");
-            sb.AppendLine("            return true;");
+            sb.AppendLine("            return false;");
         }
         else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
         {

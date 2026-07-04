@@ -18,69 +18,31 @@ public class IdGenerationFullTests
     #region IdentitySequences Tests
 
     [Test]
-    public async Task IdentitySequences_GetNextValue_ShouldReturnSequentialValues()
+    public async Task IdentitySequences_GetNextValue_ShouldRequireEnginePersistence()
     {
-        // Use unique key to avoid race conditions with parallel tests
         var uniqueKey = $"test_seq_{Guid.NewGuid():N}";
-        IdentitySequences.Reset(uniqueKey);
 
-        var v1 = IdentitySequences.GetNextValue(uniqueKey);
-        var v2 = IdentitySequences.GetNextValue(uniqueKey);
-        var v3 = IdentitySequences.GetNextValue(uniqueKey);
-
-        await Assert.That(v1).IsEqualTo(1);
-        await Assert.That(v2).IsEqualTo(2);
-        await Assert.That(v3).IsEqualTo(3);
+        await Assert.That(() => IdentitySequences.GetNextValue(uniqueKey)).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task IdentitySequences_DifferentKeys_ShouldHaveIndependentSequences()
+    public async Task IdentitySequences_Reset_ShouldValidateKey()
     {
-        // Use unique keys to avoid race conditions with parallel tests
-        var keyA = $"seq_a_{Guid.NewGuid():N}";
-        var keyB = $"seq_b_{Guid.NewGuid():N}";
-        IdentitySequences.Reset(keyA);
-        IdentitySequences.Reset(keyB);
-
-        var a1 = IdentitySequences.GetNextValue(keyA);
-        var b1 = IdentitySequences.GetNextValue(keyB);
-        var a2 = IdentitySequences.GetNextValue(keyA);
-
-        await Assert.That(a1).IsEqualTo(1);
-        await Assert.That(b1).IsEqualTo(1);
-        await Assert.That(a2).IsEqualTo(2);
+        await Assert.That(() => IdentitySequences.Reset("")).Throws<ArgumentNullException>();
     }
 
     [Test]
-    public async Task IdentitySequences_Reset_ShouldClearSequence()
+    public void IdentitySequences_Reset_ShouldRemainNoOpForValidKey()
     {
-        // Use unique key to avoid race conditions with parallel tests
         var uniqueKey = $"reset_test_{Guid.NewGuid():N}";
-        IdentitySequences.GetNextValue(uniqueKey);
-        IdentitySequences.GetNextValue(uniqueKey);
-        IdentitySequences.Reset(uniqueKey);
 
-        var value = IdentitySequences.GetNextValue(uniqueKey);
-        await Assert.That(value).IsEqualTo(1);
+        IdentitySequences.Reset(uniqueKey);
     }
 
     [Test]
-    public async Task IdentitySequences_ResetAll_ShouldClearAllSequences()
+    public void IdentitySequences_ResetAll_ShouldRemainNoOp()
     {
-        // Use unique keys for this test
-        var key1 = $"all_1_{Guid.NewGuid():N}";
-        var key2 = $"all_2_{Guid.NewGuid():N}";
-        IdentitySequences.GetNextValue(key1);
-        IdentitySequences.GetNextValue(key2);
-        
-        // Actually test ResetAll - safe since we're NotInParallel
         IdentitySequences.ResetAll();
-
-        var v1 = IdentitySequences.GetNextValue(key1);
-        var v2 = IdentitySequences.GetNextValue(key2);
-
-        await Assert.That(v1).IsEqualTo(1);
-        await Assert.That(v2).IsEqualTo(1);
     }
 
     #endregion
@@ -175,7 +137,7 @@ public class IdGenerationFullTests
     }
 
     [Test]
-    public async Task AutoIdGenerator_IntId_EmptyValue_ShouldGenerate()
+    public async Task AutoIdGenerator_IntId_EmptyValue_ShouldNotGenerateWithoutEngine()
     {
         // Don't use ResetAll() as it affects parallel tests
         var entity = new IntIdEntity { Id = 0 };
@@ -183,8 +145,8 @@ public class IdGenerationFullTests
 
         var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
 
-        await Assert.That(result).IsTrue();
-        await Assert.That(entity.Id).IsGreaterThan(0);
+        await Assert.That(result).IsFalse();
+        await Assert.That(entity.Id).IsEqualTo(0);
     }
 
     [Test]
@@ -200,31 +162,13 @@ public class IdGenerationFullTests
     }
 
     [Test]
-    public async Task AutoIdGenerator_IntId_Overflow_ShouldReturnFalse()
+    public async Task AutoIdGenerator_GetNextIdentityValue_WithoutEngine_ShouldThrow()
     {
-        var entity = new OverflowIntIdEntity { MyId = 0 };
-        var prop = typeof(OverflowIntIdEntity).GetProperty(nameof(OverflowIntIdEntity.MyId))!;
-        var key = $"{entity.GetType().Name}_{prop.Name}_int";
-
-        var sequencesField = typeof(IdentitySequences).GetField("_sequences", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(sequencesField).IsNotNull();
-
-        var sequences = (System.Collections.Concurrent.ConcurrentDictionary<string, long>)sequencesField!.GetValue(null)!;
-        sequences[key] = int.MaxValue;
-
-        try
-        {
-            var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
-            await Assert.That(result).IsFalse();
-        }
-        finally
-        {
-            IdentitySequences.Reset(key);
-        }
+        await Assert.That(() => AutoIdGenerator.GetNextIdentityValue("legacy")).Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task AutoIdGenerator_LongId_EmptyValue_ShouldGenerate()
+    public async Task AutoIdGenerator_LongId_EmptyValue_ShouldNotGenerateWithoutEngine()
     {
         // Don't use ResetAll() as it affects parallel tests
         var entity = new LongIdEntity { Id = 0L };
@@ -232,8 +176,8 @@ public class IdGenerationFullTests
 
         var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
 
-        await Assert.That(result).IsTrue();
-        await Assert.That(entity.Id).IsGreaterThan(0L);
+        await Assert.That(result).IsFalse();
+        await Assert.That(entity.Id).IsEqualTo(0L);
     }
 
     [Test]
@@ -478,31 +422,23 @@ public class IndividualGeneratorTests
     }
 
     [Test]
-    public async Task IdentityGenerator_GenerateId_Int_ShouldReturnSequentialValues()
+    public async Task IdentityGenerator_GenerateId_Int_ShouldRequireEnginePersistence()
     {
         var generator = new IdentityGenerator();
         var prop = typeof(IntIdEntity).GetProperty(nameof(IntIdEntity.Id))!;
 
-        var id1 = generator.GenerateId(typeof(IntIdEntity), prop, "test_int_seq");
-        var id2 = generator.GenerateId(typeof(IntIdEntity), prop, "test_int_seq");
-
-        await Assert.That(id1).IsTypeOf<BsonInt32>();
-        await Assert.That(id2).IsTypeOf<BsonInt32>();
-        await Assert.That(((BsonInt32)id2).Value).IsGreaterThan(((BsonInt32)id1).Value);
+        await Assert.That(() => generator.GenerateId(typeof(IntIdEntity), prop, "test_int_seq"))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task IdentityGenerator_GenerateId_Long_ShouldReturnSequentialValues()
+    public async Task IdentityGenerator_GenerateId_Long_ShouldRequireEnginePersistence()
     {
         var generator = new IdentityGenerator();
         var prop = typeof(LongIdEntity).GetProperty(nameof(LongIdEntity.Id))!;
 
-        var id1 = generator.GenerateId(typeof(LongIdEntity), prop, "test_long_seq");
-        var id2 = generator.GenerateId(typeof(LongIdEntity), prop, "test_long_seq");
-
-        await Assert.That(id1).IsTypeOf<BsonInt64>();
-        await Assert.That(id2).IsTypeOf<BsonInt64>();
-        await Assert.That(((BsonInt64)id2).Value).IsGreaterThan(((BsonInt64)id1).Value);
+        await Assert.That(() => generator.GenerateId(typeof(LongIdEntity), prop, "test_long_seq"))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
@@ -516,12 +452,12 @@ public class IndividualGeneratorTests
     }
 
     [Test]
-    public async Task IdentityGenerator_Supports_ShouldReturnTrueForIntAndLong()
+    public async Task IdentityGenerator_Supports_ShouldReturnFalseWithoutEngine()
     {
         var generator = new IdentityGenerator();
 
-        await Assert.That(generator.Supports(typeof(int))).IsTrue();
-        await Assert.That(generator.Supports(typeof(long))).IsTrue();
+        await Assert.That(generator.Supports(typeof(int))).IsFalse();
+        await Assert.That(generator.Supports(typeof(long))).IsFalse();
         await Assert.That(generator.Supports(typeof(Guid))).IsFalse();
         await Assert.That(generator.Supports(typeof(string))).IsFalse();
     }

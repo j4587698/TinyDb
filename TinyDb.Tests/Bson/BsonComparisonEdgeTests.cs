@@ -24,9 +24,9 @@ public class BsonComparisonEdgeTests
         var doc1 = new BsonDocument().Set("a", 1).Set("b", 2);
         var doc2 = new BsonDocument().Set("a", 1).Set("c", 2);
         
-        // Keys are "a", "b" vs "a", "c"
-        // In the loop, when kvp.Key is "b", it's not in doc2, returns 1
-        await Assert.That(doc1.CompareTo(doc2)).IsEqualTo(1);
+        // Keys are compared ordinally after count comparison: "b" sorts before "c".
+        await Assert.That(doc1.CompareTo(doc2)).IsLessThan(0);
+        await Assert.That(doc2.CompareTo(doc1)).IsGreaterThan(0);
     }
 
     [Test]

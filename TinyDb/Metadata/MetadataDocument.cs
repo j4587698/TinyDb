@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using TinyDb.Attributes;
 using TinyDb.Bson;
@@ -38,7 +39,7 @@ public class MetadataDocument
             UpdatedAt = DateTime.UtcNow
         };
 
-        var cols = new BsonArray();
+        var cols = new List<BsonValue>(metadata.Properties.Count);
         foreach (var p in metadata.Properties)
         {
             var fieldName = p.IsPrimaryKey ? "_id" : ToCamelCase(p.PropertyName);
@@ -59,9 +60,9 @@ public class MetadataDocument
             if (!string.IsNullOrEmpty(p.ForeignKeyCollection))
                 col = col.Set("fk", p.ForeignKeyCollection);
 
-            cols = cols.AddValue(col);
+            cols.Add(col);
         }
-        doc.Columns = cols;
+        doc.Columns = new BsonArray(cols);
         return doc;
     }
 

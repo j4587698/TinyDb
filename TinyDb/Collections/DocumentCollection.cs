@@ -9,6 +9,7 @@ using TinyDb.Serialization;
 using TinyDb.Query;
 using TinyDb.Index;
 using TinyDb.Attributes;
+using TinyDb.IdGeneration;
 
 namespace TinyDb.Collections;
 
@@ -964,7 +965,11 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             (idPropertyType == typeof(int) || idPropertyType == typeof(long)) &&
             !AotIdAccessor<T>.HasValidId(entity))
         {
-            var identityId = _engine.AllocateIdentityId(_name, idPropertyName, idPropertyType);
+            AotIdAccessor<T>.TryGetIdGenerationInfo(out _, out var configuredSequenceName);
+            var sequenceName = string.IsNullOrWhiteSpace(configuredSequenceName)
+                ? idPropertyName
+                : configuredSequenceName;
+            var identityId = AutoIdGenerator.CreateIdentityValue(_engine, _name, sequenceName, idPropertyType);
             AotIdAccessor<T>.SetId(entity, identityId);
             EnsureIdIndex();
             return;

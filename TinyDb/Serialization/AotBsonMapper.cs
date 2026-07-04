@@ -458,21 +458,38 @@ public static class AotBsonMapper
             throw new ArgumentException("集合类型必须实现 IEnumerable 接口。", nameof(collection));
         }
 
-        var builder = ImmutableList.CreateBuilder<BsonValue>();
-
-        foreach (var item in enumerable)
+        var serializingObjects = _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+        if (!serializingObjects.Add(collection))
         {
-            if (item == null)
-            {
-                builder.Add(BsonNull.Value);
-                continue;
-            }
-
-            var bsonValue = ConvertToBsonValue(item);
-            builder.Add(bsonValue);
+            throw new InvalidOperationException("Circular reference detected while serializing a collection.");
         }
 
-        return new BsonArray(builder);
+        try
+        {
+            var builder = ImmutableList.CreateBuilder<BsonValue>();
+
+            foreach (var item in enumerable)
+            {
+                if (item == null)
+                {
+                    builder.Add(BsonNull.Value);
+                    continue;
+                }
+
+                var bsonValue = ConvertToBsonValue(item);
+                builder.Add(bsonValue);
+            }
+
+            return new BsonArray(builder);
+        }
+        finally
+        {
+            serializingObjects.Remove(collection);
+            if (serializingObjects.Count == 0)
+            {
+                serializingObjects.Clear();
+            }
+        }
     }
 
     /// <summary>
@@ -613,29 +630,19 @@ public static class AotBsonMapper
 
         if (collectionType.IsArray)
         {
+            if (collectionType.GetArrayRank() != 1)
+            {
+                throw new NotSupportedException($"AOT fallback does not support multi-dimensional array type '{collectionType.FullName}'.");
+            }
+
             var arrayElementType = collectionType.GetElementType()!;
-
-            if (arrayElementType == typeof(int))
+            var values = Array.CreateInstance(arrayElementType, array.Count);
+            for (int i = 0; i < array.Count; i++)
             {
-                var values = new int[array.Count];
-                for (int i = 0; i < array.Count; i++)
-                {
-                    values[i] = (int)ConvertFromBsonValue(array[i], typeof(int))!;
-                }
-                return values;
+                values.SetValue(ConvertFromBsonValue(array[i], arrayElementType), i);
             }
 
-            if (arrayElementType == typeof(string))
-            {
-                var values = new string[array.Count];
-                for (int i = 0; i < array.Count; i++)
-                {
-                    values[i] = (string)ConvertFromBsonValue(array[i], typeof(string))!;
-                }
-                return values;
-            }
-
-            throw new NotSupportedException($"AOT fallback does not support array element type '{arrayElementType.FullName}'.");
+            return values;
         }
 
         if (collectionType.IsInterface || collectionType.IsAbstract)

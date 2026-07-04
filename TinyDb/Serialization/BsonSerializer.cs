@@ -397,7 +397,7 @@ public sealed class BsonWriter : IDisposable
     {
         get
         {
-            if (_stream != null) return _stream.Position;
+            if (_stream != null && _stream.CanSeek) return _stream.Position;
             // 对于 IBufferWriter，由于它不直接暴露位置，我们需要通过其它方式记录
             // 但目前的 BsonWriter 实现依赖于 Seek 重新写入长度
             // 改进：使用一个临时的字节缓冲区或预先计算大小
@@ -507,18 +507,9 @@ public sealed class BsonWriter : IDisposable
         {
         if (_stream != null)
         {
-            // 旧的 Stream 逻辑：使用 Seek 更新长度
-            var sizePosition = _stream.Position;
-            _writer.Write(0); // 占位符
-
+            InternalWrite(BsonSerializer.CalculateDocumentSize(document));
             foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
-            _writer.Write((byte)BsonType.End);
-
-            var endPosition = _stream.Position;
-            var documentSize = (int)(endPosition - sizePosition);
-            _stream.Seek(sizePosition, SeekOrigin.Begin);
-            _writer.Write(documentSize);
-            _stream.Seek(endPosition, SeekOrigin.Begin);
+            InternalWrite((byte)BsonType.End);
         }
         else
         {
@@ -562,17 +553,9 @@ public sealed class BsonWriter : IDisposable
         {
         if (_stream != null)
         {
-            var sizePosition = _stream.Position;
-            _writer.Write(0); // 占位符
-
+            InternalWrite(BsonSerializer.CalculateArraySize(array));
             for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
-            _writer.Write((byte)BsonType.End);
-
-            var endPosition = _stream.Position;
-            var arraySize = (int)(endPosition - sizePosition);
-            _stream.Seek(sizePosition, SeekOrigin.Begin);
-            _writer.Write(arraySize);
-            _stream.Seek(endPosition, SeekOrigin.Begin);
+            InternalWrite((byte)BsonType.End);
         }
         else
         {
@@ -807,14 +790,10 @@ public sealed class BsonWriter : IDisposable
         ThrowIfDisposed();
         if (_stream != null)
         {
-            var sizePosition = _stream.Position;
-            _writer.Write(0);
+            var size = 4 + BsonSerializer.CalculateSize(new BsonString(code)) + BsonSerializer.CalculateDocumentSize(scope);
+            InternalWrite(size);
             WriteString(code);
             WriteDocument(scope);
-            var endPosition = _stream.Position;
-            _stream.Seek(sizePosition, SeekOrigin.Begin);
-            _writer.Write((int)(endPosition - sizePosition));
-            _stream.Seek(endPosition, SeekOrigin.Begin);
         }
         else
         {
@@ -954,7 +933,7 @@ public sealed class BsonReader : IDisposable
         try
         {
             var documentSize = ReadContainerLength("document");
-            var startPosition = _stream.Position;
+            var startPosition = _stream.CanSeek ? _stream.Position : 0;
             var builder = new BsonDocumentBuilder();
 
             while (true)
@@ -970,13 +949,16 @@ public sealed class BsonReader : IDisposable
                 builder.Set(key, value);
             }
 
-            var endPosition = _stream.Position;
-            var expectedContentSize = documentSize - 4;
-            var actualContentSize = (int)(endPosition - startPosition);
-
-            if (actualContentSize != expectedContentSize)
+            if (_stream.CanSeek)
             {
-                throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+                var endPosition = _stream.Position;
+                var expectedContentSize = documentSize - 4;
+                var actualContentSize = (int)(endPosition - startPosition);
+
+                if (actualContentSize != expectedContentSize)
+                {
+                    throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+                }
             }
 
             return builder.Build();
@@ -1000,7 +982,7 @@ public sealed class BsonReader : IDisposable
         try
         {
             var documentSize = ReadContainerLength("document");
-            var startPosition = _stream.Position;
+            var startPosition = _stream.CanSeek ? _stream.Position : 0;
             var builder = new BsonDocumentBuilder();
 
             while (true)
@@ -1024,14 +1006,17 @@ public sealed class BsonReader : IDisposable
                 }
             }
 
-            var endPosition = _stream.Position;
-            var expectedContentSize = documentSize - 4;
-            var actualContentSize = (int)(endPosition - startPosition);
-
-            // 如果我们跳过了某些值，Position 应该是正确的，因为 SkipValue 也会消耗流
-            if (actualContentSize != expectedContentSize)
+            if (_stream.CanSeek)
             {
-                throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+                var endPosition = _stream.Position;
+                var expectedContentSize = documentSize - 4;
+                var actualContentSize = (int)(endPosition - startPosition);
+
+                // 如果我们跳过了某些值，Position 应该是正确的，因为 SkipValue 也会消耗流
+                if (actualContentSize != expectedContentSize)
+                {
+                    throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+                }
             }
 
             return builder.Build();
@@ -1105,6 +1090,23 @@ public sealed class BsonReader : IDisposable
         if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
         if (count == 0) return;
 
+        if (_stream.CanSeek)
+        {
+            try
+            {
+                if (_stream.Length - _stream.Position < count)
+                {
+                    throw new EndOfStreamException();
+                }
+            }
+            catch (NotSupportedException)
+            {
+            }
+
+            _stream.Seek(count, SeekOrigin.Current);
+            return;
+        }
+
         // 使用共享缓冲区读取并丢弃数据，避免分配新数组
         var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(count, 4096));
         try
@@ -1166,7 +1168,7 @@ public sealed class BsonReader : IDisposable
         try
         {
             var arraySize = ReadContainerLength("array");
-            var startPosition = _stream.Position;
+            var startPosition = _stream.CanSeek ? _stream.Position : 0;
             var values = new List<BsonValue>();
 
             while (true)
@@ -1182,13 +1184,16 @@ public sealed class BsonReader : IDisposable
                 values.Add(value);
             }
 
-            var endPosition = _stream.Position;
-            var expectedContentSize = arraySize - 4;
-            var actualContentSize = (int)(endPosition - startPosition);
-
-            if (actualContentSize != expectedContentSize)
+            if (_stream.CanSeek)
             {
-                throw new InvalidOperationException($"Array size mismatch: expected {arraySize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+                var endPosition = _stream.Position;
+                var expectedContentSize = arraySize - 4;
+                var actualContentSize = (int)(endPosition - startPosition);
+
+                if (actualContentSize != expectedContentSize)
+                {
+                    throw new InvalidOperationException($"Array size mismatch: expected {arraySize} (content: {expectedContentSize}), actual content size {actualContentSize}");
+                }
             }
 
             return new BsonArray(values);
@@ -1224,9 +1229,15 @@ public sealed class BsonReader : IDisposable
             byte b;
             while ((b = _reader.ReadByte()) != 0)
             {
+                if (count >= MaxBsonValueLength)
+                {
+                    throw new InvalidDataException($"BSON CString length exceeds {MaxBsonValueLength} bytes.");
+                }
+
                 if (count >= buffer.Length)
                 {
-                    var newBuffer = ArrayPool<byte>.Shared.Rent(buffer.Length * 2);
+                    var newLength = Math.Min(buffer.Length * 2, MaxBsonValueLength);
+                    var newBuffer = ArrayPool<byte>.Shared.Rent(newLength);
                     Buffer.BlockCopy(buffer, 0, newBuffer, 0, count);
                     ArrayPool<byte>.Shared.Return(buffer);
                     buffer = newBuffer;
@@ -1396,15 +1407,18 @@ public sealed class BsonReader : IDisposable
     public BsonJavaScriptWithScope ReadJavaScriptWithScope()
     {
         ThrowIfDisposed();
-        var startPosition = _stream.Position;
+        var startPosition = _stream.CanSeek ? _stream.Position : 0;
         var totalSize = _reader.ReadInt32();
         ValidateLength(totalSize, 5, "JavaScriptWithScope");
         var code = ReadString().Value;
         var scope = ReadDocument();
-        var actualSize = (int)(_stream.Position - startPosition);
-        if (actualSize != totalSize)
+        if (_stream.CanSeek)
         {
-            throw new InvalidOperationException($"JavaScriptWithScope size mismatch: expected {totalSize}, actual {actualSize}.");
+            var actualSize = (int)(_stream.Position - startPosition);
+            if (actualSize != totalSize)
+            {
+                throw new InvalidOperationException($"JavaScriptWithScope size mismatch: expected {totalSize}, actual {actualSize}.");
+            }
         }
 
         return new BsonJavaScriptWithScope(code, scope);

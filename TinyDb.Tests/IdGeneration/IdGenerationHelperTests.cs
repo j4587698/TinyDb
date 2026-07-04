@@ -137,11 +137,11 @@ public class IdGenerationHelperTests
         await Assert.That(res3).IsTrue();
         await Assert.That(eObj.Id).IsNotEqualTo(ObjectId.Empty);
 
-        // Identity long
+        // Identity values require TinyDbEngine-backed collection insertion.
         var eLong = new EntityWithLongAutoId();
         var resLong = IdGenerationHelper<EntityWithLongAutoId>.GenerateIdForEntity(eLong);
-        await Assert.That(resLong).IsTrue();
-        await Assert.That(eLong.Id).IsNotEqualTo(0L);
+        await Assert.That(resLong).IsFalse();
+        await Assert.That(eLong.Id).IsEqualTo(0L);
          
         // None
         var eNone = new EntityWithNone();

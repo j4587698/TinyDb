@@ -23,9 +23,10 @@ public class BsonComparisonTests
         await Assert.That(doc1.CompareTo(doc4)).IsGreaterThan(0);
         await Assert.That(doc1.CompareTo(null)).IsEqualTo(1);
         
-        // Different keys
+        // Different keys are compared ordinally after count comparison.
         var doc5 = new BsonDocument().Set("a", 1).Set("c", 0);
-        await Assert.That(doc1.CompareTo(doc5)).IsGreaterThan(0); // Because "b" is not in doc5
+        await Assert.That(doc1.CompareTo(doc5)).IsLessThan(0);
+        await Assert.That(doc5.CompareTo(doc1)).IsGreaterThan(0);
     }
 
     [Test]

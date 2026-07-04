@@ -246,9 +246,9 @@ public class BsonCoverageTests
         var doc1 = new BsonDocument().Set("a", 1);
         var doc2 = new BsonDocument().Set("b", 1);
         
-        // Count equal, keys different
-        // doc1 has "a", doc2 does not. returns 1.
-        await Assert.That(doc1.CompareTo(doc2)).IsGreaterThan(0); 
+        // Count equal, keys different: compare key names ordinally.
+        await Assert.That(doc1.CompareTo(doc2)).IsLessThan(0);
+        await Assert.That(doc2.CompareTo(doc1)).IsGreaterThan(0);
         
         var doc3 = new BsonDocument().Set("a", 2);
         // Count equal, keys equal, values different

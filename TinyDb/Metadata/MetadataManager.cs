@@ -149,26 +149,29 @@ public class MetadataManager
         if (doc == null) throw new ArgumentNullException(nameof(doc));
         if (string.IsNullOrWhiteSpace(doc.TableName)) throw new ArgumentException("TableName is required.", nameof(doc));
 
-        var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
-        
-        // 物理持久化
-        var existing = col.FindById(doc.TableName);
-        if (existing != null)
+        lock (_schemaSyncRoot)
         {
-            doc.CreatedAt = existing.CreatedAt;
-            doc.UpdatedAt = DateTime.UtcNow;
-            col.Update(doc);
-        }
-        else
-        {
-            doc.CreatedAt = DateTime.UtcNow;
-            doc.UpdatedAt = DateTime.UtcNow;
-            col.Insert(doc);
-        }
+            var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
 
-        // 更新缓存
-        _cache[doc.TableName] = doc;
-        _validationProfiles[doc.TableName] = SchemaValidationProfile.Build(doc);
+            // 物理持久化
+            var existing = col.FindById(doc.TableName);
+            if (existing != null)
+            {
+                doc.CreatedAt = existing.CreatedAt;
+                doc.UpdatedAt = DateTime.UtcNow;
+                col.Update(doc);
+            }
+            else
+            {
+                doc.CreatedAt = DateTime.UtcNow;
+                doc.UpdatedAt = DateTime.UtcNow;
+                col.Insert(doc);
+            }
+
+            // 更新缓存
+            _cache[doc.TableName] = doc;
+            _validationProfiles[doc.TableName] = SchemaValidationProfile.Build(doc);
+        }
     }
 
     /// <summary>
@@ -332,7 +335,7 @@ public class MetadataManager
         var schema = GetMetadata(tableName);
         if (schema == null || schema.Columns.Count == 0) return document;
 
-        var patched = document;
+        BsonDocumentBuilder? builder = null;
 
         foreach (var col in schema.Columns)
         {
@@ -340,16 +343,17 @@ public class MetadataManager
             if (!TryGetFieldName(colDoc, out var fieldName)) continue;
             if (IsPrimaryKey(colDoc, fieldName)) continue;
 
-            if (patched.ContainsKey(fieldName)) continue;
+            if ((builder?.ContainsKey(fieldName) ?? document.ContainsKey(fieldName))) continue;
 
             // ååŽå…¼å®¹ï¼šæ—§ Schema å¯èƒ½ç”¨ PascalCase å­˜ï¼Œæ–‡æ¡£ç”¨ camelCase å­˜
             var camelCase = ToCamelCase(fieldName);
-            if (camelCase != fieldName && patched.ContainsKey(camelCase)) continue;
+            if (camelCase != fieldName && (builder?.ContainsKey(camelCase) ?? document.ContainsKey(camelCase))) continue;
 
-            patched = patched.Set(fieldName, DetermineDefaultValue(colDoc));
+            builder ??= new BsonDocumentBuilder(document);
+            builder.Set(fieldName, DetermineDefaultValue(colDoc));
         }
 
-        return patched;
+        return builder?.Build() ?? document;
     }
 
     private static bool TryGetFieldName(BsonDocument columnDoc, out string fieldName)
