@@ -65,6 +65,7 @@ public sealed class QueryExecutor
             QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookup<T>(executionPlan),
             QueryExecutionStrategy.IndexScan => ExecuteIndexScan<T>(executionPlan),
             QueryExecutionStrategy.IndexSeek => ExecuteIndexSeek<T>(executionPlan),
+            QueryExecutionStrategy.IndexUnion => ExecuteIndexUnion<T>(executionPlan),
             _ => ExecuteFullTableScanQuery<T>(collectionName, queryExpression)
         };
     }
@@ -292,6 +293,7 @@ public sealed class QueryExecutor
             QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookup<T>(executionPlan),
             QueryExecutionStrategy.IndexScan => ExecuteIndexScan<T>(executionPlan),
             QueryExecutionStrategy.IndexSeek => ExecuteIndexSeek<T>(executionPlan),
+            QueryExecutionStrategy.IndexUnion => ExecuteIndexUnion<T>(executionPlan),
             _ => ExecuteFullTableScan(collectionName, fallbackExpression)
         };
     }
@@ -308,8 +310,69 @@ public sealed class QueryExecutor
             QueryExecutionStrategy.PrimaryKeyLookup => ExecutePrimaryKeyLookupAsync<T>(executionPlan, cancellationToken),
             QueryExecutionStrategy.IndexScan => ExecuteIndexScanAsync<T>(executionPlan, cancellationToken),
             QueryExecutionStrategy.IndexSeek => ExecuteIndexSeekAsync<T>(executionPlan, cancellationToken),
+            QueryExecutionStrategy.IndexUnion => ExecuteIndexUnionAsync<T>(executionPlan, cancellationToken),
             _ => ExecuteFullTableScanAsync(collectionName, fallbackExpression, cancellationToken)
         };
+    }
+
+    private IEnumerable<T> ExecuteIndexUnion<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan)
+        where T : class, new()
+    {
+        if (executionPlan.BranchPlans.Count == 0)
+        {
+            foreach (var item in ExecuteFullTableScanFallback<T>(executionPlan)) yield return item;
+            yield break;
+        }
+
+        var queryExpression = GetPlanQueryExpression<T>(executionPlan);
+        var yieldedIds = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+
+        foreach (var branchPlan in executionPlan.BranchPlans)
+        {
+            foreach (var item in ExecutePlanned<T>(branchPlan, branchPlan.CollectionName, fallbackExpression: null))
+            {
+                var id = AotIdAccessor<T>.GetId(item);
+                if (!yieldedIds.Add(id)) continue;
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, item)) continue;
+
+                yield return item;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<T> ExecuteIndexUnionAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        QueryExecutionPlan executionPlan,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        where T : class, new()
+    {
+        if (executionPlan.BranchPlans.Count == 0)
+        {
+            await foreach (var item in ExecuteFullTableScanAsync<T>(executionPlan.CollectionName, (Expression<Func<T, bool>>?)executionPlan.OriginalExpression, cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+            yield break;
+        }
+
+        var queryExpression = GetPlanQueryExpression<T>(executionPlan);
+        var yieldedIds = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+
+        foreach (var branchPlan in executionPlan.BranchPlans)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await foreach (var item in ExecutePlannedAsync<T>(branchPlan, branchPlan.CollectionName, fallbackExpression: null, cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var id = AotIdAccessor<T>.GetId(item);
+                if (!yieldedIds.Add(id)) continue;
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, item)) continue;
+
+                yield return item;
+            }
+        }
     }
 
     private bool TryCreatePredicateIndexBeforeOrderPlan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(

@@ -36,6 +36,27 @@ public class BsonReaderWriterAdditionalCoverageTests
     }
 
     [Test]
+    public async Task BsonWriter_WriteDocument_WithNullCharacterInFieldName_ShouldThrow()
+    {
+        var document = new BsonDocument().Set("bad\0field", 1);
+
+        await Assert.That(() => BsonSerializer.SerializeDocument(document)).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task BsonSpanReader_ReadString_WithMissingNullTerminator_ShouldThrow()
+    {
+        var bytes = new byte[]
+        {
+            2, 0, 0, 0,
+            (byte)'x',
+            (byte)'y'
+        };
+
+        await Assert.That(() => new BsonSpanReader(bytes).ReadString()).Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task BsonReader_ReadDocument_WithFields_ShouldSkip_Int32_And_Decimal128()
     {
         var document = new BsonDocument()
@@ -85,4 +106,3 @@ public class BsonReaderWriterAdditionalCoverageTests
         await Assert.That(() => reader.ReadDocument(new HashSet<string>())).Throws<NotSupportedException>();
     }
 }
-

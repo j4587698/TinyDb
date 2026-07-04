@@ -13,8 +13,9 @@ public static class QueryableCountExtensions
 
         if (!TryStripPagination(query.Expression, out var unpagedExpression, out var operations))
         {
-            totalCount = query.LongCount();
-            return query.ToList();
+            var items = query.ToList();
+            totalCount = items.Count;
+            return items;
         }
 
         IQueryable<T> unpagedQuery = operations.Count > 0

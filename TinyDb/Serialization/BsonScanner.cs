@@ -119,6 +119,11 @@ public static class BsonScanner
                     throw new InvalidDataException($"Invalid BSON string length at offset {offset}.");
                 }
 
+                if (data[offset + 4 + len - 1] != 0)
+                {
+                    throw new InvalidDataException($"Invalid BSON string terminator at offset {offset}.");
+                }
+
                 var s = Encoding.UTF8.GetString(data.Slice(offset + 4, len - 1));
                 offset += 4 + len;
                 return new BsonString(s);
@@ -209,6 +214,7 @@ public static class BsonScanner
             case BsonType.JavaScript:
             case BsonType.Symbol:
                 if (!TryReadInt32(data, offset, out int len) || len < 1 || len > MaxBsonValueLength) return false;
+                if (!HasAvailable(data, offset + 4, len) || data[offset + 4 + len - 1] != 0) return false;
                 return TryAdvance(data.Length, ref offset, 4 + len);
 
             case BsonType.Document:

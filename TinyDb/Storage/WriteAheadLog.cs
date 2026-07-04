@@ -32,6 +32,7 @@ public sealed class WriteAheadLog : IDisposable
     private readonly IWalCodec _walCodec;
     private readonly SemaphoreSlim _mutex = new(1, 1);
     private readonly AsyncLocal<int> _synchronizationDepth = new();
+    private readonly AsyncLocal<int> _writeLockDepth = new();
     private readonly AsyncLocal<Guid?> _currentTransactionId = new();
     private readonly AsyncLocal<TransactionPageBuffer?> _currentTransactionPages = new();
     private readonly int _maxRecordSize;
@@ -59,6 +60,50 @@ public sealed class WriteAheadLog : IDisposable
     private void SetHasPendingEntries(bool value)
     {
         Volatile.Write(ref _hasPendingEntries, value ? 1 : 0);
+    }
+
+    private bool HoldsWriteLock => _writeLockDepth.Value > 0;
+
+    private void RunWithWriteLock(Action action)
+    {
+        if (HoldsWriteLock)
+        {
+            action();
+            return;
+        }
+
+        _mutex.Wait();
+        _writeLockDepth.Value++;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            _writeLockDepth.Value--;
+            _mutex.Release();
+        }
+    }
+
+    private async Task RunWithWriteLockAsync(Func<Task> action, CancellationToken cancellationToken)
+    {
+        if (HoldsWriteLock)
+        {
+            await action().ConfigureAwait(false);
+            return;
+        }
+
+        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _writeLockDepth.Value++;
+        try
+        {
+            await action().ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLockDepth.Value--;
+            _mutex.Release();
+        }
     }
 
     internal bool RequiresBeforeImage => IsEnabled && _currentTransactionId.Value.HasValue;
@@ -232,8 +277,11 @@ public sealed class WriteAheadLog : IDisposable
         {
             if (_currentTransactionId.Value is Guid transactionId)
             {
-                var transactionData = PrepareTransactionPageRecord(transactionId, page, beforeImage);
-                await WriteEntryAsync(EntryTypeTransactionPage, page.PageID, transactionData, cancellationToken).ConfigureAwait(false);
+                await RunWithWriteLockAsync(async () =>
+                {
+                    var transactionData = PrepareTransactionPageRecord(transactionId, page, beforeImage);
+                    await WriteEntryAsync(EntryTypeTransactionPage, page.PageID, transactionData, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -244,17 +292,12 @@ public sealed class WriteAheadLog : IDisposable
             return;
         }
 
-        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await RunWithWriteLockAsync(async () =>
         {
             var data = PreparePageRecord(page);
             await WriteEntryAsync(EntryTypePage, page.PageID, data, cancellationToken).ConfigureAwait(false);
             SetHasPendingEntries(true);
-        }
-        finally
-        {
-            _mutex.Release();
-        }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public void AppendPage(Page page)
@@ -285,8 +328,11 @@ public sealed class WriteAheadLog : IDisposable
         {
             if (_currentTransactionId.Value is Guid transactionId)
             {
-                var data = PrepareTransactionPageRecord(transactionId, page, beforeImage);
-                WriteEntry(EntryTypeTransactionPage, page.PageID, data);
+                RunWithWriteLock(() =>
+                {
+                    var data = PrepareTransactionPageRecord(transactionId, page, beforeImage);
+                    WriteEntry(EntryTypeTransactionPage, page.PageID, data);
+                });
             }
             else
             {
@@ -297,17 +343,12 @@ public sealed class WriteAheadLog : IDisposable
             return;
         }
 
-        _mutex.Wait();
-        try
+        RunWithWriteLock(() =>
         {
             var data = PreparePageRecord(page);
             WriteEntry(EntryTypePage, page.PageID, data);
             SetHasPendingEntries(true);
-        }
-        finally
-        {
-            _mutex.Release();
-        }
+        });
     }
 
     private void BufferDeferredTransactionPage(Guid transactionId, Page page, byte[]? beforeImage)
@@ -328,25 +369,26 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled)
         {
-            return new WalTransactionScope(this, transactionId, ownsMutex: false, flushOnCommit);
+            return new WalTransactionScope(this, transactionId, ownsContext: false, flushOnCommit);
         }
 
-        _mutex.Wait();
         try
         {
             _synchronizationDepth.Value++;
             _currentTransactionId.Value = transactionId;
             _currentTransactionPages.Value = new TransactionPageBuffer(transactionId);
-            WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
-            SetHasPendingEntries(true);
-            return new WalTransactionScope(this, transactionId, ownsMutex: true, flushOnCommit);
+            RunWithWriteLock(() =>
+            {
+                WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
+                SetHasPendingEntries(true);
+            });
+            return new WalTransactionScope(this, transactionId, ownsContext: true, flushOnCommit);
         }
         catch
         {
             _currentTransactionPages.Value = null;
             _currentTransactionId.Value = null;
             _synchronizationDepth.Value--;
-            _mutex.Release();
             throw;
         }
     }
@@ -355,16 +397,16 @@ public sealed class WriteAheadLog : IDisposable
     {
         private readonly WriteAheadLog _wal;
         private readonly Guid _transactionId;
-        private readonly bool _ownsMutex;
+        private readonly bool _ownsContext;
         private readonly bool _flushOnCommit;
         private bool _completed;
         private bool _disposed;
 
-        internal WalTransactionScope(WriteAheadLog wal, Guid transactionId, bool ownsMutex, bool flushOnCommit)
+        internal WalTransactionScope(WriteAheadLog wal, Guid transactionId, bool ownsContext, bool flushOnCommit)
         {
             _wal = wal;
             _transactionId = transactionId;
-            _ownsMutex = ownsMutex;
+            _ownsContext = ownsContext;
             _flushOnCommit = flushOnCommit;
         }
 
@@ -378,14 +420,17 @@ public sealed class WriteAheadLog : IDisposable
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
 
-                _wal.WriteDeferredTransactionPages(_transactionId);
-                _wal.BeforeTransactionCommitForTesting?.Invoke();
-                _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
-                _wal.SetHasPendingEntries(true);
-                if (_flushOnCommit)
+                _wal.RunWithWriteLock(() =>
                 {
-                    _wal.FlushLogCore();
-                }
+                    _wal.WriteDeferredTransactionPages(_transactionId);
+                    _wal.BeforeTransactionCommitForTesting?.Invoke();
+                    _wal.WriteEntry(EntryTypeTransactionCommit, 0, CreateTransactionControlData(_transactionId));
+                    _wal.SetHasPendingEntries(true);
+                    if (_flushOnCommit)
+                    {
+                        _wal.FlushLogCore();
+                    }
+                });
             }
 
             _completed = true;
@@ -396,12 +441,11 @@ public sealed class WriteAheadLog : IDisposable
             if (_disposed) return;
             _disposed = true;
 
-            if (!_ownsMutex) return;
+            if (!_ownsContext) return;
 
             _wal._currentTransactionPages.Value = null;
             _wal._currentTransactionId.Value = null;
             _wal._synchronizationDepth.Value--;
-            _wal._mutex.Release();
         }
     }
 
@@ -540,42 +584,30 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled || targetLSN < _flushedLSN) return;
 
-        if (_synchronizationDepth.Value > 0)
+        if (HoldsWriteLock)
         {
             FlushToLSNCore(targetLSN);
             return;
         }
 
-        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await RunWithWriteLockAsync(() =>
         {
             FlushToLSNCore(targetLSN);
-        }
-        finally
-        {
-            _mutex.Release();
-        }
+            return Task.CompletedTask;
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public void FlushToLSN(long targetLSN)
     {
         if (!IsEnabled || targetLSN < _flushedLSN) return;
 
-        if (_synchronizationDepth.Value > 0)
+        if (HoldsWriteLock)
         {
             FlushToLSNCore(targetLSN);
             return;
         }
 
-        _mutex.Wait();
-        try
-        {
-            FlushToLSNCore(targetLSN);
-        }
-        finally
-        {
-            _mutex.Release();
-        }
+        RunWithWriteLock(() => FlushToLSNCore(targetLSN));
     }
 
     private void FlushToLSNCore(long targetLSN)
@@ -591,42 +623,30 @@ public sealed class WriteAheadLog : IDisposable
     {
         if (!IsEnabled || !HasPendingEntriesCore) return;
 
-        if (_synchronizationDepth.Value > 0)
+        if (HoldsWriteLock)
         {
             FlushLogCore();
             return;
         }
 
-        await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        await RunWithWriteLockAsync(() =>
         {
             FlushLogCore();
-        }
-        finally
-        {
-            _mutex.Release();
-        }
+            return Task.CompletedTask;
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     public void FlushLog()
     {
         if (!IsEnabled || !HasPendingEntriesCore) return;
 
-        if (_synchronizationDepth.Value > 0)
+        if (HoldsWriteLock)
         {
             FlushLogCore();
             return;
         }
 
-        _mutex.Wait();
-        try
-        {
-            FlushLogCore();
-        }
-        finally
-        {
-            _mutex.Release();
-        }
+        RunWithWriteLock(FlushLogCore);
     }
 
     private void FlushLogCore()
@@ -659,6 +679,7 @@ public sealed class WriteAheadLog : IDisposable
         }
 
         _mutex.Wait();
+        _writeLockDepth.Value++;
         try
         {
             var stream = _stream!;
@@ -694,6 +715,7 @@ public sealed class WriteAheadLog : IDisposable
         }
         finally
         {
+            _writeLockDepth.Value--;
             _mutex.Release();
         }
     }
@@ -725,6 +747,7 @@ public sealed class WriteAheadLog : IDisposable
         }
 
         await _mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _writeLockDepth.Value++;
         try
         {
             var stream = _stream!;
@@ -760,6 +783,7 @@ public sealed class WriteAheadLog : IDisposable
         }
         finally
         {
+            _writeLockDepth.Value--;
             _mutex.Release();
         }
     }

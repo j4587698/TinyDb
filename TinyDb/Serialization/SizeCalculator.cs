@@ -128,6 +128,10 @@ internal sealed class SizeCalculator
     private static int CalculateCStringSize(string value)
     {
         if (value == null) return 0;
+        if (value.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException("BSON CString values cannot contain null characters.", nameof(value));
+        }
 
         if (BsonSerializer.CommonKeyCache.TryGetValue(value, out var cachedBytes))
         {

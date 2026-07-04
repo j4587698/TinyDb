@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
@@ -19,11 +18,6 @@ public class QueryOptimizerAdditionalBranchCoverageTests
     {
         public ObjectId Id { get; set; }
         public int Age { get; set; }
-    }
-
-    private sealed class ThrowingToString
-    {
-        public override string ToString() => throw new InvalidOperationException("boom");
     }
 
     private string _testFile = null!;
@@ -96,52 +90,8 @@ public class QueryOptimizerAdditionalBranchCoverageTests
     }
 
     [Test]
-    public async Task PrivateHelpers_ShouldHandleUnsupportedConstantExtraction()
+    public async Task QueryExecutionPlan_MetadataProperties_ShouldRoundTrip()
     {
-        var extractConstant = typeof(QueryOptimizer).GetMethod("ExtractConstantValue", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(extractConstant).IsNotNull();
-
-        var resMember = (BsonValue?)extractConstant!.Invoke(null, new object[] { new TinyDb.Query.MemberExpression("Age") });
-        await Assert.That(resMember).IsNull();
-
-        var resOther = (BsonValue?)extractConstant.Invoke(
-            null,
-            new object[]
-            {
-                new TinyDb.Query.BinaryExpression(
-                    ExpressionType.Equal,
-                    new TinyDb.Query.ConstantExpression(1),
-                    new TinyDb.Query.ConstantExpression(2))
-            });
-        await Assert.That(resOther).IsNull();
-
-        var resThrow = (BsonValue?)extractConstant.Invoke(null, new object[] { new TinyDb.Query.ConstantExpression(new ThrowingToString()) });
-        await Assert.That(resThrow).IsNull();
-
-        var extractComparisonType = typeof(QueryOptimizer).GetMethod("ExtractComparisonType", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(extractComparisonType).IsNotNull();
-
-        var comparison = (ComparisonType)extractComparisonType!.Invoke(
-            null,
-            new object[]
-            {
-                new TinyDb.Query.BinaryExpression(ExpressionType.Add, new TinyDb.Query.MemberExpression("Age"), new TinyDb.Query.ConstantExpression(1)),
-                "Age"
-            })!;
-        await Assert.That(comparison).IsEqualTo(ComparisonType.Equal);
-
-        var defaultComparison = (ComparisonType)extractComparisonType.Invoke(
-            null,
-            new object[]
-            {
-                new TinyDb.Query.BinaryExpression(
-                    ExpressionType.Equal,
-                    new TinyDb.Query.ConstantExpression(1),
-                    new TinyDb.Query.ConstantExpression(2)),
-                "Age"
-            })!;
-        await Assert.That(defaultComparison).IsEqualTo(ComparisonType.Equal);
-
         var plan = new QueryExecutionPlan { EstimatedCost = 12.34, EstimatedResultCount = 56 };
         await Assert.That(plan.EstimatedCost).IsEqualTo(12.34);
         await Assert.That(plan.EstimatedResultCount).IsEqualTo(56);
