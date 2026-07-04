@@ -654,6 +654,10 @@ public sealed class BsonWriter : IDisposable
     {
         ThrowIfDisposed();
         if (value == null) throw new ArgumentNullException(nameof(value));
+        if (value.IndexOf('\0') >= 0)
+        {
+            throw new ArgumentException("BSON CString values cannot contain null characters.", nameof(value));
+        }
 
         if (BsonSerializer.CommonKeyCache.TryGetValue(value, out var cachedBytes))
         {

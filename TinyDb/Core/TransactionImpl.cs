@@ -9,6 +9,7 @@ internal sealed class Transaction : ITransaction
 {
     private readonly TransactionManager _manager;
     private readonly List<TransactionOperation> _operations;
+    private readonly Dictionary<string, Dictionary<BsonValue, BsonDocument>> _firstOriginalDocuments;
     private readonly Dictionary<Guid, TransactionSavepoint> _savepoints;
     private readonly object _syncRoot = new();
     private bool _disposed;
@@ -36,6 +37,17 @@ internal sealed class Transaction : ITransaction
     internal List<TransactionOperation> Operations => _operations;
     internal object SyncRoot => _syncRoot;
 
+    internal int OperationCount
+    {
+        get
+        {
+            lock (_syncRoot)
+            {
+                return _operations.Count;
+            }
+        }
+    }
+
     /// <summary>
     /// 保存点列表
     /// </summary>
@@ -60,7 +72,76 @@ internal sealed class Transaction : ITransaction
         State = TransactionState.Active;
         StartTime = DateTime.UtcNow;
         _operations = new List<TransactionOperation>();
+        _firstOriginalDocuments = new Dictionary<string, Dictionary<BsonValue, BsonDocument>>(StringComparer.Ordinal);
         _savepoints = new Dictionary<Guid, TransactionSavepoint>();
+    }
+
+    internal void AddOperation(TransactionOperation operation)
+    {
+        lock (_syncRoot)
+        {
+            _operations.Add(operation);
+            TrackOriginalDocument(operation);
+        }
+    }
+
+    internal void TrimOperations(int operationCount)
+    {
+        lock (_syncRoot)
+        {
+            if (operationCount < 0 || operationCount > _operations.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(operationCount));
+            }
+
+            _operations.RemoveRange(operationCount, _operations.Count - operationCount);
+            RebuildOriginalDocumentIndex();
+        }
+    }
+
+    internal void ClearOperations()
+    {
+        lock (_syncRoot)
+        {
+            _operations.Clear();
+            _firstOriginalDocuments.Clear();
+        }
+    }
+
+    private BsonDocument? GetFirstOriginalDocument(string collectionName, BsonValue documentId)
+    {
+        lock (_syncRoot)
+        {
+            return _firstOriginalDocuments.TryGetValue(collectionName, out var documents) &&
+                   documents.TryGetValue(documentId, out var originalDocument)
+                ? originalDocument
+                : null;
+        }
+    }
+
+    private void TrackOriginalDocument(TransactionOperation operation)
+    {
+        if (operation.DocumentId == null || operation.OriginalDocument == null)
+        {
+            return;
+        }
+
+        if (!_firstOriginalDocuments.TryGetValue(operation.CollectionName, out var documents))
+        {
+            documents = new Dictionary<BsonValue, BsonDocument>(BsonValueComparer.EqualityComparer);
+            _firstOriginalDocuments[operation.CollectionName] = documents;
+        }
+
+        documents.TryAdd(operation.DocumentId, operation.OriginalDocument);
+    }
+
+    private void RebuildOriginalDocumentIndex()
+    {
+        _firstOriginalDocuments.Clear();
+        foreach (var operation in _operations)
+        {
+            TrackOriginalDocument(operation);
+        }
     }
 
     /// <summary>
@@ -215,18 +296,7 @@ internal sealed class Transaction : ITransaction
         }
 
         var documentId = newDocument.TryGetValue("_id", out var id) ? id : originalDocument["_id"];
-        var effectiveOriginalDocument = originalDocument;
-        foreach (var existingOperation in GetOperationsSnapshot())
-        {
-            if (existingOperation.CollectionName == collectionName &&
-                existingOperation.DocumentId != null &&
-                BsonValueComparer.ValueEquals(existingOperation.DocumentId, documentId) &&
-                existingOperation.OriginalDocument != null)
-            {
-                effectiveOriginalDocument = existingOperation.OriginalDocument;
-                break;
-            }
-        }
+        var effectiveOriginalDocument = GetFirstOriginalDocument(collectionName, documentId) ?? originalDocument;
 
         var operation = new TransactionOperation(
             TransactionOperationType.Update,
@@ -412,10 +482,7 @@ internal sealed class Transaction : ITransaction
                     }
                 }
 
-                lock (_syncRoot)
-                {
-                    _operations.Clear();
-                }
+                ClearOperations();
                 _savepoints.Clear();
             }
             catch (Exception ex)

@@ -1181,14 +1181,7 @@ public sealed class PageManager : IDisposable
         }
 
         var currentLsn = page.Header.LSN;
-        if (loggedLsn < 0)
-        {
-            if (currentLsn < 0)
-            {
-                return false;
-            }
-        }
-        else if (currentLsn != loggedLsn)
+        if (loggedLsn < 0 || currentLsn != loggedLsn)
         {
             return false;
         }
@@ -1206,14 +1199,7 @@ public sealed class PageManager : IDisposable
         }
 
         var currentLsn = page.Header.LSN;
-        if (loggedLsn < 0)
-        {
-            if (currentLsn < 0)
-            {
-                return false;
-            }
-        }
-        else if (currentLsn != loggedLsn)
+        if (loggedLsn < 0 || currentLsn != loggedLsn)
         {
             return false;
         }
@@ -1325,7 +1311,7 @@ public sealed class PageManager : IDisposable
                 continue;
             }
 
-            if (skipUnsafeDeferredWalPages && IsDeferredWalPagePending(page))
+            if (IsDeferredWalPagePending(page))
             {
                 continue;
             }
@@ -1344,9 +1330,7 @@ public sealed class PageManager : IDisposable
         }
 
         var currentLsn = page.Header.LSN;
-        return loggedLsn < 0
-            ? currentLsn < 0
-            : currentLsn != loggedLsn;
+        return loggedLsn < 0 || currentLsn != loggedLsn;
     }
 
     /// <summary>
@@ -1375,7 +1359,7 @@ public sealed class PageManager : IDisposable
                 continue;
             }
 
-            if (skipUnsafeDeferredWalPages && IsDeferredWalPagePending(page))
+            if (IsDeferredWalPagePending(page))
             {
                 continue;
             }

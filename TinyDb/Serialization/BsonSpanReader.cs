@@ -152,6 +152,8 @@ public ref struct BsonSpanReader
                 int len = ReadInt32();
                 ValidateLength(len, 1, "string");
                 EnsureAvailableLength(len);
+                if (_data[_position + len - 1] != 0)
+                    throw new InvalidOperationException("String null terminator expected");
                 _position += len; 
                 break;
             case BsonType.JavaScriptWithScope:
@@ -271,6 +273,10 @@ public ref struct BsonSpanReader
         int len = ReadInt32(); // 包含 null
         ValidateLength(len, 1, "string");
         EnsureAvailableLength(len);
+        if (_data[_position + len - 1] != 0)
+        {
+            throw new InvalidOperationException("String null terminator expected");
+        }
 
         // 除去最后的 null
         string s = Encoding.UTF8.GetString(_data.Slice(_position, len - 1));

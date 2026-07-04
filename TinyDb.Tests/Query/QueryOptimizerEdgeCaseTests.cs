@@ -247,6 +247,54 @@ public class QueryOptimizerEdgeCaseTests
     }
 
     [Test]
+    public async Task CreateExecutionPlan_WithBoolMember_ShouldUseIndex()
+    {
+        _engine.EnsureIndex("ProductEntity", "IsActive", "active_idx");
+
+        var plan = _optimizer.CreateExecutionPlan<ProductEntity>("ProductEntity", p => p.IsActive);
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexScan);
+        await Assert.That(plan.IndexScanKeys![0].Value.RawValue).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task CreateExecutionPlan_WithNegatedBoolMember_ShouldUseIndex()
+    {
+        _engine.EnsureIndex("ProductEntity", "IsActive", "active_idx");
+
+        var plan = _optimizer.CreateExecutionPlan<ProductEntity>("ProductEntity", p => !p.IsActive);
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexScan);
+        await Assert.That(plan.IndexScanKeys![0].Value.RawValue).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task CreateExecutionPlan_WithIndexedOrElse_ShouldUseIndexUnion()
+    {
+        _engine.EnsureIndex("ProductEntity", "Name", "name_idx");
+
+        var plan = _optimizer.CreateExecutionPlan<ProductEntity>(
+            "ProductEntity",
+            p => p.Name == "A" || p.Name == "B");
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexUnion);
+        await Assert.That(plan.BranchPlans.Count).IsEqualTo(2);
+        await Assert.That(plan.BranchPlans.All(p => p.Strategy == QueryExecutionStrategy.IndexScan)).IsTrue();
+    }
+
+    [Test]
+    public async Task CreateExecutionPlan_WithPartiallyIndexedOrElse_ShouldFallbackToFullScan()
+    {
+        _engine.EnsureIndex("ProductEntity", "Name", "name_idx");
+
+        var plan = _optimizer.CreateExecutionPlan<ProductEntity>(
+            "ProductEntity",
+            p => p.Name == "A" || p.Price > 10m);
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.FullTableScan);
+    }
+
+    [Test]
     public async Task CreateExecutionPlan_WithDateTimeValue_ShouldConvertCorrectly()
     {
         _engine.EnsureIndex("ProductEntity", "CreatedAt", "date_idx");

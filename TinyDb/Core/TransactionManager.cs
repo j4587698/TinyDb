@@ -289,7 +289,7 @@ public sealed class TransactionManager : IDisposable
         {
             EnsureTransactionActive(transaction);
 
-            var savepoint = new TransactionSavepoint(name, transaction.GetOperationsSnapshot().Length);
+            var savepoint = new TransactionSavepoint(name, transaction.OperationCount);
             transaction.Savepoints[savepoint.SavepointId] = savepoint;
             return savepoint.SavepointId;
         }
@@ -316,10 +316,7 @@ public sealed class TransactionManager : IDisposable
 
             // 事务采用延迟提交模型：保存点回滚只需丢弃保存点之后的挂起操作，
             // 不应对数据库执行补偿写入。
-            lock (transaction.SyncRoot)
-            {
-                transaction.Operations.RemoveRange(savepoint.OperationCount, transaction.Operations.Count - savepoint.OperationCount);
-            }
+            transaction.TrimOperations(savepoint.OperationCount);
 
             // 移除后续的保存点
             var savepointsToRemove = transaction.Savepoints
@@ -374,7 +371,7 @@ public sealed class TransactionManager : IDisposable
                     throw new InvalidOperationException($"Transaction cannot record operations in state {transaction.State}");
                 }
 
-                transaction.Operations.Add(operation);
+                transaction.AddOperation(operation);
             }
         }
     }

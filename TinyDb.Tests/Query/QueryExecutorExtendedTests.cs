@@ -47,6 +47,63 @@ public class QueryExecutorExtendedTests : IDisposable
     }
 
     [Test]
+    public async Task Execute_With_Indexed_Or_Condition_Should_Use_IndexUnion_And_Deduplicate()
+    {
+        _engine.EnsureIndex("Products", "Category", "category_idx");
+        _engine.EnsureIndex("Products", "Stock", "stock_idx");
+
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Category = "Cat1", Stock = 1 });
+        col.Insert(new QueryExtendedProduct { Name = "B", Category = "Cat2", Stock = 1 });
+        col.Insert(new QueryExtendedProduct { Name = "C", Category = "Cat1", Stock = 0 });
+        col.Insert(new QueryExtendedProduct { Name = "D", Category = "Cat3", Stock = 1 });
+
+        var optimizer = new QueryOptimizer(_engine);
+        var plan = optimizer.CreateExecutionPlan<QueryExtendedProduct>(
+            "Products",
+            p => p.Category == "Cat1" || p.Stock == 1);
+
+        var results = _executor.Execute<QueryExtendedProduct>(
+            "Products",
+            p => p.Category == "Cat1" || p.Stock == 1).ToList();
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexUnion);
+        await Assert.That(results.Count).IsEqualTo(4);
+        await Assert.That(results.Select(p => p.Name).Distinct().Count()).IsEqualTo(4);
+        await Assert.That(results.Any(p => p.Name == "A")).IsTrue();
+        await Assert.That(results.Any(p => p.Name == "C")).IsTrue();
+        await Assert.That(results.Any(p => p.Name == "D")).IsTrue();
+    }
+
+    [Test]
+    public async Task Execute_With_Indexed_Or_Inside_And_Should_Use_IndexUnion_And_Filter()
+    {
+        _engine.EnsureIndex("Products", "Category", "category_idx");
+        _engine.EnsureIndex("Products", "Stock", "stock_idx");
+
+        var col = _engine.GetCollection<QueryExtendedProduct>("Products");
+        col.Insert(new QueryExtendedProduct { Name = "A", Category = "Cat1", Stock = 1 });
+        col.Insert(new QueryExtendedProduct { Name = "B", Category = "Cat2", Stock = 2 });
+        col.Insert(new QueryExtendedProduct { Name = "C", Category = "Cat2", Stock = 0 });
+        col.Insert(new QueryExtendedProduct { Name = "D", Category = "Cat3", Stock = 3 });
+
+        var optimizer = new QueryOptimizer(_engine);
+        var plan = optimizer.CreateExecutionPlan<QueryExtendedProduct>(
+            "Products",
+            p => (p.Category == "Cat1" || p.Category == "Cat2") && p.Stock > 0);
+
+        var results = _executor.Execute<QueryExtendedProduct>(
+            "Products",
+            p => (p.Category == "Cat1" || p.Category == "Cat2") && p.Stock > 0).ToList();
+
+        await Assert.That(plan.Strategy).IsEqualTo(QueryExecutionStrategy.IndexUnion);
+        await Assert.That(plan.BranchPlans.Count).IsEqualTo(2);
+        await Assert.That(results.Count).IsEqualTo(2);
+        await Assert.That(results.Any(p => p.Name == "A")).IsTrue();
+        await Assert.That(results.Any(p => p.Name == "B")).IsTrue();
+    }
+
+    [Test]
     public async Task Execute_With_NotEqual_Should_Work()
     {
         var col = _engine.GetCollection<QueryExtendedProduct>("Products");

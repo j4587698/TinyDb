@@ -123,4 +123,64 @@ public class WriteAheadLogTests : IDisposable
         await Assert.That(restoredPages.Count).IsEqualTo(1);
         await Assert.That(restoredPages[1][PageHeader.Size]).IsEqualTo((byte)1);
     }
+
+    [Test]
+    public async Task WAL_TransactionScope_ShouldNotHoldMutexForEntireLifetime()
+    {
+        using var wal = new WriteAheadLog(_testDbPath, 4096, true);
+        using var tx = wal.BeginTransaction(Guid.NewGuid(), flushOnCommit: false);
+
+        var page = new Page(2, 4096, PageType.Data);
+        page.WriteData(0, new byte[] { 2 });
+
+        Task appendTask;
+        using (ExecutionContext.SuppressFlow())
+        {
+            appendTask = Task.Run(() => wal.AppendPage(page));
+        }
+
+        var completed = await Task.WhenAny(appendTask, Task.Delay(TimeSpan.FromSeconds(1))) == appendTask;
+        await Assert.That(completed).IsTrue();
+        await appendTask;
+
+        tx.Commit();
+    }
+
+    [Test]
+    public async Task PageManager_FlushDirtyPages_ShouldSkipUncommittedDeferredWalPage()
+    {
+        uint pageId;
+
+        using (var stream = new DiskStream(_testDbPath))
+        using (var pageManager = new PageManager(stream, 4096))
+        using (var wal = new WriteAheadLog(_testDbPath, 4096, true))
+        {
+            pageManager.RegisterWAL(
+                (page, beforeImage) => wal.AppendPage(page, beforeImage),
+                lsn => wal.FlushToLSN(lsn),
+                () => wal.RequiresBeforeImage);
+            pageManager.RegisterDeferredWAL((page, beforeImage) => wal.AppendPageDeferred(page, beforeImage));
+            wal.DeferredTransactionPageLogged = pageManager.MarkDeferredWalPageLogged;
+
+            var page = pageManager.NewPage(PageType.Data);
+            pageId = page.PageID;
+            page.WriteData(0, new byte[] { 1 });
+            pageManager.SavePage(page, forceFlush: true);
+
+            using (wal.BeginTransaction(Guid.NewGuid(), flushOnCommit: false))
+            {
+                var beforeImage = pageManager.CaptureBeforeImageForWal(page);
+                page.WriteData(0, new byte[] { 9 });
+                pageManager.SavePageDeferred(page, beforeImage);
+
+                pageManager.FlushDirtyPages();
+            }
+        }
+
+        using var readStream = new DiskStream(_testDbPath);
+        using var readManager = new PageManager(readStream, 4096);
+        var readPage = readManager.GetPage(pageId, useCache: false);
+
+        await Assert.That(readPage.Buffer[PageHeader.Size]).IsEqualTo((byte)1);
+    }
 }
