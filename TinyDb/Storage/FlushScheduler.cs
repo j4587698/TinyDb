@@ -18,6 +18,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     private readonly Task? _backgroundTask;
     private readonly object _flushLock = new();
     private static readonly TimeSpan GroupCommitDelay = TimeSpan.FromMilliseconds(1);
+    private static readonly TimeSpan WorkerStopTimeout = TimeSpan.FromSeconds(1);
     private int _disposed;
     private int _ctsDisposed;
     private Exception? _backgroundFailure;
@@ -467,15 +468,12 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
         try
         {
+            WaitForWorkersAndDisposeCancellationTokenSource(workerWaitErrors);
             FlushForDispose();
         }
         catch (Exception ex)
         {
             flushException = ex;
-        }
-        finally
-        {
-            WaitForWorkersAndDisposeCancellationTokenSource(workerWaitErrors);
         }
 
         if (flushException == null &&
@@ -529,7 +527,14 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             {
                 try
                 {
-                    task.Wait();
+                    if (!task.Wait(WorkerStopTimeout))
+                    {
+                        var timeoutException = new TimeoutException("Flush worker did not stop before dispose timeout.");
+                        Log(TinyDbLogLevel.Warning, timeoutException.Message, timeoutException);
+                        continue;
+                    }
+
+                    task.GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {

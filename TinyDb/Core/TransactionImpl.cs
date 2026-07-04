@@ -1,3 +1,4 @@
+using System.Threading;
 using TinyDb.Bson;
 
 namespace TinyDb.Core;
@@ -12,6 +13,8 @@ internal sealed class Transaction : ITransaction
     private readonly Dictionary<string, Dictionary<BsonValue, BsonDocument>> _firstOriginalDocuments;
     private readonly Dictionary<Guid, TransactionSavepoint> _savepoints;
     private readonly object _syncRoot = new();
+    private int _state;
+    private string? _failureReason;
     private bool _disposed;
 
     /// <summary>
@@ -22,9 +25,17 @@ internal sealed class Transaction : ITransaction
     /// <summary>
     /// 事务状态
     /// </summary>
-    public TransactionState State { get; internal set; }
+    public TransactionState State
+    {
+        get => (TransactionState)Volatile.Read(ref _state);
+        internal set => Volatile.Write(ref _state, (int)value);
+    }
 
-    internal string? FailureReason { get; set; }
+    internal string? FailureReason
+    {
+        get => Volatile.Read(ref _failureReason);
+        set => Volatile.Write(ref _failureReason, value);
+    }
 
     /// <summary>
     /// 开始时间
@@ -74,6 +85,21 @@ internal sealed class Transaction : ITransaction
         _operations = new List<TransactionOperation>();
         _firstOriginalDocuments = new Dictionary<string, Dictionary<BsonValue, BsonDocument>>(StringComparer.Ordinal);
         _savepoints = new Dictionary<Guid, TransactionSavepoint>();
+    }
+
+    internal bool TryTransitionState(TransactionState from, TransactionState to)
+    {
+        return Interlocked.CompareExchange(ref _state, (int)to, (int)from) == (int)from;
+    }
+
+    internal void MarkFailed(string? failureReason = null)
+    {
+        if (failureReason != null)
+        {
+            FailureReason = failureReason;
+        }
+
+        State = TransactionState.Failed;
     }
 
     internal void AddOperation(TransactionOperation operation)
@@ -150,14 +176,15 @@ internal sealed class Transaction : ITransaction
     public void Commit()
     {
         ThrowIfDisposed();
-        if (State != TransactionState.Active)
+        var state = State;
+        if (state != TransactionState.Active)
         {
             if (FailureReason != null)
             {
                 throw new InvalidOperationException(FailureReason);
             }
 
-            throw new InvalidOperationException($"Transaction cannot be committed in state {State}");
+            throw new InvalidOperationException($"Transaction cannot be committed in state {state}");
         }
 
         try
@@ -182,19 +209,14 @@ internal sealed class Transaction : ITransaction
         ThrowIfDisposed();
 
         // 允许在Active和Failed状态下回滚
-        if (State != TransactionState.Active && State != TransactionState.Failed)
+        var state = State;
+        if (state != TransactionState.Active && state != TransactionState.Failed)
         {
-            throw new InvalidOperationException($"Transaction cannot be rolled back in state {State}");
+            throw new InvalidOperationException($"Transaction cannot be rolled back in state {state}");
         }
 
         try
         {
-            // 如果事务已经失败，先重置状态为Active以便回滚
-            if (State == TransactionState.Failed)
-            {
-                State = TransactionState.Active;
-            }
-
             _manager.RollbackTransaction(this);
         }
         finally
@@ -464,9 +486,6 @@ internal sealed class Transaction : ITransaction
     {
         if (!_disposed)
         {
-            Exception? rollbackException = null;
-            Exception? cleanupException = null;
-
             try
             {
                 // 如果事务仍然活动，自动回滚
@@ -478,28 +497,27 @@ internal sealed class Transaction : ITransaction
                     }
                     catch (Exception ex)
                     {
-                        rollbackException = new InvalidOperationException("Rollback during transaction dispose failed.", ex);
+                        _manager._engine.Log(TinyDbLogLevel.Warning, "Rollback during transaction dispose failed.", ex);
                     }
                 }
 
-                ClearOperations();
-                _savepoints.Clear();
+                try
+                {
+                    ClearOperations();
+                    _savepoints.Clear();
+                }
+                catch (Exception ex)
+                {
+                    _manager._engine.Log(TinyDbLogLevel.Warning, "Transaction dispose cleanup failed.", ex);
+                }
             }
             catch (Exception ex)
             {
-                cleanupException = new InvalidOperationException("Transaction dispose cleanup failed.", ex);
+                _manager._engine.Log(TinyDbLogLevel.Warning, "Transaction dispose failed.", ex);
             }
             finally
             {
                 _disposed = true;
-            }
-
-            if (rollbackException != null || cleanupException != null)
-            {
-                var exceptions = new List<Exception>();
-                if (rollbackException != null) exceptions.Add(rollbackException);
-                if (cleanupException != null) exceptions.Add(cleanupException);
-                throw new AggregateException("One or more errors occurred during transaction dispose.", exceptions);
             }
         }
     }

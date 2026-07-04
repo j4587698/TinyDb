@@ -1500,6 +1500,28 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private sealed class PrefetchedSingleDocumentLockScope : IDisposable
+    {
+        private readonly IDisposable _documentLock;
+        private readonly Page? _pinnedPage;
+        private bool _disposed;
+
+        public PrefetchedSingleDocumentLockScope(IDisposable documentLock, Page? pinnedPage)
+        {
+            _documentLock = documentLock ?? throw new ArgumentNullException(nameof(documentLock));
+            _pinnedPage = pinnedPage;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            _documentLock.Dispose();
+            _pinnedPage?.Unpin();
+        }
+    }
+
     private async Task<IDisposable> EnterDocumentLocksWithPrefetchedPagesAsync(
         CollectionState st,
         IEnumerable<BsonValue> ids,
@@ -1508,14 +1530,91 @@ public sealed class TinyDbEngine : IDisposable
         if (st == null) throw new ArgumentNullException(nameof(st));
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
-        var documentIds = ids
-            .Where(static id => id != null && !id.IsNull)
-            .Distinct(BsonValueComparer.EqualityComparer)
-            .ToArray();
+        var documentIds = CollectDistinctDocumentIds(ids, static id => id);
+
+        return await EnterDocumentLocksWithPrefetchedPagesAsync(st, documentIds, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IDisposable> EnterDocumentLocksWithPrefetchedPagesAsync<T>(
+        CollectionState st,
+        IReadOnlyList<T> items,
+        Func<T, BsonValue> idSelector,
+        CancellationToken cancellationToken)
+    {
+        if (st == null) throw new ArgumentNullException(nameof(st));
+        if (items == null) throw new ArgumentNullException(nameof(items));
+        if (idSelector == null) throw new ArgumentNullException(nameof(idSelector));
+
+        var documentIds = CollectDistinctDocumentIds(items, idSelector);
+
+        return await EnterDocumentLocksWithPrefetchedPagesAsync(st, documentIds, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IDisposable> EnterDocumentLockWithPrefetchedPageAsync(
+        CollectionState st,
+        BsonValue documentId,
+        CancellationToken cancellationToken)
+    {
+        if (st == null) throw new ArgumentNullException(nameof(st));
+        if (documentId == null)
+        {
+            return await st.EnterDocumentLocksAsync(Array.Empty<BsonValue>(), cancellationToken).ConfigureAwait(false);
+        }
+
+        if (documentId.IsNull)
+        {
+            return await st.EnterDocumentLockAsync(documentId, cancellationToken).ConfigureAwait(false);
+        }
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Page? pinnedPage = null;
+            IDisposable? documentLock = null;
+            var transferOwnership = false;
+
+            try
+            {
+                var prefetchedPageId = GetCurrentDocumentPageId(st, documentId);
+                if (prefetchedPageId != 0)
+                {
+                    pinnedPage = await _pageManager.GetPagePinnedAsync(
+                        prefetchedPageId,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+
+                documentLock = await st.EnterDocumentLockAsync(documentId, cancellationToken).ConfigureAwait(false);
+
+                var currentPageId = GetCurrentDocumentPageId(st, documentId);
+                if (currentPageId == 0 || currentPageId == prefetchedPageId)
+                {
+                    transferOwnership = true;
+                    return new PrefetchedSingleDocumentLockScope(documentLock, pinnedPage);
+                }
+            }
+            finally
+            {
+                if (!transferOwnership)
+                {
+                    documentLock?.Dispose();
+                    pinnedPage?.Unpin();
+                }
+            }
+        }
+    }
+
+    private async Task<IDisposable> EnterDocumentLocksWithPrefetchedPagesAsync(
+        CollectionState st,
+        BsonValue[] documentIds,
+        CancellationToken cancellationToken)
+    {
+        if (st == null) throw new ArgumentNullException(nameof(st));
+        if (documentIds == null) throw new ArgumentNullException(nameof(documentIds));
 
         if (documentIds.Length == 0)
         {
-            return st.EnterDocumentLocks(documentIds);
+            return await st.EnterDocumentLocksAsync(documentIds, cancellationToken).ConfigureAwait(false);
         }
 
         while (true)
@@ -1536,18 +1635,17 @@ public sealed class TinyDbEngine : IDisposable
                         continue;
                     }
 
-                    var page = await _pageManager.GetPageAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
-                    page.Pin();
+                    var page = await _pageManager.GetPagePinnedAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
                     pinnedPages.Add(pageId, page);
                 }
 
-                documentLocks = st.EnterDocumentLocks(documentIds);
+                documentLocks = await st.EnterDocumentLocksAsync(documentIds, cancellationToken).ConfigureAwait(false);
 
                 var currentPageIds = GetCurrentDocumentPageIds(st, documentIds);
                 if (currentPageIds.All(pinnedPages.ContainsKey))
                 {
                     transferOwnership = true;
-                    return new PrefetchedDocumentLockScope(documentLocks, pinnedPages.Values.ToArray());
+                    return new PrefetchedDocumentLockScope(documentLocks, ToPageArray(pinnedPages.Values));
                 }
             }
             finally
@@ -1564,18 +1662,102 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private static BsonValue[] CollectDistinctDocumentIds<T>(IEnumerable<T> items, Func<T, BsonValue> idSelector)
+    {
+        List<BsonValue>? ids = null;
+        HashSet<BsonValue>? seen = null;
+        BsonValue? singleId = null;
+
+        foreach (var item in items)
+        {
+            var id = idSelector(item);
+            if (id == null || id.IsNull)
+            {
+                continue;
+            }
+
+            if (singleId == null)
+            {
+                singleId = id;
+                continue;
+            }
+
+            if (seen == null)
+            {
+                seen = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer) { singleId };
+                ids = items is IReadOnlyCollection<T> collection
+                    ? new List<BsonValue>(collection.Count)
+                    : new List<BsonValue>();
+                ids.Add(singleId);
+            }
+
+            if (seen.Add(id))
+            {
+                ids!.Add(id);
+            }
+        }
+
+        if (ids == null)
+        {
+            return singleId == null ? Array.Empty<BsonValue>() : new[] { singleId };
+        }
+
+        return ids.ToArray();
+    }
+
+    private static uint GetCurrentDocumentPageId(CollectionState st, BsonValue id)
+    {
+        return st.Index.TryGet(id, out var location) ? location.PageId : 0;
+    }
+
     private static uint[] GetCurrentDocumentPageIds(CollectionState st, IReadOnlyList<BsonValue> ids)
     {
-        var pageIds = new HashSet<uint>();
+        List<uint>? pageIds = null;
+        HashSet<uint>? seen = null;
+        uint singlePageId = 0;
+
         foreach (var id in ids)
         {
             if (st.Index.TryGet(id, out var location) && location.PageId != 0)
             {
-                pageIds.Add(location.PageId);
+                if (singlePageId == 0)
+                {
+                    singlePageId = location.PageId;
+                    continue;
+                }
+
+                if (seen == null)
+                {
+                    seen = new HashSet<uint> { singlePageId };
+                    pageIds = new List<uint>(ids.Count) { singlePageId };
+                }
+
+                if (seen.Add(location.PageId))
+                {
+                    pageIds!.Add(location.PageId);
+                }
             }
         }
 
-        return pageIds.OrderBy(static pageId => pageId).ToArray();
+        if (pageIds == null)
+        {
+            return singlePageId == 0 ? Array.Empty<uint>() : new[] { singlePageId };
+        }
+
+        pageIds.Sort();
+        return pageIds.ToArray();
+    }
+
+    private static Page[] ToPageArray(Dictionary<uint, Page>.ValueCollection pages)
+    {
+        var result = new Page[pages.Count];
+        var index = 0;
+        foreach (var page in pages)
+        {
+            result[index++] = page;
+        }
+
+        return result;
     }
 
     private sealed class PreparedInsertPayload : IDisposable
@@ -1674,7 +1856,7 @@ public sealed class TinyDbEngine : IDisposable
         using (var pr = PrepareSerializedInsertPayload(col, doc, out _))
         {
             _metadataManager.ValidateDocumentForWrite(col, pr.Document, _options.SchemaValidationMode);
-            using var documentLock = st.EnterDocumentLock(pr.Id);
+            using var documentLock = await st.EnterDocumentLockAsync(pr.Id, cancellationToken).ConfigureAwait(false);
             using var durabilityScope = BeginImplicitWalTransaction();
             res = InsertPreparedDocument(col, pr, st, idx, true);
             durabilityScope?.Commit();
@@ -1726,7 +1908,7 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         bool updated;
 
-        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, new[] { id }, cancellationToken).ConfigureAwait(false))
+        using (await EnterDocumentLockWithPrefetchedPageAsync(st, id, cancellationToken).ConfigureAwait(false))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
@@ -1764,7 +1946,7 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         var updatedCount = 0;
 
-        using (st.EnterDocumentLocks(prepared.Select(static item => item.Id)))
+        using (st.EnterDocumentLocks(prepared, static item => item.Id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
@@ -1811,7 +1993,7 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         var updatedCount = 0;
 
-        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared.Select(static item => item.Id), cancellationToken).ConfigureAwait(false))
+        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared, static item => item.Id, cancellationToken).ConfigureAwait(false))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
@@ -1873,7 +2055,7 @@ public sealed class TinyDbEngine : IDisposable
         var insertedCount = 0;
         var updatedCount = 0;
 
-        using (st.EnterDocumentLocks(prepared.Select(static item => item.Id)))
+        using (st.EnterDocumentLocks(prepared, static item => item.Id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
@@ -1924,7 +2106,7 @@ public sealed class TinyDbEngine : IDisposable
         var insertedCount = 0;
         var updatedCount = 0;
 
-        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared.Select(static item => item.Id), cancellationToken).ConfigureAwait(false))
+        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared, static item => item.Id, cancellationToken).ConfigureAwait(false))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
             foreach (var (doc, id) in prepared)
@@ -1957,41 +2139,18 @@ public sealed class TinyDbEngine : IDisposable
 
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
+        int deleted;
         using (st.EnterDocumentLock(id))
         {
-            if (!st.Index.TryGet(id, out var loc)) return 0;
-
-            using var durabilityScope = BeginImplicitWalTransaction();
-            using (st.EnterPageMutationLock(loc.PageId))
-            {
-                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-                try
-                {
-                    if (i >= e.Count) return 0;
-                    var entry = e[i];
-                    e.RemoveAt(i);
-                    st.Index.Remove(id);
-                    if (e.Count == 0)
-                    {
-                        FreeDataPage(st, p);
-                    }
-                    else
-                    {
-                        _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-                    }
-                    var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
-                    if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
-                    idxMgr.DeleteDocument(indexDocument, id);
-                    durabilityScope?.Commit();
-                }
-                finally
-                {
-                    p.Unpin();
-                }
-            }
+            deleted = DeleteDocumentCore(col, id, st, idxMgr);
         }
-        EnsureWriteDurability();
-        return 1;
+
+        if (deleted > 0)
+        {
+            EnsureWriteDurability();
+        }
+
+        return deleted;
     }
 
     /// <summary>
@@ -2007,38 +2166,10 @@ public sealed class TinyDbEngine : IDisposable
 
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
-        using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, new[] { id }, cancellationToken).ConfigureAwait(false))
+        using (await EnterDocumentLockWithPrefetchedPageAsync(st, id, cancellationToken).ConfigureAwait(false))
         {
-            if (!st.Index.TryGet(id, out var loc)) return 0;
-
-            using var durabilityScope = BeginImplicitWalTransaction();
-            using (st.EnterPageMutationLock(loc.PageId))
-            {
-                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-                try
-                {
-                    if (i >= e.Count) return 0;
-                    var entry = e[i];
-                    e.RemoveAt(i);
-                    st.Index.Remove(id);
-                    if (e.Count == 0)
-                    {
-                        FreeDataPage(st, p);
-                    }
-                    else
-                    {
-                        _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-                    }
-                    var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
-                    if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
-                    idxMgr.DeleteDocument(indexDocument, id);
-                    durabilityScope?.Commit();
-                }
-                finally
-                {
-                    p.Unpin();
-                }
-            }
+            var deleted = DeleteDocumentCore(col, id, st, idxMgr);
+            if (deleted == 0) return 0;
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
@@ -2070,7 +2201,7 @@ public sealed class TinyDbEngine : IDisposable
 
         try
         {
-            using (st.EnterDocumentLocks(preparedPayloads.Select(static payload => payload.Id)))
+            using (st.EnterDocumentLocks(preparedPayloads, static payload => payload.Id))
             {
                 using var durabilityScope = BeginImplicitWalTransaction();
 
@@ -2090,7 +2221,7 @@ public sealed class TinyDbEngine : IDisposable
 
                 if (exceptions.Count > 0)
                 {
-                    RollbackInsertedDocuments(col, insertedPayloads.Select(static payload => payload.Id), exceptions);
+                    RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
                     if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
                     {
                         throw pageSelectionException;
@@ -2156,7 +2287,10 @@ public sealed class TinyDbEngine : IDisposable
 
         try
         {
-            using (st.EnterDocumentLocks(preparedPayloads.Select(static payload => payload.Id)))
+            using (await st.EnterDocumentLocksAsync(
+                       preparedPayloads,
+                       static payload => payload.Id,
+                       cancellationToken).ConfigureAwait(false))
             {
                 using var durabilityScope = BeginImplicitWalTransaction();
 
@@ -2185,7 +2319,7 @@ public sealed class TinyDbEngine : IDisposable
                     var cancellationException = exceptions.Count == 1
                         ? exceptions[0] as OperationCanceledException
                         : null;
-                    RollbackInsertedDocuments(col, insertedPayloads.Select(static payload => payload.Id), exceptions);
+                    RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
                     if (cancellationException != null && exceptions.Count == 1)
                     {
                         throw cancellationException;
@@ -2957,7 +3091,7 @@ public sealed class TinyDbEngine : IDisposable
             }
             catch
             {
-                DeleteDocument(col, prepared.Id);
+                DeleteDocumentCore(col, prepared.Id, st, idx);
                 throw;
             }
         }
@@ -3265,13 +3399,68 @@ public sealed class TinyDbEngine : IDisposable
         return doc;
     }
 
-    private void RollbackInsertedDocuments(string collectionName, IEnumerable<BsonValue> documentIds, List<Exception> exceptions)
+    private int DeleteDocumentCore(string col, BsonValue id, CollectionState st, IndexManager idxMgr)
     {
-        foreach (var id in documentIds.Where(id => id != null && !id.IsNull).Distinct().Reverse().ToArray())
+        if (!st.Index.TryGet(id, out var loc)) return 0;
+
+        using var durabilityScope = BeginImplicitWalTransaction();
+        using (st.EnterPageMutationLock(loc.PageId))
         {
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
             try
             {
-                DeleteDocument(collectionName, id);
+                if (i >= e.Count) return 0;
+                var entry = e[i];
+                e.RemoveAt(i);
+                st.Index.Remove(id);
+                if (e.Count == 0)
+                {
+                    FreeDataPage(st, p);
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+
+                var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
+                if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
+                idxMgr.DeleteDocument(indexDocument, id);
+                durabilityScope?.Commit();
+                return 1;
+            }
+            finally
+            {
+                p.Unpin();
+            }
+        }
+    }
+
+    private void RollbackInsertedDocuments(
+        string collectionName,
+        IReadOnlyList<PreparedInsertPayload> insertedPayloads,
+        CollectionState st,
+        IndexManager idxMgr,
+        List<Exception> exceptions)
+    {
+        HashSet<BsonValue>? rolledBackIds = null;
+
+        for (var i = insertedPayloads.Count - 1; i >= 0; i--)
+        {
+            var id = insertedPayloads[i].Id;
+            if (id == null || id.IsNull)
+            {
+                continue;
+            }
+
+            rolledBackIds ??= new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+            if (!rolledBackIds.Add(id))
+            {
+                continue;
+            }
+
+            try
+            {
+                DeleteDocumentCore(collectionName, id, st, idxMgr);
             }
             catch (Exception ex)
             {
@@ -3285,7 +3474,8 @@ public sealed class TinyDbEngine : IDisposable
         bool hasId = doc.TryGetValue("_id", out var exId) && exId != null && !exId.IsNull;
         // 检查 _collection 是否已经存在且值正确（避免不必要的重建）
         bool hasCorrectCol = doc.TryGetValue("_collection", out var existingCol) && existingCol?.ToString() == col;
-        bool hasIdFirst = doc.Count > 0 && string.Equals(doc.First().Key, "_id", StringComparison.Ordinal);
+        bool hasIdFirst = doc.TryGetFirstKey(out var firstKey) &&
+                          string.Equals(firstKey, "_id", StringComparison.Ordinal);
 
         // 快速路径：如果已有 _id 且 _collection 值正确，直接返回原文档
         if (hasId && hasCorrectCol && hasIdFirst)
@@ -3295,7 +3485,7 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         // 优化：直接创建新的 Builder，一次性添加所有字段，避免 ToBuilder() 的额外转换
-        var builder = new BsonDocumentBuilder();
+        var builder = new BsonDocumentBuilder(doc.Count + 2);
 
         // 复制原文档的所有字段
         // 添加 _id（如果缺失）
@@ -3310,7 +3500,7 @@ public sealed class TinyDbEngine : IDisposable
 
         // 强制设置 _collection 为实际使用的集合名称（覆盖 AOT 生成器设置的值）
         builder.Set("_id", id);
-        foreach (var kvp in doc)
+        foreach (var kvp in doc.Entries)
         {
             if (string.Equals(kvp.Key, "_id", StringComparison.Ordinal) ||
                 string.Equals(kvp.Key, "_collection", StringComparison.Ordinal))

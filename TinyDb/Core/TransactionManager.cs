@@ -11,6 +11,7 @@ namespace TinyDb.Core;
 /// </summary>
 public sealed class TransactionManager : IDisposable
 {
+    private static readonly TimeSpan TimeoutCheckStopTimeout = TimeSpan.FromSeconds(5);
     internal readonly TinyDbEngine _engine;
     private readonly Dictionary<Guid, Transaction> _activeTransactions;
     private readonly Dictionary<Guid, DateTime> _timedOutTransactions;
@@ -99,11 +100,12 @@ public sealed class TransactionManager : IDisposable
         {
             EnsureTransactionActive(transaction);
 
-            lock (transaction.SyncRoot)
+            if (!transaction.TryTransitionState(TransactionState.Active, TransactionState.Committing))
             {
-                transaction.State = TransactionState.Committing;
-                operations = transaction.Operations.ToArray();
+                throw new InvalidOperationException($"Transaction cannot be committed in state {transaction.State}");
             }
+
+            operations = transaction.GetOperationsSnapshot();
         }
 
         try
@@ -160,14 +162,14 @@ public sealed class TransactionManager : IDisposable
 
             lock (_lock)
             {
-                transaction.State = TransactionState.Committed;
+                transaction.TryTransitionState(TransactionState.Committing, TransactionState.Committed);
             }
         }
         catch (Exception ex)
         {
             lock (_lock)
             {
-                transaction.State = TransactionState.Failed;
+                transaction.MarkFailed();
             }
 
             throw new InvalidOperationException($"Failed to commit transaction: {ex.Message}", ex);
@@ -254,16 +256,25 @@ public sealed class TransactionManager : IDisposable
 
             try
             {
-                transaction.State = TransactionState.RollingBack;
+                var state = transaction.State;
+                if (state != TransactionState.Active && state != TransactionState.Failed)
+                {
+                    throw new InvalidOperationException($"Transaction cannot be rolled back in state {state}");
+                }
+
+                if (!transaction.TryTransitionState(state, TransactionState.RollingBack))
+                {
+                    throw new InvalidOperationException($"Transaction cannot be rolled back in state {transaction.State}");
+                }
 
                 // 回滚所有操作
                 RollbackOperations(transaction);
 
-                transaction.State = TransactionState.RolledBack;
+                transaction.TryTransitionState(TransactionState.RollingBack, TransactionState.RolledBack);
             }
             catch (Exception ex)
             {
-                transaction.State = TransactionState.Failed;
+                transaction.MarkFailed();
                 throw new InvalidOperationException($"Failed to rollback transaction: {ex.Message}", ex);
             }
             finally
@@ -366,9 +377,10 @@ public sealed class TransactionManager : IDisposable
 
             lock (transaction.SyncRoot)
             {
-                if (transaction.State != TransactionState.Active)
+                var state = transaction.State;
+                if (state != TransactionState.Active)
                 {
-                    throw new InvalidOperationException($"Transaction cannot record operations in state {transaction.State}");
+                    throw new InvalidOperationException($"Transaction cannot record operations in state {state}");
                 }
 
                 transaction.AddOperation(operation);
@@ -793,17 +805,22 @@ public sealed class TransactionManager : IDisposable
     /// <returns>任务</returns>
     private async Task StartTimeoutCheckTask(CancellationToken cancellationToken)
     {
-        try
+        while (Volatile.Read(ref _disposed) == 0)
         {
-            while (Volatile.Read(ref _disposed) == 0)
+            try
             {
                 await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
                 if (Volatile.Read(ref _disposed) != 0) break;
                 CheckAndCleanupExpiredTransactions();
             }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check failed.", ex);
+            }
         }
     }
 
@@ -823,9 +840,8 @@ public sealed class TransactionManager : IDisposable
 
             foreach (var expiredTransaction in expiredTransactions)
             {
-                if (expiredTransaction.State != TransactionState.Active) continue;
                 var failureReason = CreateTransactionTimeoutMessage(expiredTransaction.TransactionId, now);
-                expiredTransaction.State = TransactionState.Failed;
+                if (!expiredTransaction.TryTransitionState(TransactionState.Active, TransactionState.Failed)) continue;
                 expiredTransaction.FailureReason = failureReason;
                 _activeTransactions.Remove(expiredTransaction.TransactionId);
                 _timedOutTransactions[expiredTransaction.TransactionId] = now;
@@ -924,13 +940,35 @@ public sealed class TransactionManager : IDisposable
         {
             foreach (var transaction in _activeTransactions.Values)
             {
-                transaction.State = TransactionState.Failed;
+                transaction.MarkFailed();
             }
 
             _activeTransactions.Clear();
         }
 
+        WaitForTimeoutCheckTask();
         _timeoutCheckCts.Dispose();
+    }
+
+    private void WaitForTimeoutCheckTask()
+    {
+        try
+        {
+            if (!_timeoutCheckTask.Wait(TimeoutCheckStopTimeout))
+            {
+                _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check task did not stop before dispose timeout.");
+                return;
+            }
+
+            _timeoutCheckTask.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check task stopped with an error.", ex);
+        }
     }
 
     /// <summary>

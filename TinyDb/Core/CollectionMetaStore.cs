@@ -64,7 +64,7 @@ internal sealed class CollectionMetaStore
             if (includeInternal) return doc;
 
             var filtered = new BsonDocument();
-            foreach (var element in doc)
+            foreach (var element in doc.Entries)
             {
                 if (!element.Key.StartsWith("__", StringComparison.Ordinal))
                 {
@@ -119,7 +119,7 @@ internal sealed class CollectionMetaStore
             lock (_lock)
             {
                 _collectionsMetadata.Clear();
-                foreach (var kvp in document)
+                foreach (var kvp in document.Entries)
                 {
                     // Value can be String (Legacy) or Document (New)
                     if (kvp.Value is BsonString)

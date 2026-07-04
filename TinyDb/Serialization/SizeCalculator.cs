@@ -66,7 +66,7 @@ internal sealed class SizeCalculator
 
         var size = 4; // 文档大小（4字节）
 
-        foreach (var kvp in document)
+        foreach (var kvp in document.Entries)
         {
             size += 1; // 类型字节
             size += CalculateCStringSize(kvp.Key); // 键名
