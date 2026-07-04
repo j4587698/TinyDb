@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using TinyDb.Bson;
 
@@ -103,8 +104,8 @@ public static class BsonConversion
             null => BsonNull.Value,
             BsonValue bson => bson,
             byte[] bytes => new BsonBinary(bytes),
-            ReadOnlyMemory<byte> rom => new BsonBinary(rom.ToArray()),
-            Memory<byte> mem => new BsonBinary(mem.ToArray()),
+            ReadOnlyMemory<byte> rom => CreateBinary(rom),
+            Memory<byte> mem => CreateBinary(mem),
             byte b => BsonInt32.FromValue(b),      // 使用缓存
             sbyte sb => BsonInt32.FromValue(sb),   // 使用缓存
             short s => BsonInt32.FromValue(s),     // 小整数使用缓存
@@ -139,6 +140,16 @@ public static class BsonConversion
         var underlyingType = Enum.GetUnderlyingType(enumValue.GetType());
         var convertedValue = Convert.ChangeType(enumValue, underlyingType);
         return ToBsonValue(convertedValue!);
+    }
+
+    private static BsonBinary CreateBinary(ReadOnlyMemory<byte> memory)
+    {
+        return MemoryMarshal.TryGetArray(memory, out var segment) &&
+               segment.Array != null &&
+               segment.Offset == 0 &&
+               segment.Count == segment.Array.Length
+            ? new BsonBinary(segment.Array)
+            : new BsonBinary(memory.Span);
     }
 
     private static BsonValue ConvertJsonElementToBsonValue(JsonElement element)
@@ -300,7 +311,7 @@ public static class BsonConversion
         _serializingObjects?.Remove(value);
         if (_serializingObjects is { Count: 0 })
         {
-            _serializingObjects = null;
+            _serializingObjects.Clear();
         }
 
         _conversionDepth--;

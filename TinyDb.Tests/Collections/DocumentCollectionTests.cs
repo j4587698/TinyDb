@@ -173,6 +173,39 @@ public class DocumentCollectionTests : IDisposable
         await Assert.That(totalCount).IsEqualTo(2);
         await Assert.That(page.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task Update_InTransaction_WhenMissing_ShouldNotInsert()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+
+        using var transaction = _engine.BeginTransaction();
+        var updated = collection.Update(new DocumentCollectionItem { Id = 404, Name = "Missing" });
+        var countInTransaction = collection.Count();
+        transaction.Commit();
+
+        await Assert.That(updated).IsEqualTo(0);
+        await Assert.That(countInTransaction).IsEqualTo(0);
+        await Assert.That(collection.FindById(404)).IsNull();
+    }
+
+    [Test]
+    public async Task Count_InTransaction_ShouldUseDeltaWithoutMaterializingCollection()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+        collection.Insert(new DocumentCollectionItem { Id = 1, Name = "A" });
+        collection.Insert(new DocumentCollectionItem { Id = 2, Name = "B" });
+
+        using var transaction = _engine.BeginTransaction();
+        collection.Insert(new DocumentCollectionItem { Id = 3, Name = "C" });
+        collection.Delete(1);
+        collection.Update(new DocumentCollectionItem { Id = 2, Name = "B2" });
+
+        await Assert.That(collection.Count()).IsEqualTo(2);
+        await Assert.That(await collection.CountAsync()).IsEqualTo(2);
+
+        transaction.Rollback();
+    }
 }
 
 [Entity("Items")]

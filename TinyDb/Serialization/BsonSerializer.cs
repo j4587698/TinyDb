@@ -511,7 +511,7 @@ public sealed class BsonWriter : IDisposable
             var sizePosition = _stream.Position;
             _writer.Write(0); // 占位符
 
-            foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
+            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
             _writer.Write((byte)BsonType.End);
 
             var endPosition = _stream.Position;
@@ -527,7 +527,7 @@ public sealed class BsonWriter : IDisposable
                 int sizePosition = patchable.WrittenCount;
                 InternalWrite(0); // 占位符
 
-                foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
+                foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
                 InternalWrite((byte)BsonType.End);
 
                 int endPosition = patchable.WrittenCount;
@@ -538,7 +538,7 @@ public sealed class BsonWriter : IDisposable
             // 通用 IBufferWriter：先计算大小，再写入（避免依赖随机访问能力）
             var size = BsonSerializer.CalculateDocumentSize(document);
             InternalWrite(size);
-            foreach (var kvp in document._elements) WriteElement(kvp.Key, kvp.Value);
+            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
             InternalWrite((byte)BsonType.End);
         }
         }
@@ -951,7 +951,7 @@ public sealed class BsonReader : IDisposable
         {
             var documentSize = ReadContainerLength("document");
             var startPosition = _stream.Position;
-            var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+            var builder = new BsonDocumentBuilder();
 
             while (true)
             {
@@ -963,7 +963,7 @@ public sealed class BsonReader : IDisposable
                 var key = ReadCString();
                 var value = ReadTypedValue(type);
 
-                builder[key] = value;
+                builder.Set(key, value);
             }
 
             var endPosition = _stream.Position;
@@ -975,7 +975,7 @@ public sealed class BsonReader : IDisposable
                 throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
             }
 
-            return new BsonDocument(builder);
+            return builder.Build();
         }
         finally
         {
@@ -997,7 +997,7 @@ public sealed class BsonReader : IDisposable
         {
             var documentSize = ReadContainerLength("document");
             var startPosition = _stream.Position;
-            var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+            var builder = new BsonDocumentBuilder();
 
             while (true)
             {
@@ -1012,7 +1012,7 @@ public sealed class BsonReader : IDisposable
                 if (fields == null || fields.Contains(key))
                 {
                     var value = ReadTypedValue(type);
-                    builder[key] = value;
+                    builder.Set(key, value);
                 }
                 else
                 {
@@ -1030,7 +1030,7 @@ public sealed class BsonReader : IDisposable
                 throw new InvalidOperationException($"Document size mismatch: expected {documentSize} (content: {expectedContentSize}), actual content size {actualContentSize}");
             }
 
-            return new BsonDocument(builder);
+            return builder.Build();
         }
         finally
         {

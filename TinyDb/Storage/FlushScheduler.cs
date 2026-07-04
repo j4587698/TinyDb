@@ -21,6 +21,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     private int _disposed;
     private int _ctsDisposed;
     private Exception? _backgroundFailure;
+    private Exception? _corruptionException;
     private int _foregroundFlushFailureObserved;
     
     private TaskCompletionSource _journalBatchTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -60,6 +61,14 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         TinyDbLogging.SafeLog(_log, level, message, ex);
     }
+
+    internal void MarkCorrupted(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        Interlocked.CompareExchange(ref _corruptionException, exception, null);
+    }
+
+    private bool IsCorrupted => Volatile.Read(ref _corruptionException) != null;
 
     private async Task BackgroundLoopAsync()
     {
@@ -470,6 +479,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
 
         if (flushException == null &&
+            !IsCorrupted &&
             Volatile.Read(ref _backgroundFailure) is { } backgroundFailure &&
             Volatile.Read(ref _foregroundFlushFailureObserved) == 0)
         {
@@ -519,7 +529,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             {
                 try
                 {
-                    task.GetAwaiter().GetResult();
+                    task.Wait();
                 }
                 catch (Exception ex)
                 {
@@ -611,6 +621,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
 
         if (flushException == null &&
+            !IsCorrupted &&
             Volatile.Read(ref _backgroundFailure) is { } backgroundFailure &&
             Volatile.Read(ref _foregroundFlushFailureObserved) == 0)
         {
@@ -635,12 +646,14 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     private void FlushForDispose()
     {
+        if (IsCorrupted) return;
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         _wal.Synchronize(() => _pageManager.FlushDirtyPages());
     }
 
     private async Task FlushForDisposeAsync()
     {
+        if (IsCorrupted) return;
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), CancellationToken.None).ConfigureAwait(false);
     }

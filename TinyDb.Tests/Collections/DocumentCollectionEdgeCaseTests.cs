@@ -128,7 +128,7 @@ public class DocumentCollectionEdgeCaseTests
     }
 
     [Test]
-    public async Task Update_NonExistentDocument_InTransaction_ShouldConvertToInsert()
+    public async Task Update_NonExistentDocument_InTransaction_ShouldReturnZero()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_update_{Guid.NewGuid():N}.db");
         try
@@ -144,17 +144,14 @@ public class DocumentCollectionEdgeCaseTests
                 Name = "NonExistent" 
             };
 
-            // Update a non-existent document in transaction should insert it
             var count = collection.Update(entity);
 
-            await Assert.That(count).IsEqualTo(1);
+            await Assert.That(count).IsEqualTo(0);
 
             transaction.Commit();
 
-            // Verify the document was inserted
             var found = collection.FindById(entity.Id);
-            await Assert.That(found).IsNotNull();
-            await Assert.That(found!.Name).IsEqualTo("NonExistent");
+            await Assert.That(found).IsNull();
         }
         finally
         {

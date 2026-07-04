@@ -10,6 +10,7 @@ namespace TinyDb.Bson;
 public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IReadOnlyDictionary<string, BsonValue>
 {
     internal readonly ImmutableDictionary<string, BsonValue> _elements;
+    private readonly ImmutableArray<string> _order;
 
     public override BsonType BsonType => BsonType.Document;
     public override object? RawValue => _elements;
@@ -23,22 +24,22 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// <summary>
     /// 获取所有键
     /// </summary>
-    public IEnumerable<string> Keys => _elements.Keys;
+    public IEnumerable<string> Keys => _order;
 
     /// <summary>
     /// 获取所有值
     /// </summary>
-    public IEnumerable<BsonValue> Values => _elements.Values;
+    public IEnumerable<BsonValue> Values => _order.Select(key => _elements[key]);
 
     /// <summary>
     /// IDictionary.Keys 显式实现
     /// </summary>
-    ICollection<string> IDictionary<string, BsonValue>.Keys => _elements.Keys.ToList();
+    ICollection<string> IDictionary<string, BsonValue>.Keys => _order.ToList();
 
     /// <summary>
     /// IDictionary.Values 显式实现
     /// </summary>
-    ICollection<BsonValue> IDictionary<string, BsonValue>.Values => _elements.Values.ToList();
+    ICollection<BsonValue> IDictionary<string, BsonValue>.Values => Values.ToList();
 
     /// <summary>
     /// 获取是否为只读
@@ -93,7 +94,9 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public BsonDocument Set(string key, BsonValue value)
     {
-        return new BsonDocument(_elements.SetItem(key, value));
+        ArgumentNullException.ThrowIfNull(key);
+        var order = _elements.ContainsKey(key) ? _order : _order.Add(key);
+        return new BsonDocument(_elements.SetItem(key, value), order);
     }
 
     /// <summary>
@@ -109,7 +112,13 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public BsonDocument RemoveKey(string key)
     {
-        return new BsonDocument(_elements.Remove(key));
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_elements.ContainsKey(key))
+        {
+            return this;
+        }
+
+        return new BsonDocument(_elements.Remove(key), _order.Remove(key));
     }
 
     /// <summary>
@@ -133,7 +142,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public bool Contains(KeyValuePair<string, BsonValue> item)
     {
-        return _elements.Contains(item);
+        return _elements.TryGetValue(item.Key, out var value) && value.Equals(item.Value);
     }
 
     /// <summary>
@@ -141,7 +150,11 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public void CopyTo(KeyValuePair<string, BsonValue>[] array, int arrayIndex)
     {
-        ((ICollection<KeyValuePair<string, BsonValue>>)_elements).CopyTo(array, arrayIndex);
+        ArgumentNullException.ThrowIfNull(array);
+        foreach (var item in this)
+        {
+            array[arrayIndex++] = item;
+        }
     }
 
     /// <summary>
@@ -157,10 +170,13 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public IEnumerator<KeyValuePair<string, BsonValue>> GetEnumerator()
     {
-        return _elements.GetEnumerator();
+        foreach (var key in _order)
+        {
+            yield return new KeyValuePair<string, BsonValue>(key, _elements[key]);
+        }
     }
 
-    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _elements.GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 
     /// <summary>
     /// 初始化空的文档
@@ -172,14 +188,14 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
         _aotRef = new BsonDocumentValue();
     }
 
-    public BsonDocument() : this(ImmutableDictionary<string, BsonValue>.Empty)
+    public BsonDocument() : this(ImmutableDictionary<string, BsonValue>.Empty, ImmutableArray<string>.Empty)
     {
     }
 
     /// <summary>
     /// 使用字典初始化文档
     /// </summary>
-    public BsonDocument(IDictionary<string, BsonValue> dictionary) : this(dictionary.ToImmutableDictionary())
+    public BsonDocument(IDictionary<string, BsonValue> dictionary) : this((IEnumerable<KeyValuePair<string, BsonValue>>)dictionary)
     {
     }
 
@@ -187,16 +203,74 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// 使用不可变字典初始化文档
     /// </summary>
     internal BsonDocument(ImmutableDictionary<string, BsonValue> elements)
+        : this(elements, elements.Keys.ToImmutableArray())
+    {
+    }
+
+    private BsonDocument(ImmutableDictionary<string, BsonValue> elements, ImmutableArray<string> order)
     {
         _elements = elements;
+        _order = NormalizeOrder(elements, order);
     }
 
     /// <summary>
     /// 使用 Builder 初始化文档（内部高效使用）
     /// </summary>
     internal BsonDocument(ImmutableDictionary<string, BsonValue>.Builder builder)
+        : this(builder.ToImmutable())
     {
+    }
+
+    internal BsonDocument(IEnumerable<KeyValuePair<string, BsonValue>> elements)
+    {
+        ArgumentNullException.ThrowIfNull(elements);
+
+        var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+        var order = ImmutableArray.CreateBuilder<string>();
+
+        foreach (var (key, value) in elements)
+        {
+            ArgumentNullException.ThrowIfNull(key);
+            if (!builder.ContainsKey(key))
+            {
+                order.Add(key);
+            }
+
+            builder[key] = value;
+        }
+
         _elements = builder.ToImmutable();
+        _order = order.ToImmutable();
+    }
+
+    private static ImmutableArray<string> NormalizeOrder(
+        ImmutableDictionary<string, BsonValue> elements,
+        ImmutableArray<string> order)
+    {
+        if (elements.Count == 0)
+        {
+            return ImmutableArray<string>.Empty;
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var normalized = ImmutableArray.CreateBuilder<string>(elements.Count);
+        foreach (var key in order)
+        {
+            if (elements.ContainsKey(key) && seen.Add(key))
+            {
+                normalized.Add(key);
+            }
+        }
+
+        foreach (var key in elements.Keys)
+        {
+            if (seen.Add(key))
+            {
+                normalized.Add(key);
+            }
+        }
+
+        return normalized.ToImmutable();
     }
 
     /// <summary>
@@ -212,7 +286,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public static BsonDocument Create(string key, BsonValue value)
     {
-        return new BsonDocument(ImmutableDictionary<string, BsonValue>.Empty.Add(key, value));
+        return new BsonDocument(new[] { new KeyValuePair<string, BsonValue>(key, value) });
     }
 
     /// <summary>
@@ -220,7 +294,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public BsonDocument Clone()
     {
-        return new BsonDocument(_elements.ToBuilder().ToImmutable());
+        return new BsonDocument(this);
     }
 
     /// <summary>
@@ -258,7 +332,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
         if (Count != otherDoc.Count) return false;
 
         // 逐个比较键值对
-        foreach (var kvp in _elements)
+        foreach (var kvp in this)
         {
             if (!otherDoc._elements.TryGetValue(kvp.Key, out var otherValue) || !kvp.Value.Equals(otherValue))
             {
@@ -280,7 +354,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
             long sumOfSquares = 0;
             int xor = 0;
 
-            foreach (var kvp in _elements)
+            foreach (var kvp in this)
             {
                 var elementHash = HashCode.Combine(StringComparer.Ordinal.GetHashCode(kvp.Key), kvp.Value.GetHashCode());
                 sum += elementHash;
@@ -301,7 +375,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
         sb.Append('{');
 
         var first = true;
-        foreach (var kvp in _elements)
+        foreach (var kvp in this)
         {
             if (!first) sb.Append(", ");
             first = false;
@@ -336,14 +410,14 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public static BsonDocument FromDictionary(Dictionary<string, object?> dictionary)
     {
-        var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+        var elements = new List<KeyValuePair<string, BsonValue>>(dictionary.Count);
 
         foreach (var kvp in dictionary)
         {
-            builder[kvp.Key] = ConvertToBsonValue(kvp.Value);
+            elements.Add(new KeyValuePair<string, BsonValue>(kvp.Key, ConvertToBsonValue(kvp.Value)));
         }
 
-        return new BsonDocument(builder.ToImmutable());
+        return new BsonDocument(elements);
     }
 
     /// <summary>
@@ -353,7 +427,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     {
         var result = new Dictionary<string, object?>();
 
-        foreach (var kvp in _elements)
+        foreach (var kvp in this)
         {
             result[kvp.Key] = ConvertFromBsonValue(kvp.Value);
         }

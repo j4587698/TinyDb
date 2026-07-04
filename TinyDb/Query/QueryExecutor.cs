@@ -99,10 +99,6 @@ public sealed class QueryExecutor
         if (shape.Sort.Count == 0)
         {
             var result = Execute<T>(collectionName, shape.Predicate);
-            if (skip > 0 || take.HasValue)
-            {
-                result = result.OrderBy(static item => AotIdAccessor<T>.GetId(item), BsonValueSortComparer.Instance);
-            }
 
             bool skipPushed = false;
             bool takePushed = false;
@@ -201,10 +197,6 @@ public sealed class QueryExecutor
         if (shape.Sort.Count == 0)
         {
             var result = ExecuteAsync<T>(collectionName, shape.Predicate, cancellationToken);
-            if (skip > 0 || take.HasValue)
-            {
-                result = OrderByIdAsync(result, cancellationToken);
-            }
 
             bool skipPushed = false;
             bool takePushed = false;

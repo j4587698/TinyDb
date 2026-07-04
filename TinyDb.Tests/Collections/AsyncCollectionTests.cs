@@ -383,7 +383,7 @@ public class AsyncCollectionTests : IDisposable
     // HasValidId 的正确行为已在 AotIdAccessorCoverageTests.cs 中充分测试。
 
     [Test]
-    public async Task UpdateAsync_InTransaction_WhenMissing_ShouldInsert()
+    public async Task UpdateAsync_InTransaction_WhenMissing_ShouldReturnZero()
     {
         var collection = _engine.GetCollection<AsyncTestEntity>();
         var entity = new AsyncTestEntity { Name = "TxNew" };
@@ -391,14 +391,13 @@ public class AsyncCollectionTests : IDisposable
         using var transaction = _engine.BeginTransaction();
         var count = await collection.UpdateAsync(entity);
 
-        await Assert.That(count).IsEqualTo(1);
-        await Assert.That(collection.Count()).IsEqualTo(1);
+        await Assert.That(count).IsEqualTo(0);
+        await Assert.That(collection.Count()).IsEqualTo(0);
 
         transaction.Commit();
 
         var loaded = collection.FindById(entity.Id);
-        await Assert.That(loaded).IsNotNull();
-        await Assert.That(loaded!.Name).IsEqualTo("TxNew");
+        await Assert.That(loaded).IsNull();
     }
 
     [Test]

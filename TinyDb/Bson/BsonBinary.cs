@@ -88,6 +88,12 @@ public sealed class BsonBinary : BsonValue
         SubType = subType;
     }
 
+    public BsonBinary(ReadOnlySpan<byte> bytes, BinarySubType subType = BinarySubType.Generic)
+    {
+        _bytes = bytes.ToArray();
+        SubType = subType;
+    }
+
     /// <summary>
     /// 初始化 BsonBinary 从 Guid
     /// </summary>

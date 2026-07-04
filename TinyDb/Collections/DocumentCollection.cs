@@ -201,8 +201,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             if (originalDocument == null)
             {
                 // 如果原始文档不存在，这是插入操作
-                ((Transaction)currentTransaction).RecordInsert(_name, document);
-                return 1;
+                return 0;
             }
             else
             {
@@ -295,12 +294,13 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             currentDocuments.TryAdd(prepared[i].Id, originalDocuments[i]);
         }
 
+        var updatedCount = 0;
         foreach (var (document, id) in prepared)
         {
             currentDocuments.TryGetValue(id, out var originalDocument);
             if (originalDocument == null)
             {
-                transaction.RecordInsert(_name, document);
+                continue;
             }
             else
             {
@@ -308,9 +308,10 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             }
 
             currentDocuments[id] = document;
+            updatedCount++;
         }
 
-        return prepared.Count;
+        return updatedCount;
     }
 
     /// <summary>
@@ -674,10 +675,6 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         if (limit == 0) return Enumerable.Empty<T>();
 
         var result = _queryExecutor.Execute<T>(_name, queryExpression);
-        if (skip > 0 || limit < int.MaxValue)
-        {
-            result = result.OrderBy(static item => AotIdAccessor<T>.GetId(item));
-        }
 
         if (skip > 0)
         {
@@ -781,10 +778,10 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     {
         ThrowIfDisposed();
 
-        // 关键修复：如果在事务中，必须使用 FindAll().Count() 以包含挂起的操作
-        if (_engine.GetCurrentTransaction() != null)
+        // 事务内使用增量计数，避免为了包含挂起操作而物化整个集合。
+        if (_engine.GetCurrentTransaction() is Transaction transaction)
         {
-            return FindAll().LongCount();
+            return _engine.GetTransactionalDocumentCount(_name, transaction);
         }
 
         return _engine.GetCachedDocumentCount(_name);
@@ -1122,7 +1119,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
     private static IReadOnlyList<SqlOrderBy> CreateStableSqlOrderBy(SqlQuerySpec query)
     {
-        if (query.Skip <= 0 && query.Limit >= int.MaxValue)
+        if ((query.Skip <= 0 && query.Limit >= int.MaxValue) || query.OrderBy.Count == 0)
         {
             return query.OrderBy;
         }
@@ -1579,8 +1576,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             var originalDocument = await _engine.FindByIdAsync(_name, id, cancellationToken).ConfigureAwait(false);
             if (originalDocument == null)
             {
-                ((Transaction)currentTransaction).RecordInsert(_name, document);
-                return 1;
+                return 0;
             }
             else
             {
@@ -1823,24 +1819,18 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         return default;
     }
 
-    public async Task<long> CountAsync(CancellationToken cancellationToken = default)
+    public Task<long> CountAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
 
         // 关键修复：如果在事务中，必须使用 FindAllAsync().Count 以包含挂起的操作
-        if (_engine.GetCurrentTransaction() != null)
+        if (_engine.GetCurrentTransaction() is Transaction transaction)
         {
-            long transactionCount = 0;
-            await foreach (var _ in _queryExecutor.ExecuteAsync<T>(_name, null, cancellationToken).ConfigureAwait(false))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                transactionCount++;
-            }
-
-            return transactionCount;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_engine.GetTransactionalDocumentCount(_name, transaction));
         }
 
-        return _engine.GetCachedDocumentCount(_name);
+        return Task.FromResult((long)_engine.GetCachedDocumentCount(_name));
     }
 
     public async Task<long> CountAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)

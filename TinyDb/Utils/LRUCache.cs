@@ -35,12 +35,12 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// <summary>
     /// 缓存命中次数
     /// </summary>
-    public long Hits => _hits;
+    public long Hits => Interlocked.Read(ref _hits);
 
     /// <summary>
     /// 缓存未命中次数
     /// </summary>
-    public long Misses => _misses;
+    public long Misses => Interlocked.Read(ref _misses);
 
     /// <summary>
     /// 缓存命中率
@@ -49,8 +49,10 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     {
         get
         {
-            var total = _hits + _misses;
-            return total == 0 ? 0.0 : (double)_hits / total;
+            var hits = Interlocked.Read(ref _hits);
+            var misses = Interlocked.Read(ref _misses);
+            var total = hits + misses;
+            return total == 0 ? 0.0 : (double)hits / total;
         }
     }
 

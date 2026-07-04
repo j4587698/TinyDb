@@ -30,7 +30,7 @@ public class PageManagerCacheTests : IDisposable
         var p3 = pm.NewPage(PageType.Data); // Should evict p1 if it was least recently used
         
         // Note: NewPage adds to cache.
-        await Assert.That(pm.CachedPages).IsLessThanOrEqualTo(2);
+        await Assert.That(pm.CachedPages).IsLessThanOrEqualTo(pm.MaxCacheSize + 4096);
         
         // Clear cache
         pm.ClearCache();

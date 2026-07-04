@@ -17,6 +17,8 @@ public sealed class TransactionManager : IDisposable
     private readonly ConcurrentDictionary<string, List<ForeignKeyDefinition>> _foreignKeyCache = new(StringComparer.Ordinal);
     private readonly object _foreignKeyCacheLock = new();
     private readonly object _lock = new();
+    private readonly CancellationTokenSource _timeoutCheckCts = new();
+    private readonly Task _timeoutCheckTask;
     private int _disposed;
 
     private record ForeignKeyDefinition(string FieldName, string ReferencedCollection);
@@ -60,7 +62,7 @@ public sealed class TransactionManager : IDisposable
         _timedOutTransactions = new Dictionary<Guid, DateTime>();
 
         // 启动超时检查任务
-        _ = StartTimeoutCheckTask();
+        _timeoutCheckTask = StartTimeoutCheckTask(_timeoutCheckCts.Token);
     }
 
     /// <summary>
@@ -144,9 +146,11 @@ public sealed class TransactionManager : IDisposable
                             commitEx)
                     };
                     errors.AddRange(rollbackErrors);
-                    throw new AggregateException(
+                    var aggregate = new AggregateException(
                         "Transaction durability commit failed and rollback compensation encountered errors.",
                         errors);
+                    _engine.MarkCorrupted(aggregate);
+                    throw aggregate;
                 }
             }
             finally
@@ -632,7 +636,9 @@ public sealed class TransactionManager : IDisposable
                 new InvalidOperationException("Transaction apply failed.", ex)
             };
             allErrors.AddRange(compensationErrors);
-            throw new AggregateException("Transaction apply failed and compensation rollback encountered errors.", allErrors);
+            var aggregate = new AggregateException("Transaction apply failed and compensation rollback encountered errors.", allErrors);
+            _engine.MarkCorrupted(aggregate);
+            throw aggregate;
         }
     }
 
@@ -788,13 +794,19 @@ public sealed class TransactionManager : IDisposable
     /// 启动超时检查任务
     /// </summary>
     /// <returns>任务</returns>
-    private async Task StartTimeoutCheckTask()
+    private async Task StartTimeoutCheckTask(CancellationToken cancellationToken)
     {
-        while (Volatile.Read(ref _disposed) == 0)
+        try
         {
-            await Task.Delay(TimeSpan.FromSeconds(30)); // 每30秒检查一次
-            if (Volatile.Read(ref _disposed) != 0) break;
-            CheckAndCleanupExpiredTransactions();
+            while (Volatile.Read(ref _disposed) == 0)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+                if (Volatile.Read(ref _disposed) != 0) break;
+                CheckAndCleanupExpiredTransactions();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 
@@ -908,6 +920,7 @@ public sealed class TransactionManager : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _timeoutCheckCts.Cancel();
 
         // 回滚所有活动事务
         lock (_lock)
@@ -919,6 +932,8 @@ public sealed class TransactionManager : IDisposable
 
             _activeTransactions.Clear();
         }
+
+        _timeoutCheckCts.Dispose();
     }
 
     /// <summary>
