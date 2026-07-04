@@ -511,7 +511,7 @@ public sealed class BsonWriter : IDisposable
             var sizePosition = _stream.Position;
             _writer.Write(0); // 占位符
 
-            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+            foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
             _writer.Write((byte)BsonType.End);
 
             var endPosition = _stream.Position;
@@ -527,7 +527,7 @@ public sealed class BsonWriter : IDisposable
                 int sizePosition = patchable.WrittenCount;
                 InternalWrite(0); // 占位符
 
-                foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+                foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
                 InternalWrite((byte)BsonType.End);
 
                 int endPosition = patchable.WrittenCount;
@@ -538,7 +538,7 @@ public sealed class BsonWriter : IDisposable
             // 通用 IBufferWriter：先计算大小，再写入（避免依赖随机访问能力）
             var size = BsonSerializer.CalculateDocumentSize(document);
             InternalWrite(size);
-            foreach (var kvp in document) WriteElement(kvp.Key, kvp.Value);
+            foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
             InternalWrite((byte)BsonType.End);
         }
         }

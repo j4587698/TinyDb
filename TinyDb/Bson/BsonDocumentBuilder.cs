@@ -11,9 +11,18 @@ public sealed class BsonDocumentBuilder
     private readonly Dictionary<string, int> _index;
 
     public BsonDocumentBuilder()
+        : this(0)
     {
-        _items = new List<KeyValuePair<string, BsonValue>>();
-        _index = new Dictionary<string, int>(StringComparer.Ordinal);
+    }
+
+    public BsonDocumentBuilder(int capacity)
+    {
+        _items = capacity > 0
+            ? new List<KeyValuePair<string, BsonValue>>(capacity)
+            : new List<KeyValuePair<string, BsonValue>>();
+        _index = capacity > 0
+            ? new Dictionary<string, int>(capacity, StringComparer.Ordinal)
+            : new Dictionary<string, int>(StringComparer.Ordinal);
     }
 
     public BsonDocumentBuilder(BsonDocument existing)
@@ -21,7 +30,7 @@ public sealed class BsonDocumentBuilder
         ArgumentNullException.ThrowIfNull(existing);
         _items = new List<KeyValuePair<string, BsonValue>>(existing.Count);
         _index = new Dictionary<string, int>(existing.Count, StringComparer.Ordinal);
-        foreach (var item in existing)
+        foreach (var item in existing.Entries)
         {
             _index[item.Key] = _items.Count;
             _items.Add(item);
@@ -69,6 +78,6 @@ public sealed class BsonDocumentBuilder
 
     public BsonDocument Build()
     {
-        return new BsonDocument(_items);
+        return new BsonDocument((IReadOnlyList<KeyValuePair<string, BsonValue>>)_items);
     }
 }

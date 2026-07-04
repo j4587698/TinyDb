@@ -687,7 +687,7 @@ public static class BsonConversion
                 if (targetType == typeof(Dictionary<string, int>))
                 {
                     var dict = new Dictionary<string, int>(bsonDoc.Count, StringComparer.Ordinal);
-                    foreach (var element in bsonDoc)
+                    foreach (var element in bsonDoc.Entries)
                     {
                         dict[element.Key] = (int)FromBsonValue(element.Value, typeof(int))!;
                     }
@@ -698,7 +698,7 @@ public static class BsonConversion
                 if (targetType == typeof(Dictionary<string, string>))
                 {
                     var dict = new Dictionary<string, string?>(bsonDoc.Count, StringComparer.Ordinal);
-                    foreach (var element in bsonDoc)
+                    foreach (var element in bsonDoc.Entries)
                     {
                         dict[element.Key] = (string?)FromBsonValue(element.Value, typeof(string));
                     }
@@ -709,7 +709,7 @@ public static class BsonConversion
                 if (targetType == typeof(Dictionary<string, object>))
                 {
                     var dict = new Dictionary<string, object?>(bsonDoc.Count, StringComparer.Ordinal);
-                    foreach (var element in bsonDoc)
+                    foreach (var element in bsonDoc.Entries)
                     {
                         dict[element.Key] = FromBsonValue(element.Value, typeof(object));
                     }

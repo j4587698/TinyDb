@@ -492,7 +492,7 @@ public static class AotBsonMapper
             throw new ArgumentException($"对象 {dictionary.GetType().FullName} 未实现 IDictionary 接口，无法在AOT回退模式下进行序列化。", nameof(dictionary));
         }
 
-        var builder = new BsonDocumentBuilder();
+        var builder = new BsonDocumentBuilder(rawDictionary.Count);
 
         foreach (DictionaryEntry entry in rawDictionary)
         {
@@ -560,7 +560,7 @@ public static class AotBsonMapper
 
         if (valueType == typeof(int))
         {
-            foreach (var element in document)
+            foreach (var element in document.Entries)
             {
                 dictionary[element.Key] = ConvertFromBsonValue(element.Value, typeof(int));
             }
@@ -570,7 +570,7 @@ public static class AotBsonMapper
 
         if (valueType == typeof(string))
         {
-            foreach (var element in document)
+            foreach (var element in document.Entries)
             {
                 dictionary[element.Key] = ConvertFromBsonValue(element.Value, typeof(string));
             }
@@ -580,7 +580,7 @@ public static class AotBsonMapper
 
         if (valueType == typeof(object))
         {
-            foreach (var element in document)
+            foreach (var element in document.Entries)
             {
                 dictionary[element.Key] = ConvertFromBsonValue(element.Value, typeof(object));
             }

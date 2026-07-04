@@ -416,6 +416,55 @@ public sealed class CollectionWriteGranularityTests : IDisposable
         await unrelatedLockTask;
     }
 
+    [Test]
+    public async Task DocumentLock_InheritedChildContext_ShouldWaitForSameDocumentId()
+    {
+        var state = new CollectionState();
+        var id = new BsonInt32(42);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var parentLock = state.EnterDocumentLock(id);
+        var childTask = Task.Run(() =>
+        {
+            started.SetResult();
+            using var childLock = state.EnterDocumentLock(id);
+            return true;
+        });
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var completedWhileParentHeld = await Task.WhenAny(childTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        await Assert.That(completedWhileParentHeld == childTask).IsFalse();
+
+        parentLock.Dispose();
+
+        var completedAfterRelease = await Task.WhenAny(childTask, Task.Delay(TimeSpan.FromSeconds(2)));
+        await Assert.That(completedAfterRelease == childTask).IsTrue();
+        await Assert.That(await childTask).IsTrue();
+    }
+
+    [Test]
+    public async Task AsyncDocumentLock_ShouldWaitForSameDocumentId()
+    {
+        var state = new CollectionState();
+        var id = new BsonInt32(43);
+
+        var parentLock = await state.EnterDocumentLockAsync(id);
+        var childTask = Task.Run(async () =>
+        {
+            using var childLock = await state.EnterDocumentLockAsync(id);
+            return true;
+        });
+
+        var completedWhileParentHeld = await Task.WhenAny(childTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        await Assert.That(completedWhileParentHeld == childTask).IsFalse();
+
+        parentLock.Dispose();
+
+        var completedAfterRelease = await Task.WhenAny(childTask, Task.Delay(TimeSpan.FromSeconds(2)));
+        await Assert.That(completedAfterRelease == childTask).IsTrue();
+        await Assert.That(await childTask).IsTrue();
+    }
+
     private static BsonDocument CreateSizedDocument(int id, int payloadSize)
     {
         return new BsonDocument()

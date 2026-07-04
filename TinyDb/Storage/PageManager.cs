@@ -736,6 +736,67 @@ public sealed class PageManager : IDisposable
         }
     }
 
+    internal async Task<Page> GetPagePinnedAsync(uint pageID, bool useCache = true, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
+
+        if (useCache && TryGetCachedPage(pageID, pin: true, out var cachedPage))
+        {
+            return cachedPage;
+        }
+
+        var loadGate = GetPageLoadGate(pageID);
+        await loadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (useCache && TryGetCachedPage(pageID, pin: true, out cachedPage))
+            {
+                return cachedPage;
+            }
+
+            var pageOffset = CalculatePageOffset(pageID);
+            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+            {
+                return CreateNewPage(pageID, PageType.Empty, pinned: true);
+            }
+
+            try
+            {
+                var read = await ReadLogicalPageDataOrNullAsync(pageID, pageOffset, cancellationToken).ConfigureAwait(false);
+                if (read == null)
+                {
+                    return CreateNewPage(pageID, PageType.Empty, pinned: true);
+                }
+
+                var pageData = read.Value.Data;
+                var page = CreateLoadedPage(pageID, read.Value);
+                ValidateLoadedPage(page, pageData, pageOffset);
+
+                if (page.Header.PageType == PageType.Empty && page.Header.ItemCount == 0)
+                {
+                    page.UpdatePageType(PageType.Empty);
+                }
+
+                if (useCache)
+                {
+                    return AddToCache(page, pinned: true);
+                }
+
+                page.Pin();
+                return page;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidDataException($"Failed to parse page {pageID} at offset {pageOffset}.", ex);
+            }
+        }
+        finally
+        {
+            loadGate.Release();
+        }
+    }
+
     private static bool IsZeroFilledPage(ReadOnlySpan<byte> pageData)
     {
         for (int i = 0; i < pageData.Length; i++)
@@ -1070,35 +1131,46 @@ public sealed class PageManager : IDisposable
             _flushLogToLsn(page.Header.LSN);
         }
 
-        var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
-        var pageOffset = CalculatePageOffset(page.PageID);
-
-        await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
-
-        if (forceFlush)
+        page.Pin();
+        try
         {
-            await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
+            var pageOffset = CalculatePageOffset(page.PageID);
+
+            await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
+
+            if (forceFlush)
+            {
+                await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (MarkPageClean(page, dirtyGeneration))
+            {
+                _deferredWalPages.TryRemove(page.PageID, out _);
+            }
+            else if (!page.IsDirty)
+            {
+                WritePageToDisk(page, forceFlush);
+            }
         }
-
-        if (MarkPageClean(page, dirtyGeneration))
+        finally
         {
-            _deferredWalPages.TryRemove(page.PageID, out _);
+            page.Unpin();
         }
     }
 
     private void WritePageToDisk(Page page, bool forceFlush)
     {
-        var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
-
         var pageOffset = CalculatePageOffset(page.PageID);
-        WriteEncodedPageToDisk(page.PageID, pageOffset, snapshot);
+        var wroteCleanPage = page.WriteForDiskWithoutSnapshot(
+            logicalPage => WriteEncodedPageToDisk(page.PageID, pageOffset, logicalPage));
 
         if (forceFlush)
         {
             _diskStream.Flush();
         }
 
-        if (MarkPageClean(page, dirtyGeneration))
+        if (wroteCleanPage)
         {
             _deferredWalPages.TryRemove(page.PageID, out _);
         }
@@ -1204,13 +1276,25 @@ public sealed class PageManager : IDisposable
             return false;
         }
 
-        var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
-        var pageOffset = CalculatePageOffset(page.PageID);
-
-        await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
-        if (MarkPageClean(page, dirtyGeneration))
+        page.Pin();
+        try
         {
-            _deferredWalPages.TryRemove(page.PageID, out _);
+            var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
+            var pageOffset = CalculatePageOffset(page.PageID);
+
+            await WriteEncodedPageToDiskAsync(page.PageID, pageOffset, snapshot, cancellationToken).ConfigureAwait(false);
+            if (MarkPageClean(page, dirtyGeneration))
+            {
+                _deferredWalPages.TryRemove(page.PageID, out _);
+            }
+            else if (!page.IsDirty)
+            {
+                WritePageToDisk(page, forceFlush: false);
+            }
+        }
+        finally
+        {
+            page.Unpin();
         }
         return true;
     }
