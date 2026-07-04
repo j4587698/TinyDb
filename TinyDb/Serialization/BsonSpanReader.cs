@@ -41,7 +41,7 @@ public ref struct BsonSpanReader
             if (docSize < 5 || docSize > _data.Length - startPos)
                 throw new InvalidOperationException($"Invalid document size: {docSize}");
 
-            var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+            var builder = new BsonDocumentBuilder();
 
             // 循环读取元素直到遇到结束符
             while (true)
@@ -56,7 +56,7 @@ public ref struct BsonSpanReader
                 if (fields == null || fields.Contains(key))
                 {
                     var value = ReadValue(type);
-                    builder[key] = value;
+                    builder.Set(key, value);
                 }
                 else
                 {
@@ -70,7 +70,7 @@ public ref struct BsonSpanReader
                 throw new InvalidOperationException($"Document size mismatch. Expected {docSize}, read {actualSize}");
             }
 
-            return new BsonDocument(builder);
+            return builder.Build();
         }
         finally
         {

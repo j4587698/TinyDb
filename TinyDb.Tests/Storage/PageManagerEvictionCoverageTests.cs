@@ -14,13 +14,27 @@ public sealed class PageManagerEvictionCoverageTests
         using var ds = new MockDiskStream();
         using var pm = new PageManager(ds, pageSize: 4096, maxCacheSize: 1);
 
-        var pinned = pm.NewPage(PageType.Data);
-        pinned.Pin();
+        var pinnedPages = new List<Page>();
+        try
+        {
+            for (var i = 0; i < pm.MaxCacheSize + 4096; i++)
+            {
+                var page = pm.NewPage(PageType.Data);
+                page.Pin();
+                pinnedPages.Add(page);
+            }
 
-        _ = pm.NewPage(PageType.Data); // triggers eviction scan but cannot evict pinned page
-
-        await Assert.That(pinned.PinCount).IsGreaterThan(0);
-        pinned.Unpin();
+            await Assert.That(() => pm.NewPage(PageType.Data))
+                .Throws<InvalidOperationException>();
+            await Assert.That(pm.CachedPages).IsLessThanOrEqualTo(pm.MaxCacheSize + 4096);
+        }
+        finally
+        {
+            foreach (var page in pinnedPages)
+            {
+                page.Unpin();
+            }
+        }
     }
 
     [Test]
@@ -44,4 +58,3 @@ public sealed class PageManagerEvictionCoverageTests
         await Assert.That(pm.CachedPages).IsGreaterThan(0);
     }
 }
-

@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using TinyDb.Bson;
+using TinyDb.Serialization;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -149,6 +150,22 @@ public class BsonDocumentTests
         await Assert.That(updatedDocument["name"].ToString()).IsEqualTo("Jane");
         await Assert.That(newDocument["age"].ToInt32(null)).IsEqualTo(30);
         await Assert.That(newDocument.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task BsonDocument_Should_Preserve_Insertion_Order()
+    {
+        var document = new BsonDocument()
+            .Set("b", 1)
+            .Set("_id", 2)
+            .Set("a", 3)
+            .Set("b", 4);
+
+        await Assert.That(string.Join(",", document.Keys)).IsEqualTo("b,_id,a");
+
+        var roundTripped = BsonSerializer.DeserializeDocument(BsonSerializer.SerializeDocument(document));
+        await Assert.That(string.Join(",", roundTripped.Keys)).IsEqualTo("b,_id,a");
+        await Assert.That(roundTripped["b"].ToInt32(null)).IsEqualTo(4);
     }
 
     [Test]

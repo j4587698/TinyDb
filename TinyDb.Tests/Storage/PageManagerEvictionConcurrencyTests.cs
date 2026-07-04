@@ -40,6 +40,7 @@ public sealed class PageManagerEvictionConcurrencyTests
 
         var newPage = await evictionTask.WaitAsync(TimeSpan.FromSeconds(5));
         await Assert.That(newPage.PageID).IsNotEqualTo(page.PageID);
+        await Assert.That(pageManager.CachedPages).IsLessThanOrEqualTo(pageManager.MaxCacheSize + 4096);
     }
 
     private sealed class BlockingWriteDiskStream : IDiskStream

@@ -13,6 +13,7 @@ public static class ExpressionEvaluator
 {
     private const int MaxExpressionEvaluationDepth = 256;
     private static readonly ConcurrentDictionary<string, string> CamelCaseNameCache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<(Type Type, string Name), PropertyInfo?> PropertyCache = new();
     [ThreadStatic]
     private static int _evaluationDepth;
 
@@ -167,7 +168,7 @@ public static class ExpressionEvaluator
 
     private static object? EvaluateConstructorExpression<T>(ConstructorExpression expression, T entity)
     {
-        var args = expression.Arguments.Select(a => EvaluateValue(a, (object)entity!)).ToArray();
+        var args = EvaluateArguments(expression.Arguments, (object)entity!);
         return Activator.CreateInstance(expression.Type, args);
     }
 
@@ -205,7 +206,7 @@ public static class ExpressionEvaluator
         foreach (var (memberName, valueExpr) in expression.Bindings)
         {
             var value = EvaluateValue(valueExpr, (object)entity!);
-            var prop = expression.Type.GetProperty(memberName);
+            var prop = GetPropertySafe(expression.Type, memberName);
             if (prop != null && prop.CanWrite)
             {
                 // Handle type conversion if needed
@@ -617,16 +618,28 @@ public static class ExpressionEvaluator
 
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2075", Justification = "Fallback reflection for non-AOT scenarios. AOT apps should use Source Generator.")]
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2070", Justification = "Fallback reflection for non-AOT scenarios.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2080", Justification = "Fallback reflection cache for non-AOT scenarios. AOT apps should use Source Generator.")]
     private static PropertyInfo? GetPropertySafe(Type type, string name)
     {
-        return type.GetProperty(name);
+        return PropertyCache.GetOrAdd((type, name), static key => key.Type.GetProperty(key.Name));
+    }
+
+    private static object?[] EvaluateArguments(IReadOnlyList<QueryExpression> arguments, object entity)
+    {
+        var values = new object?[arguments.Count];
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            values[i] = EvaluateValue(arguments[i], entity);
+        }
+
+        return values;
     }
 
     private static object? EvaluateFunctionExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
         where T : class, new()
     {
         var targetValue = expression.Target != null ? EvaluateValue(expression.Target, entity) : null;
-        var argValues = expression.Arguments.Select(a => EvaluateValue(a, entity)).ToArray();
+        var argValues = EvaluateArguments(expression.Arguments, entity);
 
         return EvaluateFunction(expression.FunctionName, targetValue, argValues);
     }
@@ -634,7 +647,7 @@ public static class ExpressionEvaluator
     private static object? EvaluateFunctionExpression(FunctionExpression expression, object entity)
     {
         var targetValue = expression.Target != null ? EvaluateValue(expression.Target, entity) : null;
-        var argValues = expression.Arguments.Select(a => EvaluateValue(a, entity)).ToArray();
+        var argValues = EvaluateArguments(expression.Arguments, entity);
 
         return EvaluateFunction(expression.FunctionName, targetValue, argValues);
     }

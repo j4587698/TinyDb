@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Collections.Immutable;
 
 namespace TinyDb.Bson;
 
@@ -8,37 +7,68 @@ namespace TinyDb.Bson;
 /// </summary>
 public sealed class BsonDocumentBuilder
 {
-    private readonly ImmutableDictionary<string, BsonValue>.Builder _builder;
+    private readonly List<KeyValuePair<string, BsonValue>> _items;
+    private readonly Dictionary<string, int> _index;
 
     public BsonDocumentBuilder()
     {
-        _builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+        _items = new List<KeyValuePair<string, BsonValue>>();
+        _index = new Dictionary<string, int>(StringComparer.Ordinal);
     }
 
     public BsonDocumentBuilder(BsonDocument existing)
     {
-        _builder = existing.ToBuilder();
+        ArgumentNullException.ThrowIfNull(existing);
+        _items = new List<KeyValuePair<string, BsonValue>>(existing.Count);
+        _index = new Dictionary<string, int>(existing.Count, StringComparer.Ordinal);
+        foreach (var item in existing)
+        {
+            _index[item.Key] = _items.Count;
+            _items.Add(item);
+        }
     }
 
     public BsonDocumentBuilder Set(string key, BsonValue value)
     {
-        _builder[key] = value;
+        ArgumentNullException.ThrowIfNull(key);
+        if (_index.TryGetValue(key, out var index))
+        {
+            _items[index] = new KeyValuePair<string, BsonValue>(key, value);
+        }
+        else
+        {
+            _index.Add(key, _items.Count);
+            _items.Add(new KeyValuePair<string, BsonValue>(key, value));
+        }
+
         return this;
     }
 
     public BsonDocumentBuilder Remove(string key)
     {
-        _builder.Remove(key);
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_index.TryGetValue(key, out var index))
+        {
+            return this;
+        }
+
+        _items.RemoveAt(index);
+        _index.Remove(key);
+        for (var i = index; i < _items.Count; i++)
+        {
+            _index[_items[i].Key] = i;
+        }
+
         return this;
     }
 
     public bool ContainsKey(string key)
     {
-        return _builder.ContainsKey(key);
+        return _index.ContainsKey(key);
     }
 
     public BsonDocument Build()
     {
-        return new BsonDocument(_builder);
+        return new BsonDocument(_items);
     }
 }

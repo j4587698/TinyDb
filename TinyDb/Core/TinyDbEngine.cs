@@ -66,6 +66,7 @@ public sealed class TinyDbEngine : IDisposable
     private DatabaseHeader _header;
     private EncryptionContext? _encryptionContext;
     private int _disposed;
+    private Exception? _corruptionException;
     private bool _isInitialized;
     private long _findByIdFullScanCount;
     private long _findByIdFullScanHitCount;
@@ -118,6 +119,8 @@ public sealed class TinyDbEngine : IDisposable
     /// 获取数据库是否已初始化的值。
     /// </summary>
     public bool IsInitialized => _isInitialized;
+
+    public bool IsCorrupted => Volatile.Read(ref _corruptionException) != null;
 
     /// <summary>
     /// 获取数据库中集合的数量。
@@ -2877,6 +2880,53 @@ public sealed class TinyDbEngine : IDisposable
     internal int DeleteDocumentInternal(string col, BsonValue id) => DeleteDocument(col, id);
     public int GetCachedDocumentCount(string col) => GetCollectionState(col).Index.Count;
 
+    internal long GetTransactionalDocumentCount(string col, Transaction transaction)
+    {
+        if (transaction == null) throw new ArgumentNullException(nameof(transaction));
+
+        var operations = transaction.GetOperationsSnapshot()
+            .Where(op => op.CollectionName == col &&
+                         op.DocumentId != null &&
+                         !op.DocumentId.IsNull &&
+                         op.OperationType is TransactionOperationType.Insert or TransactionOperationType.Update or TransactionOperationType.Delete)
+            .ToArray();
+
+        if (operations.Length == 0)
+        {
+            return GetCachedDocumentCount(col);
+        }
+
+        var initialExistsById = new Dictionary<BsonValue, bool>(BsonValueComparer.EqualityComparer);
+        var currentExistsById = new Dictionary<BsonValue, bool>(BsonValueComparer.EqualityComparer);
+
+        foreach (var operation in operations)
+        {
+            var id = operation.DocumentId!;
+            if (!currentExistsById.TryGetValue(id, out var exists))
+            {
+                exists = FindCommittedById(col, id) != null;
+                initialExistsById[id] = exists;
+            }
+
+            currentExistsById[id] = operation.OperationType switch
+            {
+                TransactionOperationType.Insert => true,
+                TransactionOperationType.Delete => false,
+                _ => exists
+            };
+        }
+
+        long delta = 0;
+        foreach (var (id, currentExists) in currentExistsById)
+        {
+            var initiallyExists = initialExistsById[id];
+            if (currentExists && !initiallyExists) delta++;
+            else if (!currentExists && initiallyExists) delta--;
+        }
+
+        return GetCachedDocumentCount(col) + delta;
+    }
+
     private BsonValue InsertPreparedDocument(string col, BsonDocument doc, BsonValue id, CollectionState st, IndexManager idx, bool u)
     {
         using var prepared = PreparedInsertPayload.Create(doc, id);
@@ -3235,28 +3285,23 @@ public sealed class TinyDbEngine : IDisposable
         bool hasId = doc.TryGetValue("_id", out var exId) && exId != null && !exId.IsNull;
         // 检查 _collection 是否已经存在且值正确（避免不必要的重建）
         bool hasCorrectCol = doc.TryGetValue("_collection", out var existingCol) && existingCol?.ToString() == col;
+        bool hasIdFirst = doc.Count > 0 && string.Equals(doc.First().Key, "_id", StringComparison.Ordinal);
 
         // 快速路径：如果已有 _id 且 _collection 值正确，直接返回原文档
-        if (hasId && hasCorrectCol)
+        if (hasId && hasCorrectCol && hasIdFirst)
         {
             id = exId!;
             return doc;
         }
 
         // 优化：直接创建新的 Builder，一次性添加所有字段，避免 ToBuilder() 的额外转换
-        var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+        var builder = new BsonDocumentBuilder();
 
         // 复制原文档的所有字段
-        foreach (var kvp in doc._elements)
-        {
-            builder[kvp.Key] = kvp.Value;
-        }
-
         // 添加 _id（如果缺失）
         if (!hasId)
         {
             id = ObjectId.NewObjectId();
-            builder["_id"] = id;
         }
         else
         {
@@ -3264,9 +3309,21 @@ public sealed class TinyDbEngine : IDisposable
         }
 
         // 强制设置 _collection 为实际使用的集合名称（覆盖 AOT 生成器设置的值）
-        builder["_collection"] = col;
+        builder.Set("_id", id);
+        foreach (var kvp in doc)
+        {
+            if (string.Equals(kvp.Key, "_id", StringComparison.Ordinal) ||
+                string.Equals(kvp.Key, "_collection", StringComparison.Ordinal))
+            {
+                continue;
+            }
 
-        return new BsonDocument(builder.ToImmutable());
+            builder.Set(kvp.Key, kvp.Value);
+        }
+
+        builder.Set("_collection", col);
+
+        return builder.Build();
     }
 
     private PreparedInsertPayload PrepareSerializedInsertPayload(string col, BsonDocument doc, out BsonValue id)
@@ -3397,13 +3454,34 @@ public sealed class TinyDbEngine : IDisposable
     private BsonDocument? FindByIdFullScan(string col, BsonValue id, CollectionState st)
     {
         RecordFindByIdFullScan();
-        var document = FindAll(col).FirstOrDefault(d => BsonValuesEqual(d["_id"], id));
-        if (document != null)
+
+        var idPredicate = new[]
         {
-            RecordFindByIdFullScanHit(col, id);
+            new ScanPredicate(
+                Encoding.UTF8.GetBytes("_id"),
+                Encoding.UTF8.GetBytes("id"),
+                Encoding.UTF8.GetBytes("Id"),
+                id,
+                ExpressionType.Equal)
+        };
+
+        foreach (var result in ReadRawScanResultSnapshot(col, st, idPredicate))
+        {
+            var doc = DeserializeDocumentOrThrow(result.Slice);
+            if (doc.TryGetValue("_collection", out var c) && c.ToString() != col)
+            {
+                continue;
+            }
+
+            doc = ResolveLargeDocument(doc);
+            if (doc.TryGetValue("_id", out var documentId) && BsonValuesEqual(documentId, id))
+            {
+                RecordFindByIdFullScanHit(col, id);
+                return doc;
+            }
         }
 
-        return document;
+        return null;
     }
 
     private void RecordFindByIdFullScan()
@@ -3597,6 +3675,17 @@ public sealed class TinyDbEngine : IDisposable
         TinyDbLogging.SafeLog(_log, level, message, ex);
     }
 
+    internal void MarkCorrupted(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        if (Interlocked.CompareExchange(ref _corruptionException, exception, null) == null)
+        {
+            _pageManager.MarkCorrupted(exception);
+            _flushScheduler.MarkCorrupted(exception);
+            Log(TinyDbLogLevel.Critical, "TinyDbEngine marked corrupted. Dispose and reopen the database to recover from WAL.", exception);
+        }
+    }
+
     private void DeleteLargeDocumentOrThrow(uint largeDocumentIndexPageId)
     {
         _largeDocumentStorage.DeleteLargeDocument(largeDocumentIndexPageId);
@@ -3608,7 +3697,16 @@ public sealed class TinyDbEngine : IDisposable
 
     private void EnsureInitialized() { if (!_isInitialized) throw new InvalidOperationException(); }
 
-    private void ThrowIfDisposed() { if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(TinyDbEngine)); }
+    private void ThrowIfDisposed()
+    {
+        if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(TinyDbEngine));
+        if (Volatile.Read(ref _corruptionException) is { } corruptionException)
+        {
+            throw new InvalidOperationException(
+                "TinyDbEngine is corrupted after a failed compensation rollback. Dispose and reopen the database to recover from WAL.",
+                corruptionException);
+        }
+    }
 
     private static string? GetCollectionNameFromEntityAttribute<T>() where T : class => typeof(T).GetCustomAttribute<EntityAttribute>()?.Name;
 
@@ -3622,7 +3720,7 @@ public sealed class TinyDbEngine : IDisposable
 
             try
             {
-                if (_isInitialized)
+                if (_isInitialized && Volatile.Read(ref _corruptionException) == null)
                 {
                     _collectionMetaStore.SaveCollections(false);
                 }
@@ -3634,7 +3732,10 @@ public sealed class TinyDbEngine : IDisposable
 
             try
             {
-                FlushCore();
+                if (Volatile.Read(ref _corruptionException) == null)
+                {
+                    FlushCore();
+                }
             }
             catch (Exception ex)
             {

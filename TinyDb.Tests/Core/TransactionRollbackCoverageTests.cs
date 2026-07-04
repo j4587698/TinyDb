@@ -154,6 +154,29 @@ public sealed class TransactionRollbackCoverageTests
         }
     }
 
+    [Test]
+    public async Task MarkCorrupted_ShouldBlockOperationsAndDisposeWithoutFlush()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"tx_poison_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions
+            {
+                BackgroundFlushInterval = Timeout.InfiniteTimeSpan
+            });
+
+            engine.MarkCorrupted(new IOException("poison"));
+
+            await Assert.That(engine.IsCorrupted).IsTrue();
+            await Assert.That(() => engine.Flush()).Throws<InvalidOperationException>();
+        }
+        finally
+        {
+            CleanupDb(dbPath);
+        }
+    }
+
     private static void CleanupDb(string dbPath)
     {
         try { if (File.Exists(dbPath)) File.Delete(dbPath); } catch { }

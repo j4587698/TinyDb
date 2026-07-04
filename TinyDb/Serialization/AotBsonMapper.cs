@@ -95,7 +95,7 @@ public static class AotBsonMapper
                 _serializingObjects.Remove(entity);
                 if (_serializingObjects.Count == 0)
                 {
-                    _serializingObjects = null;
+                    _serializingObjects.Clear();
                 }
             }
         }
@@ -492,7 +492,7 @@ public static class AotBsonMapper
             throw new ArgumentException($"对象 {dictionary.GetType().FullName} 未实现 IDictionary 接口，无法在AOT回退模式下进行序列化。", nameof(dictionary));
         }
 
-        var builder = ImmutableDictionary.CreateBuilder<string, BsonValue>();
+        var builder = new BsonDocumentBuilder();
 
         foreach (DictionaryEntry entry in rawDictionary)
         {
@@ -504,10 +504,10 @@ public static class AotBsonMapper
             var bsonValue = entry.Value != null
                 ? ConvertToBsonValue(entry.Value)
                 : BsonNull.Value;
-            builder[key] = bsonValue;
+            builder.Set(key, bsonValue);
         }
 
-        return new BsonDocument(builder);
+        return builder.Build();
     }
 
     private static object? ConvertDictionary([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type dictionaryType, BsonDocument document)

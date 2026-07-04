@@ -23,12 +23,14 @@ public sealed class PageManager : IDisposable
     private readonly LRUCache<uint, Page> _lruCache;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private const int PageLoadStripeCount = 64;
+    private const int CacheOverflowSlack = 4096;
     private readonly SemaphoreSlim[] _pageLoadStripes;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private uint _freePageCount;
     private long _fileSize;
     private bool _disposed;
+    private Exception? _corruptionException;
     private readonly SemaphoreSlim _backgroundWritebackGate = new(1, 1);
     private readonly ManualResetEventSlim _backgroundWritebackIdle = new(true);
     private int _backgroundWritebackScheduled;
@@ -160,6 +162,8 @@ public sealed class PageManager : IDisposable
     /// </summary>
     public int MaxCacheSize { get; }
 
+    private int CacheOverflowLimit => GetCacheOverflowLimit(MaxCacheSize);
+
     /// <summary>
     /// 初始化页面管理器
     /// </summary>
@@ -197,7 +201,7 @@ public sealed class PageManager : IDisposable
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
         _dirtyPageIds = new ConcurrentDictionary<uint, byte>();
-        _lruCache = new LRUCache<uint, Page>(maxCacheSize);
+        _lruCache = new LRUCache<uint, Page>(GetCacheOverflowLimit(maxCacheSize));
         _pageLoadStripes = new SemaphoreSlim[PageLoadStripeCount];
         for (var i = 0; i < _pageLoadStripes.Length; i++)
         {
@@ -212,6 +216,19 @@ public sealed class PageManager : IDisposable
     private void Log(TinyDbLogLevel level, string message, Exception? ex = null)
     {
         TinyDbLogging.SafeLog(_log, level, message, ex);
+    }
+
+    private static int GetCacheOverflowLimit(int maxCacheSize)
+    {
+        return maxCacheSize > int.MaxValue - CacheOverflowSlack
+            ? int.MaxValue
+            : maxCacheSize + CacheOverflowSlack;
+    }
+
+    internal void MarkCorrupted(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        Interlocked.CompareExchange(ref _corruptionException, exception, null);
     }
 
     private void TrackDirtyPage(Page page)
@@ -483,7 +500,7 @@ public sealed class PageManager : IDisposable
             var pageOffset = CalculatePageOffset(pageID);
 
             // 检查是否超出文件大小
-            if (pageOffset + _physicalPageSize > _fileSize)
+            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
             {
                 // 文件不存在该页面，创建新页面
                 return CreateNewPage(pageID, PageType.Empty);
@@ -570,7 +587,7 @@ public sealed class PageManager : IDisposable
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
         {
             pageData = Array.Empty<byte>();
             return false;
@@ -607,7 +624,7 @@ public sealed class PageManager : IDisposable
             }
 
             var pageOffset = CalculatePageOffset(pageID);
-            if (pageOffset + _physicalPageSize > _fileSize)
+            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
             {
                 return CreateNewPage(pageID, PageType.Empty, pinned: true);
             }
@@ -677,7 +694,7 @@ public sealed class PageManager : IDisposable
 
             // 从磁盘异步读取
             var pageOffset = CalculatePageOffset(pageID);
-            if (pageOffset + _physicalPageSize > _fileSize)
+            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
@@ -948,9 +965,9 @@ public sealed class PageManager : IDisposable
         {
             if (newFileSize > _fileSize)
             {
-                _fileSize = newFileSize;
+                Volatile.Write(ref _fileSize, newFileSize);
             // 确保磁盘流的大小也被正确设置
-                _diskStream.SetLength(_fileSize);
+                _diskStream.SetLength(newFileSize);
             }
         }
 
@@ -1215,7 +1232,7 @@ public sealed class PageManager : IDisposable
     private byte[]? ReadPageSnapshotForWal(uint pageID)
     {
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
         {
             return null;
         }
@@ -1226,7 +1243,7 @@ public sealed class PageManager : IDisposable
     private async Task<byte[]?> ReadPageSnapshotForWalAsync(uint pageID, CancellationToken cancellationToken)
     {
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > _fileSize)
+        if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
         {
             return null;
         }
@@ -1406,7 +1423,7 @@ public sealed class PageManager : IDisposable
 
             RemoveFromCache(pageID);
 
-            _fileSize = Math.Max(_fileSize, pageOffset + _physicalPageSize);
+            Volatile.Write(ref _fileSize, Math.Max(_fileSize, pageOffset + _physicalPageSize));
         }
     }
 
@@ -1468,7 +1485,11 @@ public sealed class PageManager : IDisposable
     public void ClearCache(int maxPagesToKeep = 0)
     {
         ThrowIfDisposed();
+        ClearCacheCore(maxPagesToKeep);
+    }
 
+    private void ClearCacheCore(int maxPagesToKeep = 0)
+    {
         lock (_cacheLock)
         {
             if (maxPagesToKeep <= 0)
@@ -1536,9 +1557,19 @@ public sealed class PageManager : IDisposable
             }
 
             // 如果缓存已满，移除最少使用的页面
-            if (_pageCache.Count >= MaxCacheSize)
+            if (_pageCache.Count >= MaxCacheSize && !EvictLeastRecentlyUsed())
             {
-                EvictLeastRecentlyUsed();
+                ScheduleBackgroundWriteback();
+                if (_pageCache.Count >= CacheOverflowLimit)
+                {
+                    _backgroundWritebackIdle.Wait(TimeSpan.FromSeconds(5));
+                    var evicted = EvictLeastRecentlyUsed(_pageCache.Count);
+                    if (!evicted && _pageCache.Count >= CacheOverflowLimit)
+                    {
+                        throw new InvalidOperationException(
+                            $"Page cache is full ({MaxCacheSize} pages, overflow limit {CacheOverflowLimit}) and no clean unpinned non-index page is available for eviction.");
+                    }
+                }
             }
 
             lock (_cacheLock)
@@ -1561,10 +1592,11 @@ public sealed class PageManager : IDisposable
     /// <summary>
     /// 驱逐最少使用的页面
     /// </summary>
-    private bool EvictLeastRecentlyUsed()
+    private bool EvictLeastRecentlyUsed(int candidateCount = 0)
     {
         // 尝试从 LRU 获取多个候选者，以防第一个被 Pin 住。
-        var candidates = _lruCache.GetLeastRecentlyUsed(10);
+        var candidates = _lruCache.GetLeastRecentlyUsed(candidateCount > 0 ? candidateCount : Math.Max(10, MaxCacheSize));
+        var sawDirtyPage = false;
         foreach (var pageID in candidates)
         {
             var lockObj = _cacheLock;
@@ -1575,9 +1607,19 @@ public sealed class PageManager : IDisposable
                 {
                     // 如果页面被锁定（PinCount > 0），不能驱逐
                     if (page.PinCount > 0) continue;
+                    if (page.PageType == PageType.Index) continue;
+                    if (page.IsDirty)
+                    {
+                        sawDirtyPage = true;
+                        continue;
+                    }
 
                     page.Pin();
                     evictionCandidate = page;
+                }
+                else
+                {
+                    _lruCache.Remove(pageID);
                 }
             }
 
@@ -1588,12 +1630,6 @@ public sealed class PageManager : IDisposable
 
             try
             {
-                if (evictionCandidate.IsDirty)
-                {
-                    ScheduleBackgroundWriteback();
-                    SavePage(evictionCandidate);
-                }
-
                 lock (lockObj)
                 {
                     if (!_pageCache.TryGetValue(pageID, out var currentPage) ||
@@ -1604,6 +1640,11 @@ public sealed class PageManager : IDisposable
 
                     if (currentPage.PinCount > 1 || currentPage.IsDirty)
                     {
+                        if (currentPage.IsDirty)
+                        {
+                            sawDirtyPage = true;
+                        }
+
                         continue;
                     }
 
@@ -1621,6 +1662,11 @@ public sealed class PageManager : IDisposable
             {
                 evictionCandidate.Unpin();
             }
+        }
+
+        if (sawDirtyPage)
+        {
+            ScheduleBackgroundWriteback();
         }
 
         return false;
@@ -1695,6 +1741,13 @@ public sealed class PageManager : IDisposable
     {
         if (_disposed)
             throw new ObjectDisposedException(nameof(PageManager));
+
+        if (Volatile.Read(ref _corruptionException) is { } corruptionException)
+        {
+            throw new InvalidOperationException(
+                "PageManager is corrupted after a failed compensation rollback. Dispose and reopen the database to recover from WAL.",
+                corruptionException);
+        }
     }
 
     /// <summary>
@@ -1716,7 +1769,10 @@ public sealed class PageManager : IDisposable
                         try
                         {
                             // 刷新所有脏页面
-                            FlushDirtyPages();
+                            if (Volatile.Read(ref _corruptionException) == null)
+                            {
+                                FlushDirtyPages();
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -1724,7 +1780,7 @@ public sealed class PageManager : IDisposable
                         }
 
                         // 清理缓存
-                        ClearCache();
+                        ClearCacheCore();
 
                         foreach (var gate in _pageLoadStripes)
                         {

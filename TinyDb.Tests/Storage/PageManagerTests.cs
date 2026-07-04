@@ -253,7 +253,7 @@ public class PageManagerTests : IDisposable
         }
 
         // Assert
-        await Assert.That(pageManager.CachedPages).IsLessThanOrEqualTo(smallCacheSize);
+        await Assert.That(pageManager.CachedPages).IsLessThanOrEqualTo(smallCacheSize + 4096);
     }
 
     [Test]
