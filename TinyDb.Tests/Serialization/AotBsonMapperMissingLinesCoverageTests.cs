@@ -276,7 +276,13 @@ public class AotBsonMapperMissingLinesCoverageTests
         await Assert.That(strings[0]).IsEqualTo("a");
         await Assert.That(strings[1]).IsNull();
 
-        await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(bool[]))).Throws<NotSupportedException>();
+        var boolArray = new BsonArray(new BsonValue[] { BsonBoolean.True, BsonBoolean.False });
+        var bools = (bool[])AotBsonMapper.ConvertValue(boolArray, typeof(bool[]))!;
+        await Assert.That(bools.Length).IsEqualTo(2);
+        await Assert.That(bools[0]).IsTrue();
+        await Assert.That(bools[1]).IsFalse();
+
+        await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(bool[]))).Throws<FormatException>();
 
         var list = (List<string>)AotBsonMapper.ConvertValue(array, typeof(List<string>))!;
         await Assert.That(list.Count).IsEqualTo(2);

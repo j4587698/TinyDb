@@ -1,6 +1,5 @@
 using TinyDb.Attributes;
 using TinyDb.Bson;
-using TinyDb.IdGeneration;
 using TinyDb.Serialization;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -20,15 +19,14 @@ public class AotReflectionRegressionTests
     }
 
     [Test]
-    public async Task AotIdAccessor_GenerateIdIfNeeded_ShouldUseGeneratedAdapter()
+    public async Task AotIdAccessor_GenerateIdIfNeeded_ShouldLeaveIdentityIdsForEngine()
     {
-        IdentitySequences.Reset($"{nameof(AotGeneratedIntIdDocument)}_{nameof(AotGeneratedIntIdDocument.Id)}_int");
         var entity = new AotGeneratedIntIdDocument();
 
         var generated = AotIdAccessor<AotGeneratedIntIdDocument>.GenerateIdIfNeeded(entity);
 
-        await Assert.That(generated).IsTrue();
-        await Assert.That(entity.Id).IsEqualTo(1);
+        await Assert.That(generated).IsFalse();
+        await Assert.That(entity.Id).IsEqualTo(0);
     }
 
     [Test]

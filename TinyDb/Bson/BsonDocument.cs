@@ -472,13 +472,15 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
             var countComparison = Count.CompareTo(otherDoc.Count);
             if (countComparison != 0) return countComparison;
 
-            var sortedKeys = _elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-            foreach (var key in sortedKeys)
-            {
-                if (!otherDoc.TryGetValue(key, out var otherValue))
-                    return 1;
+            var leftKeys = _elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var rightKeys = otherDoc._elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
 
-                var valueComparison = _elements[key].CompareTo(otherValue);
+            for (var i = 0; i < leftKeys.Length; i++)
+            {
+                var keyComparison = StringComparer.Ordinal.Compare(leftKeys[i], rightKeys[i]);
+                if (keyComparison != 0) return keyComparison;
+
+                var valueComparison = _elements[leftKeys[i]].CompareTo(otherDoc._elements[rightKeys[i]]);
                 if (valueComparison != 0) return valueComparison;
             }
 

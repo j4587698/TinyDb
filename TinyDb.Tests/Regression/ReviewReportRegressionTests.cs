@@ -1110,9 +1110,120 @@ public sealed class ReviewReportRegressionTests : IDisposable
         await Assert.That(plan.IndexScanKeys[0].Value).IsEqualTo(new BsonInt32(2));
     }
 
+    [Test]
+    public async Task BsonDocumentCompareTo_ShouldBeAntisymmetricForDifferentKeySets()
+    {
+        var left = new BsonDocument().Set("A", 1);
+        var right = new BsonDocument().Set("B", 2);
+
+        var leftToRight = left.CompareTo(right);
+        var rightToLeft = right.CompareTo(left);
+
+        await Assert.That(Math.Sign(leftToRight)).IsEqualTo(-Math.Sign(rightToLeft));
+        await Assert.That(Math.Sign(leftToRight)).IsLessThan(0);
+        await Assert.That(Math.Sign(rightToLeft)).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task BsonSerializer_ShouldRoundTripDocumentsThroughNonSeekableStreams()
+    {
+        var original = new BsonDocument()
+            .Set("name", "non-seek")
+            .Set("nested", new BsonDocument().Set("value", 42))
+            .Set("items", new BsonArray([new BsonInt64(1), new BsonDouble(2.5), BsonBoolean.True]))
+            .Set("script", new BsonJavaScriptWithScope("return value;", new BsonDocument().Set("value", 7)));
+
+        using var output = new MemoryStream();
+        using (var nonSeekOutput = new NonSeekStream(output, leaveOpen: true))
+        {
+            BsonSerializer.SerializeDocument(original, nonSeekOutput);
+        }
+
+        using var input = new NonSeekStream(new MemoryStream(output.ToArray()));
+        using var reader = new BsonReader(input);
+        var roundTrip = reader.ReadDocument();
+
+        await Assert.That(roundTrip["name"].ToString()).IsEqualTo("non-seek");
+        await Assert.That(((BsonDocument)roundTrip["nested"])["value"].ToInt32()).IsEqualTo(42);
+        await Assert.That(((BsonArray)roundTrip["items"]).Count).IsEqualTo(3);
+        await Assert.That(((BsonJavaScriptWithScope)roundTrip["script"]).Scope["value"].ToInt32()).IsEqualTo(7);
+    }
+
+    [Test]
+    public async Task AotBsonMapper_ShouldConvertAnyOneDimensionalArrayFallback()
+    {
+        var longValues = (long[])AotBsonMapper.ConvertValue(
+            new BsonArray([new BsonInt64(1), new BsonInt64(2)]),
+            typeof(long[]))!;
+        var doubleValues = (double[])AotBsonMapper.ConvertValue(
+            new BsonArray([new BsonDouble(1.25), new BsonDouble(2.5)]),
+            typeof(double[]))!;
+        var boolValues = (bool[])AotBsonMapper.ConvertValue(
+            new BsonArray([BsonBoolean.True, BsonBoolean.False]),
+            typeof(bool[]))!;
+
+        await Assert.That(longValues.SequenceEqual([1L, 2L])).IsTrue();
+        await Assert.That(doubleValues.SequenceEqual([1.25, 2.5])).IsTrue();
+        await Assert.That(boolValues.SequenceEqual([true, false])).IsTrue();
+    }
+
+    [Test]
+    public async Task AotBsonMapper_ShouldRejectSelfReferencingCollections()
+    {
+        var items = new List<object?>();
+        items.Add(items);
+        var entity = new SelfReferencingCollectionDocument
+        {
+            Id = 1,
+            Items = items
+        };
+
+        await Assert.That(() => AotBsonMapper.ToDocument(entity)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task MetadataManager_SaveMetadata_ShouldBeAtomicForConcurrentFirstWrites()
+    {
+        using var engine = CreateEngine("metadata-race.db");
+        const string tableName = "metadata_race";
+
+        var tasks = Enumerable.Range(0, 16)
+            .Select(i => Task.Run(() => engine.MetadataManager.SaveMetadata(CreateRaceSchema(tableName, i))))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        await Assert.That(engine.MetadataManager.GetMetadata(tableName)).IsNotNull();
+    }
+
     private TinyDbEngine CreateEngine(string fileName)
     {
         return new TinyDbEngine(Path.Combine(_directory, fileName));
+    }
+
+    private static MetadataDocument CreateRaceSchema(string tableName, int order)
+    {
+        return new MetadataDocument
+        {
+            TableName = tableName,
+            TypeName = "MetadataRaceDocument",
+            DisplayName = "MetadataRaceDocument",
+            Columns = new BsonArray([
+                new BsonDocument()
+                    .Set("n", "_id")
+                    .Set("pn", "Id")
+                    .Set("t", typeof(int).FullName ?? "System.Int32")
+                    .Set("pk", true)
+                    .Set("r", true)
+                    .Set("o", 0),
+                new BsonDocument()
+                    .Set("n", "name")
+                    .Set("pn", "Name")
+                    .Set("t", typeof(string).FullName ?? "System.String")
+                    .Set("r", false)
+                    .Set("o", order + 1)
+            ])
+        };
     }
 
     private static WriteAheadLog GetWriteAheadLog(TinyDbEngine engine)
@@ -1156,6 +1267,47 @@ public sealed class ReviewReportRegressionTests : IDisposable
         catch (InvalidOperationException)
         {
             return false;
+        }
+    }
+
+    private sealed class NonSeekStream : Stream
+    {
+        private readonly Stream _inner;
+        private readonly bool _leaveOpen;
+
+        public NonSeekStream(Stream inner, bool leaveOpen = false)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _leaveOpen = leaveOpen;
+        }
+
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => _inner.CanWrite;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => _inner.Flush();
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        public override int Read(Span<byte> buffer) => _inner.Read(buffer);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => _inner.Write(buffer, offset, count);
+        public override void Write(ReadOnlySpan<byte> buffer) => _inner.Write(buffer);
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !_leaveOpen)
+            {
+                _inner.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
     }
 }
@@ -1233,4 +1385,11 @@ public sealed class LargeIndexedDocument
     public int Id { get; set; }
     public string Category { get; set; } = string.Empty;
     public string Payload { get; set; } = string.Empty;
+}
+
+[Entity("SelfReferencingCollectionDocuments")]
+public sealed class SelfReferencingCollectionDocument
+{
+    public int Id { get; set; }
+    public List<object?> Items { get; set; } = new();
 }

@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using TinyDb.Attributes;
 using TinyDb.Bson;
+using TinyDb.Core;
 
 namespace TinyDb.IdGeneration;
 
@@ -14,7 +15,29 @@ public static class AutoIdGenerator
     {
         if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
 
-        return IdentitySequences.GetNextValue(key);
+        throw new InvalidOperationException(
+            "Identity ID generation requires a TinyDbEngine instance so the sequence can be persisted.");
+    }
+
+    public static long GetNextIdentityValue(TinyDbEngine engine, string collectionName, string sequenceName, Type idType)
+    {
+        var value = CreateIdentityValue(engine, collectionName, sequenceName, idType);
+        return value switch
+        {
+            BsonInt32 int32 => int32.Value,
+            BsonInt64 int64 => int64.Value,
+            _ => throw new InvalidOperationException("Unexpected identity BSON value type.")
+        };
+    }
+
+    public static BsonValue CreateIdentityValue(TinyDbEngine engine, string collectionName, string sequenceName, Type idType)
+    {
+        if (engine == null) throw new ArgumentNullException(nameof(engine));
+        if (string.IsNullOrWhiteSpace(collectionName)) throw new ArgumentException("Collection name cannot be empty.", nameof(collectionName));
+        if (string.IsNullOrWhiteSpace(sequenceName)) throw new ArgumentException("Sequence name cannot be empty.", nameof(sequenceName));
+        if (idType == null) throw new ArgumentNullException(nameof(idType));
+
+        return engine.AllocateIdentityId(collectionName, sequenceName, idType);
     }
 
     public static object? CreateIdValue(Type idType, IdGenerationStrategy strategy, string? sequenceName, string defaultSequenceName)
@@ -25,8 +48,8 @@ public static class AutoIdGenerator
         return strategy switch
         {
             IdGenerationStrategy.ObjectId when idType == typeof(ObjectId) => ObjectId.NewObjectId(),
-            IdGenerationStrategy.IdentityInt when idType == typeof(int) => CreateIntIdentity(sequenceName ?? defaultSequenceName),
-            IdGenerationStrategy.IdentityLong when idType == typeof(long) => GetNextIdentityValue(sequenceName ?? defaultSequenceName),
+            IdGenerationStrategy.IdentityInt when idType == typeof(int) => null,
+            IdGenerationStrategy.IdentityLong when idType == typeof(long) => null,
             IdGenerationStrategy.GuidV7 when idType == typeof(Guid) => CreateGuidV7(),
             IdGenerationStrategy.GuidV7 when idType == typeof(string) => CreateGuidV7().ToString(),
             IdGenerationStrategy.GuidV4 when idType == typeof(Guid) => Guid.NewGuid(),
@@ -57,42 +80,12 @@ public static class AutoIdGenerator
         // 根据类型自动生成ID
         return idType switch
         {
-            var t when t == typeof(int) => GenerateIntId(entity, idProperty),
-            var t when t == typeof(long) => GenerateLongId(entity, idProperty),
+            var t when t == typeof(int) || t == typeof(long) => false,
             var t when t == typeof(Guid) => GenerateGuidId(entity, idProperty),
             var t when t == typeof(string) => GenerateStringGuidId(entity, idProperty),
             var t when t == typeof(ObjectId) => GenerateObjectId(entity, idProperty),
             _ => false
         };
-    }
-
-    /// <summary>
-    /// 生成int类型的自增ID
-    /// </summary>
-    private static bool GenerateIntId(object entity, PropertyInfo idProperty)
-    {
-        var key = $"{entity.GetType().Name}_{idProperty.Name}_int";
-        var nextValue = GetNextIdentityValue(key);
-
-        if (nextValue > int.MaxValue)
-        {
-            return false; // 超出int范围
-        }
-
-        idProperty.SetValue(entity, (int)nextValue);
-        return true;
-    }
-
-    /// <summary>
-    /// 生成long类型的自增ID
-    /// </summary>
-    private static bool GenerateLongId(object entity, PropertyInfo idProperty)
-    {
-        var key = $"{entity.GetType().Name}_{idProperty.Name}_long";
-        var nextValue = GetNextIdentityValue(key);
-
-        idProperty.SetValue(entity, nextValue);
-        return true;
     }
 
     /// <summary>
@@ -190,11 +183,6 @@ public static class AutoIdGenerator
         };
     }
 
-    private static int? CreateIntIdentity(string key)
-    {
-        var nextValue = GetNextIdentityValue(key);
-        return nextValue > int.MaxValue ? null : (int)nextValue;
-    }
 }
 
 /// <summary>
@@ -202,8 +190,6 @@ public static class AutoIdGenerator
 /// </summary>
 public static class IdentitySequences
 {
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _sequences = new();
-
     /// <summary>
     /// 获取序列的下一个值
     /// </summary>
@@ -211,7 +197,10 @@ public static class IdentitySequences
     /// <returns>下一个值</returns>
     public static long GetNextValue(string key)
     {
-        return _sequences.AddOrUpdate(key, 1, (k, v) => v + 1);
+        if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
+
+        throw new InvalidOperationException(
+            "Identity sequences are persisted by TinyDbEngine. Use AutoIdGenerator.CreateIdentityValue with an engine instance.");
     }
 
     /// <summary>
@@ -219,7 +208,6 @@ public static class IdentitySequences
     /// </summary>
     public static void ResetAll()
     {
-        _sequences.Clear();
     }
 
     /// <summary>
@@ -228,6 +216,6 @@ public static class IdentitySequences
     /// <param name="key">序列键</param>
     public static void Reset(string key)
     {
-        _sequences.TryRemove(key, out _);
+        if (string.IsNullOrWhiteSpace(key)) throw new ArgumentNullException(nameof(key));
     }
 }

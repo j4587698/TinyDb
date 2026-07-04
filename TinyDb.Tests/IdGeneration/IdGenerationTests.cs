@@ -152,11 +152,11 @@ public class IdGenerationTests
         // Act & Assert
         var intGenerator = IdGeneratorFactory.GetGenerator(IdGenerationStrategy.IdentityInt);
         await Assert.That(intGenerator).IsAssignableTo<IdentityGenerator>();
-        await Assert.That(intGenerator.Supports(typeof(int))).IsTrue();
+        await Assert.That(intGenerator.Supports(typeof(int))).IsFalse();
 
         var longGenerator = IdGeneratorFactory.GetGenerator(IdGenerationStrategy.IdentityLong);
         await Assert.That(longGenerator).IsAssignableTo<IdentityGenerator>();
-        await Assert.That(longGenerator.Supports(typeof(long))).IsTrue();
+        await Assert.That(longGenerator.Supports(typeof(long))).IsFalse();
 
         var guidV7Generator = IdGeneratorFactory.GetGenerator(IdGenerationStrategy.GuidV7);
         await Assert.That(guidV7Generator).IsAssignableTo<GuidV7Generator>();

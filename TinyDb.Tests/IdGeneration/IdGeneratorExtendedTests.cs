@@ -31,55 +31,26 @@ public class IdGeneratorExtendedTests
     }
 
     [Test]
-    public async Task IdentityGenerator_ShouldHandleConcurrency()
+    public async Task IdentityGenerator_ShouldRequireEnginePersistence()
     {
         var generator = new IdentityGenerator();
-        
-        const int threadCount = 10;
-        const int countPerThread = 1000;
-        var bag = new ConcurrentBag<object>();
-
-        // We need a dummy property info for int type
         var propInfo = typeof(TinyDb.Tests.TestEntities.UserWithIntId).GetProperty("Id");
 
-        var tasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>
-        {
-            for (int i = 0; i < countPerThread; i++)
-            {
-                var bson = generator.GenerateId(typeof(TinyDb.Tests.TestEntities.UserWithIntId), propInfo!, "test_seq_extended");
-                bag.Add(((TinyDb.Bson.BsonInt32)bson).Value);
-            }
-        }));
-
-        await Task.WhenAll(tasks);
-
-        await Assert.That(bag.Count).IsEqualTo(threadCount * countPerThread);
-        
-        var intIds = bag.Select(x => (int)x).OrderBy(x => x).ToList();
-        
-        // Should be 1 to 10000
-        await Assert.That(intIds.First()).IsEqualTo(1);
-        await Assert.That(intIds.Last()).IsEqualTo(threadCount * countPerThread);
-        await Assert.That(intIds.Distinct().Count()).IsEqualTo(threadCount * countPerThread);
+        await Assert.That(() => generator.GenerateId(typeof(TinyDb.Tests.TestEntities.UserWithIntId), propInfo!, "test_seq_extended"))
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
-    public async Task IdentityGenerator_Int_ShouldThrowOnOverflow()
+    public async Task IdentityGenerator_Int_ShouldRequireEngineInsteadOfOverflowingInMemory()
     {
         var generator = new IdentityGenerator();
         var propInfo = typeof(TinyDb.Tests.TestEntities.UserWithIntId).GetProperty("Id")!;
-        var sequencesField = typeof(IdentityGenerator).GetField(
-            "_sequences",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        var sequences = (ConcurrentDictionary<string, long>)sequencesField.GetValue(generator)!;
-
-        sequences["overflow_seq"] = int.MaxValue;
 
         await Assert.That(() => generator.GenerateId(
                 typeof(TinyDb.Tests.TestEntities.UserWithIntId),
                 propInfo,
                 "overflow_seq"))
-            .Throws<OverflowException>();
+            .Throws<InvalidOperationException>();
     }
 
     [Test]
