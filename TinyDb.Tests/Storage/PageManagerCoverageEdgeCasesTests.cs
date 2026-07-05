@@ -35,8 +35,8 @@ public sealed class PageManagerCoverageEdgeCasesTests
 
             var callbackField = typeof(PageManager).GetField("_flushLogToLsnAsync", BindingFlags.NonPublic | BindingFlags.Instance)
                 ?? throw new MissingFieldException(typeof(PageManager).FullName, "_flushLogToLsnAsync");
-            var callback = (Func<long, CancellationToken, Task>)callbackField.GetValue(manager)!;
-            await callback(42L, CancellationToken.None);
+            var callback = (Func<long, WriteAheadLog.WriteLockContext?, CancellationToken, Task>)callbackField.GetValue(manager)!;
+            await callback(42L, null, CancellationToken.None);
             await Assert.That(observedLsn).IsEqualTo(42L);
 
             await Assert.That(() => manager.RegisterWAL((Func<long, Task>)null!))

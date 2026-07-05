@@ -1040,16 +1040,31 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     /// <param name="id">新的ID值</param>
     private void UpdateEntityId(T entity, BsonValue id)
     {
+        if (entity is BsonDocument)
+        {
+            return;
+        }
+
+        if (!AotIdAccessor<T>.TryGetIdInfo(out var idPropertyName, out _))
+        {
+            return;
+        }
+
         try
         {
             AotIdAccessor<T>.SetId(entity, id);
         }
-        catch (InvalidOperationException)
+        catch (Exception ex) when (ex is InvalidOperationException or InvalidCastException or FormatException or OverflowException or ArgumentException)
         {
-            // 如果实体没有ID属性，忽略更新
+            throw new InvalidOperationException(
+                $"Failed to set ID property '{idPropertyName}' for entity type '{typeof(T).FullName}'.",
+                ex);
         }
-        catch (NotSupportedException) when (entity is BsonDocument)
+        var updatedId = AotIdAccessor<T>.GetId(entity);
+        if (!BsonValueComparer.ValueEquals(updatedId, id))
         {
+            throw new InvalidOperationException(
+                $"ID property '{idPropertyName}' for entity type '{typeof(T).FullName}' was not updated to the document ID.");
         }
     }
 

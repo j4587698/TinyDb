@@ -140,13 +140,16 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfBackgroundFailed();
-        return _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken);
+        return _wal.SynchronizeAsync(
+            (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
+            truncateLog: true,
+            cancellationToken);
     }
 
     public void Flush()
     {
         ThrowIfBackgroundFailed();
-        _wal.Synchronize(() => _pageManager.FlushDirtyPages());
+        _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: true);
     }
 
     private Task EnsureJournalFlushAsync(CancellationToken cancellationToken)
@@ -258,7 +261,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             ThrowIfBackgroundFailed();
         }
 
-        _wal.Synchronize(() => _pageManager.FlushDirtyPages(), truncateLog: false);
+        _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: false);
     }
 
     private async Task RunSyncedWorkerAsync()
@@ -312,7 +315,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             try
             {
                 await _wal.SynchronizeAsync(
-                    ct => _pageManager.FlushDirtyPagesAsync(ct),
+                    (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
                     truncateLog: false,
                     _cts.Token).ConfigureAwait(false);
                 tcsToComplete.TrySetResult();
@@ -446,14 +449,17 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         ThrowIfBackgroundFailed();
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
-        await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), cancellationToken).ConfigureAwait(false);
+        await _wal.SynchronizeAsync(
+            (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
+            truncateLog: true,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public void FlushPending()
     {
         ThrowIfBackgroundFailed();
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
-        _wal.Synchronize(() => _pageManager.FlushDirtyPages());
+        _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: true);
     }
 
     public void Dispose()
@@ -653,14 +659,17 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         if (IsCorrupted) return;
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
-        _wal.Synchronize(() => _pageManager.FlushDirtyPages());
+        _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: true);
     }
 
     private async Task FlushForDisposeAsync()
     {
         if (IsCorrupted) return;
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
-        await _wal.SynchronizeAsync(ct => _pageManager.FlushDirtyPagesAsync(ct), CancellationToken.None).ConfigureAwait(false);
+        await _wal.SynchronizeAsync(
+            (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
+            truncateLog: true,
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     private void ThrowIfBackgroundFailed()
