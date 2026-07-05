@@ -627,13 +627,9 @@ public sealed class ReviewReportRegressionTests : IDisposable
         collection.Insert(new TransactionDocument { Id = 1, Value = 10 });
 
         var wal = GetWriteAheadLog(engine);
-        var commitAttempts = 0;
         wal.BeforeTransactionCommitForTesting = () =>
         {
-            if (Interlocked.Increment(ref commitAttempts) == 1)
-            {
-                throw new IOException("Injected WAL commit failure.");
-            }
+            throw new IOException("Injected WAL commit failure.");
         };
 
         try

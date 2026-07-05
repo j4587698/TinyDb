@@ -1,6 +1,7 @@
 using TinyDb.Storage;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
+using System.Reflection;
 
 namespace TinyDb.Tests.Storage;
 
@@ -49,5 +50,38 @@ public class PageManagerCacheTests : IDisposable
         
         pm.ClearCache(2);
         await Assert.That(pm.CachedPages).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task CacheHit_ShouldNotWaitForCacheLock()
+    {
+        using var ds = new DiskStream(_testDbPath);
+        using var pm = new PageManager(ds, 4096, 10);
+
+        var page = pm.NewPage(PageType.Data);
+        var cacheLockField = typeof(PageManager).GetField("_cacheLock", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new MissingFieldException(typeof(PageManager).FullName, "_cacheLock");
+        var cacheLock = cacheLockField.GetValue(pm) ?? throw new InvalidOperationException("Cache lock instance is missing.");
+
+        Monitor.Enter(cacheLock);
+        try
+        {
+            var getTask = Task.Run(() => pm.GetPage(page.PageID));
+            var pinnedTask = Task.Run(() =>
+            {
+                var pinnedPage = pm.GetPagePinned(page.PageID);
+                pinnedPage.Unpin();
+                return pinnedPage;
+            });
+
+            await Assert.That(await Task.WhenAny(getTask, Task.Delay(TimeSpan.FromMilliseconds(500))) == getTask).IsTrue();
+            await Assert.That(await Task.WhenAny(pinnedTask, Task.Delay(TimeSpan.FromMilliseconds(500))) == pinnedTask).IsTrue();
+            await Assert.That((await getTask).PageID).IsEqualTo(page.PageID);
+            await Assert.That((await pinnedTask).PageID).IsEqualTo(page.PageID);
+        }
+        finally
+        {
+            Monitor.Exit(cacheLock);
+        }
     }
 }

@@ -201,15 +201,9 @@ public sealed class MetadataManagerExtendedCoverageTests
                     .AddValue(new BsonDocument().Set("n", "blob").Set("t", "System.Byte[]").Set("r", false))
             });
 
-            var profilesField = typeof(MetadataManager).GetField("_validationProfiles", BindingFlags.Instance | BindingFlags.NonPublic)
-                ?? throw new MissingFieldException(typeof(MetadataManager).FullName, "_validationProfiles");
-            var profiles = profilesField.GetValue(manager) ?? throw new InvalidOperationException("Validation profile cache instance is missing.");
-            // In NativeAOT, private member metadata can be reduced; run cache clear only when method metadata is available.
-            var clearMethod = profilesField.FieldType.GetMethod("Clear", BindingFlags.Instance | BindingFlags.Public);
-            clearMethod?.Invoke(profiles, Array.Empty<object>());
-
+            var freshManager = new MetadataManager(engine);
             var validDoc = new BsonDocument().Set("name", "ok");
-            await Assert.That(() => manager.ValidateDocumentForWrite("kind_cov", validDoc, SchemaValidationMode.Required)).ThrowsNothing();
+            await Assert.That(() => freshManager.ValidateDocumentForWrite("kind_cov", validDoc, SchemaValidationMode.Required)).ThrowsNothing();
 
             var tryGetExpectedKind = typeof(MetadataManager).GetMethod("TryGetExpectedKind", BindingFlags.Static | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException(typeof(MetadataManager).FullName, "TryGetExpectedKind");

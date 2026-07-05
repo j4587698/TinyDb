@@ -588,6 +588,41 @@ public sealed class TinyDbEngine : IDisposable
         return _writeAheadLog.BeginTransaction(transactionId);
     }
 
+    internal void RollbackTransactionDurabilityScope(WriteAheadLog.WalTransactionScope durabilityScope)
+    {
+        if (durabilityScope == null) throw new ArgumentNullException(nameof(durabilityScope));
+
+        durabilityScope.Rollback((pageId, beforeImage) => _pageManager.RestorePage(pageId, beforeImage));
+        ResetRuntimeStateAfterDurabilityRollback();
+    }
+
+    private void ResetRuntimeStateAfterDurabilityRollback()
+    {
+        lock (_lock)
+        {
+            _pageManager.ClearCache();
+            ReadHeader();
+            _pageManager.Initialize(
+                _header.TotalPages,
+                _header.FirstFreePage,
+                _header.FreePageCount,
+                _header.HasFreePageCount);
+
+            _collectionStates.Clear();
+            DisposeIndexManagers();
+
+            _collectionMetaStore = new CollectionMetaStore(
+                _pageManager,
+                () => _header.CollectionInfoPage,
+                id => _header.CollectionInfoPage = id);
+            _collectionMetaStore.LoadCollections();
+
+            _metadataManager = new TinyDb.Metadata.MetadataManager(this);
+            _identitySequences.Clear();
+            _transactionManager.ClearForeignKeyCache();
+        }
+    }
+
     private WriteAheadLog.WalTransactionScope? BeginImplicitWalTransaction()
     {
         if (!_writeAheadLog.IsEnabled || _writeAheadLog.IsInTransactionScope)

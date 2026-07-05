@@ -115,16 +115,18 @@ public sealed class WriteAheadLog : IDisposable
 
     private sealed class PendingTransactionPage
     {
-        public PendingTransactionPage(uint pageId, byte[]? beforeImage, byte[] afterImage)
+        public PendingTransactionPage(uint pageId, byte[]? beforeImage, byte[] afterImage, bool needsWalWrite)
         {
             PageId = pageId;
             BeforeImage = beforeImage;
             AfterImage = afterImage;
+            NeedsWalWrite = needsWalWrite;
         }
 
         public uint PageId { get; }
         public byte[]? BeforeImage { get; }
         public byte[] AfterImage { get; set; }
+        public bool NeedsWalWrite { get; set; }
     }
 
     private sealed class TransactionPageBuffer
@@ -139,24 +141,35 @@ public sealed class WriteAheadLog : IDisposable
 
         public Guid TransactionId { get; }
 
-        public void AddOrReplace(uint pageId, byte[]? beforeImage, byte[] afterImage)
+        public void AddOrReplace(uint pageId, byte[]? beforeImage, byte[] afterImage, bool needsWalWrite)
         {
             if (!_pages.TryGetValue(pageId, out var pending))
             {
-                _pages.Add(pageId, new PendingTransactionPage(pageId, beforeImage, afterImage));
+                _pages.Add(pageId, new PendingTransactionPage(pageId, beforeImage, afterImage, needsWalWrite));
                 _order.Add(pageId);
                 return;
             }
 
             pending.AfterImage = afterImage;
+            pending.NeedsWalWrite = needsWalWrite;
         }
 
-        public IEnumerable<(uint PageId, byte[] AfterImage, byte[]? BeforeImage)> GetPagesInFirstTouchOrder()
+        public IEnumerable<(uint PageId, byte[] AfterImage, byte[]? BeforeImage)> GetPagesPendingWalWriteInFirstTouchOrder()
         {
             foreach (var pageId in _order)
             {
                 var pending = _pages[pageId];
+                if (!pending.NeedsWalWrite) continue;
                 yield return (pending.PageId, pending.AfterImage, pending.BeforeImage);
+            }
+        }
+
+        public IEnumerable<(uint PageId, byte[]? BeforeImage)> GetPagesInReverseFirstTouchOrder()
+        {
+            for (var i = _order.Count - 1; i >= 0; i--)
+            {
+                var pending = _pages[_order[i]];
+                yield return (pending.PageId, pending.BeforeImage);
             }
         }
     }
@@ -279,7 +292,9 @@ public sealed class WriteAheadLog : IDisposable
             {
                 await RunWithWriteLockAsync(async () =>
                 {
-                    var transactionData = PrepareTransactionPageRecord(transactionId, page, beforeImage);
+                    var afterImage = PreparePageRecord(page);
+                    TrackTransactionPage(transactionId, page.PageID, beforeImage, afterImage, needsWalWrite: false);
+                    var transactionData = CreateTransactionPageRecord(transactionId, beforeImage, afterImage);
                     await WriteEntryAsync(EntryTypeTransactionPage, page.PageID, transactionData, cancellationToken).ConfigureAwait(false);
                 }, cancellationToken).ConfigureAwait(false);
             }
@@ -330,7 +345,9 @@ public sealed class WriteAheadLog : IDisposable
             {
                 RunWithWriteLock(() =>
                 {
-                    var data = PrepareTransactionPageRecord(transactionId, page, beforeImage);
+                    var afterImage = PreparePageRecord(page);
+                    TrackTransactionPage(transactionId, page.PageID, beforeImage, afterImage, needsWalWrite: false);
+                    var data = CreateTransactionPageRecord(transactionId, beforeImage, afterImage);
                     WriteEntry(EntryTypeTransactionPage, page.PageID, data);
                 });
             }
@@ -360,7 +377,18 @@ public sealed class WriteAheadLog : IDisposable
         }
 
         page.UpdateLsnForWal(PendingDeferredTransactionLsn);
-        transactionPages.AddOrReplace(page.PageID, beforeImage, page.Snapshot(includeUnusedTail: true));
+        transactionPages.AddOrReplace(page.PageID, beforeImage, page.Snapshot(includeUnusedTail: true), needsWalWrite: true);
+    }
+
+    private void TrackTransactionPage(Guid transactionId, uint pageId, byte[]? beforeImage, byte[] afterImage, bool needsWalWrite)
+    {
+        var transactionPages = _currentTransactionPages.Value;
+        if (transactionPages == null || transactionPages.TransactionId != transactionId)
+        {
+            throw new InvalidOperationException("WAL transaction page buffer mismatch.");
+        }
+
+        transactionPages.AddOrReplace(pageId, beforeImage, afterImage, needsWalWrite);
     }
 
     internal WalTransactionScope BeginTransaction(Guid transactionId) => BeginTransaction(transactionId, flushOnCommit: true);
@@ -436,6 +464,24 @@ public sealed class WriteAheadLog : IDisposable
             _completed = true;
         }
 
+        public void Rollback(Action<uint, byte[]> restore)
+        {
+            if (_completed) return;
+            if (restore == null) throw new ArgumentNullException(nameof(restore));
+
+            if (_wal.IsEnabled)
+            {
+                if (_wal._currentTransactionId.Value != _transactionId)
+                {
+                    throw new InvalidOperationException("WAL transaction scope mismatch.");
+                }
+
+                _wal.RestoreTransactionBeforeImages(_transactionId, restore);
+            }
+
+            _completed = true;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
@@ -462,11 +508,33 @@ public sealed class WriteAheadLog : IDisposable
             throw new InvalidOperationException("WAL transaction page buffer mismatch.");
         }
 
-        foreach (var record in transactionPages.GetPagesInFirstTouchOrder())
+        foreach (var record in transactionPages.GetPagesPendingWalWriteInFirstTouchOrder())
         {
             var data = PrepareTransactionPageRecord(transactionId, record.AfterImage, record.BeforeImage, out var lsn);
             WriteEntry(EntryTypeTransactionPage, record.PageId, data);
             DeferredTransactionPageLogged?.Invoke(record.PageId, lsn);
+        }
+    }
+
+    private void RestoreTransactionBeforeImages(Guid transactionId, Action<uint, byte[]> restore)
+    {
+        var transactionPages = _currentTransactionPages.Value;
+        if (transactionPages == null)
+        {
+            return;
+        }
+
+        if (transactionPages.TransactionId != transactionId)
+        {
+            throw new InvalidOperationException("WAL transaction page buffer mismatch.");
+        }
+
+        foreach (var record in transactionPages.GetPagesInReverseFirstTouchOrder())
+        {
+            if (record.BeforeImage != null)
+            {
+                restore(record.PageId, record.BeforeImage);
+            }
         }
     }
 

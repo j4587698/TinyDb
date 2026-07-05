@@ -1047,6 +1047,9 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
         {
             // 如果实体没有ID属性，忽略更新
         }
+        catch (NotSupportedException) when (entity is BsonDocument)
+        {
+        }
     }
 
     /// <summary>

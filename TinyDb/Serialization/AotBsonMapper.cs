@@ -175,10 +175,7 @@ public static class AotBsonMapper
         // For BsonDocument, the caller should use doc.Set("_id", id) instead
         if (entity is BsonDocument)
         {
-            // BsonDocument is immutable in terms of Set returning new instance
-            // The typical pattern is: doc = doc.Set("_id", id)
-            // We cannot modify the reference here, so we skip this case
-            return;
+            throw new NotSupportedException("BsonDocument is immutable. Use document.Set(\"_id\", id) to create a new document with the requested ID.");
         }
 
         AotIdAccessor<T>.SetId(entity, id);
@@ -543,69 +540,46 @@ public static class AotBsonMapper
 
         var args = dictionaryType.GetGenericArguments();
         var keyType = args[0];
-        var valueType = args[1];
 
         if (keyType != typeof(string))
         {
             throw new NotSupportedException($"AOT 回退模式仅支持字符串键的字典，但实际键类型为 {keyType.FullName}。");
         }
 
-        object instance;
-        IDictionary dictionary;
         if (dictionaryType == typeof(Dictionary<string, int>))
         {
             var typedDictionary = new Dictionary<string, int>(document.Count, StringComparer.Ordinal);
-            instance = typedDictionary;
-            dictionary = typedDictionary;
+            foreach (var element in document.Entries)
+            {
+                typedDictionary[element.Key] = ConvertToInt32(element.Value);
+            }
+
+            return typedDictionary;
         }
-        else if (dictionaryType == typeof(Dictionary<string, string>))
+
+        if (dictionaryType == typeof(Dictionary<string, string>))
         {
             var typedDictionary = new Dictionary<string, string?>(document.Count, StringComparer.Ordinal);
-            instance = typedDictionary;
-            dictionary = typedDictionary;
+            foreach (var element in document.Entries)
+            {
+                typedDictionary[element.Key] = ConvertToNullableString(element.Value);
+            }
+
+            return typedDictionary;
         }
-        else if (dictionaryType == typeof(Dictionary<string, object>))
+
+        if (dictionaryType == typeof(Dictionary<string, object>))
         {
             var typedDictionary = new Dictionary<string, object?>(document.Count, StringComparer.Ordinal);
-            instance = typedDictionary;
-            dictionary = typedDictionary;
-        }
-        else
-        {
-            throw new NotSupportedException($"AOT fallback does not support dictionary type '{dictionaryType.FullName}'.");
-        }
-
-        if (valueType == typeof(int))
-        {
             foreach (var element in document.Entries)
             {
-                dictionary[element.Key] = ConvertFromBsonValue(element.Value, typeof(int));
+                typedDictionary[element.Key] = UnwrapBsonValue(element.Value);
             }
 
-            return instance;
+            return typedDictionary;
         }
 
-        if (valueType == typeof(string))
-        {
-            foreach (var element in document.Entries)
-            {
-                dictionary[element.Key] = ConvertFromBsonValue(element.Value, typeof(string));
-            }
-
-            return instance;
-        }
-
-        if (valueType == typeof(object))
-        {
-            foreach (var element in document.Entries)
-            {
-                dictionary[element.Key] = ConvertFromBsonValue(element.Value, typeof(object));
-            }
-
-            return instance;
-        }
-
-        throw new NotSupportedException($"AOT 回退模式不支持字典值类型 '{valueType.FullName}'。");
+        throw new NotSupportedException($"AOT fallback does not support dictionary type '{dictionaryType.FullName}'.");
     }
 
     private static object? TryWrapWithTargetCollection([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type targetCollectionType, object sourceCollection)
@@ -624,6 +598,27 @@ public static class AotBsonMapper
         return null;
     }
 
+    private static T[] ConvertArray<T>(BsonArray array, Func<BsonValue, T> convert)
+    {
+        var values = new T[array.Count];
+        for (int i = 0; i < array.Count; i++)
+        {
+            values[i] = convert(array[i]);
+        }
+
+        return values;
+    }
+
+    private static T ConvertScalarArrayValue<T>(BsonValue bsonValue)
+    {
+        if (bsonValue == null || bsonValue.IsNull)
+        {
+            return default!;
+        }
+
+        return (T)ConvertPrimitiveValue(bsonValue, typeof(T));
+    }
+
     private static object? ConvertCollection([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type collectionType, BsonArray array)
     {
         if (array == null) return null;
@@ -635,14 +630,25 @@ public static class AotBsonMapper
                 throw new NotSupportedException($"AOT fallback does not support multi-dimensional array type '{collectionType.FullName}'.");
             }
 
-            var arrayElementType = collectionType.GetElementType()!;
-            var values = Array.CreateInstance(arrayElementType, array.Count);
-            for (int i = 0; i < array.Count; i++)
-            {
-                values.SetValue(ConvertFromBsonValue(array[i], arrayElementType), i);
-            }
+            if (collectionType == typeof(int[])) return ConvertArray(array, ConvertToInt32);
+            if (collectionType == typeof(long[])) return ConvertArray(array, static value => ConvertScalarArrayValue<long>(value));
+            if (collectionType == typeof(short[])) return ConvertArray(array, static value => ConvertScalarArrayValue<short>(value));
+            if (collectionType == typeof(ushort[])) return ConvertArray(array, static value => ConvertScalarArrayValue<ushort>(value));
+            if (collectionType == typeof(uint[])) return ConvertArray(array, static value => ConvertScalarArrayValue<uint>(value));
+            if (collectionType == typeof(ulong[])) return ConvertArray(array, static value => ConvertScalarArrayValue<ulong>(value));
+            if (collectionType == typeof(sbyte[])) return ConvertArray(array, static value => ConvertScalarArrayValue<sbyte>(value));
+            if (collectionType == typeof(float[])) return ConvertArray(array, static value => ConvertScalarArrayValue<float>(value));
+            if (collectionType == typeof(double[])) return ConvertArray(array, static value => ConvertScalarArrayValue<double>(value));
+            if (collectionType == typeof(decimal[])) return ConvertArray(array, static value => ConvertScalarArrayValue<decimal>(value));
+            if (collectionType == typeof(bool[])) return ConvertArray(array, ConvertToBoolean);
+            if (collectionType == typeof(char[])) return ConvertArray(array, static value => ConvertScalarArrayValue<char>(value));
+            if (collectionType == typeof(string[])) return ConvertArray(array, ConvertToNullableString);
+            if (collectionType == typeof(DateTime[])) return ConvertArray(array, static value => ConvertScalarArrayValue<DateTime>(value));
+            if (collectionType == typeof(Guid[])) return ConvertArray(array, static value => ConvertScalarArrayValue<Guid>(value));
+            if (collectionType == typeof(ObjectId[])) return ConvertArray(array, static value => ConvertScalarArrayValue<ObjectId>(value));
+            if (collectionType == typeof(object[])) return ConvertArray(array, UnwrapBsonValue);
 
-            return values;
+            throw new NotSupportedException($"AOT fallback does not support array type '{collectionType.FullName}'.");
         }
 
         if (collectionType.IsInterface || collectionType.IsAbstract)
@@ -655,7 +661,7 @@ public static class AotBsonMapper
             var list = new List<int>(array.Count);
             foreach (var bsonValue in array)
             {
-                list.Add((int)ConvertFromBsonValue(bsonValue, typeof(int))!);
+                list.Add(ConvertToInt32(bsonValue));
             }
 
             return list;
@@ -666,7 +672,7 @@ public static class AotBsonMapper
             var list = new List<string?>(array.Count);
             foreach (var bsonValue in array)
             {
-                list.Add((string?)ConvertFromBsonValue(bsonValue, typeof(string)));
+                list.Add(ConvertToNullableString(bsonValue));
             }
 
             return list;
@@ -684,6 +690,48 @@ public static class AotBsonMapper
         }
 
         throw new NotSupportedException($"AOT fallback does not support collection type '{collectionType.FullName}'.");
+    }
+
+    private static int ConvertToInt32(BsonValue bsonValue)
+    {
+        if (bsonValue == null || bsonValue.IsNull)
+        {
+            return default;
+        }
+
+        return bsonValue switch
+        {
+            BsonInt32 i32 => i32.Value,
+            BsonInt64 i64 => checked((int)i64.Value),
+            BsonDouble dbl => Convert.ToInt32(dbl.Value),
+            BsonDecimal128 dec => checked((int)dec.Value.ToDecimal()),
+            BsonString s => int.Parse(s.Value, CultureInfo.InvariantCulture),
+            _ => Convert.ToInt32(bsonValue.ToString(), CultureInfo.InvariantCulture)
+        };
+    }
+
+    private static string? ConvertToNullableString(BsonValue bsonValue)
+    {
+        return bsonValue == null || bsonValue.IsNull ? null : bsonValue.ToString();
+    }
+
+    private static bool ConvertToBoolean(BsonValue bsonValue)
+    {
+        if (bsonValue == null || bsonValue.IsNull)
+        {
+            return default;
+        }
+
+        return bsonValue switch
+        {
+            BsonBoolean b => b.Value,
+            BsonString s => bool.Parse(s.Value),
+            BsonInt32 i => Convert.ToBoolean(i.Value),
+            BsonInt64 l => Convert.ToBoolean(l.Value),
+            BsonDouble d => Convert.ToBoolean(d.Value),
+            BsonDecimal128 dec => Convert.ToBoolean(dec.Value),
+            _ => Convert.ToBoolean(bsonValue.ToString())
+        };
     }
 
 
