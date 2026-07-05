@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Tests.TestEntities;
 using TUnit.Assertions;
@@ -70,5 +71,27 @@ public class TransactionManagerIndexOperationCoverageTests : IDisposable
             tx.Commit();
             return Task.CompletedTask;
         });
+    }
+
+    [Test]
+    public async Task Commit_WhenCreateUniqueIndexBackfillFails_ShouldDropPartialIndex()
+    {
+        var collectionName = $"products_{Guid.NewGuid():N}";
+        var collection = _engine.GetBsonCollection(collectionName);
+        collection.Insert(new BsonDocument().Set("_id", 1).Set("Code", "dup"));
+        collection.Insert(new BsonDocument().Set("_id", 2).Set("Code", "dup"));
+
+        var tx = (Transaction)_engine.BeginTransaction();
+        tx.RecordCreateIndex(collectionName, "idx_code_unique", new[] { "Code" }, unique: true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        {
+            tx.Commit();
+            return Task.CompletedTask;
+        });
+
+        var indexManager = _engine.GetIndexManager(collectionName);
+        await Assert.That(indexManager.IndexExists("idx_code_unique")).IsFalse();
+        await Assert.That(indexManager.GetIndex("idx_code_unique")).IsNull();
     }
 }

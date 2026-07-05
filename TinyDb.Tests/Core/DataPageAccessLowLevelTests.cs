@@ -272,6 +272,33 @@ public class DataPageAccessLowLevelTests : IDisposable
     }
 
     [Test]
+    public async Task ReadDocumentAt_WithFields_DoesNotMutateProjectionFields()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        var doc = new BsonDocument()
+            .Set("_id", 1)
+            .Set("name", "test")
+            .Set("_isLargeDocument", false)
+            .Set("_largeDocumentIndex", 123)
+            .Set("_largeDocumentSize", 456);
+        page.Append(BsonSerializer.SerializeDocument(doc));
+
+        var fields = new HashSet<string> { "_id", "name" };
+        var result = _dpa.ReadDocumentAt(page, 0, fields);
+
+        await Assert.That(fields.Count).IsEqualTo(2);
+        await Assert.That(fields.Contains("_isLargeDocument")).IsFalse();
+        await Assert.That(fields.Contains("_largeDocumentIndex")).IsFalse();
+        await Assert.That(fields.Contains("_largeDocumentSize")).IsFalse();
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.ContainsKey("_isLargeDocument")).IsFalse();
+        await Assert.That(result.ContainsKey("_largeDocumentIndex")).IsFalse();
+        await Assert.That(result.ContainsKey("_largeDocumentSize")).IsFalse();
+    }
+
+    [Test]
     public async Task ReadDocumentAt_WithFields_IndexOutOfRange_ReturnsNull()
     {
         var page = _pm.NewPage(PageType.Data);

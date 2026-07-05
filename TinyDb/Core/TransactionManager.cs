@@ -728,10 +728,9 @@ public sealed class TransactionManager : IDisposable
                 // 尝试创建索引，如果失败抛出异常导致事务回滚
                 try 
                 {
-                    var indexManager = _engine.GetIndexManager(operation.CollectionName);
                     if (operation.IndexFields != null && !string.IsNullOrEmpty(operation.IndexName))
                     {
-                        indexManager.CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique, operation.IndexSparse);
+                        _engine.EnsureIndex(operation.CollectionName, operation.IndexFields, operation.IndexName, operation.IndexUnique, operation.IndexSparse);
                     }
                 }
                 catch (Exception ex)
@@ -809,7 +808,7 @@ public sealed class TransactionManager : IDisposable
 
                 case TransactionOperationType.DropIndex:
                     if (!string.IsNullOrEmpty(operation.IndexName) && operation.IndexFields != null)
-                        _engine.GetIndexManager(operation.CollectionName).CreateIndex(operation.IndexName, operation.IndexFields, operation.IndexUnique, operation.IndexSparse);
+                        _engine.EnsureIndex(operation.CollectionName, operation.IndexFields, operation.IndexName, operation.IndexUnique, operation.IndexSparse);
                     break;
 
                 default:
