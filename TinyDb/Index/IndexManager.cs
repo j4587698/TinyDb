@@ -144,7 +144,15 @@ public sealed class IndexManager : IDisposable
             }
             else
             {
-                index.Dispose();
+                try
+                {
+                    index.DropStorage();
+                }
+                finally
+                {
+                    index.Dispose();
+                }
+
                 return false;
             }
         }

@@ -44,9 +44,24 @@ public class MetadataManager
         public string CamelName { get; }
     }
 
+    private readonly struct DefaultField
+    {
+        public DefaultField(string name, string camelName, BsonValue value)
+        {
+            Name = name;
+            CamelName = camelName;
+            Value = value;
+        }
+
+        public string Name { get; }
+        public string CamelName { get; }
+        public BsonValue Value { get; }
+    }
+
     private sealed class SchemaValidationProfile
     {
         public required IReadOnlyList<RequiredField> RequiredFields { get; init; }
+        public required IReadOnlyList<DefaultField> DefaultFields { get; init; }
         public required HashSet<string> AllowedFields { get; init; }
         public required Dictionary<string, ExpectedBsonKind> ExpectedKindsByField { get; init; }
 
@@ -55,6 +70,7 @@ public class MetadataManager
             if (schema == null) throw new ArgumentNullException(nameof(schema));
 
             var requiredFields = new List<RequiredField>();
+            var defaultFields = new List<DefaultField>();
             var allowed = new HashSet<string>(StringComparer.Ordinal);
             var expectedKinds = new Dictionary<string, ExpectedBsonKind>(StringComparer.Ordinal);
 
@@ -74,6 +90,11 @@ public class MetadataManager
                     requiredFields.Add(new RequiredField(fieldName, camel));
                 }
 
+                if (!IsPrimaryKey(col, fieldName))
+                {
+                    defaultFields.Add(new DefaultField(fieldName, camel, DetermineDefaultValue(col)));
+                }
+
                 if (TryGetExpectedKind(GetOptionalString(col, "t"), out var kind))
                 {
                     expectedKinds[fieldName] = kind;
@@ -87,6 +108,7 @@ public class MetadataManager
             return new SchemaValidationProfile
             {
                 RequiredFields = requiredFields,
+                DefaultFields = defaultFields,
                 AllowedFields = allowed,
                 ExpectedKindsByField = expectedKinds
             };
@@ -186,6 +208,7 @@ public class MetadataManager
 
             // 更新缓存
             _cache[doc.TableName] = SchemaCacheEntry.Build(doc);
+            _engine.ClearForeignKeyCache();
         }
     }
 
@@ -254,12 +277,14 @@ public class MetadataManager
             var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
             col.Delete(tableName);
             _cache.TryRemove(tableName, out _);
+            _engine.ClearForeignKeyCache();
         }
     }
 
     internal void InvalidateMetadata(string tableName)
     {
         _cache.TryRemove(tableName, out _);
+        _engine.ClearForeignKeyCache();
     }
 
     /// <summary>
@@ -356,26 +381,24 @@ public class MetadataManager
         if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentException("tableName is required.", nameof(tableName));
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var entry = GetSchemaCacheEntry(tableName);
-        var schema = entry?.Document;
-        if (schema == null || schema.Columns.Count == 0) return document;
+        var profile = GetSchemaCacheEntry(tableName)?.Profile;
+        if (profile == null || profile.DefaultFields.Count == 0) return document;
 
         BsonDocumentBuilder? builder = null;
 
-        foreach (var col in schema.Columns)
+        foreach (var field in profile.DefaultFields)
         {
-            if (col is not BsonDocument colDoc) continue;
-            if (!TryGetFieldName(colDoc, out var fieldName)) continue;
-            if (IsPrimaryKey(colDoc, fieldName)) continue;
-
-            if ((builder?.ContainsKey(fieldName) ?? document.ContainsKey(fieldName))) continue;
+            if ((builder?.ContainsKey(field.Name) ?? document.ContainsKey(field.Name))) continue;
 
             // ååŽå…¼å®¹ï¼šæ—§ Schema å¯èƒ½ç”¨ PascalCase å­˜ï¼Œæ–‡æ¡£ç”¨ camelCase å­˜
-            var camelCase = ToCamelCase(fieldName);
-            if (camelCase != fieldName && (builder?.ContainsKey(camelCase) ?? document.ContainsKey(camelCase))) continue;
+            if (field.CamelName != field.Name &&
+                (builder?.ContainsKey(field.CamelName) ?? document.ContainsKey(field.CamelName)))
+            {
+                continue;
+            }
 
             builder ??= new BsonDocumentBuilder(document);
-            builder.Set(fieldName, DetermineDefaultValue(colDoc));
+            builder.Set(field.Name, field.Value);
         }
 
         return builder?.Build() ?? document;

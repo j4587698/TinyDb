@@ -633,6 +633,42 @@ public sealed class TinyDbEngine : IDisposable
         return _writeAheadLog.BeginTransaction(Guid.NewGuid(), flushOnCommit: false);
     }
 
+    private readonly struct PendingImplicitWalTransaction
+    {
+        private readonly Task? _beginTask;
+
+        public PendingImplicitWalTransaction(Guid transactionId, Task beginTask)
+        {
+            TransactionId = transactionId;
+            _beginTask = beginTask;
+        }
+
+        public bool HasTransaction => _beginTask != null;
+        public Guid TransactionId { get; }
+        public Task BeginTask => _beginTask ?? Task.CompletedTask;
+    }
+
+    private PendingImplicitWalTransaction PrepareImplicitWalTransactionAsync(CancellationToken cancellationToken)
+    {
+        if (!_writeAheadLog.IsEnabled || _writeAheadLog.IsInTransactionScope)
+        {
+            return default;
+        }
+
+        var transactionId = Guid.NewGuid();
+        return new PendingImplicitWalTransaction(
+            transactionId,
+            _writeAheadLog.WriteTransactionBeginAsync(transactionId, cancellationToken));
+    }
+
+    private WriteAheadLog.WalTransactionScope? EnterImplicitWalTransactionContext(
+        PendingImplicitWalTransaction pendingTransaction)
+    {
+        return pendingTransaction.HasTransaction
+            ? _writeAheadLog.EnterTransactionContext(pendingTransaction.TransactionId, flushOnCommit: false)
+            : null;
+    }
+
     internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;
 
     /// <summary>
@@ -643,6 +679,11 @@ public sealed class TinyDbEngine : IDisposable
     {
         ThrowIfDisposed();
         return _transactionManager.GetStatistics();
+    }
+
+    internal void ClearForeignKeyCache()
+    {
+        _transactionManager.ClearForeignKeyCache();
     }
 
     /// <summary>
@@ -1892,9 +1933,11 @@ public sealed class TinyDbEngine : IDisposable
         {
             _metadataManager.ValidateDocumentForWrite(col, pr.Document, _options.SchemaValidationMode);
             using var documentLock = await st.EnterDocumentLockAsync(pr.Id, cancellationToken).ConfigureAwait(false);
-            using var durabilityScope = BeginImplicitWalTransaction();
+            var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+            await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+            using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
             res = InsertPreparedDocument(col, pr, st, idx, true);
-            durabilityScope?.Commit();
+            if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
@@ -1945,9 +1988,11 @@ public sealed class TinyDbEngine : IDisposable
 
         using (await EnterDocumentLockWithPrefetchedPageAsync(st, id, cancellationToken).ConfigureAwait(false))
         {
-            using var durabilityScope = BeginImplicitWalTransaction();
+            var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+            await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+            using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
             updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
-            if (updated) durabilityScope?.Commit();
+            if (updated && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (!updated) return 0;
@@ -2030,7 +2075,9 @@ public sealed class TinyDbEngine : IDisposable
 
         using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared, static item => item.Id, cancellationToken).ConfigureAwait(false))
         {
-            using var durabilityScope = BeginImplicitWalTransaction();
+            var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+            await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+            using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
             foreach (var (doc, id) in prepared)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -2039,7 +2086,7 @@ public sealed class TinyDbEngine : IDisposable
                     updatedCount++;
                 }
             }
-            if (updatedCount > 0) durabilityScope?.Commit();
+            if (updatedCount > 0 && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (updatedCount > 0)
@@ -2143,7 +2190,9 @@ public sealed class TinyDbEngine : IDisposable
 
         using (await EnterDocumentLocksWithPrefetchedPagesAsync(st, prepared, static item => item.Id, cancellationToken).ConfigureAwait(false))
         {
-            using var durabilityScope = BeginImplicitWalTransaction();
+            var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+            await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+            using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
             foreach (var (doc, id) in prepared)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -2157,7 +2206,10 @@ public sealed class TinyDbEngine : IDisposable
                     insertedCount++;
                 }
             }
-            if (insertedCount + updatedCount > 0) durabilityScope?.Commit();
+            if (insertedCount + updatedCount > 0 && durabilityScope != null)
+            {
+                await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
 
         if (insertedCount + updatedCount > 0)
@@ -2203,7 +2255,7 @@ public sealed class TinyDbEngine : IDisposable
         var idxMgr = GetIndexManager(col);
         using (await EnterDocumentLockWithPrefetchedPageAsync(st, id, cancellationToken).ConfigureAwait(false))
         {
-            var deleted = DeleteDocumentCore(col, id, st, idxMgr);
+            var deleted = await DeleteDocumentCoreAsync(col, id, st, idxMgr, cancellationToken).ConfigureAwait(false);
             if (deleted == 0) return 0;
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
@@ -2327,7 +2379,9 @@ public sealed class TinyDbEngine : IDisposable
                        static payload => payload.Id,
                        cancellationToken).ConfigureAwait(false))
             {
-                using var durabilityScope = BeginImplicitWalTransaction();
+                var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+                await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+                using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
 
                 foreach (var payload in preparedPayloads)
                 {
@@ -2368,7 +2422,7 @@ public sealed class TinyDbEngine : IDisposable
                     throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                 }
 
-                durabilityScope?.Commit();
+                if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
 
             await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
@@ -3461,6 +3515,49 @@ public sealed class TinyDbEngine : IDisposable
                 if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
                 idxMgr.DeleteDocument(indexDocument, id);
                 durabilityScope?.Commit();
+                return 1;
+            }
+            finally
+            {
+                p.Unpin();
+            }
+        }
+    }
+
+    private async Task<int> DeleteDocumentCoreAsync(
+        string col,
+        BsonValue id,
+        CollectionState st,
+        IndexManager idxMgr,
+        CancellationToken cancellationToken)
+    {
+        if (!st.Index.TryGet(id, out var loc)) return 0;
+
+        var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+        await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+        using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
+        using (st.EnterPageMutationLock(loc.PageId))
+        {
+            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+            try
+            {
+                if (i >= e.Count) return 0;
+                var entry = e[i];
+                e.RemoveAt(i);
+                st.Index.Remove(id);
+                if (e.Count == 0)
+                {
+                    FreeDataPage(st, p);
+                }
+                else
+                {
+                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                }
+
+                var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
+                if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
+                idxMgr.DeleteDocument(indexDocument, id);
+                if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
                 return 1;
             }
             finally

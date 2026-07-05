@@ -13,10 +13,9 @@ public sealed class TransactionManager : IDisposable
 {
     private static readonly TimeSpan TimeoutCheckStopTimeout = TimeSpan.FromSeconds(5);
     internal readonly TinyDbEngine _engine;
-    private readonly Dictionary<Guid, Transaction> _activeTransactions;
-    private readonly Dictionary<Guid, DateTime> _timedOutTransactions;
-    private readonly ConcurrentDictionary<string, List<ForeignKeyDefinition>> _foreignKeyCache = new(StringComparer.Ordinal);
-    private readonly object _foreignKeyCacheLock = new();
+    private readonly ConcurrentDictionary<Guid, Transaction> _activeTransactions;
+    private readonly ConcurrentDictionary<Guid, DateTime> _timedOutTransactions;
+    private readonly ConcurrentDictionary<string, Lazy<List<ForeignKeyDefinition>>> _foreignKeyCache = new(StringComparer.Ordinal);
     private readonly object _lock = new();
     private readonly CancellationTokenSource _timeoutCheckCts = new();
     private readonly Task _timeoutCheckTask;
@@ -29,13 +28,7 @@ public sealed class TransactionManager : IDisposable
     /// </summary>
     public int ActiveTransactionCount
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _activeTransactions.Count;
-            }
-        }
+        get => _activeTransactions.Count;
     }
 
     /// <summary>
@@ -59,8 +52,8 @@ public sealed class TransactionManager : IDisposable
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         MaxTransactions = maxTransactions;
         TransactionTimeout = transactionTimeout ?? TimeSpan.FromMinutes(5);
-        _activeTransactions = new Dictionary<Guid, Transaction>();
-        _timedOutTransactions = new Dictionary<Guid, DateTime>();
+        _activeTransactions = new ConcurrentDictionary<Guid, Transaction>();
+        _timedOutTransactions = new ConcurrentDictionary<Guid, DateTime>();
 
         // 启动超时检查任务
         _timeoutCheckTask = StartTimeoutCheckTask(_timeoutCheckCts.Token);
@@ -81,7 +74,11 @@ public sealed class TransactionManager : IDisposable
             }
 
             var transaction = new Transaction(this);
-            _activeTransactions[transaction.TransactionId] = transaction;
+            if (!_activeTransactions.TryAdd(transaction.TransactionId, transaction))
+            {
+                throw new InvalidOperationException($"Transaction '{transaction.TransactionId}' already exists");
+            }
+
             return transaction;
         }
     }
@@ -96,7 +93,7 @@ public sealed class TransactionManager : IDisposable
         if (transaction == null) throw new ArgumentNullException(nameof(transaction));
 
         TransactionOperation[] operations;
-        lock (_lock)
+        lock (transaction.SyncRoot)
         {
             EnsureTransactionActive(transaction);
 
@@ -158,26 +155,17 @@ public sealed class TransactionManager : IDisposable
                 durabilityScope?.Dispose();
             }
 
-            lock (_lock)
-            {
-                transaction.TryTransitionState(TransactionState.Committing, TransactionState.Committed);
-            }
+            transaction.TryTransitionState(TransactionState.Committing, TransactionState.Committed);
         }
         catch (Exception ex)
         {
-            lock (_lock)
-            {
-                transaction.MarkFailed();
-            }
+            transaction.MarkFailed();
 
             throw new InvalidOperationException($"Failed to commit transaction: {ex.Message}", ex);
         }
         finally
         {
-            lock (_lock)
-            {
-                _activeTransactions.Remove(transaction.TransactionId);
-            }
+            _activeTransactions.TryRemove(transaction.TransactionId, out _);
         }
     }
 
@@ -277,7 +265,7 @@ public sealed class TransactionManager : IDisposable
             }
             finally
             {
-                _activeTransactions.Remove(transaction.TransactionId);
+                _activeTransactions.TryRemove(transaction.TransactionId, out _);
             }
         }
     }
@@ -369,20 +357,17 @@ public sealed class TransactionManager : IDisposable
         if (transaction == null) throw new ArgumentNullException(nameof(transaction));
         if (operation == null) throw new ArgumentNullException(nameof(operation));
 
-        lock (_lock)
+        EnsureTransactionActive(transaction);
+
+        lock (transaction.SyncRoot)
         {
-            EnsureTransactionActive(transaction);
-
-            lock (transaction.SyncRoot)
+            var state = transaction.State;
+            if (state != TransactionState.Active)
             {
-                var state = transaction.State;
-                if (state != TransactionState.Active)
-                {
-                    throw new InvalidOperationException($"Transaction cannot record operations in state {state}");
-                }
-
-                transaction.AddOperation(operation);
+                throw new InvalidOperationException($"Transaction cannot record operations in state {state}");
             }
+
+            transaction.AddOperation(operation);
         }
     }
 
@@ -553,45 +538,64 @@ public sealed class TransactionManager : IDisposable
 
     private List<ForeignKeyDefinition> GetForeignKeyDefinitions(string collectionName)
     {
-        lock (_foreignKeyCacheLock)
+        var lazy = _foreignKeyCache.GetOrAdd(
+            collectionName,
+            name => new Lazy<List<ForeignKeyDefinition>>(
+                () => LoadForeignKeyDefinitions(name),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
         {
-            return _foreignKeyCache.GetOrAdd(collectionName, name =>
+            return lazy.Value;
+        }
+        catch
+        {
+            if (_foreignKeyCache.TryGetValue(collectionName, out var current) &&
+                ReferenceEquals(current, lazy))
             {
-                var definitions = new List<ForeignKeyDefinition>();
+                _foreignKeyCache.TryRemove(collectionName, out _);
+            }
 
-                // 扫描所有元数据集合以找到匹配的集合名称
-                var metadataCollectionNames = new List<string> { "__sys_catalog" };
+            throw;
+        }
+    }
 
-                foreach (var metaColName in metadataCollectionNames)
+    private List<ForeignKeyDefinition> LoadForeignKeyDefinitions(string name)
+    {
+        var definitions = new List<ForeignKeyDefinition>();
+
+        // 扫描所有元数据集合以找到匹配的集合名称
+        var metadataCollectionNames = new List<string> { "__sys_catalog" };
+
+        foreach (var metaColName in metadataCollectionNames)
+        {
+            try
+            {
+                var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
+                var metaDoc = metaCol.FindById(name);
+
+                if (metaDoc != null)
                 {
-                    try
+                    var entityMeta = metaDoc.ToEntityMetadata();
+                    foreach (var prop in entityMeta.Properties)
                     {
-                        var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
-                        var metaDoc = metaCol.FindById(name);
-
-                        if (metaDoc != null)
+                        if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
                         {
-                            var entityMeta = metaDoc.ToEntityMetadata();
-                            foreach (var prop in entityMeta.Properties)
-                            {
-                                if (!string.IsNullOrEmpty(prop.ForeignKeyCollection))
-                                {
-                                    definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
-                                }
-                            }
-                            break;
+                            definitions.Add(new ForeignKeyDefinition(prop.PropertyName, prop.ForeignKeyCollection!));
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        throw new InvalidOperationException(
-                            $"Failed to read foreign key metadata for collection '{name}' from '{metaColName}'.", ex);
-                    }
-                }
 
-                return definitions;
-            });
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to read foreign key metadata for collection '{name}' from '{metaColName}'.", ex);
+            }
         }
+
+        return definitions;
     }
 
     internal void ClearForeignKeyCache()
@@ -768,8 +772,8 @@ public sealed class TransactionManager : IDisposable
         lock (transaction.SyncRoot)
         {
             transaction.Operations.Clear();
+            transaction.Savepoints.Clear();
         }
-        transaction.Savepoints.Clear();
     }
 
     /// <summary>
@@ -862,7 +866,7 @@ public sealed class TransactionManager : IDisposable
                 var failureReason = CreateTransactionTimeoutMessage(expiredTransaction.TransactionId, now);
                 if (!expiredTransaction.TryTransitionState(TransactionState.Active, TransactionState.Failed)) continue;
                 expiredTransaction.FailureReason = failureReason;
-                _activeTransactions.Remove(expiredTransaction.TransactionId);
+                _activeTransactions.TryRemove(expiredTransaction.TransactionId, out _);
                 _timedOutTransactions[expiredTransaction.TransactionId] = now;
             }
 
@@ -907,7 +911,7 @@ public sealed class TransactionManager : IDisposable
 
         foreach (var transactionId in expiredKeys)
         {
-            _timedOutTransactions.Remove(transactionId);
+            _timedOutTransactions.TryRemove(transactionId, out _);
         }
     }
 

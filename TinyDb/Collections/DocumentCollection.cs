@@ -697,23 +697,24 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         ValidatePaginationArguments(skip, limit);
 
-        var results = limit == int.MaxValue
-            ? new List<T>()
-            : new List<T>(Math.Max(0, limit));
-
-        long matchedCount = 0;
-        foreach (var item in Query().Where(predicate))
+        totalCount = _queryExecutor.Count(_name, predicate);
+        if (limit == 0)
         {
-            if (matchedCount >= skip && (limit == int.MaxValue || results.Count < limit))
-            {
-                results.Add(item);
-            }
-
-            matchedCount++;
+            return Enumerable.Empty<T>();
         }
 
-        totalCount = matchedCount;
-        return results;
+        var result = _queryExecutor.Execute<T>(_name, predicate);
+        if (skip > 0)
+        {
+            result = result.Skip(skip);
+        }
+
+        if (limit < int.MaxValue)
+        {
+            result = result.Take(limit);
+        }
+
+        return result.ToList();
     }
 
     /// <summary>

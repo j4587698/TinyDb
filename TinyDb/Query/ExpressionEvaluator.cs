@@ -598,8 +598,7 @@ public static class ExpressionEvaluator
             if (memberName == "Count")
             {
                 int count = 0;
-                var enumerator = en.GetEnumerator();
-                while (enumerator.MoveNext()) count++;
+                foreach (var _ in en) count++;
                 return count;
             }
         }
@@ -700,8 +699,7 @@ public static class ExpressionEvaluator
                 if (targetValue is System.Collections.ICollection col) return col.Count;
                 if (targetValue is BsonArray ba) return ba.Count;
                 int count = 0;
-                var e = enumerable.GetEnumerator();
-                while (e.MoveNext()) count++;
+                foreach (var _ in enumerable) count++;
                 return count;
             }
             if (functionName == "Sum" || functionName == "Average" || functionName == "Min" || functionName == "Max")

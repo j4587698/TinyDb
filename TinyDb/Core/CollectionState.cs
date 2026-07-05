@@ -335,15 +335,23 @@ internal sealed class CollectionState
         while (true)
         {
             var documentLock = _documentLocks.GetOrAdd(key, static id => new KeyedDocumentLock(id));
+            var retry = false;
             lock (documentLock.ReferenceSyncRoot)
             {
                 if (documentLock.IsRemoved)
                 {
-                    continue;
+                    retry = true;
                 }
+                else
+                {
+                    documentLock.ReferenceCount++;
+                    return documentLock;
+                }
+            }
 
-                documentLock.ReferenceCount++;
-                return documentLock;
+            if (retry)
+            {
+                Thread.Yield();
             }
         }
     }
@@ -376,15 +384,23 @@ internal sealed class CollectionState
         while (true)
         {
             var pageLock = _pageMutationLocks.GetOrAdd(pageId, static id => new KeyedPageLock(id));
+            var retry = false;
             lock (pageLock.ReferenceSyncRoot)
             {
                 if (pageLock.IsRemoved)
                 {
-                    continue;
+                    retry = true;
                 }
+                else
+                {
+                    pageLock.ReferenceCount++;
+                    return pageLock;
+                }
+            }
 
-                pageLock.ReferenceCount++;
-                return pageLock;
+            if (retry)
+            {
+                Thread.Yield();
             }
         }
     }

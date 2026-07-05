@@ -84,6 +84,89 @@ public sealed class QueryExecutor
         return ExecutePlannedAsync(executionPlan, collectionName, expression, cancellationToken);
     }
 
+    internal long Count<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        Expression<Func<T, bool>>? expression = null)
+        where T : class, new()
+    {
+        QueryExpression? queryExpression = null;
+        if (expression != null)
+        {
+            try { queryExpression = _expressionParser.Parse(expression); }
+            catch (Exception ex) { throw new NotSupportedException("Parse failed", ex); }
+        }
+
+        return Count(collectionName, queryExpression);
+    }
+
+    internal long Count(string collectionName, QueryExpression? queryExpression)
+    {
+        var predicates = new List<ScanPredicate>();
+        bool fullyPushed = CollectPredicates(queryExpression, predicates);
+        var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+
+        var collectionFieldNameBytes = Encoding.UTF8.GetBytes("_collection");
+        var collectionNameBytes = Encoding.UTF8.GetBytes(collectionName);
+        var isLargeDocumentFieldNameBytes = Encoding.UTF8.GetBytes("_isLargeDocument");
+
+        long count = 0;
+        var tx = _engine.GetCurrentTransaction();
+        var txOverlay = tx != null ? BuildTransactionOverlay(tx, collectionName) : null;
+
+        foreach (var result in _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates))
+        {
+            var slice = result.Slice;
+            var span = slice.Span;
+            if (!MatchesCollection(span, collectionFieldNameBytes, collectionNameBytes))
+            {
+                continue;
+            }
+
+            if (txOverlay != null && TryReadBsonValue(span, SortFieldBytes.Id, out var idValue))
+            {
+                if (txOverlay.TryGetValue(idValue, out var txDoc))
+                {
+                    txOverlay.Remove(idValue);
+                    if (txDoc == null) continue;
+                    if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, txDoc)) count++;
+                    continue;
+                }
+            }
+
+            if (queryExpression == null)
+            {
+                count++;
+                continue;
+            }
+
+            if (fullyPushed &&
+                !result.RequiresPostFilter &&
+                !IsLargeDocumentStub(span, isLargeDocumentFieldNameBytes))
+            {
+                count++;
+                continue;
+            }
+
+            var doc = DeserializeDocumentOrThrow(slice);
+            doc = _engine.ResolveLargeDocument(doc);
+            if (ExpressionEvaluator.Evaluate(queryExpression, doc))
+            {
+                count++;
+            }
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var txDoc in txOverlay.Values)
+            {
+                if (txDoc == null) continue;
+                if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, txDoc)) count++;
+            }
+        }
+
+        return count;
+    }
+
     internal IEnumerable<T> ExecuteShaped<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         QueryShape<T> shape,
@@ -2111,6 +2194,12 @@ public sealed class QueryExecutor
         if (start < 0 || start + bytesLen > document.Length) return false;
 
         return document.Slice(start, bytesLen).SequenceEqual(collectionNameBytes);
+    }
+
+    private static bool IsLargeDocumentStub(ReadOnlySpan<byte> document, byte[] isLargeDocumentFieldNameBytes)
+    {
+        if (!BsonScanner.TryLocateField(document, isLargeDocumentFieldNameBytes, out var offset, out var type)) return false;
+        return type == BsonType.Boolean && offset >= 0 && offset < document.Length && document[offset] != 0;
     }
 
     private static SortKey[] MaterializeKeysFromDocument(BsonDocument doc, IReadOnlyList<QuerySortField> sort)

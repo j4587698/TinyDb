@@ -11,6 +11,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 {
     internal readonly ImmutableDictionary<string, BsonValue> _elements;
     private readonly ImmutableArray<string> _order;
+    private string[]? _sortedKeys;
 
     public override BsonType BsonType => BsonType.Document;
     public override object? RawValue => _elements;
@@ -458,7 +459,20 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public BsonDocument Clone()
     {
-        return new BsonDocument(this);
+        return this;
+    }
+
+    private string[] GetSortedKeys()
+    {
+        var keys = Volatile.Read(ref _sortedKeys);
+        if (keys != null)
+        {
+            return keys;
+        }
+
+        keys = _elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+        Volatile.Write(ref _sortedKeys, keys);
+        return keys;
     }
 
     /// <summary>
@@ -472,8 +486,8 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
             var countComparison = Count.CompareTo(otherDoc.Count);
             if (countComparison != 0) return countComparison;
 
-            var leftKeys = _elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
-            var rightKeys = otherDoc._elements.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray();
+            var leftKeys = GetSortedKeys();
+            var rightKeys = otherDoc.GetSortedKeys();
 
             for (var i = 0; i < leftKeys.Length; i++)
             {

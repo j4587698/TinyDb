@@ -317,6 +317,21 @@ public sealed class Page : IDisposable
         }
     }
 
+    public void CopyDataTo(int offset, Span<byte> destination)
+    {
+        ThrowIfDisposed();
+        if (destination.Length == 0) return;
+
+        int physOffset = DataStartOffset + offset;
+        if (offset < 0 || physOffset + destination.Length > PageSize)
+            throw new ArgumentOutOfRangeException(nameof(offset));
+
+        lock (_lock)
+        {
+            _data.AsSpan(physOffset, destination.Length).CopyTo(destination);
+        }
+    }
+
     // Legacy Support
     public byte[] ReadData(int offset, int length) 
     {
