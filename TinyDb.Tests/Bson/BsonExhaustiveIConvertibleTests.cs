@@ -246,7 +246,7 @@ public class BsonExhaustiveIConvertibleTests
         await Assert.That(wrapper.RawValue).IsEqualTo(array);
         
         await Assert.That(wrapper.Equals(wrapper)).IsTrue();
-        await Assert.That(wrapper.Equals(array)).IsFalse(); // Different wrapper/type
+        await Assert.That(wrapper.Equals(array)).IsTrue();
         
         await Assert.That(wrapper.CompareTo(wrapper)).IsEqualTo(0);
         await Assert.That(wrapper.CompareTo(array)).IsEqualTo(0); // BsonArrayValue.CompareTo handles BsonArray

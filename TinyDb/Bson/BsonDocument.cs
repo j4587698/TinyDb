@@ -508,7 +508,14 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// </summary>
     public override bool Equals(BsonValue? other)
     {
-        if (other is not BsonDocument otherDoc) return false;
+        var otherDoc = other switch
+        {
+            BsonDocument document => document,
+            BsonDocumentValue documentValue => documentValue.Value,
+            _ => null
+        };
+
+        if (otherDoc is null) return false;
         if (Count != otherDoc.Count) return false;
 
         // 逐个比较键值对
@@ -536,7 +543,9 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
             foreach (var kvp in Entries)
             {
-                var elementHash = HashCode.Combine(StringComparer.Ordinal.GetHashCode(kvp.Key), kvp.Value.GetHashCode());
+                var elementHash = HashCode.Combine(
+                    StringComparer.Ordinal.GetHashCode(kvp.Key),
+                    BsonValueComparer.GetHashCode(kvp.Value));
                 sum += elementHash;
                 sumOfSquares += (long)elementHash * elementHash;
                 xor ^= elementHash;

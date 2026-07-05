@@ -11,7 +11,7 @@ internal interface IWalCodec
     bool IsEncrypted { get; }
     int MaxOverhead { get; }
     byte[] Encode(byte entryType, uint pageId, long recordOffset, byte[] payload);
-    byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload);
+    byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload, int payloadLength);
 }
 
 internal sealed class NoOpWalCodec : IWalCodec
@@ -25,9 +25,15 @@ internal sealed class NoOpWalCodec : IWalCodec
         return payload ?? throw new ArgumentNullException(nameof(payload));
     }
 
-    public byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload)
+    public byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload, int payloadLength)
     {
-        return payload ?? throw new ArgumentNullException(nameof(payload));
+        if (payload == null) throw new ArgumentNullException(nameof(payload));
+        if (payloadLength < 0 || payloadLength > payload.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(payloadLength));
+        }
+
+        return payload.Length == payloadLength ? payload : payload.AsSpan(0, payloadLength).ToArray();
     }
 }
 
@@ -100,19 +106,25 @@ internal sealed class AesGcmWalCodec : IWalCodec, IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(nonce.Slice(sizeof(ulong), sizeof(uint)), (uint)counter);
     }
 
-    public byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload)
+    public byte[] Decode(byte entryType, uint pageId, long recordOffset, byte[] payload, int payloadLength)
     {
         if (payload == null) throw new ArgumentNullException(nameof(payload));
-        if (payload.Length < MaxOverhead || !payload.AsSpan(0, MagicLength).SequenceEqual(Magic))
+        if (payloadLength < 0 || payloadLength > payload.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(payloadLength));
+        }
+
+        var payloadSpan = payload.AsSpan(0, payloadLength);
+        if (payloadSpan.Length < MaxOverhead || !payloadSpan[..MagicLength].SequenceEqual(Magic))
         {
             throw new InvalidDataException("Encrypted WAL record frame is invalid.");
         }
 
-        var ciphertextLength = payload.Length - MaxOverhead;
+        var ciphertextLength = payloadSpan.Length - MaxOverhead;
         var plaintext = new byte[ciphertextLength];
-        var nonce = payload.AsSpan(MagicLength, EncryptionMetadata.NonceLength);
-        var ciphertext = payload.AsSpan(MagicLength + EncryptionMetadata.NonceLength, ciphertextLength);
-        var tag = payload.AsSpan(MagicLength + EncryptionMetadata.NonceLength + ciphertextLength, EncryptionMetadata.TagLength);
+        var nonce = payloadSpan.Slice(MagicLength, EncryptionMetadata.NonceLength);
+        var ciphertext = payloadSpan.Slice(MagicLength + EncryptionMetadata.NonceLength, ciphertextLength);
+        var tag = payloadSpan.Slice(MagicLength + EncryptionMetadata.NonceLength + ciphertextLength, EncryptionMetadata.TagLength);
 
         try
         {

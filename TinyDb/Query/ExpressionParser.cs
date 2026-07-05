@@ -309,6 +309,13 @@ public sealed class ExpressionParser
     {
         result = 0;
 
+        if (IsNumericConstant(left) &&
+            IsNumericConstant(right) &&
+            QueryValueComparer.TryCompare(left, right, out result))
+        {
+            return true;
+        }
+
         if (left is int li && right is int ri) { result = li.CompareTo(ri); return true; }
         if (left is int li2 && right is long rl2) { result = ((long)li2).CompareTo(rl2); return true; }
         if (left is long ll3 && right is int ri3) { result = ll3.CompareTo((long)ri3); return true; }
@@ -331,6 +338,11 @@ public sealed class ExpressionParser
         if (left is TimeSpan lts && right is TimeSpan rts) { result = lts.CompareTo(rts); return true; }
 
         return false;
+    }
+
+    private static bool IsNumericConstant(object value)
+    {
+        return value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal;
     }
 
     private static object? EvaluateAdd(object left, object right) =>

@@ -1199,10 +1199,6 @@ public sealed class PageManager : IDisposable
             {
                 _deferredWalPages.TryRemove(page.PageID, out _);
             }
-            else if (!page.IsDirty)
-            {
-                WritePageToDisk(page, forceFlush);
-            }
         }
         finally
         {
@@ -1337,10 +1333,6 @@ public sealed class PageManager : IDisposable
             if (MarkPageClean(page, dirtyGeneration))
             {
                 _deferredWalPages.TryRemove(page.PageID, out _);
-            }
-            else if (!page.IsDirty)
-            {
-                WritePageToDisk(page, forceFlush: false);
             }
         }
         finally
@@ -1630,13 +1622,10 @@ public sealed class PageManager : IDisposable
             if (maxPagesToKeep <= 0)
             {
                 // 清空所有缓存
-                foreach (var page in _pageCache.Values)
+                foreach (var pageID in _pageCache.Keys)
                 {
-                    RemoveDirtyTracking(page);
-                    page.Dispose();
+                    TryRemoveCachedPageForClear(pageID);
                 }
-                _pageCache.Clear();
-                _lruCache.Clear();
             }
             else
             {
@@ -1647,15 +1636,34 @@ public sealed class PageManager : IDisposable
                     var lruPages = _lruCache.GetLeastRecentlyUsed(pagesToRemove);
                     foreach (var pageID in lruPages)
                     {
-                        if (_pageCache.TryRemove(pageID, out var page))
-                        {
-                            RemoveDirtyTracking(page);
-                            page.Dispose();
-                        }
+                        TryRemoveCachedPageForClear(pageID);
                     }
                 }
             }
         }
+    }
+
+    private bool TryRemoveCachedPageForClear(uint pageID)
+    {
+        if (!_pageCache.TryGetValue(pageID, out var page))
+        {
+            return false;
+        }
+
+        if (page.PinCount > 0)
+        {
+            return false;
+        }
+
+        if (!_pageCache.TryRemove(pageID, out var removedPage))
+        {
+            return false;
+        }
+
+        RemoveDirtyTracking(removedPage);
+        _lruCache.Remove(pageID);
+        removedPage.Dispose();
+        return true;
     }
 
     /// <summary>

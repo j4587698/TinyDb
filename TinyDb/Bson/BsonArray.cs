@@ -258,7 +258,12 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     /// </summary>
     public override bool Equals(BsonValue? other)
     {
-        return other is BsonArray otherArray && _elements.SequenceEqual(otherArray._elements);
+        return other switch
+        {
+            BsonArray otherArray => _elements.SequenceEqual(otherArray._elements),
+            BsonArrayValue otherArrayValue => Equals(otherArrayValue.Value),
+            _ => false
+        };
     }
 
     /// <summary>
@@ -269,7 +274,7 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
         var hash = 17;
         foreach (var element in _elements)
         {
-            hash = hash * 31 + element.GetHashCode();
+            hash = hash * 31 + BsonValueComparer.GetHashCode(element);
         }
         return hash;
     }
@@ -442,7 +447,12 @@ internal sealed class BsonArrayValue : BsonValue
 
     public override bool Equals(BsonValue? other)
     {
-        return other is BsonArrayValue otherArray && Value.Equals(otherArray.Value);
+        return other switch
+        {
+            BsonArrayValue otherArray => Value.Equals(otherArray.Value),
+            BsonArray array => Value.Equals(array),
+            _ => false
+        };
     }
 
     public override int GetHashCode() => Value.GetHashCode();

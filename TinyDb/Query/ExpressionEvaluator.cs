@@ -288,7 +288,7 @@ public static class ExpressionEvaluator
         if (expression.NodeType == ExpressionType.AndAlso)
         {
             var left = EvaluateValue(expression.Left, entity);
-            if (left is bool b && !b) return false;
+            if (left is not bool b || !b) return false;
             var right = EvaluateValue(expression.Right, entity);
             return right is bool rb && rb;
         }
@@ -311,7 +311,7 @@ public static class ExpressionEvaluator
         if (expression.NodeType == ExpressionType.AndAlso)
         {
             var left = EvaluateValue(expression.Left, entity);
-            if (left is bool b && !b) return false;
+            if (left is not bool b || !b) return false;
             var right = EvaluateValue(expression.Right, entity);
             return right is bool rb && rb;
         }
@@ -689,8 +689,7 @@ public static class ExpressionEvaluator
             {
                 foreach (var item in enumerable)
                 {
-                    var actualItem = item is BsonValue bv ? bv.RawValue : item;
-                    if (Equals(actualItem, args[0])) return true;
+                    if (QueryValueComparer.EvaluateComparison(item, args[0], ExpressionType.Equal)) return true;
                 }
                 return false;
             }

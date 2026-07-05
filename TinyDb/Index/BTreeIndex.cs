@@ -310,6 +310,7 @@ public sealed class BTreeIndex : IDisposable
         BsonValue? continuationValue = null;
         uint continuationPageId = 0;
         int continuationIndex = -1;
+        var yieldedValues = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
 
         while (true)
         {
@@ -333,13 +334,31 @@ public sealed class BTreeIndex : IDisposable
                 yield break;
             }
 
+            var yieldedFromBatch = false;
             foreach (var value in batch.Values)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!yieldedValues.Add(value))
+                {
+                    continue;
+                }
+
+                yieldedFromBatch = true;
                 yield return value;
             }
 
             if (!batch.HasMore || batch.LastKey == null || batch.LastValue == null)
+            {
+                yield break;
+            }
+
+            if (!yieldedFromBatch &&
+                IsSameContinuation(
+                    continuationKey,
+                    continuationValue,
+                    continuationPageId,
+                    continuationIndex,
+                    batch))
             {
                 yield break;
             }
@@ -362,6 +381,7 @@ public sealed class BTreeIndex : IDisposable
         BsonValue? continuationValue = null;
         uint continuationPageId = 0;
         int continuationIndex = -1;
+        var yieldedValues = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
 
         while (true)
         {
@@ -383,12 +403,30 @@ public sealed class BTreeIndex : IDisposable
                 yield break;
             }
 
+            var yieldedFromBatch = false;
             foreach (var value in batch.Values)
             {
+                if (!yieldedValues.Add(value))
+                {
+                    continue;
+                }
+
+                yieldedFromBatch = true;
                 yield return value;
             }
 
             if (!batch.HasMore || batch.LastKey == null || batch.LastValue == null)
+            {
+                yield break;
+            }
+
+            if (!yieldedFromBatch &&
+                IsSameContinuation(
+                    continuationKey,
+                    continuationValue,
+                    continuationPageId,
+                    continuationIndex,
+                    batch))
             {
                 yield break;
             }
@@ -398,6 +436,23 @@ public sealed class BTreeIndex : IDisposable
             continuationPageId = batch.LastPageId;
             continuationIndex = batch.LastIndex;
         }
+    }
+
+    private static bool IsSameContinuation(
+        IndexKey? continuationKey,
+        BsonValue? continuationValue,
+        uint continuationPageId,
+        int continuationIndex,
+        DiskBTree.IndexScanBatch batch)
+    {
+        return continuationKey != null &&
+               continuationValue != null &&
+               batch.LastKey != null &&
+               batch.LastValue != null &&
+               continuationPageId == batch.LastPageId &&
+               continuationIndex == batch.LastIndex &&
+               continuationKey.CompareTo(batch.LastKey) == 0 &&
+               BsonValueComparer.ValueEquals(continuationValue, batch.LastValue);
     }
 
     public void Clear()

@@ -42,6 +42,8 @@ internal static class BsonValueComparer
                 .CompareTo(BsonDateTime.GetComparableTicks(((BsonDateTime)right).Value)),
             BsonType.ObjectId => ((BsonObjectId)left).Value.CompareTo(((BsonObjectId)right).Value),
             BsonType.Binary => ((BsonBinary)left).CompareTo((BsonBinary)right),
+            BsonType.Array => GetArray(left).CompareTo(GetArray(right)),
+            BsonType.Document => GetDocument(left).CompareTo(GetDocument(right)),
             BsonType.Timestamp => ((BsonTimestamp)left).Value.CompareTo(((BsonTimestamp)right).Value),
             BsonType.Symbol => string.Compare(((BsonSymbol)left).Name, ((BsonSymbol)right).Name, StringComparison.Ordinal),
             _ => string.Compare(left.ToString(), right.ToString(), StringComparison.Ordinal)
@@ -65,9 +67,31 @@ internal static class BsonValueComparer
             BsonType.DateTime => BsonDateTime.GetComparableTicks(((BsonDateTime)value).Value).GetHashCode(),
             BsonType.ObjectId => ((BsonObjectId)value).Value.GetHashCode(),
             BsonType.Binary => ((BsonBinary)value).GetHashCode(),
+            BsonType.Array => GetArray(value).GetHashCode(),
+            BsonType.Document => GetDocument(value).GetHashCode(),
             BsonType.Timestamp => ((BsonTimestamp)value).Value.GetHashCode(),
             BsonType.Symbol => StringComparer.Ordinal.GetHashCode(((BsonSymbol)value).Name),
             _ => HashCode.Combine(GetTypeOrder(value.BsonType), value.ToString())
+        };
+    }
+
+    private static BsonArray GetArray(BsonValue value)
+    {
+        return value switch
+        {
+            BsonArray array => array,
+            BsonArrayValue arrayValue => arrayValue.Value,
+            _ => throw new InvalidOperationException("BSON value is not an array.")
+        };
+    }
+
+    private static BsonDocument GetDocument(BsonValue value)
+    {
+        return value switch
+        {
+            BsonDocument document => document,
+            BsonDocumentValue documentValue => documentValue.Value,
+            _ => throw new InvalidOperationException("BSON value is not a document.")
         };
     }
 

@@ -410,16 +410,75 @@ public sealed class QueryExecutor
 
         var queryExpression = GetPlanQueryExpression<T>(executionPlan);
         var yieldedIds = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+        var tx = _engine.GetCurrentTransaction();
+        var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
+        var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
 
         foreach (var branchPlan in executionPlan.BranchPlans)
         {
-            foreach (var item in ExecutePlanned<T>(branchPlan, branchPlan.CollectionName, fallbackExpression: null))
+            if (!CanEnumeratePlanDocumentIds(branchPlan))
             {
-                var id = AotIdAccessor<T>.GetId(item);
-                if (!yieldedIds.Add(id)) continue;
-                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, item)) continue;
+                foreach (var item in ExecutePlanned<T>(branchPlan, branchPlan.CollectionName, fallbackExpression: null))
+                {
+                    var itemId = AotIdAccessor<T>.GetId(item);
+                    if (!yieldedIds.Add(itemId)) continue;
+                    if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, item)) continue;
 
-                yield return item;
+                    yield return item;
+                }
+
+                continue;
+            }
+
+            foreach (var id in EnumeratePlanDocumentIds(branchPlan))
+            {
+                if (!yieldedIds.Add(id)) continue;
+
+                if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
+                {
+                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, queryExpression))
+                    {
+                        yield return item;
+                    }
+
+                    committedIds.Clear();
+                    txOverlay.Remove(id);
+                    if (txDoc == null) continue;
+                    if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, txDoc)) continue;
+
+                    var txEntity = AotBsonMapper.FromDocument<T>(txDoc);
+                    if (txEntity != null) yield return txEntity;
+                    continue;
+                }
+
+                committedIds.Add(id);
+                if (committedIds.Count >= CommittedLookupBatchSize)
+                {
+                    foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, queryExpression))
+                    {
+                        yield return item;
+                    }
+
+                    committedIds.Clear();
+                }
+            }
+        }
+
+        foreach (var item in ResolveCommittedBatch<T>(executionPlan.CollectionName, committedIds, queryExpression))
+        {
+            yield return item;
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var (id, doc) in txOverlay)
+            {
+                if (!yieldedIds.Add(id)) continue;
+                if (doc == null) continue;
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, doc)) continue;
+
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
             }
         }
     }
@@ -440,20 +499,212 @@ public sealed class QueryExecutor
 
         var queryExpression = GetPlanQueryExpression<T>(executionPlan);
         var yieldedIds = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+        var tx = _engine.GetCurrentTransaction();
+        var txOverlay = tx != null ? BuildTransactionOverlay(tx, executionPlan.CollectionName) : null;
+        var committedIds = new List<BsonValue>(CommittedLookupBatchSize);
 
         foreach (var branchPlan in executionPlan.BranchPlans)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            await foreach (var item in ExecutePlannedAsync<T>(branchPlan, branchPlan.CollectionName, fallbackExpression: null, cancellationToken).ConfigureAwait(false))
+            if (!CanEnumeratePlanDocumentIds(branchPlan))
+            {
+                await foreach (var item in ExecutePlannedAsync<T>(branchPlan, branchPlan.CollectionName, fallbackExpression: null, cancellationToken).ConfigureAwait(false))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var itemId = AotIdAccessor<T>.GetId(item);
+                    if (!yieldedIds.Add(itemId)) continue;
+                    if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, item)) continue;
+
+                    yield return item;
+                }
+
+                continue;
+            }
+
+            await foreach (var id in EnumeratePlanDocumentIdsAsync(branchPlan, cancellationToken).ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-
-                var id = AotIdAccessor<T>.GetId(item);
                 if (!yieldedIds.Add(id)) continue;
-                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, item)) continue;
 
+                if (txOverlay != null && txOverlay.TryGetValue(id, out var txDoc))
+                {
+                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, queryExpression, cancellationToken).ConfigureAwait(false);
+                    committedIds.Clear();
+                    foreach (var item in batch)
+                    {
+                        yield return item;
+                    }
+
+                    txOverlay.Remove(id);
+                    if (txDoc == null) continue;
+                    if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, txDoc)) continue;
+
+                    var txEntity = AotBsonMapper.FromDocument<T>(txDoc);
+                    if (txEntity != null) yield return txEntity;
+                    continue;
+                }
+
+                committedIds.Add(id);
+                if (committedIds.Count >= CommittedLookupBatchSize)
+                {
+                    var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, queryExpression, cancellationToken).ConfigureAwait(false);
+                    committedIds.Clear();
+                    foreach (var item in batch)
+                    {
+                        yield return item;
+                    }
+                }
+            }
+        }
+
+        if (committedIds.Count > 0)
+        {
+            var batch = await ResolveCommittedBatchAsync<T>(executionPlan.CollectionName, committedIds, queryExpression, cancellationToken).ConfigureAwait(false);
+            committedIds.Clear();
+            foreach (var item in batch)
+            {
                 yield return item;
+            }
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var (id, doc) in txOverlay)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!yieldedIds.Add(id)) continue;
+                if (doc == null) continue;
+                if (queryExpression != null && !ExpressionEvaluator.Evaluate(queryExpression, doc)) continue;
+
+                var entity = AotBsonMapper.FromDocument<T>(doc);
+                if (entity != null) yield return entity;
+            }
+        }
+    }
+
+    private bool CanEnumeratePlanDocumentIds(QueryExecutionPlan executionPlan)
+    {
+        if (executionPlan.Strategy == QueryExecutionStrategy.PrimaryKeyLookup)
+        {
+            return executionPlan.IndexScanKeys.Count > 0;
+        }
+
+        if (executionPlan.Strategy is not (QueryExecutionStrategy.IndexSeek or QueryExecutionStrategy.IndexScan) ||
+            executionPlan.UseIndex == null)
+        {
+            return false;
+        }
+
+        if (executionPlan.Strategy == QueryExecutionStrategy.IndexSeek &&
+            BuildExactIndexKey(executionPlan) == null)
+        {
+            return false;
+        }
+
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        return idxMgr?.GetIndex(executionPlan.UseIndex.Name) != null;
+    }
+
+    private IEnumerable<BsonValue> EnumeratePlanDocumentIds(QueryExecutionPlan executionPlan)
+    {
+        if (executionPlan.Strategy == QueryExecutionStrategy.PrimaryKeyLookup)
+        {
+            if (executionPlan.IndexScanKeys.Count > 0)
+            {
+                yield return executionPlan.IndexScanKeys[0].Value;
+            }
+
+            yield break;
+        }
+
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        if (idxMgr == null || executionPlan.UseIndex == null) yield break;
+
+        var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
+        if (index == null) yield break;
+
+        if (executionPlan.Strategy == QueryExecutionStrategy.IndexSeek)
+        {
+            var key = BuildExactIndexKey(executionPlan);
+            if (key == null) yield break;
+
+            if (index.IsUnique)
+            {
+                var id = index.FindExact(key);
+                if (id != null) yield return id;
+                yield break;
+            }
+
+            foreach (var id in index.Find(key))
+            {
+                yield return id;
+            }
+
+            yield break;
+        }
+
+        if (executionPlan.Strategy == QueryExecutionStrategy.IndexScan)
+        {
+            var range = BuildIndexScanRange(executionPlan);
+            foreach (var id in index.FindRange(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax))
+            {
+                yield return id;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<BsonValue> EnumeratePlanDocumentIdsAsync(
+        QueryExecutionPlan executionPlan,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (executionPlan.Strategy == QueryExecutionStrategy.PrimaryKeyLookup)
+        {
+            if (executionPlan.IndexScanKeys.Count > 0)
+            {
+                yield return executionPlan.IndexScanKeys[0].Value;
+            }
+
+            yield break;
+        }
+
+        var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
+        if (idxMgr == null || executionPlan.UseIndex == null) yield break;
+
+        var index = idxMgr.GetIndex(executionPlan.UseIndex.Name);
+        if (index == null) yield break;
+
+        if (executionPlan.Strategy == QueryExecutionStrategy.IndexSeek)
+        {
+            var key = BuildExactIndexKey(executionPlan);
+            if (key == null) yield break;
+
+            if (index.IsUnique)
+            {
+                var id = await index.FindExactAsync(key, cancellationToken).ConfigureAwait(false);
+                if (id != null) yield return id;
+                yield break;
+            }
+
+            await foreach (var id in index.FindAsync(key, cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return id;
+            }
+
+            yield break;
+        }
+
+        if (executionPlan.Strategy == QueryExecutionStrategy.IndexScan)
+        {
+            var range = BuildIndexScanRange(executionPlan);
+            await foreach (var id in index.FindRangeAsync(range.MinKey, range.MaxKey, range.IncludeMin, range.IncludeMax, cancellationToken).ConfigureAwait(false))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return id;
             }
         }
     }
