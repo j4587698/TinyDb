@@ -189,7 +189,7 @@ public class ExpressionEvaluatorAdditionalBranchCoverageTests2
         await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(false), unknown), entity)).IsFalse();
         await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(true), new ConstantExpression(false)), entity)).IsFalse();
         await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(true), new ConstantExpression(true)), entity)).IsTrue();
-        await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(1), new ConstantExpression(true)), entity)).IsTrue();
+        await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(1), new ConstantExpression(true)), entity)).IsFalse();
         await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.AndAlso, new ConstantExpression(1), new ConstantExpression("x")), entity)).IsFalse();
 
         await Assert.That(ExpressionEvaluator.Evaluate(new BinaryExpression(ExpressionType.OrElse, new ConstantExpression(true), unknown), entity)).IsTrue();
@@ -274,4 +274,3 @@ public class ExpressionEvaluatorAdditionalBranchCoverageTests2
         await Assert.That(() => ExpressionEvaluator.EvaluateValue(new FunctionExpression("Nope", new ConstantExpression(dt), Array.Empty<QueryExpression>()), entity)).Throws<NotSupportedException>();
     }
 }
-

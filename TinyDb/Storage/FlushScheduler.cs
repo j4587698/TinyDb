@@ -467,14 +467,14 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
 
-        CancelPendingBatchesForDispose();
+        var workerTasks = CancelPendingBatchesForDisposeAndGetWorkerTasks();
 
         Exception? flushException = null;
         var workerWaitErrors = new List<Exception>();
 
         try
         {
-            WaitForWorkersAndDisposeCancellationTokenSource(workerWaitErrors);
+            WaitForWorkersAndDisposeCancellationTokenSource(workerTasks, workerWaitErrors);
             FlushForDispose();
         }
         catch (Exception ex)
@@ -499,10 +499,11 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
     }
 
-    private void CancelPendingBatchesForDispose()
+    private (Task Task, string FailureMessage)[] CancelPendingBatchesForDisposeAndGetWorkerTasks()
     {
         TaskCompletionSource? journalBatchToCancel = null;
         TaskCompletionSource? syncedBatchToCancel = null;
+        (Task Task, string FailureMessage)[] workerTasks;
 
         lock (_flushLock)
         {
@@ -519,32 +520,37 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 _syncedBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 _syncedRequests = 0;
             }
+
+            workerTasks = GetWorkerTasks();
         }
 
         journalBatchToCancel?.TrySetCanceled();
         syncedBatchToCancel?.TrySetCanceled();
+        return workerTasks;
     }
 
-    private void WaitForWorkersAndDisposeCancellationTokenSource(List<Exception> workerWaitErrors)
+    private void WaitForWorkersAndDisposeCancellationTokenSource(
+        (Task Task, string FailureMessage)[] workerTasks,
+        List<Exception> workerWaitErrors)
     {
         try
         {
-            foreach (var task in GetWorkerTasks())
+            foreach (var workerTask in workerTasks)
             {
                 try
                 {
-                    if (!task.Wait(WorkerStopTimeout))
+                    if (!workerTask.Task.Wait(WorkerStopTimeout))
                     {
                         var timeoutException = new TimeoutException("Flush worker did not stop before dispose timeout.");
                         Log(TinyDbLogLevel.Warning, timeoutException.Message, timeoutException);
                         continue;
                     }
 
-                    task.GetAwaiter().GetResult();
+                    workerTask.Task.GetAwaiter().GetResult();
                 }
                 catch (Exception ex)
                 {
-                    workerWaitErrors.Add(new InvalidOperationException("Flush worker stop failed.", ex));
+                    workerWaitErrors.Add(new InvalidOperationException(workerTask.FailureMessage, ex));
                 }
             }
         }
@@ -554,12 +560,12 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
     }
 
-    private Task[] GetWorkerTasks()
+    private (Task Task, string FailureMessage)[] GetWorkerTasks()
     {
-        var tasks = new List<Task>(3);
-        if (_journalWorkerTask != null) tasks.Add(_journalWorkerTask);
-        if (_syncedWorkerTask != null) tasks.Add(_syncedWorkerTask);
-        if (_backgroundTask != null) tasks.Add(_backgroundTask);
+        var tasks = new List<(Task Task, string FailureMessage)>(3);
+        if (_journalWorkerTask != null) tasks.Add((_journalWorkerTask, "Journal worker stop failed."));
+        if (_syncedWorkerTask != null) tasks.Add((_syncedWorkerTask, "Synced worker stop failed."));
+        if (_backgroundTask != null) tasks.Add((_backgroundTask, "Background worker stop failed."));
         return tasks.ToArray();
     }
 
@@ -575,47 +581,21 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _cts.Cancel();
-        CancelPendingBatchesForDispose();
+        var workerTasks = CancelPendingBatchesForDisposeAndGetWorkerTasks();
 
-        Exception? journalWaitException = null;
-        Exception? syncedWaitException = null;
-        Exception? backgroundWaitException = null;
+        var workerWaitExceptions = new List<Exception>();
         Exception? flushException = null;
 
-        try
+        foreach (var workerTask in workerTasks)
         {
-            if (_journalWorkerTask != null)
+            try
             {
-                await _journalWorkerTask.ConfigureAwait(false);
+                await workerTask.Task.ConfigureAwait(false);
             }
-        }
-        catch (Exception ex)
-        {
-            journalWaitException = new InvalidOperationException("Journal worker stop failed.", ex);
-        }
-
-        try
-        {
-            if (_syncedWorkerTask != null)
+            catch (Exception ex)
             {
-                await _syncedWorkerTask.ConfigureAwait(false);
+                workerWaitExceptions.Add(new InvalidOperationException(workerTask.FailureMessage, ex));
             }
-        }
-        catch (Exception ex)
-        {
-            syncedWaitException = new InvalidOperationException("Synced worker stop failed.", ex);
-        }
-
-        try
-        {
-            if (_backgroundTask != null)
-            {
-                await _backgroundTask.ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            backgroundWaitException = new InvalidOperationException("Background worker stop failed.", ex);
         }
 
         try
@@ -639,12 +619,10 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
         }
 
-        if (journalWaitException != null || syncedWaitException != null || backgroundWaitException != null || flushException != null)
+        if (workerWaitExceptions.Count > 0 || flushException != null)
         {
             var exceptions = new List<Exception>();
-            if (journalWaitException != null) exceptions.Add(journalWaitException);
-            if (syncedWaitException != null) exceptions.Add(syncedWaitException);
-            if (backgroundWaitException != null) exceptions.Add(backgroundWaitException);
+            exceptions.AddRange(workerWaitExceptions);
             if (flushException != null) exceptions.Add(flushException);
             throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
         }

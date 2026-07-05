@@ -748,22 +748,24 @@ public sealed class WriteAheadLog : IDisposable
         var payload = _walCodec.Encode(entryType, pageId, recordOffset, data);
 
         const int headerLength = HeaderSize + 4;
-        var header = ArrayPool<byte>.Shared.Rent(headerLength);
+        var recordLength = headerLength + payload.Length;
+        var record = ArrayPool<byte>.Shared.Rent(recordLength);
         try
         {
-            var headerSpan = header.AsSpan(0, headerLength);
+            var recordSpan = record.AsSpan(0, recordLength);
+            var headerSpan = recordSpan[..headerLength];
             headerSpan[0] = entryType;
             BinaryPrimitives.WriteUInt32LittleEndian(headerSpan[1..5], pageId);
             BinaryPrimitives.WriteInt32LittleEndian(headerSpan[5..9], payload.Length);
             var crc32 = TinyCrc32.HashToUInt32(headerSpan[..HeaderSize], payload);
             BinaryPrimitives.WriteUInt32LittleEndian(headerSpan[9..13], crc32);
+            payload.CopyTo(recordSpan[headerLength..]);
 
-            await stream.WriteAsync(header, 0, headerLength, cancellationToken).ConfigureAwait(false);
-            await stream.WriteAsync(payload, 0, payload.Length, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(record, 0, recordLength, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(header);
+            ArrayPool<byte>.Shared.Return(record, clearArray: _walCodec.IsEncrypted);
         }
     }
 
@@ -1105,95 +1107,109 @@ public sealed class WriteAheadLog : IDisposable
                     break;
                 }
 
-                var buffer = new byte[length];
-                var offset = 0;
-                while (offset < length)
-                {
-                    var chunk = stream.Read(buffer, offset, length - offset);
-                    if (chunk == 0)
-                    {
-                        break;
-                    }
-                    offset += chunk;
-                }
-
-                if (offset != length)
-                {
-                    Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
-                    replayStoppedAtInvalidRecord = true;
-                    break;
-                }
-
-                if (expectedCrc.HasValue)
-                {
-                    if (!ValidateRecordCrc(headerBuffer, buffer, expectedCrc.Value, currentEntryStart))
-                    {
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-                }
-
+                var rentedBuffer = ArrayPool<byte>.Shared.Rent(length);
+                byte[]? decodedBuffer = null;
                 try
                 {
-                    buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
-                }
-                catch (InvalidDataException ex) when (_walCodec.IsEncrypted)
-                {
-                    Log(TinyDbLogLevel.Warning, $"Encrypted WAL record is invalid at {currentEntryStart}.", ex);
-                    replayStoppedAtInvalidRecord = true;
-                    break;
-                }
-
-                if (entryType == EntryTypePage)
-                {
-                    apply(pageId, buffer);
-                }
-                else if (entryType == EntryTypeTransactionBegin)
-                {
-                    if (!TryReadTransactionId(buffer, out var transactionId))
+                    var offset = 0;
+                    while (offset < length)
                     {
-                        Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-
-                    pendingTransactions.TryAdd(transactionId, new List<(uint, byte[]?, byte[])>());
-                }
-                else if (entryType == EntryTypeTransactionPage)
-                {
-                    if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
-                    {
-                        Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-
-                    if (!pendingTransactions.TryGetValue(transactionId, out var records))
-                    {
-                        records = new List<(uint, byte[]?, byte[])>();
-                        pendingTransactions[transactionId] = records;
-                    }
-
-                    records.Add((pageId, beforeImage, afterImage));
-                }
-                else if (entryType == EntryTypeTransactionCommit)
-                {
-                    if (!TryReadTransactionId(buffer, out var transactionId))
-                    {
-                        Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-
-                    if (pendingTransactions.TryGetValue(transactionId, out var records))
-                    {
-                        foreach (var record in records)
+                        var chunk = stream.Read(rentedBuffer, offset, length - offset);
+                        if (chunk == 0)
                         {
-                            apply(record.PageId, record.AfterImage);
+                            break;
+                        }
+                        offset += chunk;
+                    }
+
+                    if (offset != length)
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
+                        break;
+                    }
+
+                    if (expectedCrc.HasValue)
+                    {
+                        if (!ValidateRecordCrc(headerBuffer, rentedBuffer.AsSpan(0, length), expectedCrc.Value, currentEntryStart))
+                        {
+                            replayStoppedAtInvalidRecord = true;
+                            break;
+                        }
+                    }
+
+                    try
+                    {
+                        decodedBuffer = _walCodec.Decode(entryType, pageId, currentEntryStart, rentedBuffer, length);
+                    }
+                    catch (InvalidDataException ex) when (_walCodec.IsEncrypted)
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Encrypted WAL record is invalid at {currentEntryStart}.", ex);
+                        replayStoppedAtInvalidRecord = true;
+                        break;
+                    }
+
+                    if (ReferenceEquals(decodedBuffer, rentedBuffer))
+                    {
+                        decodedBuffer = rentedBuffer.AsSpan(0, length).ToArray();
+                    }
+
+                    var buffer = decodedBuffer;
+                    if (entryType == EntryTypePage)
+                    {
+                        apply(pageId, buffer);
+                    }
+                    else if (entryType == EntryTypeTransactionBegin)
+                    {
+                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        {
+                            Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
                         }
 
-                        pendingTransactions.Remove(transactionId);
+                        pendingTransactions.TryAdd(transactionId, new List<(uint, byte[]?, byte[])>());
                     }
+                    else if (entryType == EntryTypeTransactionPage)
+                    {
+                        if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
+                        {
+                            Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
+                        }
+
+                        if (!pendingTransactions.TryGetValue(transactionId, out var records))
+                        {
+                            records = new List<(uint, byte[]?, byte[])>();
+                            pendingTransactions[transactionId] = records;
+                        }
+
+                        records.Add((pageId, beforeImage, afterImage));
+                    }
+                    else if (entryType == EntryTypeTransactionCommit)
+                    {
+                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        {
+                            Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
+                        }
+
+                        if (pendingTransactions.TryGetValue(transactionId, out var records))
+                        {
+                            foreach (var record in records)
+                            {
+                                apply(record.PageId, record.AfterImage);
+                            }
+
+                            pendingTransactions.Remove(transactionId);
+                        }
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rentedBuffer, clearArray: _walCodec.IsEncrypted);
                 }
 
                 lastSuccessfulPosition = stream.Position;
@@ -1326,96 +1342,110 @@ public sealed class WriteAheadLog : IDisposable
                     break; // 无效长度
                 }
 
-                var buffer = new byte[length];
-                var offset = 0;
-                while (offset < length)
-                {
-                    var chunk = await stream.ReadAsync(buffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
-                    if (chunk == 0)
-                    {
-                        break;
-                    }
-                    offset += chunk;
-                }
-
-                if (offset != length)
-                {
-                    Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
-                    replayStoppedAtInvalidRecord = true;
-                    break; // 数据不完整
-                }
-
-                // 验证校验和 (如果存在)
-                if (expectedCrc.HasValue)
-                {
-                    if (!ValidateRecordCrc(headerBuffer, buffer, expectedCrc.Value, currentEntryStart))
-                    {
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-                }
-
+                var rentedBuffer = ArrayPool<byte>.Shared.Rent(length);
+                byte[]? decodedBuffer = null;
                 try
                 {
-                    buffer = _walCodec.Decode(entryType, pageId, currentEntryStart, buffer);
-                }
-                catch (InvalidDataException ex) when (_walCodec.IsEncrypted)
-                {
-                    Log(TinyDbLogLevel.Warning, $"Encrypted WAL record is invalid at {currentEntryStart}.", ex);
-                    replayStoppedAtInvalidRecord = true;
-                    break;
-                }
-
-                if (entryType == EntryTypePage)
-                {
-                    await applyAsync(pageId, buffer).ConfigureAwait(false);
-                }
-                else if (entryType == EntryTypeTransactionBegin)
-                {
-                    if (!TryReadTransactionId(buffer, out var transactionId))
+                    var offset = 0;
+                    while (offset < length)
                     {
-                        Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-
-                    pendingTransactions.TryAdd(transactionId, new List<(uint, byte[]?, byte[])>());
-                }
-                else if (entryType == EntryTypeTransactionPage)
-                {
-                    if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
-                    {
-                        Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-
-                    if (!pendingTransactions.TryGetValue(transactionId, out var records))
-                    {
-                        records = new List<(uint, byte[]?, byte[])>();
-                        pendingTransactions[transactionId] = records;
-                    }
-
-                    records.Add((pageId, beforeImage, afterImage));
-                }
-                else if (entryType == EntryTypeTransactionCommit)
-                {
-                    if (!TryReadTransactionId(buffer, out var transactionId))
-                    {
-                        Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
-
-                    if (pendingTransactions.TryGetValue(transactionId, out var records))
-                    {
-                        foreach (var record in records)
+                        var chunk = await stream.ReadAsync(rentedBuffer, offset, length - offset, cancellationToken).ConfigureAwait(false);
+                        if (chunk == 0)
                         {
-                            await applyAsync(record.PageId, record.AfterImage).ConfigureAwait(false);
+                            break;
+                        }
+                        offset += chunk;
+                    }
+
+                    if (offset != length)
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Incomplete data record at {currentEntryStart}.");
+                        replayStoppedAtInvalidRecord = true;
+                        break; // 数据不完整
+                    }
+
+                // 验证校验和 (如果存在)
+                    if (expectedCrc.HasValue)
+                    {
+                        if (!ValidateRecordCrc(headerBuffer, rentedBuffer.AsSpan(0, length), expectedCrc.Value, currentEntryStart))
+                        {
+                            replayStoppedAtInvalidRecord = true;
+                            break;
+                        }
+                    }
+
+                    try
+                    {
+                        decodedBuffer = _walCodec.Decode(entryType, pageId, currentEntryStart, rentedBuffer, length);
+                    }
+                    catch (InvalidDataException ex) when (_walCodec.IsEncrypted)
+                    {
+                        Log(TinyDbLogLevel.Warning, $"Encrypted WAL record is invalid at {currentEntryStart}.", ex);
+                        replayStoppedAtInvalidRecord = true;
+                        break;
+                    }
+
+                    if (ReferenceEquals(decodedBuffer, rentedBuffer))
+                    {
+                        decodedBuffer = rentedBuffer.AsSpan(0, length).ToArray();
+                    }
+
+                    var buffer = decodedBuffer;
+                    if (entryType == EntryTypePage)
+                    {
+                        await applyAsync(pageId, buffer).ConfigureAwait(false);
+                    }
+                    else if (entryType == EntryTypeTransactionBegin)
+                    {
+                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        {
+                            Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
                         }
 
-                        pendingTransactions.Remove(transactionId);
+                        pendingTransactions.TryAdd(transactionId, new List<(uint, byte[]?, byte[])>());
                     }
+                    else if (entryType == EntryTypeTransactionPage)
+                    {
+                        if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
+                        {
+                            Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
+                        }
+
+                        if (!pendingTransactions.TryGetValue(transactionId, out var records))
+                        {
+                            records = new List<(uint, byte[]?, byte[])>();
+                            pendingTransactions[transactionId] = records;
+                        }
+
+                        records.Add((pageId, beforeImage, afterImage));
+                    }
+                    else if (entryType == EntryTypeTransactionCommit)
+                    {
+                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        {
+                            Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
+                            replayStoppedAtInvalidRecord = true;
+                            break;
+                        }
+
+                        if (pendingTransactions.TryGetValue(transactionId, out var records))
+                        {
+                            foreach (var record in records)
+                            {
+                                await applyAsync(record.PageId, record.AfterImage).ConfigureAwait(false);
+                            }
+
+                            pendingTransactions.Remove(transactionId);
+                        }
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rentedBuffer, clearArray: _walCodec.IsEncrypted);
                 }
 
                 lastSuccessfulPosition = stream.Position;
@@ -1477,7 +1507,7 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
-    private bool ValidateRecordCrc(byte[] headerBuffer, byte[] buffer, uint expectedCrc, long recordOffset)
+    private bool ValidateRecordCrc(byte[] headerBuffer, ReadOnlySpan<byte> buffer, uint expectedCrc, long recordOffset)
     {
         var actualCrc = TinyCrc32.HashToUInt32(headerBuffer.AsSpan(0, HeaderSize), buffer);
         if (actualCrc == expectedCrc)
