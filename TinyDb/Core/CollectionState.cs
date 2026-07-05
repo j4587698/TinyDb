@@ -9,6 +9,8 @@ namespace TinyDb.Core;
 
 internal sealed class CollectionState
 {
+    private static readonly AsyncLocal<DocumentLockOwner?> CurrentDocumentLockOwner = new();
+
     private int _cacheInitialized;
     private readonly ConcurrentDictionary<BsonValue, KeyedDocumentLock> _documentLocks = new(BsonValueComparer.EqualityComparer);
     private readonly ConcurrentDictionary<uint, KeyedPageLock> _pageMutationLocks = new();
@@ -55,7 +57,8 @@ internal sealed class CollectionState
             return new ValueTask<IDisposable>(EmptyLockScope.Instance);
         }
 
-        return SingleAsyncKeyedDocumentLockScope.EnterAsync(this, AcquireDocumentLockReference(id), cancellationToken);
+        var owner = GetOrCreateDocumentLockOwner();
+        return SingleAsyncKeyedDocumentLockScope.EnterAsync(this, AcquireDocumentLockReference(id), owner, cancellationToken);
     }
 
     public async ValueTask<IDisposable> EnterDocumentLocksAsync(
@@ -67,7 +70,8 @@ internal sealed class CollectionState
             ? CreateDocumentLockReferences(list, static id => id, out var singleLock)
             : CreateDocumentLockReferences(ids, static id => id, out singleLock);
 
-        return await EnterDocumentLocksAsyncCore(locks, singleLock, cancellationToken).ConfigureAwait(false);
+        var owner = CreateDocumentLockOwnerIfNeeded(locks, singleLock);
+        return await EnterDocumentLocksAsyncCore(locks, singleLock, owner, cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask<IDisposable> EnterDocumentLocksAsync<T>(
@@ -76,7 +80,8 @@ internal sealed class CollectionState
         CancellationToken cancellationToken = default)
     {
         var locks = CreateDocumentLockReferences(items, idSelector, out var singleLock);
-        return EnterDocumentLocksAsyncCore(locks, singleLock, cancellationToken);
+        var owner = CreateDocumentLockOwnerIfNeeded(locks, singleLock);
+        return EnterDocumentLocksAsyncCore(locks, singleLock, owner, cancellationToken);
     }
 
     public IDisposable EnterPageMutationLock(uint pageId)
@@ -124,11 +129,12 @@ internal sealed class CollectionState
     private async ValueTask<IDisposable> EnterDocumentLocksAsyncCore(
         KeyedDocumentLock[]? locks,
         KeyedDocumentLock? singleLock,
+        DocumentLockOwner? owner,
         CancellationToken cancellationToken)
     {
         if (singleLock != null)
         {
-            return await SingleAsyncKeyedDocumentLockScope.EnterAsync(this, singleLock, cancellationToken)
+            return await SingleAsyncKeyedDocumentLockScope.EnterAsync(this, singleLock, owner!, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -137,7 +143,7 @@ internal sealed class CollectionState
             return EmptyLockScope.Instance;
         }
 
-        return await AsyncKeyedDocumentLockScope.EnterAsync(this, locks, cancellationToken).ConfigureAwait(false);
+        return await AsyncKeyedDocumentLockScope.EnterAsync(this, locks, owner!, cancellationToken).ConfigureAwait(false);
     }
 
     private KeyedDocumentLock[]? CreateDocumentLockReferences<T>(
@@ -440,9 +446,20 @@ internal sealed class CollectionState
         public object ReferenceSyncRoot { get; } = new();
         public int ReferenceCount { get; set; }
         public bool IsRemoved { get; set; }
+        public DocumentLockOwner? Owner { get; set; }
         public int OwnerThreadId { get; set; }
         public int? OwnerTaskId { get; set; }
         public int OwnerDepth { get; set; }
+    }
+
+    private sealed class DocumentLockOwner
+    {
+        public DocumentLockOwner(int? taskId)
+        {
+            CreatorTaskId = taskId;
+        }
+
+        public int? CreatorTaskId { get; }
     }
 
     private sealed class KeyedPageLock
@@ -472,6 +489,7 @@ internal sealed class CollectionState
     {
         private readonly CollectionState _state;
         private readonly KeyedDocumentLock _lock;
+        private readonly DocumentLockOwner _owner;
         private bool _entered;
         private bool _disposed;
 
@@ -481,7 +499,7 @@ internal sealed class CollectionState
             _lock = documentLock ?? throw new ArgumentNullException(nameof(documentLock));
             try
             {
-                EnterDocumentSemaphore(_lock);
+                _owner = EnterDocumentSemaphore(_lock);
                 _entered = true;
             }
             catch
@@ -498,7 +516,7 @@ internal sealed class CollectionState
 
             if (_entered)
             {
-                ExitDocumentSemaphore(_lock);
+                ExitDocumentSemaphore(_lock, _owner);
                 _entered = false;
             }
 
@@ -510,6 +528,7 @@ internal sealed class CollectionState
     {
         private readonly CollectionState _state;
         private readonly KeyedDocumentLock[] _locks;
+        private DocumentLockOwner? _owner;
         private int _entered;
         private bool _disposed;
 
@@ -521,7 +540,7 @@ internal sealed class CollectionState
             {
                 for (var i = 0; i < _locks.Length; i++)
                 {
-                    EnterDocumentSemaphore(_locks[i]);
+                    _owner = EnterDocumentSemaphore(_locks[i]);
                     _entered++;
                 }
             }
@@ -539,7 +558,7 @@ internal sealed class CollectionState
 
             for (var i = _entered - 1; i >= 0; i--)
             {
-                ExitDocumentSemaphore(_locks[i]);
+                ExitDocumentSemaphore(_locks[i], _owner!);
             }
 
             _entered = 0;
@@ -599,17 +618,18 @@ internal sealed class CollectionState
         }
     }
 
-    private static void EnterDocumentSemaphore(KeyedDocumentLock documentLock)
+    private static DocumentLockOwner EnterDocumentSemaphore(KeyedDocumentLock documentLock)
     {
+        var owner = GetOrCreateDocumentLockOwner();
         var ownerThreadId = Environment.CurrentManagedThreadId;
         var ownerTaskId = Task.CurrentId;
 
         lock (documentLock.ReferenceSyncRoot)
         {
-            if (IsOwnedByCurrentExecution(documentLock, ownerThreadId, ownerTaskId))
+            if (IsOwnedByCurrentExecution(documentLock, owner, ownerThreadId, ownerTaskId))
             {
                 documentLock.OwnerDepth++;
-                return;
+                return owner;
             }
         }
 
@@ -617,67 +637,145 @@ internal sealed class CollectionState
 
         lock (documentLock.ReferenceSyncRoot)
         {
-            documentLock.OwnerThreadId = ownerThreadId;
-            documentLock.OwnerTaskId = ownerTaskId;
-            documentLock.OwnerDepth = 1;
+            SetDocumentLockOwner(documentLock, owner, ownerThreadId, ownerTaskId);
         }
+
+        return owner;
     }
 
-    private static void ExitDocumentSemaphore(KeyedDocumentLock documentLock)
+    private static async ValueTask EnterDocumentSemaphoreAsync(
+        KeyedDocumentLock documentLock,
+        DocumentLockOwner owner,
+        CancellationToken cancellationToken)
     {
         var ownerThreadId = Environment.CurrentManagedThreadId;
         var ownerTaskId = Task.CurrentId;
 
         lock (documentLock.ReferenceSyncRoot)
         {
-            if (IsOwnedByCurrentExecution(documentLock, ownerThreadId, ownerTaskId))
+            if (IsOwnedByCurrentExecution(documentLock, owner, ownerThreadId, ownerTaskId))
             {
-                if (documentLock.OwnerDepth > 1)
-                {
-                    documentLock.OwnerDepth--;
-                    return;
-                }
-
-                documentLock.OwnerThreadId = 0;
-                documentLock.OwnerTaskId = null;
-                documentLock.OwnerDepth = 0;
+                documentLock.OwnerDepth++;
+                return;
             }
+        }
+
+        await documentLock.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        ownerThreadId = Environment.CurrentManagedThreadId;
+        ownerTaskId = Task.CurrentId;
+        lock (documentLock.ReferenceSyncRoot)
+        {
+            SetDocumentLockOwner(documentLock, owner, ownerThreadId, ownerTaskId);
+        }
+    }
+
+    private static void ExitDocumentSemaphore(KeyedDocumentLock documentLock, DocumentLockOwner scopeOwner)
+    {
+        var owner = CurrentDocumentLockOwner.Value;
+        var ownerThreadId = Environment.CurrentManagedThreadId;
+        var ownerTaskId = Task.CurrentId;
+
+        lock (documentLock.ReferenceSyncRoot)
+        {
+            if (!IsOwnedByCurrentExecution(documentLock, owner, ownerThreadId, ownerTaskId) &&
+                !ReferenceEquals(documentLock.Owner, scopeOwner))
+            {
+                throw new SynchronizationLockException("Document lock is not owned by the current execution context.");
+            }
+
+            if (documentLock.OwnerDepth > 1)
+            {
+                documentLock.OwnerDepth--;
+                return;
+            }
+
+            documentLock.Owner = null;
+            documentLock.OwnerThreadId = 0;
+            documentLock.OwnerTaskId = null;
+            documentLock.OwnerDepth = 0;
         }
 
         documentLock.Semaphore.Release();
     }
 
-    private static bool IsOwnedByCurrentExecution(KeyedDocumentLock documentLock, int ownerThreadId, int? ownerTaskId)
+    private static DocumentLockOwner GetOrCreateDocumentLockOwner()
+    {
+        var owner = CurrentDocumentLockOwner.Value;
+        var currentTaskId = Task.CurrentId;
+        if (owner != null && ShouldReuseDocumentLockOwner(owner, currentTaskId)) return owner;
+
+        owner = new DocumentLockOwner(currentTaskId);
+        CurrentDocumentLockOwner.Value = owner;
+        return owner;
+    }
+
+    private static bool ShouldReuseDocumentLockOwner(DocumentLockOwner owner, int? currentTaskId)
+    {
+        return currentTaskId == null || owner.CreatorTaskId == currentTaskId;
+    }
+
+    private static DocumentLockOwner? CreateDocumentLockOwnerIfNeeded(
+        KeyedDocumentLock[]? locks,
+        KeyedDocumentLock? singleLock)
+    {
+        return singleLock != null || (locks != null && locks.Length > 0)
+            ? GetOrCreateDocumentLockOwner()
+            : null;
+    }
+
+    private static void SetDocumentLockOwner(
+        KeyedDocumentLock documentLock,
+        DocumentLockOwner owner,
+        int ownerThreadId,
+        int? ownerTaskId)
+    {
+        documentLock.Owner = owner;
+        documentLock.OwnerThreadId = ownerThreadId;
+        documentLock.OwnerTaskId = ownerTaskId;
+        documentLock.OwnerDepth = 1;
+    }
+
+    private static bool IsOwnedByCurrentExecution(
+        KeyedDocumentLock documentLock,
+        DocumentLockOwner? owner,
+        int ownerThreadId,
+        int? ownerTaskId)
     {
         return documentLock.OwnerDepth > 0 &&
-               documentLock.OwnerThreadId == ownerThreadId &&
-               documentLock.OwnerTaskId == ownerTaskId;
+               ((owner != null && ReferenceEquals(documentLock.Owner, owner)) ||
+                (documentLock.Owner == null &&
+                 documentLock.OwnerThreadId == ownerThreadId &&
+                 documentLock.OwnerTaskId == ownerTaskId));
     }
 
     private sealed class AsyncKeyedDocumentLockScope : IDisposable
     {
         private readonly CollectionState _state;
         private readonly KeyedDocumentLock[] _locks;
+        private readonly DocumentLockOwner _owner;
         private int _entered;
         private bool _disposed;
 
-        private AsyncKeyedDocumentLockScope(CollectionState state, KeyedDocumentLock[] locks)
+        private AsyncKeyedDocumentLockScope(CollectionState state, KeyedDocumentLock[] locks, DocumentLockOwner owner)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _locks = locks ?? throw new ArgumentNullException(nameof(locks));
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
         }
 
         public static async ValueTask<AsyncKeyedDocumentLockScope> EnterAsync(
             CollectionState state,
             KeyedDocumentLock[] locks,
+            DocumentLockOwner owner,
             CancellationToken cancellationToken)
         {
-            var scope = new AsyncKeyedDocumentLockScope(state, locks);
+            var scope = new AsyncKeyedDocumentLockScope(state, locks, owner);
             try
             {
                 for (var i = 0; i < scope._locks.Length; i++)
                 {
-                    await scope._locks[i].Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    await EnterDocumentSemaphoreAsync(scope._locks[i], owner, cancellationToken).ConfigureAwait(false);
                     scope._entered++;
                 }
 
@@ -697,7 +795,7 @@ internal sealed class CollectionState
 
             for (var i = _entered - 1; i >= 0; i--)
             {
-                _locks[i].Semaphore.Release();
+                ExitDocumentSemaphore(_locks[i], _owner);
             }
 
             _entered = 0;
@@ -713,24 +811,27 @@ internal sealed class CollectionState
     {
         private readonly CollectionState _state;
         private readonly KeyedDocumentLock _lock;
+        private readonly DocumentLockOwner _owner;
         private bool _entered;
         private bool _disposed;
 
-        private SingleAsyncKeyedDocumentLockScope(CollectionState state, KeyedDocumentLock documentLock)
+        private SingleAsyncKeyedDocumentLockScope(CollectionState state, KeyedDocumentLock documentLock, DocumentLockOwner owner)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _lock = documentLock ?? throw new ArgumentNullException(nameof(documentLock));
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
         }
 
         public static async ValueTask<IDisposable> EnterAsync(
             CollectionState state,
             KeyedDocumentLock documentLock,
+            DocumentLockOwner owner,
             CancellationToken cancellationToken)
         {
-            var scope = new SingleAsyncKeyedDocumentLockScope(state, documentLock);
+            var scope = new SingleAsyncKeyedDocumentLockScope(state, documentLock, owner);
             try
             {
-                await documentLock.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await EnterDocumentSemaphoreAsync(documentLock, owner, cancellationToken).ConfigureAwait(false);
                 scope._entered = true;
                 return scope;
             }
@@ -748,7 +849,7 @@ internal sealed class CollectionState
 
             if (_entered)
             {
-                _lock.Semaphore.Release();
+                ExitDocumentSemaphore(_lock, _owner);
                 _entered = false;
             }
 

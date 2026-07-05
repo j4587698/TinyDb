@@ -16,7 +16,10 @@ internal sealed class DataPageAccess
     private readonly WriteAheadLog _wal;
 
     private const int InternalReserved = 0;
-    private static readonly byte[] IsLargeDocumentFieldNameBytes = Encoding.UTF8.GetBytes("_isLargeDocument");
+    private const string IsLargeDocumentFieldName = "_isLargeDocument";
+    private const string LargeDocumentIndexFieldName = "_largeDocumentIndex";
+    private const string LargeDocumentSizeFieldName = "_largeDocumentSize";
+    private static readonly byte[] IsLargeDocumentFieldNameBytes = Encoding.UTF8.GetBytes(IsLargeDocumentFieldName);
 
     public DataPageAccess(PageManager pm, LargeDocumentStorage lds, WriteAheadLog wal)
     {
@@ -168,26 +171,25 @@ internal sealed class DataPageAccess
         var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, targetLen);
         try
         {
-            // Always ensure system fields are loaded to check for large document
-            if (fields != null)
-            {
-                if (!fields.Contains("_isLargeDocument")) fields.Add("_isLargeDocument");
-                if (!fields.Contains("_largeDocumentIndex")) fields.Add("_largeDocumentIndex");
-                if (!fields.Contains("_largeDocumentSize")) fields.Add("_largeDocumentSize");
-            }
+            var readFields = CreateLargeDocumentProbeFields(fields);
 
-            var doc = fields != null
-                ? BsonSerializer.DeserializeDocument(rawDocument, fields)
+            var doc = readFields != null
+                ? BsonSerializer.DeserializeDocument(rawDocument, readFields)
                 : BsonSerializer.DeserializeDocument(rawDocument);
 
-            bool isL = doc.TryGetValue("_isLargeDocument", out var v) && v.ToBoolean(null);
+            bool isL = doc.TryGetValue(IsLargeDocumentFieldName, out var v) && v.ToBoolean(null);
             if (isL)
             {
-                uint lId = (uint)doc["_largeDocumentIndex"].ToInt64(null);
+                uint lId = (uint)doc[LargeDocumentIndexFieldName].ToInt64(null);
                 var largeBytes = _lds.ReadLargeDocument(lId);
                 return fields != null
                    ? BsonSerializer.DeserializeDocument(largeBytes, fields)
                    : BsonSerializer.DeserializeDocument(largeBytes);
+            }
+
+            if (fields != null && !ReferenceEquals(readFields, fields))
+            {
+                doc = RemoveProbeOnlyFields(doc, fields);
             }
 
             return doc;
@@ -197,6 +199,35 @@ internal sealed class DataPageAccess
             throw new InvalidDataException(
                 $"Failed to read document in page {p.PageID} at entry {index}.", ex);
         }
+    }
+
+    private static HashSet<string>? CreateLargeDocumentProbeFields(HashSet<string>? fields)
+    {
+        if (fields == null) return null;
+
+        if (fields.Contains(IsLargeDocumentFieldName) &&
+            fields.Contains(LargeDocumentIndexFieldName) &&
+            fields.Contains(LargeDocumentSizeFieldName))
+        {
+            return fields;
+        }
+
+        var readFields = new HashSet<string>(fields, fields.Comparer)
+        {
+            IsLargeDocumentFieldName,
+            LargeDocumentIndexFieldName,
+            LargeDocumentSizeFieldName
+        };
+
+        return readFields;
+    }
+
+    private static BsonDocument RemoveProbeOnlyFields(BsonDocument doc, HashSet<string> fields)
+    {
+        if (!fields.Contains(IsLargeDocumentFieldName)) doc = doc.RemoveKey(IsLargeDocumentFieldName);
+        if (!fields.Contains(LargeDocumentIndexFieldName)) doc = doc.RemoveKey(LargeDocumentIndexFieldName);
+        if (!fields.Contains(LargeDocumentSizeFieldName)) doc = doc.RemoveKey(LargeDocumentSizeFieldName);
+        return doc;
     }
 
     public void AppendDocumentToPage(Page p, ReadOnlySpan<byte> bytes)

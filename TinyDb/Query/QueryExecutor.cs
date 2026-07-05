@@ -1140,6 +1140,8 @@ public sealed class QueryExecutor
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+        var collectionFieldNameBytes = Encoding.UTF8.GetBytes("_collection");
+        var collectionNameBytes = Encoding.UTF8.GetBytes(collectionName);
 
         return Iterator();
 
@@ -1150,24 +1152,46 @@ public sealed class QueryExecutor
 
             foreach (var result in _engine.FindAllRawWithPredicateInfo(collectionName, pushDownPredicates))
             {
-                var doc = DeserializeDocumentOrThrow(result.Slice);
-                if (doc.TryGetValue("_collection", out var c) && c.ToString() != collectionName)
+                var slice = result.Slice;
+                var span = slice.Span;
+                if (!MatchesCollection(span, collectionFieldNameBytes, collectionNameBytes))
                 {
                     continue;
                 }
 
-                doc = _engine.ResolveLargeDocument(doc);
                 var requiresPostFilter = result.RequiresPostFilter;
+                BsonDocument doc;
 
-                if (txOverlay != null)
+                if (txOverlay != null && TryReadBsonValue(span, SortFieldBytes.Id, out var rawIdValue))
                 {
-                    var idValue = doc["_id"];
-                    if (txOverlay.TryGetValue(idValue, out var txDoc))
+                    if (txOverlay.TryGetValue(rawIdValue, out var txDoc))
                     {
-                        txOverlay.Remove(idValue);
+                        txOverlay.Remove(rawIdValue);
                         if (txDoc == null) continue;
                         doc = txDoc;
                         requiresPostFilter = true;
+                    }
+                    else
+                    {
+                        doc = DeserializeDocumentOrThrow(slice);
+                        doc = _engine.ResolveLargeDocument(doc);
+                    }
+                }
+                else
+                {
+                    doc = DeserializeDocumentOrThrow(slice);
+                    doc = _engine.ResolveLargeDocument(doc);
+
+                    if (txOverlay != null)
+                    {
+                        var idValue = doc["_id"];
+                        if (txOverlay.TryGetValue(idValue, out var txDoc))
+                        {
+                            txOverlay.Remove(idValue);
+                            if (txDoc == null) continue;
+                            doc = txDoc;
+                            requiresPostFilter = true;
+                        }
                     }
                 }
 
@@ -1214,6 +1238,8 @@ public sealed class QueryExecutor
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+        var collectionFieldNameBytes = Encoding.UTF8.GetBytes("_collection");
+        var collectionNameBytes = Encoding.UTF8.GetBytes(collectionName);
 
         var tx = _engine.GetCurrentTransaction();
         var txOverlay = tx != null ? BuildTransactionOverlay(tx, collectionName) : null;
@@ -1222,24 +1248,46 @@ public sealed class QueryExecutor
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var doc = DeserializeDocumentOrThrow(result.Slice);
-            if (doc.TryGetValue("_collection", out var c) && c.ToString() != collectionName)
+            var slice = result.Slice;
+            var span = slice.Span;
+            if (!MatchesCollection(span, collectionFieldNameBytes, collectionNameBytes))
             {
                 continue;
             }
 
-            doc = await _engine.ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
             var requiresPostFilter = result.RequiresPostFilter;
+            BsonDocument doc;
 
-            if (txOverlay != null)
+            if (txOverlay != null && TryReadBsonValue(span, SortFieldBytes.Id, out var rawIdValue))
             {
-                var idValue = doc["_id"];
-                if (txOverlay.TryGetValue(idValue, out var txDoc))
+                if (txOverlay.TryGetValue(rawIdValue, out var txDoc))
                 {
-                    txOverlay.Remove(idValue);
+                    txOverlay.Remove(rawIdValue);
                     if (txDoc == null) continue;
                     doc = txDoc;
                     requiresPostFilter = true;
+                }
+                else
+                {
+                    doc = DeserializeDocumentOrThrow(slice);
+                    doc = await _engine.ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            else
+            {
+                doc = DeserializeDocumentOrThrow(slice);
+                doc = await _engine.ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
+
+                if (txOverlay != null)
+                {
+                    var idValue = doc["_id"];
+                    if (txOverlay.TryGetValue(idValue, out var txDoc))
+                    {
+                        txOverlay.Remove(idValue);
+                        if (txDoc == null) continue;
+                        doc = txDoc;
+                        requiresPostFilter = true;
+                    }
                 }
             }
 
