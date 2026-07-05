@@ -149,9 +149,7 @@ public class LargeDocumentStorage
             var dataToRead = Math.Min(_dataPayloadSize, header.TotalLength - offset);
             // ReadData 期望相对于 DataStartOffset 的偏移
             // 我们在 DataPageHeaderSize (8) 处开始写入。
-            var dataBytes = dataPage.ReadBytes(DataPageHeaderSize, dataToRead);
-
-            Buffer.BlockCopy(dataBytes, 0, result, offset, dataToRead);
+            dataPage.CopyDataTo(DataPageHeaderSize, result.AsSpan(offset, dataToRead));
             offset += dataToRead;
 
             currentPageId = dataHeader.NextPageId;
@@ -190,9 +188,7 @@ public class LargeDocumentStorage
                 throw new InvalidOperationException("Data page number mismatch");
 
             var dataToRead = Math.Min(_dataPayloadSize, header.TotalLength - offset);
-            var dataBytes = dataPage.ReadBytes(DataPageHeaderSize, dataToRead);
-
-            Buffer.BlockCopy(dataBytes, 0, result, offset, dataToRead);
+            dataPage.CopyDataTo(DataPageHeaderSize, result.AsSpan(offset, dataToRead));
             offset += dataToRead;
 
             currentPageId = dataHeader.NextPageId;

@@ -27,7 +27,11 @@ public class BsonStructureTests
         
         var clone = doc.Clone();
         await Assert.That(clone.Equals(doc)).IsTrue();
-        await Assert.That(ReferenceEquals(clone, doc)).IsFalse();
+
+        var changed = clone.Set("c", 3);
+        await Assert.That(changed.ContainsKey("c")).IsTrue();
+        await Assert.That(doc.ContainsKey("c")).IsFalse();
+        await Assert.That(clone.ContainsKey("c")).IsFalse();
     }
 
     [Test]

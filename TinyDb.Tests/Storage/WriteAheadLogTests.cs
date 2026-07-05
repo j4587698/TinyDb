@@ -93,6 +93,37 @@ public class WriteAheadLogTests : IDisposable
     }
 
     [Test]
+    public async Task WAL_AsyncTransaction_Should_Coalesce_Deferred_Transaction_Page_Records()
+    {
+        using var wal = new WriteAheadLog(_testDbPath, 4096, true);
+        var page = new Page(1, 4096, PageType.Data);
+
+        var transactionId = Guid.NewGuid();
+        await wal.WriteTransactionBeginAsync(transactionId);
+        using (var tx = wal.EnterTransactionContext(transactionId, flushOnCommit: false))
+        {
+            page.WriteData(0, new byte[] { 1 });
+            wal.AppendPageDeferred(page, beforeImage: null);
+
+            page.WriteData(1, new byte[] { 2 });
+            wal.AppendPageDeferred(page, beforeImage: null);
+
+            await tx.CommitAsync();
+        }
+
+        var replayedPages = new List<byte[]>();
+        await wal.ReplayAsync((_, data) =>
+        {
+            replayedPages.Add(data);
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(replayedPages.Count).IsEqualTo(1);
+        await Assert.That(replayedPages[0][PageHeader.Size]).IsEqualTo((byte)1);
+        await Assert.That(replayedPages[0][PageHeader.Size + 1]).IsEqualTo((byte)2);
+    }
+
+    [Test]
     public async Task WAL_Should_Restore_Coalesced_Deferred_Page_When_Transaction_Does_Not_Commit()
     {
         using var wal = new WriteAheadLog(_testDbPath, 4096, true);
@@ -107,6 +138,40 @@ public class WriteAheadLogTests : IDisposable
             wal.AppendPageDeferred(page, beforeImage);
 
             await Assert.That(() => tx.Commit()).Throws<IOException>();
+        }
+
+        wal.BeforeTransactionCommitForTesting = null;
+
+        var restoredPages = new Dictionary<uint, byte[]>();
+        await wal.ReplayAsync(
+            (_, _) => Task.CompletedTask,
+            (id, data) =>
+            {
+                restoredPages[id] = data;
+                return Task.CompletedTask;
+            });
+
+        await Assert.That(restoredPages.Count).IsEqualTo(1);
+        await Assert.That(restoredPages[1][PageHeader.Size]).IsEqualTo((byte)1);
+    }
+
+    [Test]
+    public async Task WAL_AsyncTransaction_Should_Restore_Coalesced_Deferred_Page_When_Commit_Fails()
+    {
+        using var wal = new WriteAheadLog(_testDbPath, 4096, true);
+        var page = new Page(1, 4096, PageType.Data);
+        page.WriteData(0, new byte[] { 1 });
+        var beforeImage = page.Snapshot();
+
+        wal.BeforeTransactionCommitForTesting = () => throw new IOException("commit failed");
+        var transactionId = Guid.NewGuid();
+        await wal.WriteTransactionBeginAsync(transactionId);
+        using (var tx = wal.EnterTransactionContext(transactionId, flushOnCommit: false))
+        {
+            page.WriteData(0, new byte[] { 9 });
+            wal.AppendPageDeferred(page, beforeImage);
+
+            await Assert.That(async () => await tx.CommitAsync()).Throws<IOException>();
         }
 
         wal.BeforeTransactionCommitForTesting = null;

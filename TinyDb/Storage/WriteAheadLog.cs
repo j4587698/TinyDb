@@ -421,6 +421,37 @@ public sealed class WriteAheadLog : IDisposable
         }
     }
 
+    internal Task WriteTransactionBeginAsync(Guid transactionId, CancellationToken cancellationToken = default)
+    {
+        if (!IsEnabled)
+        {
+            return Task.CompletedTask;
+        }
+
+        return RunWithWriteLockAsync(async () =>
+        {
+            await WriteEntryAsync(
+                EntryTypeTransactionBegin,
+                0,
+                CreateTransactionControlData(transactionId),
+                cancellationToken).ConfigureAwait(false);
+            SetHasPendingEntries(true);
+        }, cancellationToken);
+    }
+
+    internal WalTransactionScope EnterTransactionContext(Guid transactionId, bool flushOnCommit)
+    {
+        if (!IsEnabled)
+        {
+            return new WalTransactionScope(this, transactionId, ownsContext: false, flushOnCommit);
+        }
+
+        _synchronizationDepth.Value++;
+        _currentTransactionId.Value = transactionId;
+        _currentTransactionPages.Value = new TransactionPageBuffer(transactionId);
+        return new WalTransactionScope(this, transactionId, ownsContext: true, flushOnCommit);
+    }
+
     internal sealed class WalTransactionScope : IDisposable
     {
         private readonly WriteAheadLog _wal;
@@ -459,6 +490,36 @@ public sealed class WriteAheadLog : IDisposable
                         _wal.FlushLogCore();
                     }
                 });
+            }
+
+            _completed = true;
+        }
+
+        public async Task CommitAsync(CancellationToken cancellationToken = default)
+        {
+            if (_completed) return;
+            if (_wal.IsEnabled)
+            {
+                if (_wal._currentTransactionId.Value != _transactionId)
+                {
+                    throw new InvalidOperationException("WAL transaction scope mismatch.");
+                }
+
+                await _wal.RunWithWriteLockAsync(async () =>
+                {
+                    await _wal.WriteDeferredTransactionPagesAsync(_transactionId, cancellationToken).ConfigureAwait(false);
+                    _wal.BeforeTransactionCommitForTesting?.Invoke();
+                    await _wal.WriteEntryAsync(
+                        EntryTypeTransactionCommit,
+                        0,
+                        CreateTransactionControlData(_transactionId),
+                        cancellationToken).ConfigureAwait(false);
+                    _wal.SetHasPendingEntries(true);
+                    if (_flushOnCommit)
+                    {
+                        _wal.FlushLogCore();
+                    }
+                }, cancellationToken).ConfigureAwait(false);
             }
 
             _completed = true;
@@ -512,6 +573,27 @@ public sealed class WriteAheadLog : IDisposable
         {
             var data = PrepareTransactionPageRecord(transactionId, record.AfterImage, record.BeforeImage, out var lsn);
             WriteEntry(EntryTypeTransactionPage, record.PageId, data);
+            DeferredTransactionPageLogged?.Invoke(record.PageId, lsn);
+        }
+    }
+
+    private async Task WriteDeferredTransactionPagesAsync(Guid transactionId, CancellationToken cancellationToken)
+    {
+        var transactionPages = _currentTransactionPages.Value;
+        if (transactionPages == null)
+        {
+            return;
+        }
+
+        if (transactionPages.TransactionId != transactionId)
+        {
+            throw new InvalidOperationException("WAL transaction page buffer mismatch.");
+        }
+
+        foreach (var record in transactionPages.GetPagesPendingWalWriteInFirstTouchOrder())
+        {
+            var data = PrepareTransactionPageRecord(transactionId, record.AfterImage, record.BeforeImage, out var lsn);
+            await WriteEntryAsync(EntryTypeTransactionPage, record.PageId, data, cancellationToken).ConfigureAwait(false);
             DeferredTransactionPageLogged?.Invoke(record.PageId, lsn);
         }
     }
