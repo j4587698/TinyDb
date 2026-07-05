@@ -180,13 +180,13 @@ public sealed class TinyDbEngine : IDisposable
         _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log, walCodec);
         
         _pageManager.RegisterWAL(
-            (page, beforeImage) => _writeAheadLog.AppendPage(page, beforeImage),
-            lsn => _writeAheadLog.FlushToLSN(lsn),
+            (page, beforeImage, ctx) => _writeAheadLog.AppendPage(page, beforeImage, ctx),
+            (lsn, ctx) => _writeAheadLog.FlushToLSN(lsn, ctx),
             () => _writeAheadLog.RequiresBeforeImage);
-        _pageManager.RegisterDeferredWAL((page, beforeImage) => _writeAheadLog.AppendPageDeferred(page, beforeImage));
+        _pageManager.RegisterDeferredWAL((page, beforeImage, _) => _writeAheadLog.AppendPageDeferred(page, beforeImage));
         _writeAheadLog.DeferredTransactionPageLogged = _pageManager.MarkDeferredWalPageLogged;
-        _pageManager.RegisterWAL((page, beforeImage, ct) => _writeAheadLog.AppendPageAsync(page, beforeImage, ct));
-        _pageManager.RegisterWAL((lsn, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ct));
+        _pageManager.RegisterWAL((page, beforeImage, ctx, ct) => _writeAheadLog.AppendPageAsync(page, beforeImage, ctx, ct));
+        _pageManager.RegisterWAL((lsn, ctx, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ctx, ct));
 
         _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), _log);
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize, _log);

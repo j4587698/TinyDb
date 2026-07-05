@@ -93,6 +93,58 @@ public sealed class WriteAheadLogFlushToLsnCoverageTests
         }
     }
 
+    [Test]
+    public async Task SynchronizeAsync_ChildAppend_ShouldNotInheritWriteLock()
+    {
+        using var wal = new WriteAheadLog(_dbFile, PageSize, enabled: true);
+        var page = new Page(1, PageSize, PageType.Data);
+        page.WriteData(0, new byte[] { 1 });
+
+        var appendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var appendCompleted = 0;
+        Task? appendTask = null;
+
+        await wal.SynchronizeAsync(async _ =>
+        {
+            appendTask = Task.Run(async () =>
+            {
+                appendStarted.SetResult();
+                await wal.AppendPageAsync(page).ConfigureAwait(false);
+                Volatile.Write(ref appendCompleted, 1);
+            });
+
+            await appendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await Task.Delay(100).ConfigureAwait(false);
+
+            await Assert.That(Volatile.Read(ref appendCompleted)).IsEqualTo(0);
+        }, CancellationToken.None);
+
+        await appendTask!.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        await Assert.That(Volatile.Read(ref appendCompleted)).IsEqualTo(1);
+        await Assert.That(wal.HasPendingEntries).IsTrue();
+    }
+
+    [Test]
+    public async Task Synchronize_WithLegacyPageManagerCallbacks_ShouldAllowSameThreadWalReentry()
+    {
+        using var disk = new DiskStream(_dbFile);
+        using var pageManager = new PageManager(disk, PageSize);
+        using var wal = new WriteAheadLog(_dbFile, PageSize, enabled: true);
+
+        pageManager.RegisterWAL(
+            (page, beforeImage) => wal.AppendPage(page, beforeImage),
+            lsn => wal.FlushToLSN(lsn),
+            () => wal.RequiresBeforeImage);
+
+        var dirtyPage = pageManager.NewPage(PageType.Data);
+        dirtyPage.WriteData(0, new byte[] { 1 });
+
+        var flushTask = Task.Run(() => wal.Synchronize(() => pageManager.FlushDirtyPages()));
+        await flushTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+        await Assert.That(wal.HasPendingEntries).IsFalse();
+    }
+
     private static string GetWalFile(string dbFile)
     {
         var directory = Path.GetDirectoryName(dbFile) ?? string.Empty;

@@ -37,11 +37,11 @@ public sealed class PageManager : IDisposable
     private readonly ManualResetEventSlim _backgroundWritebackIdle = new(true);
     private int _backgroundWritebackScheduled;
 
-    private Action<long>? _flushLogToLsn;
-    private Func<long, CancellationToken, Task>? _flushLogToLsnAsync;
-    private Action<Page, byte[]?>? _appendLogPage;
-    private Action<Page, byte[]?>? _appendDeferredLogPage;
-    private Func<Page, byte[]?, CancellationToken, Task>? _appendLogPageAsync;
+    private Action<long, WriteAheadLog.WriteLockContext?>? _flushLogToLsn;
+    private Func<long, WriteAheadLog.WriteLockContext?, CancellationToken, Task>? _flushLogToLsnAsync;
+    private Action<Page, byte[]?, WriteAheadLog.WriteLockContext?>? _appendLogPage;
+    private Action<Page, byte[]?, WriteAheadLog.WriteLockContext?>? _appendDeferredLogPage;
+    private Func<Page, byte[]?, WriteAheadLog.WriteLockContext?, CancellationToken, Task>? _appendLogPageAsync;
     private Func<bool>? _requiresWalBeforeImage;
     private readonly ConcurrentDictionary<uint, long> _deferredWalPages = new();
 
@@ -52,20 +52,25 @@ public sealed class PageManager : IDisposable
     public void RegisterWAL(Func<long, Task> flushLogToLsnAsync)
     {
         if (flushLogToLsnAsync == null) throw new ArgumentNullException(nameof(flushLogToLsnAsync));
-        _flushLogToLsnAsync = (lsn, _) => flushLogToLsnAsync(lsn);
+        _flushLogToLsnAsync = (lsn, _, _) => flushLogToLsnAsync(lsn);
     }
 
     public void RegisterWAL(Func<long, CancellationToken, Task> flushLogToLsnAsync)
     {
         if (flushLogToLsnAsync == null) throw new ArgumentNullException(nameof(flushLogToLsnAsync));
-        _flushLogToLsnAsync = flushLogToLsnAsync;
+        _flushLogToLsnAsync = (lsn, _, ct) => flushLogToLsnAsync(lsn, ct);
+    }
+
+    internal void RegisterWAL(Func<long, WriteAheadLog.WriteLockContext?, CancellationToken, Task> flushLogToLsnAsync)
+    {
+        _flushLogToLsnAsync = flushLogToLsnAsync ?? throw new ArgumentNullException(nameof(flushLogToLsnAsync));
     }
 
     public void RegisterWAL(Action<long> flushLogToLsn)
     {
         if (flushLogToLsn == null) throw new ArgumentNullException(nameof(flushLogToLsn));
 
-        _flushLogToLsn = flushLogToLsn;
+        _flushLogToLsn = (lsn, _) => flushLogToLsn(lsn);
     }
 
     public void RegisterWAL(Action<Page> appendLogPage, Action<long> flushLogToLsn)
@@ -79,13 +84,30 @@ public sealed class PageManager : IDisposable
         if (appendLogPage == null) throw new ArgumentNullException(nameof(appendLogPage));
         if (flushLogToLsn == null) throw new ArgumentNullException(nameof(flushLogToLsn));
 
-        _appendLogPage = appendLogPage;
+        _appendLogPage = (page, beforeImage, _) => appendLogPage(page, beforeImage);
+        _appendDeferredLogPage = (page, beforeImage, _) => appendLogPage(page, beforeImage);
+        _flushLogToLsn = (lsn, _) => flushLogToLsn(lsn);
+        _requiresWalBeforeImage = requiresBeforeImage;
+    }
+
+    internal void RegisterWAL(
+        Action<Page, byte[]?, WriteAheadLog.WriteLockContext?> appendLogPage,
+        Action<long, WriteAheadLog.WriteLockContext?> flushLogToLsn,
+        Func<bool>? requiresBeforeImage = null)
+    {
+        _appendLogPage = appendLogPage ?? throw new ArgumentNullException(nameof(appendLogPage));
         _appendDeferredLogPage = appendLogPage;
-        _flushLogToLsn = flushLogToLsn;
+        _flushLogToLsn = flushLogToLsn ?? throw new ArgumentNullException(nameof(flushLogToLsn));
         _requiresWalBeforeImage = requiresBeforeImage;
     }
 
     internal void RegisterDeferredWAL(Action<Page, byte[]?> appendDeferredLogPage)
+    {
+        if (appendDeferredLogPage == null) throw new ArgumentNullException(nameof(appendDeferredLogPage));
+        _appendDeferredLogPage = (page, beforeImage, _) => appendDeferredLogPage(page, beforeImage);
+    }
+
+    internal void RegisterDeferredWAL(Action<Page, byte[]?, WriteAheadLog.WriteLockContext?> appendDeferredLogPage)
     {
         _appendDeferredLogPage = appendDeferredLogPage ?? throw new ArgumentNullException(nameof(appendDeferredLogPage));
     }
@@ -112,6 +134,12 @@ public sealed class PageManager : IDisposable
     }
 
     internal void RegisterWAL(Func<Page, byte[]?, CancellationToken, Task> appendLogPageAsync)
+    {
+        if (appendLogPageAsync == null) throw new ArgumentNullException(nameof(appendLogPageAsync));
+        _appendLogPageAsync = (page, beforeImage, _, ct) => appendLogPageAsync(page, beforeImage, ct);
+    }
+
+    internal void RegisterWAL(Func<Page, byte[]?, WriteAheadLog.WriteLockContext?, CancellationToken, Task> appendLogPageAsync)
     {
         _appendLogPageAsync = appendLogPageAsync ?? throw new ArgumentNullException(nameof(appendLogPageAsync));
     }
@@ -1051,6 +1079,11 @@ public sealed class PageManager : IDisposable
     /// <param name="forceFlush">是否强制刷新到磁盘</param>
     public void SavePage(Page page, bool forceFlush = false)
     {
+        SavePage(page, forceFlush, walContext: null);
+    }
+
+    internal void SavePage(Page page, bool forceFlush, WriteAheadLog.WriteLockContext? walContext)
+    {
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
 
@@ -1061,10 +1094,10 @@ public sealed class PageManager : IDisposable
             beforeImage = ReadPageSnapshotForWal(page.PageID);
         }
 
-        _appendLogPage?.Invoke(page, beforeImage);
+        _appendLogPage?.Invoke(page, beforeImage, walContext);
         if (_flushLogToLsn != null && page.Header.LSN >= 0)
         {
-            _flushLogToLsn(page.Header.LSN);
+            _flushLogToLsn(page.Header.LSN, walContext);
         }
 
         WritePageToDisk(page, forceFlush);
@@ -1095,7 +1128,7 @@ public sealed class PageManager : IDisposable
             return;
         }
 
-        appendDeferredLogPage(page, beforeImage);
+        appendDeferredLogPage(page, beforeImage, null);
         _deferredWalPages[page.PageID] = page.Header.LSN;
 
         if (page.IsDirty)
@@ -1112,6 +1145,15 @@ public sealed class PageManager : IDisposable
     /// <param name="cancellationToken">取消令牌</param>
     public async Task SavePageAsync(Page page, bool forceFlush = false, CancellationToken cancellationToken = default)
     {
+        await SavePageAsync(page, forceFlush, walContext: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task SavePageAsync(
+        Page page,
+        bool forceFlush,
+        WriteAheadLog.WriteLockContext? walContext,
+        CancellationToken cancellationToken = default)
+    {
         ThrowIfDisposed();
         if (page == null) throw new ArgumentNullException(nameof(page));
         cancellationToken.ThrowIfCancellationRequested();
@@ -1124,20 +1166,20 @@ public sealed class PageManager : IDisposable
 
         if (_appendLogPageAsync != null)
         {
-            await _appendLogPageAsync(page, beforeImage, cancellationToken).ConfigureAwait(false);
+            await _appendLogPageAsync(page, beforeImage, walContext, cancellationToken).ConfigureAwait(false);
         }
         else
         {
-            _appendLogPage?.Invoke(page, beforeImage);
+            _appendLogPage?.Invoke(page, beforeImage, walContext);
         }
 
         if (_flushLogToLsnAsync != null && page.Header.LSN >= 0)
         {
-            await _flushLogToLsnAsync(page.Header.LSN, cancellationToken).ConfigureAwait(false);
+            await _flushLogToLsnAsync(page.Header.LSN, walContext, cancellationToken).ConfigureAwait(false);
         }
         else if (_flushLogToLsn != null && page.Header.LSN >= 0)
         {
-            _flushLogToLsn(page.Header.LSN);
+            _flushLogToLsn(page.Header.LSN, walContext);
         }
 
         page.Pin();
@@ -1359,10 +1401,10 @@ public sealed class PageManager : IDisposable
                 page.Header.FreeBytes = (ushort)(page.DataSize);
             }
 
-            _appendLogPage?.Invoke(page, beforeImage);
+            _appendLogPage?.Invoke(page, beforeImage, null);
             if (_flushLogToLsn != null && page.Header.LSN >= 0)
             {
-                _flushLogToLsn(page.Header.LSN);
+                _flushLogToLsn(page.Header.LSN, null);
             }
 
             lock (_stateLock)
@@ -1386,10 +1428,16 @@ public sealed class PageManager : IDisposable
     public void FlushDirtyPages()
     {
         ThrowIfDisposed();
-        FlushDirtyPagesCore();
+        FlushDirtyPagesCore(walContext: null);
     }
 
-    private void FlushDirtyPagesCore()
+    internal void FlushDirtyPages(WriteAheadLog.WriteLockContext walContext)
+    {
+        ThrowIfDisposed();
+        FlushDirtyPagesCore(walContext);
+    }
+
+    private void FlushDirtyPagesCore(WriteAheadLog.WriteLockContext? walContext)
     {
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
@@ -1409,7 +1457,7 @@ public sealed class PageManager : IDisposable
                 continue;
             }
 
-            SavePage(page);
+            SavePage(page, forceFlush: false, walContext);
         }
 
         _diskStream.Flush();
@@ -1433,10 +1481,20 @@ public sealed class PageManager : IDisposable
     public async Task FlushDirtyPagesAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await FlushDirtyPagesAsyncCore(cancellationToken).ConfigureAwait(false);
+        await FlushDirtyPagesAsyncCore(walContext: null, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task FlushDirtyPagesAsyncCore(CancellationToken cancellationToken)
+    internal async Task FlushDirtyPagesAsync(
+        WriteAheadLog.WriteLockContext walContext,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await FlushDirtyPagesAsyncCore(walContext, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task FlushDirtyPagesAsyncCore(
+        WriteAheadLog.WriteLockContext? walContext,
+        CancellationToken cancellationToken)
     {
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
@@ -1457,7 +1515,7 @@ public sealed class PageManager : IDisposable
                 continue;
             }
 
-            await SavePageAsync(page, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await SavePageAsync(page, forceFlush: false, walContext, cancellationToken).ConfigureAwait(false);
         }
 
         await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);

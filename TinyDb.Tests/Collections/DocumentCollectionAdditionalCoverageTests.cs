@@ -181,6 +181,32 @@ public class DocumentCollectionAdditionalCoverageTests
     }
 
     [Test]
+    public async Task UpdateEntityId_WhenIdPropertyCannotRepresentDocumentId_ShouldThrow()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_id_mismatch_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
+            var col = (DocumentCollection<BatchItem>)engine.GetCollection<BatchItem>("batch");
+
+            var updateEntityId = typeof(DocumentCollection<BatchItem>).GetMethod("UpdateEntityId", BindingFlags.Instance | BindingFlags.NonPublic);
+            await Assert.That(updateEntityId).IsNotNull();
+
+            var entity = new BatchItem { Name = "x" };
+            var ex = await Assert.That(() => updateEntityId!.Invoke(col, new object[] { entity, new BsonObjectId(ObjectId.NewObjectId()) }))
+                .Throws<TargetInvocationException>();
+
+            await Assert.That(ex!.InnerException).IsTypeOf<InvalidOperationException>();
+            await Assert.That(ex.InnerException!.Message).Contains("was not updated to the document ID");
+        }
+        finally
+        {
+            CleanupDb(dbPath);
+        }
+    }
+
+    [Test]
     public async Task Insert_WithEmptyEnumerable_ShouldReturnZero()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_empty_batch_{Guid.NewGuid():N}.db");
