@@ -225,10 +225,10 @@ public class AotBsonMapperMissingLinesCoverageTests
     }
 
     [Test]
-    public async Task SetId_ForBsonDocument_ShouldNoOp()
+    public async Task SetId_ForBsonDocument_ShouldThrow()
     {
         var doc = new BsonDocument();
-        await Assert.That(() => AotBsonMapper.SetId(doc, new BsonInt32(1))).ThrowsNothing();
+        await Assert.That(() => AotBsonMapper.SetId(doc, new BsonInt32(1))).Throws<NotSupportedException>();
     }
 
     [Test]

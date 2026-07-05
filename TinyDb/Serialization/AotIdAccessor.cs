@@ -45,8 +45,7 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
 
         if (entity is BsonDocument)
         {
-            // BsonDocument is immutable, cannot set ID in place
-            return;
+            throw new NotSupportedException("BsonDocument is immutable. Use document.Set(\"_id\", id) to create a new document with the requested ID.");
         }
 
         if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))

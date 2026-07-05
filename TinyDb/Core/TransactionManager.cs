@@ -130,10 +130,8 @@ public sealed class TransactionManager : IDisposable
                 }
                 catch (Exception commitEx)
                 {
-                    durabilityScope.Dispose();
+                    var rollbackErrors = RollbackDurabilityScope(durabilityScope);
                     durabilityScope = null;
-
-                    var rollbackErrors = RollbackAppliedOperations(operations);
                     if (rollbackErrors.Count == 0)
                     {
                         throw new InvalidOperationException(
@@ -666,6 +664,27 @@ public sealed class TransactionManager : IDisposable
                     $"Rollback compensation failed for operation index {i}.",
                     rollbackEx));
             }
+        }
+
+        return rollbackErrors;
+    }
+
+    private List<Exception> RollbackDurabilityScope(WriteAheadLog.WalTransactionScope durabilityScope)
+    {
+        var rollbackErrors = new List<Exception>();
+        try
+        {
+            _engine.RollbackTransactionDurabilityScope(durabilityScope);
+        }
+        catch (Exception rollbackEx)
+        {
+            rollbackErrors.Add(new InvalidOperationException(
+                "Transaction durability rollback failed while restoring WAL before-images.",
+                rollbackEx));
+        }
+        finally
+        {
+            durabilityScope.Dispose();
         }
 
         return rollbackErrors;

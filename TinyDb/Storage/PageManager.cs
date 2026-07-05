@@ -24,6 +24,8 @@ public sealed class PageManager : IDisposable
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private const int PageLoadStripeCount = 64;
     private const int CacheOverflowSlack = 4096;
+    private const int BackgroundWritebackMinBatchSize = 16;
+    private const int BackgroundWritebackMaxBatchSize = 256;
     private readonly SemaphoreSlim[] _pageLoadStripes;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
@@ -558,17 +560,24 @@ public sealed class PageManager : IDisposable
 
     private bool TryGetCachedPage(uint pageID, bool pin, out Page page)
     {
-        lock (_cacheLock)
+        while (_pageCache.TryGetValue(pageID, out var candidate))
         {
-            if (_pageCache.TryGetValue(pageID, out page!))
+            if (pin)
             {
-                if (pin)
-                {
-                    page.Pin();
-                }
+                candidate.Pin();
+            }
 
+            if (_pageCache.TryGetValue(pageID, out var current) &&
+                ReferenceEquals(current, candidate))
+            {
                 _lruCache.TryTouch(pageID);
+                page = candidate;
                 return true;
+            }
+
+            if (pin)
+            {
+                candidate.Unpin();
             }
         }
 
@@ -1377,10 +1386,10 @@ public sealed class PageManager : IDisposable
     public void FlushDirtyPages()
     {
         ThrowIfDisposed();
-        FlushDirtyPagesCore(skipUnsafeDeferredWalPages: false);
+        FlushDirtyPagesCore();
     }
 
-    private void FlushDirtyPagesCore(bool skipUnsafeDeferredWalPages)
+    private void FlushDirtyPagesCore()
     {
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
@@ -1424,10 +1433,10 @@ public sealed class PageManager : IDisposable
     public async Task FlushDirtyPagesAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await FlushDirtyPagesAsyncCore(skipUnsafeDeferredWalPages: false, cancellationToken).ConfigureAwait(false);
+        await FlushDirtyPagesAsyncCore(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task FlushDirtyPagesAsyncCore(bool skipUnsafeDeferredWalPages, CancellationToken cancellationToken)
+    private async Task FlushDirtyPagesAsyncCore(CancellationToken cancellationToken)
     {
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
@@ -1768,7 +1777,7 @@ public sealed class PageManager : IDisposable
                     return;
                 }
 
-                await FlushDirtyPagesAsyncCore(skipUnsafeDeferredWalPages: true, CancellationToken.None).ConfigureAwait(false);
+                await WritebackDirtyPagesForEvictionAsync(CancellationToken.None).ConfigureAwait(false);
             }
             finally
             {
@@ -1787,6 +1796,117 @@ public sealed class PageManager : IDisposable
             Interlocked.Exchange(ref _backgroundWritebackScheduled, 0);
             _backgroundWritebackIdle.Set();
         }
+    }
+
+    private async Task WritebackDirtyPagesForEvictionAsync(CancellationToken cancellationToken)
+    {
+        var targetWrites = GetBackgroundWritebackTarget();
+        var candidateCount = GetBackgroundWritebackCandidateCount(targetWrites);
+        if (candidateCount <= 0)
+        {
+            return;
+        }
+
+        var candidates = _lruCache.GetLeastRecentlyUsed(candidateCount);
+        var written = 0;
+        foreach (var pageID in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (written >= targetWrites)
+            {
+                break;
+            }
+
+            if (!TryPinDirtyPageForBackgroundWriteback(pageID, out var page))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (await WriteDirtyPageForBackgroundWritebackAsync(page, cancellationToken).ConfigureAwait(false))
+                {
+                    written++;
+                }
+            }
+            finally
+            {
+                page.Unpin();
+            }
+        }
+
+        if (written > 0)
+        {
+            await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private int GetBackgroundWritebackTarget()
+    {
+        return Math.Clamp(MaxCacheSize / 4, BackgroundWritebackMinBatchSize, BackgroundWritebackMaxBatchSize);
+    }
+
+    private int GetBackgroundWritebackCandidateCount(int targetWrites)
+    {
+        var cachedPages = _pageCache.Count;
+        if (cachedPages <= 0)
+        {
+            return 0;
+        }
+
+        var desired = Math.Max(targetWrites * 4, Math.Min(MaxCacheSize, BackgroundWritebackMaxBatchSize * 4));
+        return Math.Min(cachedPages, desired);
+    }
+
+    private bool TryPinDirtyPageForBackgroundWriteback(uint pageID, out Page page)
+    {
+        page = null!;
+
+        if (!_pageCache.TryGetValue(pageID, out var candidate))
+        {
+            _lruCache.Remove(pageID);
+            return false;
+        }
+
+        if (candidate.PinCount > 0 || candidate.PageType == PageType.Index || !candidate.IsDirty)
+        {
+            return false;
+        }
+
+        candidate.Pin();
+        if (!_pageCache.TryGetValue(pageID, out var current) ||
+            !ReferenceEquals(current, candidate) ||
+            candidate.PinCount != 1 ||
+            candidate.PageType == PageType.Index ||
+            !candidate.IsDirty)
+        {
+            candidate.Unpin();
+            return false;
+        }
+
+        page = candidate;
+        return true;
+    }
+
+    private async Task<bool> WriteDirtyPageForBackgroundWritebackAsync(Page page, CancellationToken cancellationToken)
+    {
+        if (page.PageType == PageType.Index || !page.IsDirty)
+        {
+            return false;
+        }
+
+        if (await TryWriteDeferredWalPageAsync(page, cancellationToken).ConfigureAwait(false))
+        {
+            return true;
+        }
+
+        if (IsDeferredWalPagePending(page) || !page.IsDirty)
+        {
+            return false;
+        }
+
+        await SavePageAsync(page, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     private void RemoveFromCache(uint pageID)

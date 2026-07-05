@@ -18,8 +18,7 @@ public class MetadataManager
     private readonly object _schemaSyncRoot = new();
     
     // 内存 LRU 模式缓存 (AOT 环境下使用 ConcurrentDictionary 极其稳定)
-    private readonly ConcurrentDictionary<string, MetadataDocument> _cache = new();
-    private readonly ConcurrentDictionary<string, SchemaValidationProfile> _validationProfiles = new();
+    private readonly ConcurrentDictionary<string, SchemaCacheEntry> _cache = new();
 
     private enum ExpectedBsonKind
     {
@@ -91,6 +90,23 @@ public class MetadataManager
                 AllowedFields = allowed,
                 ExpectedKindsByField = expectedKinds
             };
+        }
+    }
+
+    private sealed class SchemaCacheEntry
+    {
+        private SchemaCacheEntry(MetadataDocument document, SchemaValidationProfile profile)
+        {
+            Document = document;
+            Profile = profile;
+        }
+
+        public MetadataDocument Document { get; }
+        public SchemaValidationProfile Profile { get; }
+
+        public static SchemaCacheEntry Build(MetadataDocument document)
+        {
+            return new SchemaCacheEntry(document, SchemaValidationProfile.Build(document));
         }
     }
 
@@ -169,8 +185,7 @@ public class MetadataManager
             }
 
             // 更新缓存
-            _cache[doc.TableName] = doc;
-            _validationProfiles[doc.TableName] = SchemaValidationProfile.Build(doc);
+            _cache[doc.TableName] = SchemaCacheEntry.Build(doc);
         }
     }
 
@@ -196,24 +211,36 @@ public class MetadataManager
 
     public MetadataDocument? GetMetadata(string tableName)
     {
+        return GetSchemaCacheEntry(tableName)?.Document;
+    }
+
+    private SchemaCacheEntry? GetSchemaCacheEntry(string tableName)
+    {
         if (_cache.TryGetValue(tableName, out var cached)) return cached;
 
-        try {
-            var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
-            var doc = col.FindById(tableName);
-            if (doc != null) {
-                _cache[tableName] = doc;
-                _validationProfiles[tableName] = SchemaValidationProfile.Build(doc);
-                return doc;
+        lock (_schemaSyncRoot)
+        {
+            if (_cache.TryGetValue(tableName, out cached)) return cached;
+
+            try
+            {
+                var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
+                var doc = col.FindById(tableName);
+                if (doc != null)
+                {
+                    cached = SchemaCacheEntry.Build(doc);
+                    _cache[tableName] = cached;
+                    return cached;
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to load metadata for table '{tableName}'.",
+                    ex);
             }
         }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException(
-                $"Failed to load metadata for table '{tableName}'.",
-                ex);
-        }
-        
+
         return null;
     }
 
@@ -222,16 +249,17 @@ public class MetadataManager
     /// </summary>
     public void DeleteMetadata(string tableName)
     {
-        var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
-        col.Delete(tableName);
-        _cache.TryRemove(tableName, out _);
-        _validationProfiles.TryRemove(tableName, out _);
+        lock (_schemaSyncRoot)
+        {
+            var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);
+            col.Delete(tableName);
+            _cache.TryRemove(tableName, out _);
+        }
     }
 
     internal void InvalidateMetadata(string tableName)
     {
         _cache.TryRemove(tableName, out _);
-        _validationProfiles.TryRemove(tableName, out _);
     }
 
     /// <summary>
@@ -283,17 +311,13 @@ public class MetadataManager
         if (document == null) throw new ArgumentNullException(nameof(document));
         if (tableName.StartsWith("__", StringComparison.Ordinal)) return;
 
-        var schema = GetMetadata(tableName);
-        if (schema == null)
+        var entry = GetSchemaCacheEntry(tableName);
+        if (entry == null)
         {
             throw new InvalidOperationException($"Schema not found for table '{tableName}'.");
         }
 
-        if (!_validationProfiles.TryGetValue(tableName, out var profile))
-        {
-            profile = SchemaValidationProfile.Build(schema);
-            _validationProfiles[tableName] = profile;
-        }
+        var profile = entry.Profile;
 
         foreach (var requiredField in profile.RequiredFields)
         {
@@ -332,7 +356,8 @@ public class MetadataManager
         if (string.IsNullOrWhiteSpace(tableName)) throw new ArgumentException("tableName is required.", nameof(tableName));
         if (document == null) throw new ArgumentNullException(nameof(document));
 
-        var schema = GetMetadata(tableName);
+        var entry = GetSchemaCacheEntry(tableName);
+        var schema = entry?.Document;
         if (schema == null || schema.Columns.Count == 0) return document;
 
         BsonDocumentBuilder? builder = null;

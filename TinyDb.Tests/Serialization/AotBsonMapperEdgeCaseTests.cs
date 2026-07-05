@@ -536,14 +536,11 @@ public class AotBsonMapperEdgeCaseTests
     }
 
     [Test]
-    public async Task SetId_BsonDocument_ShouldNotModify()
+    public async Task SetId_BsonDocument_ShouldThrowAndNotModify()
     {
-        // BsonDocument is immutable, SetId should be a no-op
         var doc = new BsonDocument().Set("_id", new BsonInt32(1));
-        
-        AotBsonMapper.SetId(doc, new BsonInt32(999));
-        
-        // Should still be 1 (not modified)
+
+        await Assert.That(() => AotBsonMapper.SetId(doc, new BsonInt32(999))).Throws<NotSupportedException>();
         await Assert.That(doc["_id"].ToInt32(null)).IsEqualTo(1);
     }
 

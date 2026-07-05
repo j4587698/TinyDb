@@ -189,14 +189,13 @@ public class AotBsonMapperExtendedTests
     }
     
     /// <summary>
-    /// Test SetId with BsonDocument (should do nothing, BsonDocument is immutable)
+    /// Test SetId with BsonDocument.
     /// </summary>
     [Test]
-    public async Task SetId_BsonDocument_ShouldDoNothing()
+    public async Task SetId_BsonDocument_ShouldThrow()
     {
         var doc = new BsonDocument().Set("_id", 123);
-        AotBsonMapper.SetId(doc, new BsonInt32(999));
-        // BsonDocument is immutable, SetId does nothing
+        await Assert.That(() => AotBsonMapper.SetId(doc, new BsonInt32(999))).Throws<NotSupportedException>();
         await Assert.That(doc["_id"].ToInt32(null)).IsEqualTo(123);
     }
     
