@@ -11,7 +11,7 @@ using LinqExp = System.Linq.Expressions;
 namespace TinyDb.Query;
 
 public class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource, TData> : IOrderedQueryable<TData>
-    where TSource : class, new()
+    where TSource : class
 {
     private readonly QueryExecutor _executor;
     private readonly string _collectionName;
@@ -55,7 +55,7 @@ public class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
 
 // Helper for initial creation
 public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T> : Queryable<T, T>
-    where T : class, new()
+    where T : class
 {
     public Queryable(QueryExecutor executor, string collectionName) 
         : base(executor, collectionName)
@@ -64,7 +64,7 @@ public sealed class Queryable<[DynamicallyAccessedMembers(DynamicallyAccessedMem
 }
 
 internal sealed class UntypedQueryable<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource> : IOrderedQueryable
-    where TSource : class, new()
+    where TSource : class
 {
     private readonly Type _elementType;
 
@@ -89,7 +89,7 @@ internal sealed class UntypedQueryable<[DynamicallyAccessedMembers(DynamicallyAc
 }
 
 internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource, TData> : IQueryProvider
-    where TSource : class, new()
+    where TSource : class
 {
     private readonly QueryExecutor _executor;
     private readonly string _collectionName;
@@ -166,12 +166,18 @@ internal sealed class QueryProvider<[DynamicallyAccessedMembers(DynamicallyAcces
 internal static class QueryPipeline
 {
     public static object? Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource>(QueryExecutor executor, string collectionName, LinqExp.Expression expression)
-        where TSource : class, new()
+        where TSource : class
     {
         // 1. 提取可下推到数据库的查询条件 (Where)
         // Note: PredicateExtractor.Extract may use Expression.Lambda for combining predicates,
         // but the actual execution path in AOT uses ExecuteAot which doesn't require dynamic code.
         var (shape, sourceConstant) = QueryShapeExtractor.Extract<TSource>(expression);
+
+        if (sourceConstant != null &&
+            TryExecuteCountTerminal(executor, collectionName, expression, shape, out var countResult))
+        {
+            return countResult;
+        }
 
         // 2. 执行数据库查询 (直接调用泛型方法，无需反射)
         // Predicate is Expression<Func<TSource, bool>>?
@@ -196,8 +202,244 @@ internal static class QueryPipeline
         return queryResult;
     }
 
+    private static bool TryExecuteCountTerminal<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource>(
+        QueryExecutor executor,
+        string collectionName,
+        LinqExp.Expression expression,
+        QueryShape<TSource> shape,
+        out object? result)
+        where TSource : class
+    {
+        result = null;
+        if (shape.HasTypeShapingOperator ||
+            expression is not LinqExp.MethodCallExpression methodCall ||
+            methodCall.Method.DeclaringType != typeof(System.Linq.Queryable))
+        {
+            return false;
+        }
+
+        var methodName = methodCall.Method.Name;
+        if (methodName is not ("Count" or "LongCount"))
+        {
+            return false;
+        }
+
+        if (!IsCountFastPathShapeSafe(methodCall, shape))
+        {
+            return false;
+        }
+
+        if (!TryBuildCountPredicate(methodCall, shape.Predicate, out var predicate))
+        {
+            return false;
+        }
+
+        var count = executor.Count(collectionName, predicate);
+        if (shape.Skip is { } skip && skip > 0)
+        {
+            count = Math.Max(0, count - skip);
+        }
+
+        if (shape.Take is { } take)
+        {
+            count = Math.Min(count, Math.Max(0, take));
+        }
+
+        if (methodName == "LongCount")
+        {
+            result = count;
+        }
+        else
+        {
+            result = checked((int)count);
+        }
+
+        return true;
+    }
+
+    private static bool IsCountFastPathShapeSafe<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource>(
+        LinqExp.MethodCallExpression terminalCall,
+        QueryShape<TSource> shape)
+        where TSource : class
+    {
+        if (terminalCall.Arguments.Count == 2 &&
+            (shape.Skip.HasValue || shape.Take.HasValue))
+        {
+            return false;
+        }
+
+        var stack = new Stack<LinqExp.MethodCallExpression>();
+        var current = terminalCall.Arguments[0];
+        while (current is LinqExp.MethodCallExpression call && call.Method.DeclaringType == typeof(System.Linq.Queryable))
+        {
+            stack.Push(call);
+            current = call.Arguments[0];
+        }
+
+        var stage = CountFastPathStage.BeforePagination;
+        var seenSkip = false;
+        var seenTake = false;
+
+        foreach (var call in stack)
+        {
+            switch (call.Method.Name)
+            {
+                case "Where":
+                    if (stage != CountFastPathStage.BeforePagination ||
+                        !TryGetPredicateLambda<TSource>(call, out _))
+                    {
+                        return false;
+                    }
+                    break;
+
+                case "OrderBy":
+                case "OrderByDescending":
+                case "ThenBy":
+                case "ThenByDescending":
+                    if (stage != CountFastPathStage.BeforePagination)
+                    {
+                        return false;
+                    }
+                    break;
+
+                case "Skip":
+                    if (stage != CountFastPathStage.BeforePagination ||
+                        seenSkip ||
+                        seenTake ||
+                        !TryGetIntConstantArgument(call))
+                    {
+                        return false;
+                    }
+
+                    seenSkip = true;
+                    stage = CountFastPathStage.AfterSkip;
+                    break;
+
+                case "Take":
+                    if (seenTake ||
+                        !TryGetIntConstantArgument(call))
+                    {
+                        return false;
+                    }
+
+                    seenTake = true;
+                    stage = CountFastPathStage.AfterTake;
+                    break;
+
+                default:
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryGetPredicateLambda<TSource>(
+        LinqExp.MethodCallExpression call,
+        [NotNullWhen(true)] out LinqExp.LambdaExpression? lambda)
+        where TSource : class
+    {
+        lambda = null;
+        if (call.Arguments.Count < 2)
+        {
+            return false;
+        }
+
+        if (call.Arguments[1] is LinqExp.UnaryExpression unary &&
+            unary.Operand is LinqExp.LambdaExpression quotedLambda)
+        {
+            lambda = quotedLambda;
+        }
+        else if (call.Arguments[1] is LinqExp.LambdaExpression directLambda)
+        {
+            lambda = directLambda;
+        }
+        else
+        {
+            return false;
+        }
+
+        return lambda.Parameters.Count == 1 &&
+               lambda.Parameters[0].Type == typeof(TSource) &&
+               lambda.ReturnType == typeof(bool);
+    }
+
+    private static bool TryGetIntConstantArgument(LinqExp.MethodCallExpression call)
+    {
+        return call.Arguments.Count >= 2 &&
+               call.Arguments[1] is LinqExp.ConstantExpression { Value: int };
+    }
+
+    private enum CountFastPathStage
+    {
+        BeforePagination,
+        AfterSkip,
+        AfterTake
+    }
+
+    private static bool TryBuildCountPredicate<TSource>(
+        LinqExp.MethodCallExpression methodCall,
+        LinqExp.Expression<Func<TSource, bool>>? shapePredicate,
+        out LinqExp.Expression<Func<TSource, bool>>? predicate)
+        where TSource : class
+    {
+        predicate = shapePredicate;
+        if (methodCall.Arguments.Count == 1)
+        {
+            return true;
+        }
+
+        if (methodCall.Arguments.Count != 2 ||
+            methodCall.Arguments[1] is not LinqExp.UnaryExpression unary ||
+            unary.Operand is not LinqExp.LambdaExpression lambda ||
+            lambda.Parameters.Count != 1 ||
+            lambda.Parameters[0].Type != typeof(TSource) ||
+            lambda.ReturnType != typeof(bool))
+        {
+            return false;
+        }
+
+        var terminalPredicate = (LinqExp.Expression<Func<TSource, bool>>)lambda;
+        predicate = shapePredicate == null
+            ? terminalPredicate
+            : AndAlso(shapePredicate, terminalPredicate);
+        return true;
+    }
+
+    private static LinqExp.Expression<Func<TSource, bool>> AndAlso<TSource>(
+        LinqExp.Expression<Func<TSource, bool>> left,
+        LinqExp.Expression<Func<TSource, bool>> right)
+        where TSource : class
+    {
+        var parameter = LinqExp.Expression.Parameter(typeof(TSource), "x");
+        var leftBody = new ParameterReplaceVisitor(left.Parameters[0], parameter).Visit(left.Body)!;
+        var rightBody = new ParameterReplaceVisitor(right.Parameters[0], parameter).Visit(right.Body)!;
+        return LinqExp.Expression.Lambda<Func<TSource, bool>>(
+            LinqExp.Expression.AndAlso(leftBody, rightBody),
+            parameter);
+    }
+
+    private sealed class ParameterReplaceVisitor : LinqExp.ExpressionVisitor
+    {
+        private readonly LinqExp.ParameterExpression _from;
+        private readonly LinqExp.ParameterExpression _to;
+
+        public ParameterReplaceVisitor(LinqExp.ParameterExpression from, LinqExp.ParameterExpression to)
+        {
+            _from = from;
+            _to = to;
+        }
+
+        protected override LinqExp.Expression VisitParameter(LinqExp.ParameterExpression node)
+        {
+            return ReferenceEquals(node, _from) ? _to : node;
+        }
+    }
+
     private static object? ExecuteAot<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, QueryPushdownInfo pushdown)
-        where TSource : class, new()
+        where TSource : class
     {
         var stack = new Stack<LinqExp.MethodCallExpression>();
         var current = expression;
@@ -332,14 +574,14 @@ internal static class QueryPipeline
     }
 
     internal static object? ExecuteAotForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(LinqExp.Expression expression, IEnumerable<TSource> queryResult, LinqExp.Expression? extractedPredicate)
-        where TSource : class, new()
+        where TSource : class
     {
         var pushdown = new QueryPushdownInfo { WherePushedCount = extractedPredicate != null ? int.MaxValue : 0 };
         return ExecuteAot(expression, queryResult, pushdown);
     }
 
     internal static IEnumerable<T> ExecuteWhereGenericForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
-        where T : class, new()
+        where T : class
     {
         return ExecuteWhereGeneric(source, m);
     }
@@ -354,7 +596,7 @@ internal static class QueryPipeline
     // ... IsTerminal, ExecuteTerminal ...
 
     private static IEnumerable<T> ExecuteWhereGeneric<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
-        where T : class, new()
+        where T : class
     {
         var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
         var parser = new ExpressionParser();
@@ -369,7 +611,7 @@ internal static class QueryPipeline
     }
 
     private static IEnumerable<T> ExecuteOrderByGeneric<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
-        where T : class, new()
+        where T : class
     {
         var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
         var parser = new ExpressionParser();
@@ -642,7 +884,7 @@ internal static class QueryPipeline
     }
 
     private static IEnumerable<AotGrouping> ExecuteGroupByGeneric<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(IEnumerable<T> source, LinqExp.MethodCallExpression m)
-        where T : class, new()
+        where T : class
     {
         var lambda = (LinqExp.LambdaExpression)((LinqExp.UnaryExpression)m.Arguments[1]).Operand;
         var parser = new ExpressionParser();

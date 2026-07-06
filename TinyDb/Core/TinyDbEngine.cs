@@ -692,7 +692,7 @@ public sealed class TinyDbEngine : IDisposable
     /// </summary>
     /// <typeparam name="T">集合中文档的类型。</typeparam>
     /// <returns>集合实例。</returns>
-    public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>() where T : class, new()
+    public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>() where T : class
     {
         var n = GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name;
         return GetOrCreateCollection<T>(n);
@@ -705,7 +705,7 @@ public sealed class TinyDbEngine : IDisposable
     /// <typeparam name="T">集合中文档的类型。</typeparam>
     /// <param name="name">集合的名称（可选）。如果为null或空，则使用Entity特性的Name属性或类名。</param>
     /// <returns>集合实例。</returns>
-    public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name) where T : class, new()
+    public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name) where T : class
     {
         var n = !string.IsNullOrEmpty(name) ? name : (GetCollectionNameFromEntityAttribute<T>() ?? typeof(T).Name);
         return GetOrCreateCollection<T>(n);
@@ -714,7 +714,7 @@ public sealed class TinyDbEngine : IDisposable
     public IEnumerable<T> QuerySql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where T : class, new()
+        where T : class
     {
         ThrowIfDisposed();
         if (sql == null) throw new ArgumentNullException(nameof(sql));
@@ -729,7 +729,7 @@ public sealed class TinyDbEngine : IDisposable
     public IEnumerable<BsonDocument> QuerySqlDocuments<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TSource : class, new()
+        where TSource : class
     {
         ThrowIfDisposed();
         if (sql == null) throw new ArgumentNullException(nameof(sql));
@@ -746,8 +746,8 @@ public sealed class TinyDbEngine : IDisposable
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TSource : class, new()
-        where TProjection : class, new()
+        where TSource : class
+        where TProjection : class
     {
         ThrowIfDisposed();
         if (sql == null) throw new ArgumentNullException(nameof(sql));
@@ -762,7 +762,7 @@ public sealed class TinyDbEngine : IDisposable
     public SqlExecutionResult Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TSource : class, new()
+        where TSource : class
     {
         ThrowIfDisposed();
         if (sql == null) throw new ArgumentNullException(nameof(sql));
@@ -779,8 +779,8 @@ public sealed class TinyDbEngine : IDisposable
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TSource : class, new()
-        where TProjection : class, new()
+        where TSource : class
+        where TProjection : class
     {
         ThrowIfDisposed();
         if (sql == null) throw new ArgumentNullException(nameof(sql));
@@ -792,7 +792,7 @@ public sealed class TinyDbEngine : IDisposable
             : collection.Execute<TProjection>(sql, parameters);
     }
 
-    private ITinyCollection<T> GetOrCreateCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string name) where T : class, new()
+    private ITinyCollection<T> GetOrCreateCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string name) where T : class
     {
         if (_collections.TryGetValue(name, out var existing))
         {

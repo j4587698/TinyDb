@@ -61,7 +61,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         var classDeclarations = context.SyntaxProvider
             .ForAttributeWithMetadataName(
                 EntityAttributeMetadataName,
-                predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax,
+                predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax || s is RecordDeclarationSyntax,
                 transform: static (ctx, _) => GetClassInfo(ctx))
             .Where(static m => m is not null)
             .Collect();
@@ -216,7 +216,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     propertySymbol.IsStatic ||
                     propertySymbol.IsIndexer ||
                     propertySymbol.GetMethod == null ||
-                    propertySymbol.SetMethod == null)
+                    propertySymbol.SetMethod == null ||
+                    propertySymbol.SetMethod.DeclaredAccessibility != Accessibility.Public ||
+                    propertySymbol.SetMethod.IsInitOnly)
                 {
                     continue;
                 }
@@ -481,6 +483,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             }
         }
 
+        AddMissingSymbolProperties(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors);
+        var constructorParameters = AddConstructorBoundProperties(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors);
+
         // 智能ID识别逻辑
         if (!string.IsNullOrEmpty(specifiedIdProperty))
         {
@@ -493,26 +498,14 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         }
         if (idProperty == null)
         {
-            // 2. 自动查找标准ID属性名称
-            foreach (var member in classDeclaration.Members)
+            // 2. 自动查找 [Id] 标记属性（包含继承链）
+            var idAttributePropertyName = FindIdPropertyName(classSymbol);
+            idProperty = idAttributePropertyName == null
+                ? null
+                : properties.FirstOrDefault(p => p.Name == idAttributePropertyName);
+            if (idProperty != null)
             {
-                if (member is PropertyDeclarationSyntax property)
-                {
-                    var propertySymbol = semanticModel.GetDeclaredSymbol(property);
-                    var hasIdAttribute = propertySymbol?.GetAttributes()
-                        .Any(attr => attr.AttributeClass?.Name == "IdAttribute") ?? false;
-
-                    if (hasIdAttribute)
-                    {
-                        var propertyName = property.Identifier.Text;
-                        idProperty = properties.FirstOrDefault(p => p.Name == propertyName);
-                        if (idProperty != null)
-                        {
-                            idProperty.IsId = true;
-                            break;
-                        }
-                    }
-                }
+                idProperty.IsId = true;
             }
 
             if (idProperty == null)
@@ -538,7 +531,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
         var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
 
-        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors);
+        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors, constructorParameters);
     }
 
     /// <summary>
@@ -568,6 +561,323 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 只处理有属性的实体类（ID将通过智能识别获得）
         return classInfo.Properties.Count > 0;
+    }
+
+    private static void AddMissingSymbolProperties(
+        INamedTypeSymbol? classSymbol,
+        string containingTypeName,
+        List<PropertyInfo> properties,
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors)
+    {
+        if (classSymbol == null)
+        {
+            return;
+        }
+
+        var existingNames = new HashSet<string>(properties.Select(static p => p.Name), StringComparer.Ordinal);
+        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol))
+        {
+            foreach (var member in typeSymbol.GetMembers())
+            {
+                if (member is not IPropertySymbol propertySymbol ||
+                    !existingNames.Add(propertySymbol.Name))
+                {
+                    continue;
+                }
+
+                if (TryCreatePropertyInfoFromSymbol(
+                        propertySymbol,
+                        containingTypeName,
+                        typeSymbolMap,
+                        bsonRefMissingEntityErrors,
+                        requirePublicMutableSetter: true,
+                        out var propertyInfo))
+                {
+                    properties.Add(propertyInfo!);
+                }
+            }
+        }
+    }
+
+    private static List<ConstructorParameterInfo> AddConstructorBoundProperties(
+        INamedTypeSymbol? classSymbol,
+        string containingTypeName,
+        List<PropertyInfo> properties,
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors)
+    {
+        if (classSymbol == null)
+        {
+            return new List<ConstructorParameterInfo>();
+        }
+
+        var propertySymbols = EnumerateTypeAndBaseTypes(classSymbol)
+            .SelectMany(static type => type.GetMembers().OfType<IPropertySymbol>())
+            .Where(static property => property.DeclaredAccessibility == Accessibility.Public &&
+                                      !property.IsStatic &&
+                                      !property.IsIndexer &&
+                                      property.GetMethod != null)
+            .GroupBy(static property => property.Name, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+
+        foreach (var constructor in classSymbol.InstanceConstructors
+                     .Where(static ctor => ctor.DeclaredAccessibility == Accessibility.Public && ctor.Parameters.Length > 0)
+                     .OrderByDescending(static ctor => ctor.Parameters.Length))
+        {
+            var parameters = new List<ConstructorParameterInfo>(constructor.Parameters.Length);
+            var matchedAll = true;
+
+            foreach (var parameter in constructor.Parameters)
+            {
+                if (!TryFindConstructorProperty(parameter, propertySymbols, out var propertySymbol))
+                {
+                    matchedAll = false;
+                    break;
+                }
+
+                var propertyInfo = properties.FirstOrDefault(p => string.Equals(p.Name, propertySymbol.Name, StringComparison.Ordinal));
+                if (propertyInfo == null)
+                {
+                    if (!TryCreatePropertyInfoFromSymbol(
+                            propertySymbol,
+                            containingTypeName,
+                            typeSymbolMap,
+                            bsonRefMissingEntityErrors,
+                            requirePublicMutableSetter: false,
+                            out propertyInfo))
+                    {
+                        matchedAll = false;
+                        break;
+                    }
+
+                    var constructorPropertyInfo = propertyInfo!;
+                    properties.Add(constructorPropertyInfo);
+                    propertyInfo = constructorPropertyInfo;
+                }
+
+                if (propertyInfo.HasIgnoreAttribute)
+                {
+                    matchedAll = false;
+                    break;
+                }
+
+                parameters.Add(new ConstructorParameterInfo(parameter.Name, propertyInfo));
+            }
+
+            if (matchedAll)
+            {
+                return parameters;
+            }
+        }
+
+        return new List<ConstructorParameterInfo>();
+    }
+
+    private static bool TryFindConstructorProperty(
+        IParameterSymbol parameter,
+        IReadOnlyDictionary<string, IPropertySymbol> propertySymbols,
+        out IPropertySymbol propertySymbol)
+    {
+        if (propertySymbols.TryGetValue(parameter.Name, out propertySymbol!) &&
+            SymbolEqualityComparer.Default.Equals(propertySymbol.Type, parameter.Type))
+        {
+            return true;
+        }
+
+        foreach (var candidate in propertySymbols.Values)
+        {
+            if (string.Equals(candidate.Name, parameter.Name, StringComparison.OrdinalIgnoreCase) &&
+                SymbolEqualityComparer.Default.Equals(candidate.Type, parameter.Type))
+            {
+                propertySymbol = candidate;
+                return true;
+            }
+        }
+
+        propertySymbol = null!;
+        return false;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndBaseTypes(INamedTypeSymbol typeSymbol)
+    {
+        for (var current = typeSymbol; current != null && current.SpecialType != SpecialType.System_Object; current = current.BaseType)
+        {
+            yield return current;
+        }
+    }
+
+    private static bool TryCreatePropertyInfoFromSymbol(
+        IPropertySymbol propertySymbol,
+        string containingTypeName,
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
+        bool requirePublicMutableSetter,
+        out PropertyInfo? propertyInfo)
+    {
+        propertyInfo = null;
+        var canSet = propertySymbol.SetMethod is { DeclaredAccessibility: Accessibility.Public, IsInitOnly: false };
+        if (propertySymbol.DeclaredAccessibility != Accessibility.Public ||
+            propertySymbol.IsStatic ||
+            propertySymbol.IsIndexer ||
+            propertySymbol.GetMethod == null ||
+            (requirePublicMutableSetter && !canSet))
+        {
+            return false;
+        }
+
+        var attributes = propertySymbol.GetAttributes();
+        var hasIgnoreAttribute = attributes
+            .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore");
+
+        var bsonRefAttribute = attributes
+            .FirstOrDefault(attr => attr.AttributeClass?.Name == "BsonRefAttribute");
+        var bsonRefCollectionName = bsonRefAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+
+        var foreignKeyAttribute = attributes
+            .FirstOrDefault(attr => attr.AttributeClass?.Name == "ForeignKeyAttribute" ||
+                                    attr.AttributeClass?.Name == "ForeignKey");
+        var foreignKeyCollectionName = foreignKeyAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+
+        var typeSymbol = propertySymbol.Type;
+        if (!string.IsNullOrEmpty(bsonRefCollectionName))
+        {
+            var refTypeSymbol = GetBsonRefTargetType(typeSymbol);
+            if (refTypeSymbol != null &&
+                !refTypeSymbol.GetAttributes().Any(attr => attr.AttributeClass?.Name == "EntityAttribute"))
+            {
+                bsonRefMissingEntityErrors.Add(new BsonRefMissingEntityInfo(
+                    propertySymbol.Name,
+                    containingTypeName,
+                    refTypeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                    propertySymbol.Locations.FirstOrDefault()));
+            }
+        }
+
+        var propertyType = typeSymbol.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+        var propIsValueType = typeSymbol.IsValueType;
+        var isNullableValueType = typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+                                  namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+        var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
+                                      propertySymbol.NullableAnnotation == NullableAnnotation.Annotated;
+        var isEnumType = typeSymbol.TypeKind == TypeKind.Enum;
+        var nonNullableType = propertyType;
+        var fullyQualifiedNonNullableType = propertyType;
+
+        if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
+        {
+            var underlyingType = nullableType.TypeArguments[0];
+            isEnumType = underlyingType.TypeKind == TypeKind.Enum;
+            nonNullableType = underlyingType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+            fullyQualifiedNonNullableType = nonNullableType;
+            AddTypeSymbolIfMissing(typeSymbolMap, fullyQualifiedNonNullableType, underlyingType);
+        }
+        else if (!propIsValueType && propertyType.EndsWith("?", StringComparison.Ordinal))
+        {
+            nonNullableType = propertyType.TrimEnd('?').Trim();
+            fullyQualifiedNonNullableType = nonNullableType;
+        }
+
+        var typeAnalysis = AnalyzePropertyType(typeSymbol);
+        AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis);
+
+        var idGenerationInfo = GetIdGenerationInfo(propertySymbol);
+        propertyInfo = new PropertyInfo(
+            propertySymbol.Name,
+            propertyType,
+            isId: false,
+            isIgnored: hasIgnoreAttribute,
+            hasIgnoreAttribute: hasIgnoreAttribute,
+            isValueType: propIsValueType,
+            isNullableValueType: isNullableValueType,
+            isNullableReferenceType: isNullableReferenceType,
+            isEnum: isEnumType,
+            nonNullableType: nonNullableType,
+            fullyQualifiedType: propertyType,
+            fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
+            isComplexType: typeAnalysis.IsComplexType,
+            isCollection: typeAnalysis.IsCollection,
+            isDictionary: typeAnalysis.IsDictionary,
+            isArray: typeAnalysis.IsArray,
+            elementType: typeAnalysis.ElementType,
+            isElementComplexType: typeAnalysis.IsElementComplexType,
+            isElementValueType: typeAnalysis.IsElementValueType,
+            dictionaryKeyType: typeAnalysis.DictionaryKeyType,
+            dictionaryValueType: typeAnalysis.DictionaryValueType,
+            isDictionaryValueComplexType: typeAnalysis.IsDictionaryValueComplexType,
+            isDictionaryValueValueType: typeAnalysis.IsDictionaryValueValueType,
+            bsonRefCollectionName: bsonRefCollectionName,
+            foreignKeyCollectionName: foreignKeyCollectionName,
+            idGenerationStrategyValue: idGenerationInfo.StrategyValue,
+            idGenerationSequenceName: idGenerationInfo.SequenceName,
+            canSet: canSet);
+        return true;
+    }
+
+    private static void AddTypeSymbols(
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        ITypeSymbol typeSymbol,
+        bool isNullableValueType,
+        string fullyQualifiedNonNullableType,
+        TypeAnalysisResult typeAnalysis)
+    {
+        var actualTypeSymbol = typeSymbol;
+        if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
+        {
+            actualTypeSymbol = nullableType.TypeArguments[0];
+        }
+
+        AddTypeSymbolIfMissing(typeSymbolMap, fullyQualifiedNonNullableType, actualTypeSymbol);
+
+        if (typeAnalysis.IsCollection && !string.IsNullOrEmpty(typeAnalysis.ElementType))
+        {
+            var elementTypeSymbol = GetElementTypeSymbol(typeSymbol);
+            if (elementTypeSymbol != null)
+            {
+                AddTypeSymbolIfMissing(typeSymbolMap, typeAnalysis.ElementType!, elementTypeSymbol);
+            }
+        }
+
+        if (typeAnalysis.IsDictionary && !string.IsNullOrEmpty(typeAnalysis.DictionaryValueType))
+        {
+            var valueTypeSymbol = GetDictionaryValueTypeSymbol(typeSymbol);
+            if (valueTypeSymbol != null)
+            {
+                AddTypeSymbolIfMissing(typeSymbolMap, typeAnalysis.DictionaryValueType!, valueTypeSymbol);
+            }
+        }
+    }
+
+    private static void AddTypeSymbolIfMissing(
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        string typeName,
+        ITypeSymbol typeSymbol)
+    {
+        if (!typeSymbolMap.ContainsKey(typeName))
+        {
+            typeSymbolMap[typeName] = typeSymbol;
+        }
+    }
+
+    private static string? FindIdPropertyName(INamedTypeSymbol? classSymbol)
+    {
+        if (classSymbol == null)
+        {
+            return null;
+        }
+
+        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol))
+        {
+            foreach (var propertySymbol in typeSymbol.GetMembers().OfType<IPropertySymbol>())
+            {
+                if (propertySymbol.GetAttributes().Any(attr => attr.AttributeClass?.Name == "IdAttribute"))
+                {
+                    return propertySymbol.Name;
+                }
+            }
+        }
+
+        return null;
     }
 
     private static (int StrategyValue, string? SequenceName) GetIdGenerationInfo(ISymbol? symbol)
@@ -717,7 +1027,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 sb.AppendLine($"            if (id?.IsNull != false) return;");
             }
 
-            if (isObjectId)
+            if (!idProp.CanSet)
+            {
+                sb.AppendLine("            return;");
+            }
+            else if (isObjectId)
             {
                 sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
                 sb.AppendLine($"                entity.{idProp.Name} = bsonObjectId.Value;");
@@ -859,6 +1173,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine();
 
         // 为每个属性生成序列化代码
+        var constructorPropertyNames = new HashSet<string>(
+            classInfo.ConstructorParameters.Select(static p => p.Property.Name),
+            StringComparer.Ordinal);
         foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
         {
             var bsonCode = RewriteDocumentSetToBuilder(SourceGeneratorHelpers.GeneratePropertySerialization(prop));
@@ -887,11 +1204,30 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine($"        public static {classInfo.TypeReference} FromDocument(BsonDocument document)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (document == null) throw new ArgumentNullException(nameof(document));");
-        sb.AppendLine($"            var entity = new {classInfo.TypeReference}();");
+        if (classInfo.ConstructorParameters.Count > 0)
+        {
+            foreach (var parameter in classInfo.ConstructorParameters)
+            {
+                var prop = parameter.Property;
+                var bsonFieldName = GetBsonFieldName(prop);
+                var localName = $"ctor_{prop.Name}";
+                var bsonLocalName = $"bsonCtor_{prop.Name}";
+                sb.AppendLine($"            {prop.FullyQualifiedType} {localName} = document.TryGetValue(\"{bsonFieldName}\", out var {bsonLocalName})");
+                sb.AppendLine($"                ? ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName})!");
+                sb.AppendLine("                : default!;");
+            }
+
+            var arguments = string.Join(", ", classInfo.ConstructorParameters.Select(p => $"ctor_{p.Property.Name}"));
+            sb.AppendLine($"            var entity = new {classInfo.TypeReference}({arguments});");
+        }
+        else
+        {
+            sb.AppendLine($"            var entity = new {classInfo.TypeReference}();");
+        }
         sb.AppendLine();
 
         // 为每个属性生成反序列化代码
-        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
+        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute && p.CanSet && !constructorPropertyNames.Contains(p.Name)))
         {
             var bsonCode = SourceGeneratorHelpers.GeneratePropertyDeserialization(prop);
             sb.AppendLine($"            // 反序列化属性: {prop.Name}");
@@ -939,7 +1275,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("            switch (propertyName)");
         sb.AppendLine("            {");
 
-        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
+        foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute && p.CanSet))
         {
             sb.AppendLine($"                case \"{prop.Name}\":");
             sb.AppendLine($"                    entity.{prop.Name} = value is null ? default! : ({prop.FullyQualifiedType})value;");
@@ -968,6 +1304,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     private static string RewriteDocumentSetToBuilder(string source)
     {
         return source.Replace("document = document.Set(", "documentBuilder.Set(");
+    }
+
+    private static string GetBsonFieldName(PropertyInfo prop)
+    {
+        return prop.IsId ? "_id" : ToCamelCase(prop.Name);
     }
 
     private static void GenerateForeignKeyReferences(StringBuilder sb, ClassInfo classInfo)
@@ -1027,6 +1368,13 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         if (!classInfo.IsValueType)
         {
             sb.AppendLine("            if (entity == null) return false;");
+        }
+
+        if (!idProperty.CanSet)
+        {
+            sb.AppendLine("            return false;");
+            sb.AppendLine("        }");
+            return;
         }
 
         sb.AppendLine("            if (HasValidId(entity)) return false;");
@@ -2862,6 +3210,18 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
 }
 
+    public sealed class ConstructorParameterInfo
+    {
+        public string ParameterName { get; }
+        public PropertyInfo Property { get; }
+
+        public ConstructorParameterInfo(string parameterName, PropertyInfo property)
+        {
+            ParameterName = parameterName;
+            Property = property;
+        }
+    }
+
     /// <summary>
     /// 类信息
     /// </summary>
@@ -2954,8 +3314,9 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         /// BsonRef 引用类型缺少 Entity 特性的错误列表
         /// </summary>
         public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
+        public List<ConstructorParameterInfo> ConstructorParameters { get; }
 
-        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null)
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null)
         {
             Namespace = @namespace;
             Name = name;
@@ -2969,6 +3330,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
             EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
             BsonRefMissingEntityErrors = bsonRefMissingEntityErrors ?? new List<BsonRefMissingEntityInfo>();
+            ConstructorParameters = constructorParameters ?? new List<ConstructorParameterInfo>();
         }
     }
 /// <summary>
@@ -3164,6 +3526,7 @@ public class PropertyInfo
     public string? ForeignKeyCollectionName { get; }
     public int IdGenerationStrategyValue { get; }
     public string? IdGenerationSequenceName { get; }
+    public bool CanSet { get; }
     
     /// <summary>
     /// 是否是 DbRef 引用类型
@@ -3198,7 +3561,8 @@ public class PropertyInfo
         string? bsonRefCollectionName = null,
         string? foreignKeyCollectionName = null,
         int idGenerationStrategyValue = 0,
-        string? idGenerationSequenceName = null)
+        string? idGenerationSequenceName = null,
+        bool canSet = true)
     {
         Name = name;
         Type = type;
@@ -3227,6 +3591,7 @@ public class PropertyInfo
         ForeignKeyCollectionName = foreignKeyCollectionName;
         IdGenerationStrategyValue = idGenerationStrategyValue;
         IdGenerationSequenceName = idGenerationSequenceName;
+        CanSet = canSet;
     }
 }
 

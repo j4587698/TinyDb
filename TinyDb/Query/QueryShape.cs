@@ -6,7 +6,7 @@ using System.Linq.Expressions;
 namespace TinyDb.Query;
 
 internal sealed class QueryShape<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>
-    where T : class, new()
+    where T : class
 {
     public Expression<Func<T, bool>>? Predicate { get; init; }
     public int PushedWhereCount { get; init; }

@@ -309,6 +309,51 @@ public class QueryTests
     }
 
     [Test]
+    public async Task Query_SqlExecute_UpdateDelete_WithIndexPredicate_ShouldUseStableTargetIds()
+    {
+        var col = _engine.GetCollection<UserWithIntId>();
+        _engine.EnsureIndex("UserWithIntId", "Age", "age_sql_dml_idx");
+
+        var update = col.Execute(
+            "update users_int set Name = @name where Age = @age",
+            QueryParams.Create(("name", "IndexedUpdated"), ("age", 25)));
+
+        await Assert.That(update.StatementKind).IsEqualTo(SqlStatementKind.Update);
+        await Assert.That(update.AffectedRows).IsEqualTo(2);
+        await Assert.That(col.Find("Age = @age and Name = @name", QueryParams.Create(("age", 25), ("name", "IndexedUpdated"))).Count()).IsEqualTo(2);
+
+        var delete = col.Execute(
+            "delete from users_int where Age = @age",
+            QueryParams.Create(("age", 26)));
+
+        await Assert.That(delete.StatementKind).IsEqualTo(SqlStatementKind.Delete);
+        await Assert.That(delete.AffectedRows).IsEqualTo(2);
+        await Assert.That(col.Find("Age = @age", QueryParams.Create(("age", 26))).Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Query_SqlExecute_UpdateInTransaction_ShouldUsePendingTargetIds()
+    {
+        var col = _engine.GetCollection<UserWithIntId>();
+        _engine.EnsureIndex("UserWithIntId", "Age", "age_sql_tx_dml_idx");
+
+        using var transaction = _engine.BeginTransaction();
+        var first = col.Execute(
+            "update users_int set Name = @name where Age = @age",
+            QueryParams.Create(("name", "TxIndexedUpdated"), ("age", 25)));
+
+        var second = col.Execute(
+            "update users_int set Age = @newAge where Name = @name",
+            QueryParams.Create(("newAge", 77), ("name", "TxIndexedUpdated")));
+
+        transaction.Commit();
+
+        await Assert.That(first.AffectedRows).IsEqualTo(2);
+        await Assert.That(second.AffectedRows).IsEqualTo(2);
+        await Assert.That(col.Find("Age = @age and Name = @name", QueryParams.Create(("age", 77), ("name", "TxIndexedUpdated"))).Count()).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task Query_SqlExecute_DmlNumericLiterals_ShouldUseTargetPropertyTypes()
     {
         var col = _engine.GetCollection<SqlNumericItem>();

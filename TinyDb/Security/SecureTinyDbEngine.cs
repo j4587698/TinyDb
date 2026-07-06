@@ -148,7 +148,7 @@ public sealed class SecureTinyDbEngine : IDisposable
         /// 获取集合（带权限检查）
         /// </summary>
         public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>() 
-            where T : class, new()
+            where T : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();
@@ -157,7 +157,7 @@ public sealed class SecureTinyDbEngine : IDisposable
         }
 
         public ITinyCollection<T> GetCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(string? name)
-            where T : class, new()
+            where T : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();
@@ -168,7 +168,7 @@ public sealed class SecureTinyDbEngine : IDisposable
         public IEnumerable<T> QuerySql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T>(
             string sql,
             IReadOnlyDictionary<string, object?>? parameters = null)
-            where T : class, new()
+            where T : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();
@@ -179,7 +179,7 @@ public sealed class SecureTinyDbEngine : IDisposable
         public IEnumerable<BsonDocument> QuerySqlDocuments<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
             string sql,
             IReadOnlyDictionary<string, object?>? parameters = null)
-            where TSource : class, new()
+            where TSource : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();
@@ -192,8 +192,8 @@ public sealed class SecureTinyDbEngine : IDisposable
             [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
             string sql,
             IReadOnlyDictionary<string, object?>? parameters = null)
-            where TSource : class, new()
-            where TProjection : class, new()
+            where TSource : class
+            where TProjection : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();
@@ -204,7 +204,7 @@ public sealed class SecureTinyDbEngine : IDisposable
         public SqlExecutionResult Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TSource>(
             string sql,
             IReadOnlyDictionary<string, object?>? parameters = null)
-            where TSource : class, new()
+            where TSource : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();
@@ -217,8 +217,8 @@ public sealed class SecureTinyDbEngine : IDisposable
             [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
             string sql,
             IReadOnlyDictionary<string, object?>? parameters = null)
-            where TSource : class, new()
-            where TProjection : class, new()
+            where TSource : class
+            where TProjection : class
         {
             ThrowIfDisposed();
             ThrowIfNotAuthenticated();

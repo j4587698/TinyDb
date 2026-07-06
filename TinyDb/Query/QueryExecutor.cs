@@ -40,7 +40,7 @@ public sealed class QueryExecutor
     }
 
     public IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
-        where T : class, new()
+        where T : class
     {
         if (string.IsNullOrWhiteSpace(collectionName))
             throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
@@ -53,7 +53,7 @@ public sealed class QueryExecutor
     internal IEnumerable<T> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         QueryExpression? queryExpression)
-        where T : class, new()
+        where T : class
     {
         if (string.IsNullOrWhiteSpace(collectionName))
             throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
@@ -74,7 +74,7 @@ public sealed class QueryExecutor
         string collectionName,
         Expression<Func<T, bool>>? expression = null,
         CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         if (string.IsNullOrWhiteSpace(collectionName))
             throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
@@ -87,7 +87,7 @@ public sealed class QueryExecutor
     internal long Count<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         Expression<Func<T, bool>>? expression = null)
-        where T : class, new()
+        where T : class
     {
         QueryExpression? queryExpression = null;
         if (expression != null)
@@ -171,7 +171,7 @@ public sealed class QueryExecutor
         string collectionName,
         QueryShape<T> shape,
         out QueryPushdownInfo pushdown)
-        where T : class, new()
+        where T : class
     {
         if (shape == null) throw new ArgumentNullException(nameof(shape));
         if (string.IsNullOrWhiteSpace(collectionName))
@@ -269,7 +269,7 @@ public sealed class QueryExecutor
         QueryShape<T> shape,
         out QueryPushdownInfo pushdown,
         CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         if (shape == null) throw new ArgumentNullException(nameof(shape));
         if (string.IsNullOrWhiteSpace(collectionName))
@@ -362,14 +362,14 @@ public sealed class QueryExecutor
 
     // ... (省略 Index 相关方法，保持不变) ...
     internal IEnumerable<BsonDocument> ExecuteIndexScanForTests(QueryExecutionPlan executionPlan) => ExecuteIndexScan<BsonDocument>(executionPlan);
-    internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecutePrimaryKeyLookup<T>(executionPlan);
-    internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new() => ExecuteIndexSeek<T>(executionPlan);
+    internal IEnumerable<T> ExecutePrimaryKeyLookupForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class => ExecutePrimaryKeyLookup<T>(executionPlan);
+    internal IEnumerable<T> ExecuteIndexSeekForTests<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class => ExecuteIndexSeek<T>(executionPlan);
 
     private IEnumerable<T> ExecutePlanned<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         string collectionName,
         Expression<Func<T, bool>>? fallbackExpression)
-        where T : class, new()
+        where T : class
     {
         return executionPlan.Strategy switch
         {
@@ -386,7 +386,7 @@ public sealed class QueryExecutor
         string collectionName,
         Expression<Func<T, bool>>? fallbackExpression,
         CancellationToken cancellationToken)
-        where T : class, new()
+        where T : class
     {
         return executionPlan.Strategy switch
         {
@@ -400,7 +400,7 @@ public sealed class QueryExecutor
 
     private IEnumerable<T> ExecuteIndexUnion<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan)
-        where T : class, new()
+        where T : class
     {
         if (executionPlan.BranchPlans.Count == 0)
         {
@@ -486,7 +486,7 @@ public sealed class QueryExecutor
     private async IAsyncEnumerable<T> ExecuteIndexUnionAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         if (executionPlan.BranchPlans.Count == 0)
         {
@@ -713,7 +713,7 @@ public sealed class QueryExecutor
         string collectionName,
         QueryShape<T> shape,
         [NotNullWhen(true)] out QueryExecutionPlan? predicatePlan)
-        where T : class, new()
+        where T : class
     {
         if (shape.Predicate == null || shape.Sort.Count == 0 || shape.Take.HasValue)
         {
@@ -808,7 +808,7 @@ public sealed class QueryExecutor
     private static async IAsyncEnumerable<T> OrderByIdAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         IAsyncEnumerable<T> source,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         var items = new List<T>();
         await foreach (var item in source.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -827,7 +827,7 @@ public sealed class QueryExecutor
 
     private QueryExpression? GetPlanQueryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan)
-        where T : class, new()
+        where T : class
     {
         if (executionPlan.QueryExpression != null) return executionPlan.QueryExpression;
         return executionPlan.OriginalExpression != null
@@ -837,7 +837,7 @@ public sealed class QueryExecutor
 
     private IEnumerable<T> ExecuteFullTableScanFallback<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan)
-        where T : class, new()
+        where T : class
     {
         return executionPlan.QueryExpression != null
             ? ExecuteFullTableScanQuery<T>(executionPlan.CollectionName, executionPlan.QueryExpression)
@@ -847,7 +847,7 @@ public sealed class QueryExecutor
     private async IAsyncEnumerable<T> ExecutePrimaryKeyLookupAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (executionPlan.IndexScanKeys.Count == 0) yield break;
@@ -880,7 +880,7 @@ public sealed class QueryExecutor
         }
     }
 
-    private IEnumerable<T> ExecutePrimaryKeyLookup<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
+    private IEnumerable<T> ExecutePrimaryKeyLookup<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class
     {
         if (executionPlan.IndexScanKeys.Count == 0) yield break;
 
@@ -916,7 +916,7 @@ public sealed class QueryExecutor
         string collectionName,
         List<BsonValue> ids,
         QueryExpression? queryExpression)
-        where T : class, new()
+        where T : class
     {
         if (ids.Count == 0) yield break;
 
@@ -936,7 +936,7 @@ public sealed class QueryExecutor
         List<BsonValue> ids,
         QueryExpression? queryExpression,
         CancellationToken cancellationToken)
-        where T : class, new()
+        where T : class
     {
         var results = new List<T>(ids.Count);
         if (ids.Count == 0) return results;
@@ -958,7 +958,7 @@ public sealed class QueryExecutor
     private async IAsyncEnumerable<T> ExecuteIndexScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1052,7 +1052,7 @@ public sealed class QueryExecutor
         }
     }
 
-    private IEnumerable<T> ExecuteIndexScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
+    private IEnumerable<T> ExecuteIndexScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class
     {
         var tx = _engine.GetCurrentTransaction();
         var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
@@ -1128,7 +1128,7 @@ public sealed class QueryExecutor
     private async IAsyncEnumerable<T> ExecuteIndexSeekAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         QueryExecutionPlan executionPlan,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -1261,7 +1261,7 @@ public sealed class QueryExecutor
         }
     }
 
-    private IEnumerable<T> ExecuteIndexSeek<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class, new()
+    private IEnumerable<T> ExecuteIndexSeek<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(QueryExecutionPlan executionPlan) where T : class
     {
         var tx = _engine.GetCurrentTransaction();
         var idxMgr = _engine.GetIndexManager(executionPlan.CollectionName);
@@ -1370,7 +1370,7 @@ public sealed class QueryExecutor
     }
 
     private IEnumerable<T> ExecuteFullTableScan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(string collectionName, Expression<Func<T, bool>>? expression = null)
-        where T : class, new()
+        where T : class
     {
         QueryExpression? queryExpression = null;
 
@@ -1386,7 +1386,7 @@ public sealed class QueryExecutor
     private IEnumerable<T> ExecuteFullTableScanQuery<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         QueryExpression? queryExpression)
-        where T : class, new()
+        where T : class
     {
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
@@ -1476,7 +1476,7 @@ public sealed class QueryExecutor
         string collectionName,
         Expression<Func<T, bool>>? expression = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : class, new()
+        where T : class
     {
         QueryExpression? queryExpression = null;
 
@@ -1630,7 +1630,7 @@ public sealed class QueryExecutor
         BTreeIndex orderIndex,
         bool descending,
         out QueryPushdownInfo pushdown)
-        where T : class, new()
+        where T : class
     {
         var skipRemaining = Math.Max(shape.Skip.GetValueOrDefault(), 0);
         var takeRemaining = shape.Take;
@@ -1698,7 +1698,7 @@ public sealed class QueryExecutor
         bool descending,
         Transaction tx,
         out QueryPushdownInfo pushdown)
-        where T : class, new()
+        where T : class
     {
         if (tx == null) throw new ArgumentNullException(nameof(tx));
 
@@ -1866,7 +1866,7 @@ public sealed class QueryExecutor
         bool descending,
         out QueryPushdownInfo pushdown,
         CancellationToken cancellationToken)
-        where T : class, new()
+        where T : class
     {
         var skipRemaining = Math.Max(shape.Skip.GetValueOrDefault(), 0);
         var takeRemaining = shape.Take;
@@ -1938,7 +1938,7 @@ public sealed class QueryExecutor
         Transaction tx,
         out QueryPushdownInfo pushdown,
         CancellationToken cancellationToken)
-        where T : class, new()
+        where T : class
     {
         if (tx == null) throw new ArgumentNullException(nameof(tx));
 
@@ -2086,7 +2086,7 @@ public sealed class QueryExecutor
         string collectionName,
         QueryShape<T> shape,
         out QueryPushdownInfo pushdown)
-        where T : class, new()
+        where T : class
     {
         var sort = shape.Sort;
         var skip = Math.Max(shape.Skip.GetValueOrDefault(), 0);
@@ -2327,7 +2327,7 @@ public sealed class QueryExecutor
         QueryShape<T> shape,
         out QueryPushdownInfo pushdown,
         CancellationToken cancellationToken)
-        where T : class, new()
+        where T : class
     {
         var sort = shape.Sort;
         var skip = Math.Max(shape.Skip.GetValueOrDefault(), 0);

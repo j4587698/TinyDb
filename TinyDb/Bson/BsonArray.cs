@@ -164,10 +164,12 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     /// <summary>
     /// 获取枚举器
     /// </summary>
-    public IEnumerator<BsonValue> GetEnumerator()
+    public ImmutableList<BsonValue>.Enumerator GetEnumerator()
     {
         return _elements.GetEnumerator();
     }
+
+    IEnumerator<BsonValue> IEnumerable<BsonValue>.GetEnumerator() => _elements.GetEnumerator();
 
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _elements.GetEnumerator();
 

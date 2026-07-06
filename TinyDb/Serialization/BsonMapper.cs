@@ -16,7 +16,7 @@ public static class BsonMapper
     /// <param name="entity">要转换的实体。</param>
     /// <returns>BSON 文档。</returns>
     public static BsonDocument ToDocument<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(T entity)
-        where T : class, new()
+        where T : class
     {
         return AotBsonMapper.ToDocument(entity);
     }
@@ -28,7 +28,7 @@ public static class BsonMapper
     /// <param name="document">BSON 文档。</param>
     /// <returns>转换后的实体对象，如果文档为空则返回默认值。</returns>
     public static T? ToObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(BsonDocument document)
-        where T : class, new()
+        where T : class
     {
         return document == null ? default : AotBsonMapper.FromDocument<T>(document);
     }
@@ -40,7 +40,7 @@ public static class BsonMapper
     /// <param name="entity">实体对象。</param>
     /// <returns>BSON 格式的 ID 值。</returns>
     public static BsonValue GetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(T entity)
-        where T : class, new()
+        where T : class
     {
         return AotIdAccessor<T>.GetId(entity);
     }
@@ -52,7 +52,7 @@ public static class BsonMapper
     /// <param name="entity">实体对象。</param>
     /// <param name="id">新的 ID 值。</param>
     public static void SetId<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(T entity, BsonValue id)
-        where T : class, new()
+        where T : class
     {
         AotIdAccessor<T>.SetId(entity, id);
     }
