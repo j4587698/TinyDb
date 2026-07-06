@@ -98,6 +98,38 @@ public class ForeignKeyTests
             CleanupDb(testDbPath);
         }
     }
+
+    [Test]
+    public async Task ForeignKey_Validation_ShouldSucceed_WhenReferencedDocumentIsInsertedInSameTransaction()
+    {
+        var testDbPath = $"test_fk_same_transaction_{Guid.NewGuid():N}.db";
+        try
+        {
+            using var engine = new TinyDbEngine(testDbPath);
+            var metadataManager = new MetadataManager(engine);
+
+            metadataManager.SaveEntityMetadata(typeof(ForeignKeyUser));
+            metadataManager.SaveEntityMetadata(typeof(ForeignKeyOrder));
+
+            var users = engine.GetCollection<ForeignKeyUser>("Users");
+            var orders = engine.GetCollection<ForeignKeyOrder>("Orders");
+
+            using var transaction = engine.BeginTransaction();
+            var user = new ForeignKeyUser { Name = "Jane" };
+            users.Insert(user);
+            var order = new ForeignKeyOrder { UserId = user.Id };
+            orders.Insert(order);
+
+            transaction.Commit();
+
+            await Assert.That(users.FindById(user.Id)).IsNotNull();
+            await Assert.That(orders.FindById(order.Id)).IsNotNull();
+        }
+        finally
+        {
+            CleanupDb(testDbPath);
+        }
+    }
 }
 
 [Entity("Users")]

@@ -147,6 +147,40 @@ public class LRUCacheTests
     }
 
     [Test]
+    public async Task LRUCache_GetValues_WhenPendingFactoryFails_ShouldReturnHealthyValuesAndRemoveFailedItem()
+    {
+        var cache = new LRUCache<int, string>(10);
+        using var factoryStarted = new ManualResetEventSlim();
+        using var releaseFactory = new ManualResetEventSlim();
+
+        var failedLoad = Task.Run(() => cache.GetOrAdd(1, _ =>
+        {
+            factoryStarted.Set();
+            if (!releaseFactory.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException("Factory was not released.");
+            }
+
+            throw new InvalidOperationException("Factory failed.");
+        }));
+
+        await Assert.That(factoryStarted.Wait(TimeSpan.FromSeconds(2))).IsTrue();
+
+        cache.Put(2, "Healthy");
+        var getValuesTask = Task.Run(() => cache.GetValues().ToList());
+
+        releaseFactory.Set();
+
+        await Assert.That(async () => await failedLoad.WaitAsync(TimeSpan.FromSeconds(2))).Throws<InvalidOperationException>();
+        var values = await getValuesTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(values.Contains("Healthy")).IsTrue();
+        await Assert.That(values.Count).IsEqualTo(1);
+        await Assert.That(cache.ContainsKey(1)).IsFalse();
+        await Assert.That(cache.ContainsKey(2)).IsTrue();
+    }
+
+    [Test]
     public async Task LRUCache_GetOrAdd_WhenPutReplacesPendingValue_ShouldNotOverwritePut()
     {
         var cache = new LRUCache<int, string>(10);

@@ -1517,16 +1517,33 @@ public sealed class TinyDbEngine : IDisposable
     {
         if (lockKeys == null) throw new ArgumentNullException(nameof(lockKeys));
 
-        var scopes = lockKeys
+        var groupedKeys = lockKeys
             .Where(static key => !string.IsNullOrWhiteSpace(key.CollectionName) &&
                                  key.DocumentId != null &&
                                  !key.DocumentId.IsNull)
             .GroupBy(static key => key.CollectionName, StringComparer.Ordinal)
             .OrderBy(static group => group.Key, StringComparer.Ordinal)
-            .Select(group => GetCollectionState(group.Key).EnterDocumentLocks(group.Select(static key => key.DocumentId)))
             .ToArray();
 
-        return new DisposableListScope(scopes);
+        var scopes = new List<IDisposable>(groupedKeys.Length);
+        try
+        {
+            foreach (var group in groupedKeys)
+            {
+                scopes.Add(GetCollectionState(group.Key).EnterDocumentLocks(group.Select(static key => key.DocumentId)));
+            }
+
+            return new DisposableListScope(scopes.ToArray());
+        }
+        catch
+        {
+            for (var i = scopes.Count - 1; i >= 0; i--)
+            {
+                scopes[i].Dispose();
+            }
+
+            throw;
+        }
     }
 
     private sealed class DisposableListScope : IDisposable

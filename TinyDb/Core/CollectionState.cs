@@ -593,8 +593,12 @@ internal sealed class CollectionState
             {
                 for (var i = 0; i < _locks.Length; i++)
                 {
-                    Monitor.Enter(_locks[i]);
-                    _entered++;
+                    var lockTaken = false;
+                    Monitor.Enter(_locks[i], ref lockTaken);
+                    if (lockTaken)
+                    {
+                        _entered++;
+                    }
                 }
             }
             catch

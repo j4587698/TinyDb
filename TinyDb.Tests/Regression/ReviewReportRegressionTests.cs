@@ -10,6 +10,7 @@ using TinyDb.Security;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using System.Globalization;
+using System.Threading;
 using ExpressionType = System.Linq.Expressions.ExpressionType;
 
 namespace TinyDb.Tests.Regression;
@@ -779,6 +780,20 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task Decimal128_GetHashCode_ShouldNotFormatLargeExponentValues()
+    {
+        var exponent = 5000;
+        var biasedExponent = (ulong)(6176 + exponent);
+        var sameValueWithTrailingZero = (ulong)(6176 + exponent - 1);
+        var value = new Decimal128(1UL, biasedExponent << 49);
+        var equivalent = new Decimal128(10UL, sameValueWithTrailingZero << 49);
+
+        await Assert.That(value.Equals(equivalent)).IsTrue();
+        await Assert.That(() => value.GetHashCode()).ThrowsNothing();
+        await Assert.That(value.GetHashCode()).IsEqualTo(equivalent.GetHashCode());
+    }
+
+    [Test]
     public async Task BsonBinary_ShouldDefensivelyCopyByteArrays()
     {
         var source = new byte[] { 1, 2, 3 };
@@ -1146,6 +1161,37 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task BsonSerializer_ShouldPatchDocumentSizesForSeekableStreams()
+    {
+        var document = new BsonDocument()
+            .Set("name", "seek")
+            .Set("nested", new BsonDocument().Set("value", 42))
+            .Set("items", new BsonArray([new BsonInt32(1), new BsonInt32(2)]));
+
+        using var stream = new MemoryStream();
+        BsonSerializer.SerializeDocument(document, stream);
+
+        var expected = BsonSerializer.SerializeDocument(document);
+        await Assert.That(stream.ToArray().SequenceEqual(expected)).IsTrue();
+    }
+
+    [Test]
+    public async Task BsonSerializer_GetRecyclableStream_ShouldSupportExpansionAndReuseSemantics()
+    {
+        using var stream = BsonSerializer.GetRecyclableStream();
+        var payload = Enumerable.Range(0, 10_000).Select(static i => (byte)(i % 251)).ToArray();
+
+        stream.Write(payload);
+        stream.Position = 0;
+
+        var read = new byte[payload.Length];
+        var bytesRead = stream.Read(read, 0, read.Length);
+
+        await Assert.That(bytesRead).IsEqualTo(payload.Length);
+        await Assert.That(read.SequenceEqual(payload)).IsTrue();
+    }
+
+    [Test]
     public async Task AotBsonMapper_ShouldConvertAnyOneDimensionalArrayFallback()
     {
         var longValues = (long[])AotBsonMapper.ConvertValue(
@@ -1178,6 +1224,19 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task AotBsonMapper_ShouldUseAsyncLocalSerializationContext()
+    {
+        var field = typeof(AotBsonMapper).GetField(
+            "SerializingObjects",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+
+        await Assert.That(field).IsNotNull();
+        await Assert.That(field!.FieldType.IsGenericType).IsTrue();
+        await Assert.That(field.FieldType.GetGenericTypeDefinition()).IsEqualTo(typeof(AsyncLocal<>));
+        await Assert.That(field.GetCustomAttributes(typeof(ThreadStaticAttribute), false).Length).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task MetadataManager_SaveMetadata_ShouldBeAtomicForConcurrentFirstWrites()
     {
         using var engine = CreateEngine("metadata-race.db");
@@ -1190,6 +1249,16 @@ public sealed class ReviewReportRegressionTests : IDisposable
         await Task.WhenAll(tasks);
 
         await Assert.That(engine.MetadataManager.GetMetadata(tableName)).IsNotNull();
+    }
+
+    [Test]
+    public async Task TransactionManager_ShouldNotKeepUnusedRollbackAppliedOperationsHelper()
+    {
+        var method = typeof(TransactionManager).GetMethod(
+            "RollbackAppliedOperations",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        await Assert.That(method).IsNull();
     }
 
     private TinyDbEngine CreateEngine(string fileName)

@@ -5,6 +5,7 @@ using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Globalization;
+using System.Threading;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 
@@ -16,8 +17,7 @@ namespace TinyDb.Serialization;
 public static class AotBsonMapper
 {
     // 简单的循环引用检测，使用ThreadLocal来跟踪当前正在序列化的对象
-    [ThreadStatic]
-    private static HashSet<object>? _serializingObjects;
+    private static readonly AsyncLocal<HashSet<object>?> SerializingObjects = new();
 
     private const DynamicallyAccessedMemberTypes EntityMemberRequirements =
         DynamicallyAccessedMemberTypes.PublicConstructors |
@@ -54,9 +54,7 @@ public static class AotBsonMapper
 
         // 循环引用检测
         var trackReference = !typeof(T).IsValueType;
-        var serializingObjects = trackReference
-            ? _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance)
-            : null;
+        var serializingObjects = trackReference ? GetOrCreateSerializingObjects() : null;
         
         if (trackReference && serializingObjects!.Contains(entity))
         {
@@ -90,12 +88,12 @@ public static class AotBsonMapper
         }
         finally
         {
-            if (trackReference && _serializingObjects != null)
+            if (trackReference && SerializingObjects.Value != null)
             {
-                _serializingObjects.Remove(entity);
-                if (_serializingObjects.Count == 0)
+                SerializingObjects.Value.Remove(entity);
+                if (SerializingObjects.Value.Count == 0)
                 {
-                    _serializingObjects.Clear();
+                    SerializingObjects.Value = null;
                 }
             }
         }
@@ -455,7 +453,7 @@ public static class AotBsonMapper
             throw new ArgumentException("集合类型必须实现 IEnumerable 接口。", nameof(collection));
         }
 
-        var serializingObjects = _serializingObjects ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var serializingObjects = GetOrCreateSerializingObjects();
         if (!serializingObjects.Add(collection))
         {
             throw new InvalidOperationException("Circular reference detected while serializing a collection.");
@@ -484,9 +482,14 @@ public static class AotBsonMapper
             serializingObjects.Remove(collection);
             if (serializingObjects.Count == 0)
             {
-                serializingObjects.Clear();
+                SerializingObjects.Value = null;
             }
         }
+    }
+
+    private static HashSet<object> GetOrCreateSerializingObjects()
+    {
+        return SerializingObjects.Value ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
     }
 
     /// <summary>
