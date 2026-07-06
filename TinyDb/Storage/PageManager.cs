@@ -20,6 +20,8 @@ public sealed class PageManager : IDisposable
     private readonly ConcurrentDictionary<uint, byte> _dirtyPageIds;
     private readonly object _stateLock = new();
     private readonly object _cacheLock = new();
+    private readonly object _freeListLock = new();
+    private readonly object _fileSizeLock = new();
     private readonly LRUCache<uint, Page> _lruCache;
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private const int PageLoadStripeCount = 64;
@@ -983,64 +985,72 @@ public sealed class PageManager : IDisposable
     {
         ThrowIfDisposed();
 
-        lock (_stateLock)
+        lock (_freeListLock)
         {
-            uint pageID;
-
-                // 尝试从空闲页面链表获取
-                if (_firstFreePageID != 0)
+            var freePageId = _firstFreePageID;
+            if (freePageId != 0)
+            {
+                var freePage = GetPage(freePageId);
+                lock (_stateLock)
                 {
-                    pageID = _firstFreePageID;
-                    // 读取该页面以获取下一个空闲页面ID
-                    var freePage = GetPage(pageID);
                     _firstFreePageID = freePage.Header.NextPageID;
                     if (_freePageCount > 0)
                     {
                         _freePageCount--;
                     }
-
-                    // 重置页面状态
-                    freePage.ClearData();
-                    freePage.UpdatePageType(pageType);
-                    freePage.SetLinks(0, 0);
-
-                    return freePage;
                 }
 
-                // 分配新页面
-            pageID = ++_nextPageID;
-            return CreateNewPage(pageID, pageType);
+                freePage.ClearData();
+                freePage.UpdatePageType(pageType);
+                freePage.SetLinks(0, 0);
+
+                return freePage;
+            }
         }
+
+        uint pageID;
+        lock (_stateLock)
+        {
+            pageID = ++_nextPageID;
+        }
+
+        return CreateNewPage(pageID, pageType);
     }
 
     internal Page NewPagePinned(PageType pageType)
     {
         ThrowIfDisposed();
 
-        lock (_stateLock)
+        lock (_freeListLock)
         {
-            uint pageID;
-
-                if (_firstFreePageID != 0)
+            var freePageId = _firstFreePageID;
+            if (freePageId != 0)
+            {
+                var freePage = GetPagePinned(freePageId);
+                lock (_stateLock)
                 {
-                    pageID = _firstFreePageID;
-                    var freePage = GetPagePinned(pageID);
                     _firstFreePageID = freePage.Header.NextPageID;
                     if (_freePageCount > 0)
                     {
                         _freePageCount--;
                     }
-
-                    freePage.ClearData();
-                    freePage.UpdatePageType(pageType);
-                    freePage.SetLinks(0, 0);
-
-                    return freePage;
                 }
 
-            pageID = ++_nextPageID;
-            return CreateNewPage(pageID, pageType, pinned: true);
+                freePage.ClearData();
+                freePage.UpdatePageType(pageType);
+                freePage.SetLinks(0, 0);
+
+                return freePage;
+            }
         }
+
+        uint pageID;
+        lock (_stateLock)
+        {
+            pageID = ++_nextPageID;
+        }
+
+        return CreateNewPage(pageID, pageType, pinned: true);
     }
 
     /// <summary>
@@ -1058,18 +1068,21 @@ public sealed class PageManager : IDisposable
         // 计算新的文件大小
         var newFileSize = CalculatePageOffset(pageID) + _physicalPageSize;
 
-        // 只有当新文件大小大于当前大小时才更新
-        lock (_stateLock)
-        {
-            if (newFileSize > _fileSize)
-            {
-                Volatile.Write(ref _fileSize, newFileSize);
-            // 确保磁盘流的大小也被正确设置
-                _diskStream.SetLength(newFileSize);
-            }
-        }
+        EnsureFileLength(newFileSize);
 
         return page;
+    }
+
+    private void EnsureFileLength(long newFileSize)
+    {
+        lock (_fileSizeLock)
+        {
+            if (newFileSize > Volatile.Read(ref _fileSize))
+            {
+                _diskStream.SetLength(newFileSize);
+                Volatile.Write(ref _fileSize, newFileSize);
+            }
+        }
     }
 
     /// <summary>
@@ -1373,25 +1386,26 @@ public sealed class PageManager : IDisposable
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
-        var page = GetPage(pageID);
-        byte[]? beforeImage = null;
-        if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
+        lock (_freeListLock)
         {
-            beforeImage = ReadPageSnapshotForWal(pageID);
-        }
+            var page = GetPage(pageID);
+            byte[]? beforeImage = null;
+            if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
+            {
+                beforeImage = ReadPageSnapshotForWal(pageID);
+            }
 
-        while (true)
-        {
-            uint expectedFirstFreePageId;
+            uint nextFreePageId;
             lock (_stateLock)
             {
-                expectedFirstFreePageId = _firstFreePageID;
-                page.ClearData();
-                page.UpdatePageType(PageType.Empty);
-                page.SetLinks(0, expectedFirstFreePageId);
-                page.Header.ItemCount = 0;
-                page.Header.FreeBytes = (ushort)(page.DataSize);
+                nextFreePageId = _firstFreePageID;
             }
+
+            page.ClearData();
+            page.UpdatePageType(PageType.Empty);
+            page.SetLinks(0, nextFreePageId);
+            page.Header.ItemCount = 0;
+            page.Header.FreeBytes = (ushort)(page.DataSize);
 
             _appendLogPage?.Invoke(page, beforeImage, null);
             if (_flushLogToLsn != null && page.Header.LSN >= 0)
@@ -1399,17 +1413,11 @@ public sealed class PageManager : IDisposable
                 _flushLogToLsn(page.Header.LSN, null);
             }
 
+            WritePageToDisk(page, forceFlush: false);
             lock (_stateLock)
             {
-                if (_firstFreePageID != expectedFirstFreePageId)
-                {
-                    continue;
-                }
-
-                WritePageToDisk(page, forceFlush: false);
                 _firstFreePageID = pageID;
                 _freePageCount++;
-                return;
             }
         }
     }
@@ -1710,7 +1718,7 @@ public sealed class PageManager : IDisposable
                     if (!evicted && _pageCache.Count >= CacheOverflowLimit)
                     {
                         throw new InvalidOperationException(
-                            $"Page cache is full ({MaxCacheSize} pages, overflow limit {CacheOverflowLimit}) and no clean unpinned non-index page is available for eviction.");
+                            $"Page cache is full ({MaxCacheSize} pages, overflow limit {CacheOverflowLimit}) and no clean unpinned page is available for eviction.");
                     }
                 }
             }
@@ -1750,7 +1758,6 @@ public sealed class PageManager : IDisposable
                 {
                     // 如果页面被锁定（PinCount > 0），不能驱逐
                     if (page.PinCount > 0) continue;
-                    if (page.PageType == PageType.Index) continue;
                     if (page.IsDirty)
                     {
                         sawDirtyPage = true;
@@ -1934,7 +1941,7 @@ public sealed class PageManager : IDisposable
             return false;
         }
 
-        if (candidate.PinCount > 0 || candidate.PageType == PageType.Index || !candidate.IsDirty)
+        if (candidate.PinCount > 0 || !candidate.IsDirty)
         {
             return false;
         }
@@ -1943,7 +1950,6 @@ public sealed class PageManager : IDisposable
         if (!_pageCache.TryGetValue(pageID, out var current) ||
             !ReferenceEquals(current, candidate) ||
             candidate.PinCount != 1 ||
-            candidate.PageType == PageType.Index ||
             !candidate.IsDirty)
         {
             candidate.Unpin();
@@ -1956,7 +1962,7 @@ public sealed class PageManager : IDisposable
 
     private async Task<bool> WriteDirtyPageForBackgroundWritebackAsync(Page page, CancellationToken cancellationToken)
     {
-        if (page.PageType == PageType.Index || !page.IsDirty)
+        if (!page.IsDirty)
         {
             return false;
         }

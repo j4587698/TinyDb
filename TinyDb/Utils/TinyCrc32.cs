@@ -6,6 +6,7 @@ namespace TinyDb.Utils;
 internal static class TinyCrc32
 {
     private const uint Polynomial = 0xEDB88320u;
+    private static readonly byte[] ZeroBlock = new byte[256];
     private static readonly uint[][] LookupTables = CreateLookupTables();
     private static uint[] LookupTable => LookupTables[0];
 
@@ -35,9 +36,11 @@ internal static class TinyCrc32
 
         uint crc = Update(0xFFFFFFFFu, data.Slice(0, zeroStart));
         int zeroEnd = zeroStart + zeroLength;
-        for (int i = 0; i < zeroLength; i++)
+        while (zeroLength > 0)
         {
-            crc = Append(crc, 0);
+            var blockLength = Math.Min(zeroLength, ZeroBlock.Length);
+            crc = Update(crc, ZeroBlock.AsSpan(0, blockLength));
+            zeroLength -= blockLength;
         }
 
         crc = Update(crc, data.Slice(zeroEnd));

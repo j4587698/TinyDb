@@ -19,6 +19,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     private readonly object _flushLock = new();
     private static readonly TimeSpan GroupCommitDelay = TimeSpan.FromMilliseconds(1);
     private static readonly TimeSpan WorkerStopTimeout = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan BackgroundFailureInitialDelay = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan BackgroundFailureMaxDelay = TimeSpan.FromSeconds(5);
     private int _disposed;
     private int _ctsDisposed;
     private Exception? _backgroundFailure;
@@ -76,6 +78,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         var effectiveInterval = _backgroundInterval > TimeSpan.Zero
             ? _backgroundInterval
             : TimeSpan.FromMilliseconds(100);
+        var failureDelay = TimeSpan.Zero;
 
         while (!_cts.IsCancellationRequested)
         {
@@ -83,6 +86,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             {
                 await Task.Delay(effectiveInterval, _cts.Token).ConfigureAwait(false);
                 await FlushPendingAsync(_cts.Token).ConfigureAwait(false);
+                failureDelay = TimeSpan.Zero;
             }
             catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
@@ -95,8 +99,29 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                     RecordBackgroundFailure(ex);
                     Log(TinyDbLogLevel.Warning, "Background flush attempt failed.", ex);
                 }
+
+                failureDelay = NextBackgroundFailureDelay(failureDelay);
+                try
+                {
+                    await Task.Delay(failureDelay, _cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+                {
+                    // Expected during shutdown.
+                }
             }
         }
+    }
+
+    private static TimeSpan NextBackgroundFailureDelay(TimeSpan currentDelay)
+    {
+        if (currentDelay <= TimeSpan.Zero)
+        {
+            return BackgroundFailureInitialDelay;
+        }
+
+        var nextMilliseconds = Math.Min(currentDelay.TotalMilliseconds * 2, BackgroundFailureMaxDelay.TotalMilliseconds);
+        return TimeSpan.FromMilliseconds(nextMilliseconds);
     }
 
     public async Task EnsureDurabilityAsync(WriteConcern concern, CancellationToken cancellationToken = default)
