@@ -181,8 +181,16 @@ public readonly struct ObjectId : IComparable<ObjectId>, IEquatable<ObjectId>, I
 
     private static int CreateMachineHash()
     {
-        var machineName = Environment.MachineName;
-        var hash = MD5.HashData(Encoding.UTF8.GetBytes(machineName));
+        Span<byte> random = stackalloc byte[8];
+        RandomNumberGenerator.Fill(random);
+
+        var identity = $"{Environment.MachineName}:{Environment.ProcessId}:";
+        var identityBytes = Encoding.UTF8.GetBytes(identity);
+        var input = new byte[identityBytes.Length + random.Length];
+        identityBytes.CopyTo(input);
+        random.CopyTo(input.AsSpan(identityBytes.Length));
+
+        var hash = SHA256.HashData(input);
         return (hash[0] << 16) | (hash[1] << 8) | hash[2];
     }
 

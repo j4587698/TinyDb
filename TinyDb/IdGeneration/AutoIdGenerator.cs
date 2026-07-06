@@ -127,44 +127,49 @@ public static class AutoIdGenerator
         // .NET 9+ 使用内置的 GUID v7 生成方法
         return Guid.CreateVersion7();
 #else
-        // .NET 8 使用自定义实现
-        // 获取当前 Unix 时间戳毫秒
         var unixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // 创建随机字节 (使用加密安全的 RNG 以避免碰撞)
-        var randomBytes = new byte[10];
-        System.Security.Cryptography.RandomNumberGenerator.Fill(randomBytes);
-
-        // 构造 GUID v7 的16字节
-        // GUID v7 格式 (RFC draft):
-        // - bytes 0-5: 48-bit timestamp (big-endian)
-        // - bytes 6-7: ver + rand_a (4-bit version + 12-bit random)
-        // - bytes 8-9: var + rand_b (2-bit variant + 62-bit random)
-        // - bytes 10-15: rand_b continuation
-        var guidBytes = new byte[16];
-
-        // 前6字节：Unix 时间戳毫秒的大端序
-        var timeBytes = BitConverter.GetBytes(unixTimeMs);
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(timeBytes);
-        }
-        Buffer.BlockCopy(timeBytes, 2, guidBytes, 0, 6); // 取高6字节
-
-        // 接下来的4字节：随机数据
-        Buffer.BlockCopy(randomBytes, 0, guidBytes, 6, 4);
-
-        // 最后6字节：随机数据，但设置版本和变体
-        Buffer.BlockCopy(randomBytes, 4, guidBytes, 10, 6);
+        Span<byte> guidBytes = stackalloc byte[16];
+        guidBytes[0] = (byte)(unixTimeMs >> 40);
+        guidBytes[1] = (byte)(unixTimeMs >> 32);
+        guidBytes[2] = (byte)(unixTimeMs >> 24);
+        guidBytes[3] = (byte)(unixTimeMs >> 16);
+        guidBytes[4] = (byte)(unixTimeMs >> 8);
+        guidBytes[5] = (byte)unixTimeMs;
+        System.Security.Cryptography.RandomNumberGenerator.Fill(guidBytes[6..]);
 
         // 设置版本位 (bits 12-15) 为 0111 (version 7)
-        guidBytes[7] = (byte)((guidBytes[7] & 0x0F) | 0x70);
+        guidBytes[6] = (byte)((guidBytes[6] & 0x0F) | 0x70);
 
         // 设置变体位 (bits 6-7 of byte 8) 为 10 (RFC 4122 variant)
         guidBytes[8] = (byte)((guidBytes[8] & 0x3F) | 0x80);
 
-        return new Guid(guidBytes);
+        return CreateGuidFromRfcBytes(guidBytes);
 #endif
+    }
+
+    private static Guid CreateGuidFromRfcBytes(ReadOnlySpan<byte> bytes)
+    {
+        var data1 = unchecked((int)(
+            ((uint)bytes[0] << 24) |
+            ((uint)bytes[1] << 16) |
+            ((uint)bytes[2] << 8) |
+            bytes[3]));
+        var data2 = unchecked((short)((bytes[4] << 8) | bytes[5]));
+        var data3 = unchecked((short)((bytes[6] << 8) | bytes[7]));
+
+        return new Guid(
+            data1,
+            data2,
+            data3,
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15]);
     }
 
     /// <summary>

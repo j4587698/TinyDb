@@ -402,7 +402,11 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     public IEnumerable<T> FindAll()
     {
         ThrowIfDisposed();
+        return FindAllIterator();
+    }
 
+    private IEnumerable<T> FindAllIterator()
+    {
         var documents = _engine.FindAll(_name);
         if (typeof(T) == typeof(BsonDocument))
         {

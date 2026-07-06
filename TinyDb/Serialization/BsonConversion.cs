@@ -363,7 +363,7 @@ public static class BsonConversion
         _serializingObjects?.Remove(value);
         if (_serializingObjects is { Count: 0 })
         {
-            _serializingObjects.Clear();
+            _serializingObjects = null;
         }
 
         _conversionDepth--;

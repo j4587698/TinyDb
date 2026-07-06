@@ -31,8 +31,7 @@ public sealed class WriteAheadLog : IDisposable
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private readonly IWalCodec _walCodec;
     private readonly SemaphoreSlim _mutex = new(1, 1);
-    [ThreadStatic]
-    private static WriteLockContext? s_currentThreadWriteContext;
+    private static readonly AsyncLocal<WriteLockContext?> s_currentWriteContext = new();
     private readonly AsyncLocal<Guid?> _currentTransactionId = new();
     private readonly AsyncLocal<TransactionPageBuffer?> _currentTransactionPages = new();
     private readonly int _maxRecordSize;
@@ -86,20 +85,34 @@ public sealed class WriteAheadLog : IDisposable
     private bool HasActiveWriteContext(WriteLockContext? context)
     {
         return context?.IsActiveFor(this) == true ||
-               s_currentThreadWriteContext?.IsActiveFor(this) == true;
+               s_currentWriteContext.Value?.IsActiveFor(this) == true;
     }
 
     private static void RunWithCurrentThreadWriteContext(WriteLockContext context, Action action)
     {
-        var previousContext = s_currentThreadWriteContext;
-        s_currentThreadWriteContext = context;
+        var previousContext = s_currentWriteContext.Value;
+        s_currentWriteContext.Value = context;
         try
         {
             action();
         }
         finally
         {
-            s_currentThreadWriteContext = previousContext;
+            s_currentWriteContext.Value = previousContext;
+        }
+    }
+
+    private static async Task RunWithCurrentThreadWriteContextAsync(WriteLockContext context, Func<Task> action)
+    {
+        var previousContext = s_currentWriteContext.Value;
+        s_currentWriteContext.Value = context;
+        try
+        {
+            await action().ConfigureAwait(false);
+        }
+        finally
+        {
+            s_currentWriteContext.Value = previousContext;
         }
     }
 
@@ -124,7 +137,7 @@ public sealed class WriteAheadLog : IDisposable
         var context = new WriteLockContext(this);
         try
         {
-            await action(context).ConfigureAwait(false);
+            await RunWithCurrentThreadWriteContextAsync(context, () => action(context)).ConfigureAwait(false);
         }
         finally
         {
