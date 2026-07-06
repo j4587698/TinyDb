@@ -27,7 +27,7 @@ internal static class QueryShapeExtractor
     public static (QueryShape<TSource> Shape, LinqExp.ConstantExpression? Source) Extract<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource>(
         LinqExp.Expression expression)
-        where TSource : class, new()
+        where TSource : class
     {
         if (expression == null) throw new ArgumentNullException(nameof(expression));
 
@@ -177,7 +177,7 @@ internal static class QueryShapeExtractor
     }
 
     private static bool TryExtractSortField<TSource>(LinqExp.MethodCallExpression call, bool descending, out QuerySortField field)
-        where TSource : class, new()
+        where TSource : class
     {
         field = default;
         if (!TryGetUnaryQuotedLambda(call, out var lambda)) return false;

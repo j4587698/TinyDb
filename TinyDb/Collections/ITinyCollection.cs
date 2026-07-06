@@ -90,14 +90,14 @@ public interface ITinyCollection<T> where T : class
     IEnumerable<TProjection> FindSql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TProjection : class, new();
+        where TProjection : class;
 
     SqlExecutionResult Execute(string sql, IReadOnlyDictionary<string, object?>? parameters = null);
 
     SqlExecutionResult<TProjection> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TProjection : class, new();
+        where TProjection : class;
 
     IEnumerable<T> Find(System.Linq.Expressions.Expression<Func<T, bool>> predicate, int skip, int limit);
 

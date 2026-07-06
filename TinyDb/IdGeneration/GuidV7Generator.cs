@@ -34,26 +34,18 @@ public class GuidV7Generator : IIdGenerator
         // 获取当前 Unix 时间戳毫秒
         var unixTimeMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-        // 创建随机字节 (使用加密安全的 RNG 以避免碰撞)
-        var randomBytes = new byte[10];
-        System.Security.Cryptography.RandomNumberGenerator.Fill(randomBytes);
-
-        // 构造 GUID v7 的16字节
-        var guidBytes = new byte[16];
+        Span<byte> guidBytes = stackalloc byte[16];
 
         // 前6字节：Unix 时间戳毫秒的大端序
-        var timeBytes = BitConverter.GetBytes(unixTimeMs);
-        if (BitConverter.IsLittleEndian)
-        {
-            Array.Reverse(timeBytes);
-        }
-        Buffer.BlockCopy(timeBytes, 2, guidBytes, 0, 6); // 取高6字节
+        guidBytes[0] = (byte)(unixTimeMs >> 40);
+        guidBytes[1] = (byte)(unixTimeMs >> 32);
+        guidBytes[2] = (byte)(unixTimeMs >> 24);
+        guidBytes[3] = (byte)(unixTimeMs >> 16);
+        guidBytes[4] = (byte)(unixTimeMs >> 8);
+        guidBytes[5] = (byte)unixTimeMs;
 
-        // 接下来的4字节：随机数据
-        Buffer.BlockCopy(randomBytes, 0, guidBytes, 6, 4);
-
-        // 最后6字节：随机数据，但设置版本和变体
-        Buffer.BlockCopy(randomBytes, 4, guidBytes, 10, 6);
+        // 后10字节：随机数据（使用加密安全的 RNG 以避免碰撞）
+        System.Security.Cryptography.RandomNumberGenerator.Fill(guidBytes.Slice(6));
 
         // 设置版本位 (bits 12-15) 为 0111 (version 7)
         guidBytes[7] = (byte)((guidBytes[7] & 0x0F) | 0x70);

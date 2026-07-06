@@ -12,7 +12,7 @@ namespace TinyDb.IdGeneration;
 /// ID生成辅助工具
 /// </summary>
 public static class IdGenerationHelper<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>
-    where T : class, new()
+    where T : class
 {
     /// <summary>
     /// 检查实体是否需要生成ID

@@ -50,6 +50,30 @@ public sealed class QueryableTerminalMethodsCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task Terminal_Count_WithPaginationSensitiveShape_ShouldKeepLinqSemantics()
+    {
+        var countAfterTakeSkip = _items.Query()
+            .OrderBy(x => x.Id)
+            .Take(4)
+            .Skip(2)
+            .Count();
+
+        var predicateAfterSkip = _items.Query()
+            .OrderBy(x => x.Id)
+            .Skip(1)
+            .Count(x => x.Category == "B");
+
+        var predicateAfterTake = _items.Query()
+            .OrderBy(x => x.Id)
+            .Take(4)
+            .LongCount(x => x.Category == "B");
+
+        await Assert.That(countAfterTakeSkip).IsEqualTo(2);
+        await Assert.That(predicateAfterSkip).IsEqualTo(2);
+        await Assert.That(predicateAfterTake).IsEqualTo(1L);
+    }
+
+    [Test]
     public async Task Terminal_First_Last_ElementAt_ShouldWork()
     {
         var q = _items.Query().OrderBy(x => x.Id);

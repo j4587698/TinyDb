@@ -138,7 +138,7 @@ public class LargeDocumentStorage
         var visitedPages = 0;
         for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
         {
-            var dataPage = _pageManager.GetPage(currentPageId);
+            var dataPage = _pageManager.GetPage(currentPageId, useCache: false);
             if (dataPage.PageType != PageType.LargeDocumentData)
                 throw new InvalidOperationException($"Page {currentPageId} is not a large document data page");
             var dataHeader = ReadDataPageHeader(dataPage);
@@ -179,7 +179,7 @@ public class LargeDocumentStorage
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var dataPage = await _pageManager.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var dataPage = await _pageManager.GetPageAsync(currentPageId, useCache: false, cancellationToken: cancellationToken).ConfigureAwait(false);
             if (dataPage.PageType != PageType.LargeDocumentData)
                 throw new InvalidOperationException($"Page {currentPageId} is not a large document data page");
             var dataHeader = ReadDataPageHeader(dataPage);
@@ -221,7 +221,7 @@ public class LargeDocumentStorage
             var dataPageIds = new List<uint>(header.PageCount);
             for (int i = 0; i < header.PageCount && currentPageId != 0; i++)
             {
-                var dataPage = _pageManager.GetPage(currentPageId);
+                var dataPage = _pageManager.GetPage(currentPageId, useCache: false);
                 if (dataPage.PageType != PageType.LargeDocumentData)
                     throw new InvalidOperationException($"Page {currentPageId} is not a large document data page.");
 
@@ -270,7 +270,7 @@ public class LargeDocumentStorage
             {
                 if (currentPageId == 0) return false;
 
-                var dataPage = _pageManager.GetPage(currentPageId);
+                var dataPage = _pageManager.GetPage(currentPageId, useCache: false);
                 if (dataPage.PageType != PageType.LargeDocumentData) return false;
 
                 var dataHeader = ReadDataPageHeader(dataPage);

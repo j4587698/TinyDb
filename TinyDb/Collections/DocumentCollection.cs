@@ -17,8 +17,10 @@ namespace TinyDb.Collections;
 /// 文档集合实现
 /// </summary>
 /// <typeparam name="T">文档类型</typeparam>
-public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T> : ITinyCollection<T>, IDocumentCollection where T : class, new()
+public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] T> : ITinyCollection<T>, IDocumentCollection where T : class
 {
+    private const int SqlWriteBatchSize = 1000;
+
     private readonly TinyDbEngine _engine;
     private readonly string _name;
     private readonly QueryExecutor _queryExecutor;
@@ -451,7 +453,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     public IEnumerable<TProjection> FindSql<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TProjection : class, new()
+        where TProjection : class
     {
         return Execute<TProjection>(sql, parameters).Rows;
     }
@@ -488,7 +490,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
     public SqlExecutionResult<TProjection> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         string sql,
         IReadOnlyDictionary<string, object?>? parameters = null)
-        where TProjection : class, new()
+        where TProjection : class
     {
         ThrowIfDisposed();
         if (sql == null) throw new ArgumentNullException(nameof(sql));
@@ -499,7 +501,7 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
     internal SqlExecutionResult<TProjection> Execute<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)] TProjection>(
         SqlStatement statement)
-        where TProjection : class, new()
+        where TProjection : class
     {
         ThrowIfDisposed();
         if (statement == null) throw new ArgumentNullException(nameof(statement));
@@ -620,30 +622,161 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
 
         ValidateNoDuplicateSqlStorageFields(statement.Assignments);
 
-        var items = _queryExecutor.Execute<T>(_name, statement.Predicate).ToList();
-        var updatedItems = new List<T>(items.Count);
-        foreach (var item in items)
+        var ids = CollectSqlTargetIds(statement.Predicate, "update");
+        var currentTransaction = _engine.GetCurrentTransaction();
+        return currentTransaction is Transaction transaction
+            ? ExecuteUpdateInTransaction(statement, ids, transaction)
+            : ExecuteUpdateCommitted(statement, ids);
+    }
+
+    private List<BsonValue> CollectSqlTargetIds(QueryExpression? predicate, string operationName)
+    {
+        var ids = new List<BsonValue>();
+        var seenIds = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+
+        foreach (var item in _queryExecutor.Execute<T>(_name, predicate))
         {
-            var document = ToSqlDocument(item);
+            if (!AotIdAccessor<T>.HasValidId(item))
+            {
+                throw new ArgumentException($"Entity must have a valid ID for {operationName}", nameof(item));
+            }
+
+            var id = AotIdAccessor<T>.GetId(item);
+            if (id != null && !id.IsNull && seenIds.Add(id))
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    private int ExecuteUpdateCommitted(SqlUpdateStatement statement, IReadOnlyList<BsonValue> ids)
+    {
+        var updatedCount = 0;
+        var idBatch = new List<BsonValue>(SqlWriteBatchSize);
+        var documentBatch = new List<BsonDocument>(SqlWriteBatchSize);
+
+        foreach (var id in ids)
+        {
+            idBatch.Add(id);
+            if (idBatch.Count >= SqlWriteBatchSize)
+            {
+                updatedCount += FlushSqlUpdateBatch(statement, idBatch, documentBatch);
+            }
+        }
+
+        updatedCount += FlushSqlUpdateBatch(statement, idBatch, documentBatch);
+        return updatedCount;
+    }
+
+    private int FlushSqlUpdateBatch(
+        SqlUpdateStatement statement,
+        List<BsonValue> idBatch,
+        List<BsonDocument> documentBatch)
+    {
+        if (idBatch.Count == 0)
+        {
+            return 0;
+        }
+
+        var documents = _engine.FindByIds(_name, idBatch);
+        for (int i = 0; i < documents.Count; i++)
+        {
+            var document = documents[i];
+            if (document == null)
+            {
+                continue;
+            }
+
             foreach (var assignment in statement.Assignments)
             {
                 document = SetSqlDocumentField(document, assignment);
             }
 
-            updatedItems.Add(ToEntity(document));
+            documentBatch.Add(document);
         }
 
-        return Update(updatedItems);
+        idBatch.Clear();
+        if (documentBatch.Count == 0)
+        {
+            return 0;
+        }
+
+        var updatedCount = _engine.UpdateDocuments(_name, documentBatch);
+        documentBatch.Clear();
+        return updatedCount;
+    }
+
+    private int ExecuteUpdateInTransaction(
+        SqlUpdateStatement statement,
+        IReadOnlyList<BsonValue> ids,
+        Transaction transaction)
+    {
+        var updatedCount = 0;
+        var idBatch = new List<BsonValue>(SqlWriteBatchSize);
+        var prepared = new List<(BsonDocument Document, BsonValue Id)>(SqlWriteBatchSize);
+        var originalDocuments = new List<BsonDocument?>(SqlWriteBatchSize);
+
+        foreach (var id in ids)
+        {
+            idBatch.Add(id);
+            if (idBatch.Count >= SqlWriteBatchSize)
+            {
+                updatedCount += FlushSqlTransactionUpdateBatch(statement, idBatch, prepared, originalDocuments, transaction);
+            }
+        }
+
+        updatedCount += FlushSqlTransactionUpdateBatch(statement, idBatch, prepared, originalDocuments, transaction);
+        return updatedCount;
+    }
+
+    private int FlushSqlTransactionUpdateBatch(
+        SqlUpdateStatement statement,
+        List<BsonValue> idBatch,
+        List<(BsonDocument Document, BsonValue Id)> prepared,
+        List<BsonDocument?> originalDocuments,
+        Transaction transaction)
+    {
+        if (idBatch.Count == 0)
+        {
+            return 0;
+        }
+
+        var currentDocuments = _engine.FindByIds(_name, idBatch);
+        for (int i = 0; i < currentDocuments.Count; i++)
+        {
+            var document = currentDocuments[i];
+            if (document == null)
+            {
+                continue;
+            }
+
+            var originalDocument = document;
+            foreach (var assignment in statement.Assignments)
+            {
+                document = SetSqlDocumentField(document, assignment);
+            }
+
+            prepared.Add((document, idBatch[i]));
+            originalDocuments.Add(originalDocument);
+        }
+
+        idBatch.Clear();
+        if (prepared.Count == 0)
+        {
+            return 0;
+        }
+
+        var updatedCount = RecordPreparedUpdatesInTransaction(prepared, originalDocuments, transaction);
+        prepared.Clear();
+        originalDocuments.Clear();
+        return updatedCount;
     }
 
     private int ExecuteDelete(SqlDeleteStatement statement)
     {
-        var ids = _queryExecutor.Execute<T>(_name, statement.Predicate)
-            .Select(static item => AotIdAccessor<T>.GetId(item))
-            .Where(static id => id != null && !id.IsNull)
-            .ToList();
-
-        return Delete(ids);
+        return Delete(CollectSqlTargetIds(statement.Predicate, "delete"));
     }
 
     private static BsonDocument SetSqlDocumentField(BsonDocument document, SqlAssignment assignment)
@@ -972,13 +1105,23 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
                 : configuredSequenceName;
             var identityId = AutoIdGenerator.CreateIdentityValue(_engine, _name, sequenceName, idPropertyType);
             AotIdAccessor<T>.SetId(entity, identityId);
-            EnsureIdIndex();
-            return;
+            if (AotIdAccessor<T>.HasValidId(entity))
+            {
+                EnsureIdIndex();
+                return;
+            }
+
+            throw CreateIdGenerationFailedException(idPropertyName);
         }
 
         // 尝试使用新的ID生成系统
         if (AotIdAccessor<T>.GenerateIdIfNeeded(entity))
         {
+            if (!AotIdAccessor<T>.HasValidId(entity))
+            {
+                throw CreateIdGenerationFailedException(idPropertyName);
+            }
+
             // ID生成成功，确保创建了索引
             EnsureIdIndex();
             return;
@@ -992,6 +1135,18 @@ public sealed class DocumentCollection<[DynamicallyAccessedMembers(DynamicallyAc
             UpdateEntityId(entity, newId);
             EnsureIdIndex();
         }
+
+        if (AotIdAccessor<T>.TryGetIdInfo(out idPropertyName, out _) &&
+            !AotIdAccessor<T>.HasValidId(entity))
+        {
+            throw CreateIdGenerationFailedException(idPropertyName);
+        }
+    }
+
+    private static InvalidOperationException CreateIdGenerationFailedException(string? idPropertyName)
+    {
+        return new InvalidOperationException(
+            $"ID property '{idPropertyName ?? "Id"}' for entity type '{typeof(T).FullName}' cannot be generated automatically. Provide a non-default ID value or use a writable ID property.");
     }
 
     /// <summary>

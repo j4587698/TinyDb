@@ -11,6 +11,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 {
     internal readonly ImmutableDictionary<string, BsonValue> _elements;
     private readonly ImmutableArray<string> _order;
+    private readonly ImmutableArray<KeyValuePair<string, BsonValue>> _entries;
     private string[]? _sortedKeys;
 
     public override BsonType BsonType => BsonType.Document;
@@ -30,9 +31,9 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     /// <summary>
     /// 获取所有值
     /// </summary>
-    public IEnumerable<BsonValue> Values => new ValueEnumerable(_elements, _order);
+    public IEnumerable<BsonValue> Values => new ValueEnumerable(_entries);
 
-    internal EntryEnumerable Entries => new(_elements, _order);
+    internal EntryEnumerable Entries => new(_entries);
 
     /// <summary>
     /// IDictionary.Keys 显式实现
@@ -191,16 +192,14 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
     internal readonly struct EntryEnumerable : IEnumerable<KeyValuePair<string, BsonValue>>
     {
-        private readonly ImmutableDictionary<string, BsonValue> _elements;
-        private readonly ImmutableArray<string> _order;
+        private readonly ImmutableArray<KeyValuePair<string, BsonValue>> _entries;
 
-        internal EntryEnumerable(ImmutableDictionary<string, BsonValue> elements, ImmutableArray<string> order)
+        internal EntryEnumerable(ImmutableArray<KeyValuePair<string, BsonValue>> entries)
         {
-            _elements = elements;
-            _order = order;
+            _entries = entries;
         }
 
-        public EntryEnumerator GetEnumerator() => new(_elements, _order);
+        public EntryEnumerator GetEnumerator() => new(_entries);
 
         IEnumerator<KeyValuePair<string, BsonValue>> IEnumerable<KeyValuePair<string, BsonValue>>.GetEnumerator() => GetEnumerator();
 
@@ -209,32 +208,23 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
     internal struct EntryEnumerator : IEnumerator<KeyValuePair<string, BsonValue>>
     {
-        private readonly ImmutableDictionary<string, BsonValue> _elements;
-        private readonly ImmutableArray<string> _order;
+        private readonly ImmutableArray<KeyValuePair<string, BsonValue>> _entries;
         private int _index;
 
-        internal EntryEnumerator(ImmutableDictionary<string, BsonValue> elements, ImmutableArray<string> order)
+        internal EntryEnumerator(ImmutableArray<KeyValuePair<string, BsonValue>> entries)
         {
-            _elements = elements;
-            _order = order;
+            _entries = entries;
             _index = -1;
         }
 
-        public KeyValuePair<string, BsonValue> Current
-        {
-            get
-            {
-                var key = _order[_index];
-                return new KeyValuePair<string, BsonValue>(key, _elements[key]);
-            }
-        }
+        public KeyValuePair<string, BsonValue> Current => _entries[_index];
 
         object System.Collections.IEnumerator.Current => Current;
 
         public bool MoveNext()
         {
             var next = _index + 1;
-            if (next >= _order.Length)
+            if (next >= _entries.Length)
             {
                 return false;
             }
@@ -255,16 +245,14 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
     private readonly struct ValueEnumerable : IEnumerable<BsonValue>
     {
-        private readonly ImmutableDictionary<string, BsonValue> _elements;
-        private readonly ImmutableArray<string> _order;
+        private readonly ImmutableArray<KeyValuePair<string, BsonValue>> _entries;
 
-        internal ValueEnumerable(ImmutableDictionary<string, BsonValue> elements, ImmutableArray<string> order)
+        internal ValueEnumerable(ImmutableArray<KeyValuePair<string, BsonValue>> entries)
         {
-            _elements = elements;
-            _order = order;
+            _entries = entries;
         }
 
-        public ValueEnumerator GetEnumerator() => new(_elements, _order);
+        public ValueEnumerator GetEnumerator() => new(_entries);
 
         IEnumerator<BsonValue> IEnumerable<BsonValue>.GetEnumerator() => GetEnumerator();
 
@@ -273,25 +261,23 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
     private struct ValueEnumerator : IEnumerator<BsonValue>
     {
-        private readonly ImmutableDictionary<string, BsonValue> _elements;
-        private readonly ImmutableArray<string> _order;
+        private readonly ImmutableArray<KeyValuePair<string, BsonValue>> _entries;
         private int _index;
 
-        internal ValueEnumerator(ImmutableDictionary<string, BsonValue> elements, ImmutableArray<string> order)
+        internal ValueEnumerator(ImmutableArray<KeyValuePair<string, BsonValue>> entries)
         {
-            _elements = elements;
-            _order = order;
+            _entries = entries;
             _index = -1;
         }
 
-        public BsonValue Current => _elements[_order[_index]];
+        public BsonValue Current => _entries[_index].Value;
 
         object System.Collections.IEnumerator.Current => Current;
 
         public bool MoveNext()
         {
             var next = _index + 1;
-            if (next >= _order.Length)
+            if (next >= _entries.Length)
             {
                 return false;
             }
@@ -349,6 +335,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     {
         _elements = elements;
         _order = normalizeOrder ? NormalizeOrder(elements, order) : order;
+        _entries = CreateEntries(_elements, _order);
     }
 
     /// <summary>
@@ -380,6 +367,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
         _elements = builder.ToImmutable();
         _order = order.ToImmutable();
+        _entries = CreateEntries(_elements, _order);
     }
 
     internal BsonDocument(IEnumerable<KeyValuePair<string, BsonValue>> elements)
@@ -402,6 +390,28 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
         _elements = builder.ToImmutable();
         _order = order.ToImmutable();
+        _entries = CreateEntries(_elements, _order);
+    }
+
+    private static ImmutableArray<KeyValuePair<string, BsonValue>> CreateEntries(
+        ImmutableDictionary<string, BsonValue> elements,
+        ImmutableArray<string> order)
+    {
+        if (elements.Count == 0)
+        {
+            return ImmutableArray<KeyValuePair<string, BsonValue>>.Empty;
+        }
+
+        var entries = ImmutableArray.CreateBuilder<KeyValuePair<string, BsonValue>>(elements.Count);
+        foreach (var key in order)
+        {
+            if (elements.TryGetValue(key, out var value))
+            {
+                entries.Add(new KeyValuePair<string, BsonValue>(key, value));
+            }
+        }
+
+        return entries.ToImmutable();
     }
 
     private static ImmutableArray<string> NormalizeOrder(

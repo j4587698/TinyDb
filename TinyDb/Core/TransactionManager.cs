@@ -378,16 +378,19 @@ public sealed class TransactionManager : IDisposable
     private void ValidateOperations(IReadOnlyList<TransactionOperation> operations)
     {
         // 检查重复的文档ID插入（只检查非null ID的重复）
-        var insertOperations = operations
-            .Where(op => op.OperationType == TransactionOperationType.Insert && op.DocumentId != null)
-            .GroupBy(op => new { op.CollectionName, op.DocumentId })
-            .Where(group => group.Count() > 1)
-            .SelectMany(group => group)
-            .ToList();
-
-        if (insertOperations.Count > 0)
+        var insertedIds = new HashSet<(string CollectionName, BsonValue DocumentId)>();
+        foreach (var op in operations)
         {
-            throw new InvalidOperationException("Duplicate document IDs detected in transaction");
+            if (op.OperationType != TransactionOperationType.Insert ||
+                op.DocumentId == null)
+            {
+                continue;
+            }
+
+            if (!insertedIds.Add((op.CollectionName, op.DocumentId)))
+            {
+                throw new InvalidOperationException("Duplicate document IDs detected in transaction");
+            }
         }
 
         // 检查外键约束

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Core;
@@ -36,7 +36,7 @@ public sealed class QueryOptimizer
     public QueryExecutionPlan CreateExecutionPlan<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         string collectionName, Expression<Func<T, bool>>? expression = null,
         bool planningMetadataOnly = false)
-        where T : class, new()
+        where T : class
     {
         var plan = new QueryExecutionPlan
         {

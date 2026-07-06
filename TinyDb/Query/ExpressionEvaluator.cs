@@ -18,7 +18,7 @@ public static class ExpressionEvaluator
     private static int _evaluationDepth;
 
     public static bool Evaluate<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         EnterEvaluation();
         try
@@ -74,7 +74,7 @@ public static class ExpressionEvaluator
     }
 
     public static object? EvaluateValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         EnterEvaluation();
         try
@@ -229,7 +229,7 @@ public static class ExpressionEvaluator
     }
 
     private static bool EvaluateUnaryBooleanExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(UnaryExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         var val = EvaluateValue(expression, entity);
         return val is bool b && b;
@@ -242,7 +242,7 @@ public static class ExpressionEvaluator
     }
 
     private static object? EvaluateUnaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(UnaryExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         var value = EvaluateValue(expression.Operand, entity);
         return EvaluateUnary(expression.NodeType, value, expression.Type);
@@ -270,7 +270,7 @@ public static class ExpressionEvaluator
     }
 
     private static bool EvaluateMemberExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         var value = GetMemberValue(expression, entity);
         return value is bool boolValue ? boolValue : value != null;
@@ -283,7 +283,7 @@ public static class ExpressionEvaluator
     }
 
     private static object? EvaluateBinaryExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(BinaryExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         if (expression.NodeType == ExpressionType.AndAlso)
         {
@@ -487,7 +487,7 @@ public static class ExpressionEvaluator
     }
 
     private static object? GetMemberValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(MemberExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         object? target = entity;
         if (expression.Expression != null && expression.Expression.NodeType != ExpressionType.Parameter)
@@ -635,7 +635,7 @@ public static class ExpressionEvaluator
     }
 
     private static object? EvaluateFunctionExpression<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(FunctionExpression expression, T entity)
-        where T : class, new()
+        where T : class
     {
         var targetValue = expression.Target != null ? EvaluateValue(expression.Target, entity) : null;
         var argValues = EvaluateArguments(expression.Arguments, entity);

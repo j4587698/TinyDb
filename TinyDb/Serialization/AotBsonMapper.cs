@@ -132,7 +132,7 @@ public static class AotBsonMapper
     /// <param name="entity">实体对象。</param>
     /// <returns>BSON 格式的 ID。</returns>
     public static BsonValue GetId<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity)
-        where T : class, new()
+        where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -164,7 +164,7 @@ public static class AotBsonMapper
     /// <param name="entity">实体对象。</param>
     /// <param name="id">新的 ID 值。</param>
     public static void SetId<[DynamicallyAccessedMembers(EntityMemberRequirements)] T>(T entity, BsonValue id)
-        where T : class, new()
+        where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
 
@@ -187,7 +187,7 @@ public static class AotBsonMapper
     /// <param name="propertyName">属性名称。</param>
     /// <returns>属性值。</returns>
     public static object? GetPropertyValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(T entity, string propertyName)
-        where T : class, new()
+        where T : class
     {
         if (entity == null) throw new ArgumentNullException(nameof(entity));
         if (string.IsNullOrWhiteSpace(propertyName)) throw new ArgumentNullException(nameof(propertyName));
