@@ -653,26 +653,6 @@ public sealed class TransactionManager : IDisposable
         }
     }
 
-    private List<Exception> RollbackAppliedOperations(IReadOnlyList<TransactionOperation> operations)
-    {
-        var rollbackErrors = new List<Exception>();
-        for (int i = operations.Count - 1; i >= 0; i--)
-        {
-            try
-            {
-                RollbackSingleOperation(operations[i]);
-            }
-            catch (Exception rollbackEx)
-            {
-                rollbackErrors.Add(new InvalidOperationException(
-                    $"Rollback compensation failed for operation index {i}.",
-                    rollbackEx));
-            }
-        }
-
-        return rollbackErrors;
-    }
-
     private List<Exception> RollbackDurabilityScope(WriteAheadLog.WalTransactionScope durabilityScope)
     {
         var rollbackErrors = new List<Exception>();

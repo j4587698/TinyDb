@@ -172,7 +172,23 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
     public override int GetHashCode()
     {
-        return StringComparer.Ordinal.GetHashCode(ToString());
+        if (!TryDecodeFinite(out var sign, out var exponent, out var significand))
+        {
+            return HashCode.Combine(_hi, _lo);
+        }
+
+        if (significand.IsZero)
+        {
+            return 0;
+        }
+
+        while (significand % 10 == 0)
+        {
+            significand /= 10;
+            exponent++;
+        }
+
+        return HashCode.Combine(sign, exponent, significand);
     }
 
     public int CompareTo(Decimal128 other)

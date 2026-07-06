@@ -365,6 +365,14 @@ public sealed class BsonWriter : IDisposable
         }
     }
 
+    private void PatchStreamInt32LittleEndian(long position, int value)
+    {
+        var currentPosition = _stream!.Position;
+        _stream.Position = position;
+        _writer!.Write(value);
+        _stream.Position = currentPosition;
+    }
+
     private void InternalWrite(long value)
     {
         if (_stream != null)
@@ -507,6 +515,18 @@ public sealed class BsonWriter : IDisposable
         {
         if (_stream != null)
         {
+            if (_stream.CanSeek)
+            {
+                var sizePosition = _stream.Position;
+                InternalWrite(0);
+                foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
+                InternalWrite((byte)BsonType.End);
+
+                var endPosition = _stream.Position;
+                PatchStreamInt32LittleEndian(sizePosition, checked((int)(endPosition - sizePosition)));
+                return;
+            }
+
             InternalWrite(BsonSerializer.CalculateDocumentSize(document));
             foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
             InternalWrite((byte)BsonType.End);
@@ -553,6 +573,18 @@ public sealed class BsonWriter : IDisposable
         {
         if (_stream != null)
         {
+            if (_stream.CanSeek)
+            {
+                var sizePosition = _stream.Position;
+                InternalWrite(0);
+                for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
+                InternalWrite((byte)BsonType.End);
+
+                var endPosition = _stream.Position;
+                PatchStreamInt32LittleEndian(sizePosition, checked((int)(endPosition - sizePosition)));
+                return;
+            }
+
             InternalWrite(BsonSerializer.CalculateArraySize(array));
             for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
             InternalWrite((byte)BsonType.End);

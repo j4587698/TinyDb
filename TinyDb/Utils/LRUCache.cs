@@ -324,7 +324,16 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
             values = _lruList.Select(item => new KeyValuePair<TKey, CacheValue>(item.Key, item.Value)).ToList();
         }
 
-        return values.Select(item => GetValueOrRemoveFailed(item.Key, item.Value)).ToList();
+        var result = new List<TValue>(values.Count);
+        foreach (var item in values)
+        {
+            if (TryGetValueOrRemoveFailed(item.Key, item.Value, out var value))
+            {
+                result.Add(value!);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -389,6 +398,21 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
         {
             RemoveIfSameValueHolder(key, valueHolder);
             throw;
+        }
+    }
+
+    private bool TryGetValueOrRemoveFailed(TKey key, CacheValue valueHolder, out TValue? value)
+    {
+        try
+        {
+            value = valueHolder.GetValue();
+            return true;
+        }
+        catch
+        {
+            RemoveIfSameValueHolder(key, valueHolder);
+            value = default;
+            return false;
         }
     }
 
