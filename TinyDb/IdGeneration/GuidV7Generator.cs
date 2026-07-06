@@ -12,7 +12,9 @@ public class GuidV7Generator : IIdGenerator
     public BsonValue GenerateId(Type entityType, PropertyInfo idProperty, string? sequenceName = null)
     {
         var guid = CreateGuidV7();
-        return new BsonString(guid.ToString());
+        return idProperty.PropertyType == typeof(Guid)
+            ? new BsonBinary(guid)
+            : new BsonString(guid.ToString());
     }
 
     public bool Supports(Type idType)

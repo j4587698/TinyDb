@@ -564,14 +564,12 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             {
                 try
                 {
-                    if (!workerTask.Task.Wait(WorkerStopTimeout))
-                    {
-                        var timeoutException = new TimeoutException("Flush worker did not stop before dispose timeout.");
-                        Log(TinyDbLogLevel.Warning, timeoutException.Message, timeoutException);
-                        continue;
-                    }
-
-                    workerTask.Task.GetAwaiter().GetResult();
+                    workerTask.Task.WaitAsync(WorkerStopTimeout).GetAwaiter().GetResult();
+                }
+                catch (TimeoutException ex)
+                {
+                    var timeoutException = new TimeoutException("Flush worker did not stop before dispose timeout.", ex);
+                    Log(TinyDbLogLevel.Warning, timeoutException.Message, timeoutException);
                 }
                 catch (Exception ex)
                 {

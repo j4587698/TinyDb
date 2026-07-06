@@ -1,9 +1,9 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using TinyDb.Attributes;
 
 namespace TinyDb.Metadata;
@@ -13,7 +13,8 @@ namespace TinyDb.Metadata;
 /// </summary>
 public static class MetadataRegistry
 {
-    private static readonly ConcurrentDictionary<Type, EntityMetadata> _staticMetadata = new();
+    private static readonly object _registryLock = new();
+    private static readonly ConditionalWeakTable<Type, EntityMetadata> _staticMetadata = new();
 
     /// <summary>
     /// 预先注册元数据 (Source Generator 使用)
@@ -22,13 +23,20 @@ public static class MetadataRegistry
     {
         if (type == null) throw new ArgumentNullException(nameof(type));
         if (metadata == null) throw new ArgumentNullException(nameof(metadata));
-        _staticMetadata[type] = metadata;
+        lock (_registryLock)
+        {
+            _staticMetadata.Remove(type);
+            _staticMetadata.Add(type, metadata);
+        }
     }
 
     public static bool TryGet(Type type, [NotNullWhen(true)] out EntityMetadata? metadata)
     {
         if (type == null) throw new ArgumentNullException(nameof(type));
-        return _staticMetadata.TryGetValue(type, out metadata);
+        lock (_registryLock)
+        {
+            return _staticMetadata.TryGetValue(type, out metadata);
+        }
     }
 }
 
@@ -52,7 +60,10 @@ public static class MetadataExtractor
         };
 
         var extracted = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0)
+            .Where(p => p.CanRead &&
+                        p.CanWrite &&
+                        p.GetIndexParameters().Length == 0 &&
+                        p.GetCustomAttribute<BsonIgnoreAttribute>() == null)
             .Select(p => (Property: p, Metadata: ExtractPropertyMetadata(p)))
             .ToList();
 

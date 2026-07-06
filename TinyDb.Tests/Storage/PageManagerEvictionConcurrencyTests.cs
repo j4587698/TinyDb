@@ -5,6 +5,7 @@ using TUnit.Core;
 
 namespace TinyDb.Tests.Storage;
 
+[NotInParallel]
 public sealed class PageManagerEvictionConcurrencyTests
 {
     [Test]

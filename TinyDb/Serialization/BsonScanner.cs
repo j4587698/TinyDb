@@ -18,7 +18,10 @@ public static class BsonScanner
         valueOffset = 0;
         type = BsonType.Null;
         
-        if (document.Length < 5) return false; 
+        if (document.Length < 5) return false;
+        var documentLength = BinaryPrimitives.ReadInt32LittleEndian(document.Slice(0, 4));
+        if (documentLength < 5 || documentLength > document.Length) return false;
+        document = document.Slice(0, documentLength);
 
         int offset = 4; // 跳过大小字段
 
@@ -54,7 +57,10 @@ public static class BsonScanner
     public static bool TryGetValue(ReadOnlySpan<byte> document, string fieldName, out BsonValue? value)
     {
         value = null;
-        if (document.Length < 5) return false; 
+        if (document.Length < 5) return false;
+        var documentLength = BinaryPrimitives.ReadInt32LittleEndian(document.Slice(0, 4));
+        if (documentLength < 5 || documentLength > document.Length) return false;
+        document = document.Slice(0, documentLength);
 
         int offset = 4; // 跳过大小字段
 
@@ -107,18 +113,18 @@ public static class BsonScanner
                 if (!TryReadInt32(data, offset, out int len) ||
                     len < 1 ||
                     len > MaxBsonValueLength ||
-                    !HasAvailable(data, offset + 4, len))
+                    !HasAvailableAfterPrefix(data, offset, 4, len, out var stringOffset))
                 {
                     return false;
                 }
 
-                if (data[offset + 4 + len - 1] != 0)
+                if (data[stringOffset + len - 1] != 0)
                 {
                     return false;
                 }
 
-                var s = Encoding.UTF8.GetString(data.Slice(offset + 4, len - 1));
-                offset += 4 + len;
+                var s = Encoding.UTF8.GetString(data.Slice(stringOffset, len - 1));
+                offset = stringOffset + len;
                 value = new BsonString(s);
                 return true;
             case BsonType.Int32:
@@ -165,14 +171,14 @@ public static class BsonScanner
                 if (!TryReadInt32(data, offset, out int binLen) ||
                     binLen < 0 ||
                     binLen > MaxBsonValueLength ||
-                    !HasAvailable(data, offset + 4, 1 + binLen))
+                    !HasAvailableAfterPrefix(data, offset, 4, 1 + binLen, out var binaryOffset))
                 {
                     return false;
                 }
 
-                var subType = data[offset + 4];
-                var binary = data.Slice(offset + 5, binLen).ToArray();
-                offset += 5 + binLen;
+                var subType = data[binaryOffset];
+                var binary = data.Slice(binaryOffset + 1, binLen).ToArray();
+                offset = binaryOffset + 1 + binLen;
                 value = new BsonBinary(binary, (BsonBinary.BinarySubType)subType);
                 return true;
             case BsonType.Document:
@@ -223,7 +229,11 @@ public static class BsonScanner
             case BsonType.JavaScript:
             case BsonType.Symbol:
                 if (!TryReadInt32(data, offset, out int len) || len < 1 || len > MaxBsonValueLength) return false;
-                if (!HasAvailable(data, offset + 4, len) || data[offset + 4 + len - 1] != 0) return false;
+                if (!HasAvailableAfterPrefix(data, offset, 4, len, out var stringOffset) ||
+                    data[stringOffset + len - 1] != 0)
+                {
+                    return false;
+                }
                 return TryAdvance(data.Length, ref offset, 4 + len);
 
             case BsonType.Document:
@@ -291,6 +301,20 @@ public static class BsonScanner
                count >= 0 &&
                offset <= data.Length &&
                count <= data.Length - offset;
+    }
+
+    private static bool HasAvailableAfterPrefix(
+        ReadOnlySpan<byte> data,
+        int offset,
+        int prefixLength,
+        int count,
+        out int valueOffset)
+    {
+        valueOffset = 0;
+        if (!HasAvailable(data, offset, prefixLength)) return false;
+
+        valueOffset = offset + prefixLength;
+        return HasAvailable(data, valueOffset, count);
     }
 
     private static bool IsMalformedBsonException(Exception ex)

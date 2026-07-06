@@ -356,7 +356,7 @@ public class CoverageSprintFinal : IDisposable
         await Assert.That(BsonConversion.ToBsonValue((uint)1).BsonType).IsEqualTo(BsonType.Int64);
         await Assert.That(BsonConversion.ToBsonValue((ulong)1).BsonType).IsEqualTo(BsonType.Int64);
         await Assert.That(BsonConversion.ToBsonValue(1.23f).BsonType).IsEqualTo(BsonType.Double);
-        await Assert.That(BsonConversion.ToBsonValue(Guid.NewGuid()).BsonType).IsEqualTo(BsonType.String);
+        await Assert.That(BsonConversion.ToBsonValue(Guid.NewGuid()).BsonType).IsEqualTo(BsonType.Binary);
         await Assert.That(BsonConversion.ToBsonValue(BsonType.Binary).BsonType).IsEqualTo(BsonType.Int32); // Enum
 
         // 2. FromBsonValue

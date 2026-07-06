@@ -224,7 +224,7 @@ public static class BsonSerializer
     public static BsonDocument DeserializeDocument(ReadOnlyMemory<byte> data, HashSet<string> fields)
     {
         if (fields == null) throw new ArgumentNullException(nameof(fields));
-        if (data.IsEmpty) return new BsonDocument();
+        if (data.IsEmpty) throw new InvalidDataException("BSON document payload cannot be empty.");
 
         var reader = new BsonSpanReader(data.Span);
         return reader.ReadDocument(fields);

@@ -144,37 +144,37 @@ internal sealed class CollectionMetaStore
 
     public void SaveCollections(bool forceFlush)
     {
-        var pageId = _getCollectionPageId();
-        var collectionInfo = new BsonDocument();
         lock (_lock)
         {
+            var pageId = _getCollectionPageId();
             if (_collectionsMetadata.Count == 0 && pageId == 0) return;
+
+            var collectionInfo = new BsonDocument();
             foreach (var kvp in _collectionsMetadata)
             {
                 // Store Metadata as value
                 collectionInfo = collectionInfo.Set(kvp.Key, kvp.Value);
             }
-        }
-        if (pageId == 0)
-        {
-            var newPage = _pageManager.NewPage(PageType.Collection);
-            pageId = newPage.PageID;
-            _setCollectionPageId(pageId);
-        }
-        var collectionData = BsonSerializer.SerializeDocument(collectionInfo);
-        
-        
-        var collectionPage = _pageManager.GetPage(pageId);
-        const int dataOffset = 247;
-        
-        // 检查溢出
-        if (collectionData.Length > collectionPage.PageSize - dataOffset)
-        {
-            throw new InvalidOperationException($"Collection metadata size ({collectionData.Length} bytes) exceeds page capacity. Multi-page metadata storage is not yet implemented.");
-        }
+            if (pageId == 0)
+            {
+                var newPage = _pageManager.NewPage(PageType.Collection);
+                pageId = newPage.PageID;
+                _setCollectionPageId(pageId);
+            }
 
-        collectionPage.WriteData(dataOffset, collectionData);
-        collectionPage.UpdateStats((ushort)(collectionPage.DataSize - dataOffset - collectionData.Length), 1);
-        _pageManager.SavePage(collectionPage, forceFlush: forceFlush);
+            var collectionData = BsonSerializer.SerializeDocument(collectionInfo);
+            var collectionPage = _pageManager.GetPage(pageId);
+            const int dataOffset = 247;
+        
+            // 检查溢出
+            if (collectionData.Length > collectionPage.PageSize - dataOffset)
+            {
+                throw new InvalidOperationException($"Collection metadata size ({collectionData.Length} bytes) exceeds page capacity. Multi-page metadata storage is not yet implemented.");
+            }
+
+            collectionPage.WriteData(dataOffset, collectionData);
+            collectionPage.UpdateStats((ushort)(collectionPage.DataSize - dataOffset - collectionData.Length), 1);
+            _pageManager.SavePage(collectionPage, forceFlush: forceFlush);
+        }
     }
 }

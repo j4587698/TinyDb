@@ -1859,7 +1859,7 @@ public sealed class DiskBTree : IDisposable
         // 1. Validate keys are sorted
         for (int i = 0; i < node.KeyCount - 1; i++)
         {
-            if (node.Keys[i].CompareTo(node.Keys[i + 1]) >= 0) return false;
+            if (node.Keys[i].CompareTo(node.Keys[i + 1]) > 0) return false;
         }
 
         // 2. Validate keys are within range [minKey, maxKey]

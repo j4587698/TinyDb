@@ -172,7 +172,7 @@ public static class BsonConversion
             decimal dec => new BsonDecimal128(dec),
             bool b => BsonBoolean.FromValue(b),    // 使用单例
             DateTime dt => new BsonDateTime(dt),
-            Guid guid => new BsonString(guid.ToString()),
+            Guid guid => new BsonBinary(guid),
             ObjectId oid => new BsonObjectId(oid),
             JsonElement jsonElement => ConvertJsonElementToBsonValue(jsonElement),
             JsonDocument jsonDocument => ConvertJsonElementToBsonValue(jsonDocument.RootElement),

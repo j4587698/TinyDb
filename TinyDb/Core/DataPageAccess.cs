@@ -44,7 +44,8 @@ internal sealed class DataPageAccess
             int len = BitConverter.ToInt32(mem.Span.Slice(offset, 4));
             offset += 4;
 
-            if (offset + len > endOffset) break;
+            if (len < 0) break;
+            if (len > endOffset - offset) break;
 
             var slice = mem.Slice(offset, len);
             offset += len;
@@ -85,7 +86,8 @@ internal sealed class DataPageAccess
             int len = BitConverter.ToInt32(span.Slice(offset, 4));
             offset += 4;
             
-            if (offset + len > span.Length) break;
+            if (len < 0) break;
+            if (len > span.Length - offset) break;
             var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, len);
             offset += len;
             
@@ -121,14 +123,18 @@ internal sealed class DataPageAccess
         {
             if (offset + 4 > span.Length) return null;
             int len = BitConverter.ToInt32(span.Slice(offset, 4));
-            offset += 4 + len;
+            if (len < 0) return null;
+            offset += 4;
+            if (len > span.Length - offset) return null;
+            offset += len;
         }
 
         // Read target document
         if (offset + 4 > span.Length) return null;
         int targetLen = BitConverter.ToInt32(span.Slice(offset, 4));
         offset += 4;
-        if (offset + targetLen > span.Length) return null;
+        if (targetLen < 0) return null;
+        if (targetLen > span.Length - offset) return null;
 
         var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, targetLen);
         try
@@ -159,14 +165,18 @@ internal sealed class DataPageAccess
         {
             if (offset + 4 > span.Length) return null;
             int len = BitConverter.ToInt32(span.Slice(offset, 4));
-            offset += 4 + len;
+            if (len < 0) return null;
+            offset += 4;
+            if (len > span.Length - offset) return null;
+            offset += len;
         }
 
         // Read target document
         if (offset + 4 > span.Length) return null;
         int targetLen = BitConverter.ToInt32(span.Slice(offset, 4));
         offset += 4;
-        if (offset + targetLen > span.Length) return null;
+        if (targetLen < 0) return null;
+        if (targetLen > span.Length - offset) return null;
 
         var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, targetLen);
         try
@@ -275,7 +285,8 @@ internal sealed class DataPageAccess
             int len = BitConverter.ToInt32(mem.Span.Slice(offset, 4));
             offset += 4;
 
-            if (offset + len > endOffset) break;
+            if (len < 0) break;
+            if (len > endOffset - offset) break;
 
             var slice = mem.Slice(offset, len);
             offset += len;

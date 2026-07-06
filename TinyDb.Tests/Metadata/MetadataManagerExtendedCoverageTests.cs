@@ -169,7 +169,7 @@ public sealed class MetadataManagerExtendedCoverageTests
             await Assert.That(patched["dec"].BsonType).IsEqualTo(BsonType.Decimal128);
             await Assert.That(patched["flag"].ToBoolean()).IsFalse();
             await Assert.That(patched["when"].BsonType).IsEqualTo(BsonType.DateTime);
-            await Assert.That(patched["gid"].BsonType).IsEqualTo(BsonType.String);
+            await Assert.That(patched["gid"].BsonType).IsEqualTo(BsonType.Binary);
             await Assert.That(patched["bytes"].BsonType).IsEqualTo(BsonType.Binary);
             await Assert.That(patched["oid"].BsonType).IsEqualTo(BsonType.ObjectId);
             await Assert.That(patched["arr"].BsonType).IsEqualTo(BsonType.Array);

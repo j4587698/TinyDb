@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using TinyDb.Storage;
 
 namespace TinyDb.Core;
 
@@ -148,6 +149,11 @@ public sealed class TinyDbOptions
 
         if (!IsPowerOfTwo(PageSize))
             throw new ArgumentException("Page size must be a power of 2", nameof(PageSize));
+
+        if ((long)PageSize - PageHeader.Size > ushort.MaxValue)
+            throw new ArgumentException(
+                $"Page size cannot exceed {PageHeader.Size + ushort.MaxValue} bytes with the current page format",
+                nameof(PageSize));
 
         // 验证缓存大小
         if (CacheSize <= 0)
