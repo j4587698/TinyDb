@@ -3142,18 +3142,19 @@ public sealed class QueryExecutor
             return queryExpression;
         }
 
-        return RemoveIndexCoveredPredicates(queryExpression, executionPlan.IndexScanKeys);
+        return RemoveIndexCoveredPredicates(queryExpression, executionPlan.IndexScanKeys, executionPlan.UseIndex.Fields);
     }
 
     private static QueryExpression? RemoveIndexCoveredPredicates(
         QueryExpression expression,
-        IReadOnlyList<IndexScanKey> scanKeys)
+        IReadOnlyList<IndexScanKey> scanKeys,
+        IReadOnlyList<string> indexFields)
     {
         if (expression is BinaryExpression binary &&
             binary.NodeType == System.Linq.Expressions.ExpressionType.AndAlso)
         {
-            var left = RemoveIndexCoveredPredicates(binary.Left, scanKeys);
-            var right = RemoveIndexCoveredPredicates(binary.Right, scanKeys);
+            var left = RemoveIndexCoveredPredicates(binary.Left, scanKeys, indexFields);
+            var right = RemoveIndexCoveredPredicates(binary.Right, scanKeys, indexFields);
 
             if (left == null) return right;
             if (right == null) return left;
@@ -3162,10 +3163,13 @@ public sealed class QueryExecutor
             return new BinaryExpression(System.Linq.Expressions.ExpressionType.AndAlso, left, right);
         }
 
-        return IsPredicateCoveredByIndex(expression, scanKeys) ? null : expression;
+        return IsPredicateCoveredByIndex(expression, scanKeys, indexFields) ? null : expression;
     }
 
-    private static bool IsPredicateCoveredByIndex(QueryExpression expression, IReadOnlyList<IndexScanKey> scanKeys)
+    private static bool IsPredicateCoveredByIndex(
+        QueryExpression expression,
+        IReadOnlyList<IndexScanKey> scanKeys,
+        IReadOnlyList<string> indexFields)
     {
         if (expression is not BinaryExpression binary ||
             !TryExtractIndexedComparison(binary, out var fieldName, out var comparisonType, out var value))
@@ -3173,20 +3177,50 @@ public sealed class QueryExecutor
             return false;
         }
 
-        foreach (var scanKey in scanKeys)
+        var coveredScanKeyCount = GetRangeCoveredScanKeyCount(scanKeys);
+        for (var i = 0; i < coveredScanKeyCount; i++)
         {
+            var scanKey = scanKeys[i];
             if (!string.Equals(scanKey.FieldName, fieldName, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (IsComparisonCoveredByScanKey(comparisonType, value, scanKey))
+            var fieldIndex = FindIndexFieldPosition(indexFields, scanKey.FieldName);
+            var hasTrailingIndexFields = fieldIndex >= 0 && fieldIndex < indexFields.Count - 1;
+            if (IsComparisonCoveredByScanKey(comparisonType, value, scanKey, hasTrailingIndexFields))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static int GetRangeCoveredScanKeyCount(IReadOnlyList<IndexScanKey> scanKeys)
+    {
+        for (var i = 0; i < scanKeys.Count; i++)
+        {
+            if (scanKeys[i].ComparisonType != ComparisonType.Equal)
+            {
+                return i + 1;
+            }
+        }
+
+        return scanKeys.Count;
+    }
+
+    private static int FindIndexFieldPosition(IReadOnlyList<string> indexFields, string fieldName)
+    {
+        for (var i = 0; i < indexFields.Count; i++)
+        {
+            if (string.Equals(indexFields[i], fieldName, StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     private static bool TryExtractIndexedComparison(
@@ -3287,8 +3321,14 @@ public sealed class QueryExecutor
     private static bool IsComparisonCoveredByScanKey(
         ComparisonType comparisonType,
         BsonValue value,
-        IndexScanKey scanKey)
+        IndexScanKey scanKey,
+        bool hasTrailingIndexFields)
     {
+        if (comparisonType == ComparisonType.NotEqual)
+        {
+            return false;
+        }
+
         if (comparisonType == ComparisonType.Equal)
         {
             return scanKey.ComparisonType == ComparisonType.Equal &&
@@ -3298,6 +3338,11 @@ public sealed class QueryExecutor
         if (scanKey.ComparisonType == comparisonType &&
             BsonValueComparer.ValueEquals(scanKey.Value, value))
         {
+            if (hasTrailingIndexFields && comparisonType == ComparisonType.GreaterThan)
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -3310,6 +3355,7 @@ public sealed class QueryExecutor
         {
             ComparisonType.GreaterThan =>
                 scanKey.LowerValue != null &&
+                !hasTrailingIndexFields &&
                 !scanKey.IncludeLower &&
                 BsonValueComparer.ValueEquals(scanKey.LowerValue, value),
             ComparisonType.GreaterThanOrEqual =>

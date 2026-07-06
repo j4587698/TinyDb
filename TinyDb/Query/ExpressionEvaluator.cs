@@ -1,19 +1,21 @@
 using System;
-using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Globalization;
 using TinyDb.Bson;
 using TinyDb.Serialization;
+using TinyDb.Utils;
 
 namespace TinyDb.Query;
 
 public static class ExpressionEvaluator
 {
     private const int MaxExpressionEvaluationDepth = 256;
-    private static readonly ConcurrentDictionary<string, string> CamelCaseNameCache = new(StringComparer.Ordinal);
-    private static readonly ConcurrentDictionary<(Type Type, string Name), PropertyInfo?> PropertyCache = new();
+    private const int NameCacheCapacity = 2048;
+    private const int PropertyCacheCapacity = 4096;
+    private static readonly LRUCache<string, string> CamelCaseNameCache = new(NameCacheCapacity);
+    private static readonly LRUCache<(Type Type, string Name), PropertyInfo?> PropertyCache = new(PropertyCacheCapacity);
     [ThreadStatic]
     private static int _evaluationDepth;
 
@@ -495,7 +497,12 @@ public static class ExpressionEvaluator
             target = EvaluateValue(expression.Expression, entity);
         }
 
-        if (target == null) return null;
+        if (target == null)
+        {
+            if (expression.MemberName == "HasValue") return false;
+            if (expression.MemberName == "Value") return null;
+            return null;
+        }
 
         // BsonDocument stores data as dictionary entries, not C# properties
         // Always use GetMemberValueFromTarget for proper dictionary-style access
@@ -529,7 +536,12 @@ public static class ExpressionEvaluator
             target = EvaluateValue(expression.Expression, entity);
         }
 
-        if (target == null) return null;
+        if (target == null)
+        {
+            if (expression.MemberName == "HasValue") return false;
+            if (expression.MemberName == "Value") return null;
+            return null;
+        }
 
         return GetMemberValueFromTarget(expression.MemberName, target);
     }
@@ -612,7 +624,15 @@ public static class ExpressionEvaluator
 
         // Fallback to reflection for other properties
         var prop = GetPropertySafe(type, memberName);
-        return prop?.GetValue(target);
+        if (prop != null)
+        {
+            return prop.GetValue(target);
+        }
+
+        if (memberName == "HasValue") return true;
+        if (memberName == "Value") return target;
+
+        return null;
     }
 
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2075", Justification = "Fallback reflection for non-AOT scenarios. AOT apps should use Source Generator.")]
@@ -666,9 +686,9 @@ public static class ExpressionEvaluator
 
         if (targetValue is string str)
         {
-            if (functionName == "Contains") return args.Length == 1 && args[0] is string s ? str.Contains(s, StringComparison.Ordinal) : false;
-            if (functionName == "StartsWith") return args.Length == 1 && args[0] is string s ? str.StartsWith(s, StringComparison.Ordinal) : false;
-            if (functionName == "EndsWith") return args.Length == 1 && args[0] is string s ? str.EndsWith(s, StringComparison.Ordinal) : false;
+            if (functionName == "Contains") return EvaluateStringPredicate(args, str.Contains);
+            if (functionName == "StartsWith") return EvaluateStringPredicate(args, str.StartsWith);
+            if (functionName == "EndsWith") return EvaluateStringPredicate(args, str.EndsWith);
             if (functionName == "ToLower") return str.ToLowerInvariant();
             if (functionName == "ToUpper") return str.ToUpperInvariant();
             if (functionName == "Trim") return str.Trim();
@@ -748,6 +768,43 @@ public static class ExpressionEvaluator
         }
 
         throw new NotSupportedException($"Function '{functionName}' is not supported for type {targetValue?.GetType().Name ?? "null"}");
+    }
+
+    private static bool EvaluateStringPredicate(
+        object?[] args,
+        Func<string, StringComparison, bool> predicate)
+    {
+        if (args.Length == 1 && args[0] is string value)
+        {
+            return predicate(value, StringComparison.Ordinal);
+        }
+
+        if (args.Length == 2 &&
+            args[0] is string valueWithComparison &&
+            TryGetStringComparison(args[1], out var comparison))
+        {
+            return predicate(valueWithComparison, comparison);
+        }
+
+        return false;
+    }
+
+    private static bool TryGetStringComparison(object? value, out StringComparison comparison)
+    {
+        if (value is StringComparison stringComparison)
+        {
+            comparison = stringComparison;
+            return true;
+        }
+
+        if (value is int intValue && Enum.IsDefined(typeof(StringComparison), intValue))
+        {
+            comparison = (StringComparison)intValue;
+            return true;
+        }
+
+        comparison = default;
+        return false;
     }
 
     private static bool IsEnumerableFunction(string functionName)

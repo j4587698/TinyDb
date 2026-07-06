@@ -1,4 +1,5 @@
 using TinyDb.Bson;
+using TinyDb.Serialization;
 
 namespace TinyDb.Query;
 
@@ -92,19 +93,14 @@ internal static class QueryPredicateAnalyzer
     {
         if (value == null) return BsonNull.Value;
 
-        return value switch
+        try
         {
-            BsonValue bson => bson,
-            ObjectId oid => oid,
-            string str => new BsonString(str),
-            int i => new BsonInt32(i),
-            long l => new BsonInt64(l),
-            double d => new BsonDouble(d),
-            decimal dec => new BsonDecimal128(dec),
-            bool b => new BsonBoolean(b),
-            DateTime dt => new BsonDateTime(dt),
-            _ => new BsonString(value.ToString() ?? string.Empty)
-        };
+            return BsonConversion.ToBsonValue(value);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or InvalidCastException or FormatException or OverflowException or ArgumentException)
+        {
+            return new BsonString(value.ToString() ?? string.Empty);
+        }
     }
 
     public static ComparisonType ExtractComparisonType(QueryExpression queryExpression, string fieldName)

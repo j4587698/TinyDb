@@ -509,7 +509,7 @@ public class MetadataManager
         if (normalized.Equals("Guid", StringComparison.OrdinalIgnoreCase) ||
             normalized.EndsWith("System.Guid", StringComparison.Ordinal))
         {
-            kind = ExpectedBsonKind.String;
+            kind = ExpectedBsonKind.Binary;
             return true;
         }
 
@@ -662,7 +662,7 @@ public class MetadataManager
 
         if (normalized.Equals("Guid", StringComparison.OrdinalIgnoreCase) ||
             normalized.EndsWith("System.Guid", StringComparison.Ordinal))
-            return new BsonString(Guid.Empty.ToString());
+            return new BsonBinary(Guid.Empty);
 
         if (normalized.Equals("byte[]", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("System.Byte[]", StringComparison.OrdinalIgnoreCase) ||

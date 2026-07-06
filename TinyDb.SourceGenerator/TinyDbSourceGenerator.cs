@@ -64,14 +64,26 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax || s is RecordDeclarationSyntax,
                 transform: static (ctx, _) => GetClassInfo(ctx))
             .Where(static m => m is not null)
-            .Collect();
+            .WithComparer(ClassInfoComparer.Instance);
 
         // 注册源代码生成
-        context.RegisterSourceOutput(classDeclarations, (spc, classes) =>
+        var validClassDeclarations = classDeclarations
+            .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
+
+        context.RegisterSourceOutput(validClassDeclarations, static (spc, classInfo) =>
+        {
+            if (classInfo == null) return;
+
+            var partialClassCode = GeneratePartialClass(classInfo);
+            var partialFileName = $"{classInfo.UniqueFileName}_AotHelper.g.cs";
+            spc.AddSource(partialFileName, SourceText.From(partialClassCode, Encoding.UTF8));
+        });
+
+        context.RegisterSourceOutput(validClassDeclarations.Collect(), static (spc, classes) =>
         {
             if (classes.IsDefaultOrEmpty) return;
 
-            var validClasses = new List<ClassInfo>();
+            var validClasses = new List<ClassInfo>(classes.Length);
 
             foreach (var classInfo in classes)
             {
@@ -96,7 +108,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 {
                     var diagnostic = Diagnostic.Create(
                         CircularReferenceWarningDescriptor,
-                        classInfo.Location,
+                        classInfo.Location.ToLocation(),
                         circularRef.ContainingTypeName,
                         circularRef.CycleChain);
                     spc.ReportDiagnostic(diagnostic);
@@ -107,7 +119,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 {
                     var diagnostic = Diagnostic.Create(
                         EntityCircularReferenceWarningDescriptor,
-                        classInfo.Location,
+                        classInfo.Location.ToLocation(),
                         entityCircularRef.CurrentEntityName,
                         entityCircularRef.CycleChain);
                     spc.ReportDiagnostic(diagnostic);
@@ -118,17 +130,14 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 {
                     var diagnostic = Diagnostic.Create(
                         BsonRefMissingEntityErrorDescriptor,
-                        bsonRefError.Location ?? classInfo.Location,
+                        bsonRefError.Location.ToLocation() ?? classInfo.Location.ToLocation(),
                         bsonRefError.PropertyName,
                         bsonRefError.ContainingTypeName,
                         bsonRefError.ReferencedTypeName);
                     spc.ReportDiagnostic(diagnostic);
                 }
                 
-                var partialClassCode = GeneratePartialClass(classInfo);
                 // 使用UniqueFileName来保证文件名唯一
-                var partialFileName = $"{classInfo.UniqueFileName}_AotHelper.g.cs";
-                spc.AddSource(partialFileName, SourceText.From(partialClassCode, Encoding.UTF8));
             }
 
             var registrySource = GenerateRegistrySource(validClasses);
@@ -171,6 +180,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 检查是否是值类型
         var isValueType = classSymbol?.IsValueType ?? false;
+        var runtimeFullName = classSymbol != null ? GetRuntimeFullName(classSymbol) : null;
 
         // 获取Entity属性信息
         var entityAttribute = context.Attributes.FirstOrDefault();
@@ -184,10 +194,16 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         }
 
         // 获取Entity属性中指定的IdProperty名称
-        var specifiedIdProperty = entityAttribute?.NamedArguments
+        var specifiedIdProperty = entityAttribute?.ConstructorArguments.Length > 1
+            ? entityAttribute.ConstructorArguments[1].Value?.ToString()
+            : null;
+        specifiedIdProperty ??= entityAttribute?.NamedArguments
             .FirstOrDefault(arg => arg.Key == "IdProperty").Value.Value?.ToString();
 
         // 获取属性信息
+        var entityDisplayName = GetEntityMetadataDisplayName(classSymbol, className);
+        var entityDescription = GetEntityMetadataDescription(classSymbol);
+
         var properties = new List<PropertyInfo>();
         PropertyInfo? idProperty = null;
         // 收集所有属性的类型符号，用于后续分析依赖类型
@@ -223,21 +239,22 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     continue;
                 }
 
-                var hasIgnoreAttribute = propertySymbol?.GetAttributes()
-                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore") ?? false;
+                var hasIgnoreAttribute = propertySymbol.GetAttributes()
+                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore");
 
                 // 检查是否有 [BsonRef] 特性
-                var bsonRefAttribute = propertySymbol?.GetAttributes()
+                var bsonRefAttribute = propertySymbol.GetAttributes()
                     .FirstOrDefault(attr => attr.AttributeClass?.Name == "BsonRefAttribute");
                 var bsonRefCollectionName = bsonRefAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
 
-                var foreignKeyAttribute = propertySymbol?.GetAttributes()
+                var foreignKeyAttribute = propertySymbol.GetAttributes()
                     .FirstOrDefault(attr => attr.AttributeClass?.Name == "ForeignKeyAttribute" ||
                                             attr.AttributeClass?.Name == "ForeignKey");
                 var foreignKeyCollectionName = foreignKeyAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+                var propertyMetadataAttribute = GetPropertyMetadataAttribute(propertySymbol);
                 
                 // 如果有 BsonRef 特性，验证引用类型是否有 Entity 特性
-                if (!string.IsNullOrEmpty(bsonRefCollectionName) && propertySymbol?.Type != null)
+                if (!string.IsNullOrEmpty(bsonRefCollectionName))
                 {
                     var refTypeSymbol = GetBsonRefTargetType(propertySymbol.Type);
                     if (refTypeSymbol != null)
@@ -250,7 +267,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                                 propertyName,
                                 className,
                                 refTypeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
-                                property.GetLocation()));
+                                DiagnosticLocationInfo.From(property.GetLocation())));
                         }
                     }
                 }
@@ -264,6 +281,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 var isEnumType = typeSymbol?.TypeKind == TypeKind.Enum;
 
                 var fullyQualifiedType = typeSymbol?.ToDisplayString(FullyQualifiedNullableDisplayFormat) ?? propertyType;
+                var metadataTypeName = typeSymbol != null ? GetStableMetadataTypeName(typeSymbol) : fullyQualifiedType.Replace("global::", "");
                 var nonNullableType = propertyType;
                 var fullyQualifiedNonNullableType = fullyQualifiedType;
 
@@ -335,6 +353,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     nonNullableType: nonNullableType,
                     fullyQualifiedType: fullyQualifiedType,
                     fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
+                    metadataTypeName: metadataTypeName,
                     isComplexType: typeAnalysis.IsComplexType,
                     isCollection: typeAnalysis.IsCollection,
                     isDictionary: typeAnalysis.IsDictionary,
@@ -349,7 +368,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     bsonRefCollectionName: bsonRefCollectionName,
                     foreignKeyCollectionName: foreignKeyCollectionName,
                     idGenerationStrategyValue: idGenerationInfo.StrategyValue,
-                    idGenerationSequenceName: idGenerationInfo.SequenceName);
+                    idGenerationSequenceName: idGenerationInfo.SequenceName,
+                    displayName: GetConstructorString(propertyMetadataAttribute, 0) ?? propertyName,
+                    description: GetNamedString(propertyMetadataAttribute, "Description"),
+                    order: GetNamedInt(propertyMetadataAttribute, "Order"),
+                    required: GetNamedBool(propertyMetadataAttribute, "Required"));
                 properties.Add(propInfo);
             }
             // 处理公共字段 (FieldDeclarationSyntax)
@@ -397,7 +420,8 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                                                   fieldSymbol?.NullableAnnotation == NullableAnnotation.Annotated;
                     var isEnumType = typeSymbol?.TypeKind == TypeKind.Enum;
 
-                var fullyQualifiedType = typeSymbol?.ToDisplayString(FullyQualifiedNullableDisplayFormat) ?? fieldType;
+                    var fullyQualifiedType = typeSymbol?.ToDisplayString(FullyQualifiedNullableDisplayFormat) ?? fieldType;
+                    var metadataTypeName = typeSymbol != null ? GetStableMetadataTypeName(typeSymbol) : fullyQualifiedType.Replace("global::", "");
                     var nonNullableType = fieldType;
                     var fullyQualifiedNonNullableType = fullyQualifiedType;
 
@@ -466,6 +490,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                         nonNullableType: nonNullableType,
                         fullyQualifiedType: fullyQualifiedType,
                         fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
+                        metadataTypeName: metadataTypeName,
                         isComplexType: typeAnalysis.IsComplexType,
                         isCollection: typeAnalysis.IsCollection,
                         isDictionary: typeAnalysis.IsDictionary,
@@ -531,7 +556,58 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
         var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
 
-        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, containingTypePath, classDeclaration.GetLocation(), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors, constructorParameters);
+        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, entityDisplayName, entityDescription, containingTypePath, DiagnosticLocationInfo.From(classDeclaration.GetLocation()), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors, constructorParameters, runtimeFullName);
+    }
+
+    private static string GetRuntimeFullName(INamedTypeSymbol typeSymbol)
+    {
+        var names = new Stack<string>();
+        var current = typeSymbol;
+        while (current != null)
+        {
+            names.Push(current.MetadataName);
+            current = current.ContainingType;
+        }
+
+        var typePath = string.Join("+", names);
+        var namespaceName = typeSymbol.ContainingNamespace is { IsGlobalNamespace: false } ns
+            ? ns.ToDisplayString()
+            : string.Empty;
+
+        return string.IsNullOrEmpty(namespaceName) ? typePath : $"{namespaceName}.{typePath}";
+    }
+
+    private static string GetStableMetadataTypeName(ITypeSymbol typeSymbol)
+    {
+        if (typeSymbol is IArrayTypeSymbol arrayType)
+        {
+            return $"{GetStableMetadataTypeName(arrayType.ElementType)}[]";
+        }
+
+        if (typeSymbol is ITypeParameterSymbol typeParameter)
+        {
+            return typeParameter.Name;
+        }
+
+        if (typeSymbol is not INamedTypeSymbol namedType)
+        {
+            return typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat).Replace("global::", "");
+        }
+
+        if (!namedType.IsGenericType)
+        {
+            return GetRuntimeFullName(namedType);
+        }
+
+        var definitionName = GetRuntimeFullName(namedType.ConstructedFrom);
+        var tickIndex = definitionName.IndexOf('`');
+        if (tickIndex >= 0)
+        {
+            definitionName = definitionName.Substring(0, tickIndex);
+        }
+
+        var typeArguments = namedType.TypeArguments.Select(GetStableMetadataTypeName);
+        return $"{definitionName}<{string.Join(",", typeArguments)}>";
     }
 
     /// <summary>
@@ -738,6 +814,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             .FirstOrDefault(attr => attr.AttributeClass?.Name == "ForeignKeyAttribute" ||
                                     attr.AttributeClass?.Name == "ForeignKey");
         var foreignKeyCollectionName = foreignKeyAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+        var propertyMetadataAttribute = GetPropertyMetadataAttribute(propertySymbol);
 
         var typeSymbol = propertySymbol.Type;
         if (!string.IsNullOrEmpty(bsonRefCollectionName))
@@ -750,7 +827,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     propertySymbol.Name,
                     containingTypeName,
                     refTypeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
-                    propertySymbol.Locations.FirstOrDefault()));
+                    DiagnosticLocationInfo.From(propertySymbol.Locations.FirstOrDefault())));
             }
         }
 
@@ -782,6 +859,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis);
 
         var idGenerationInfo = GetIdGenerationInfo(propertySymbol);
+        var metadataTypeName = GetStableMetadataTypeName(typeSymbol);
         propertyInfo = new PropertyInfo(
             propertySymbol.Name,
             propertyType,
@@ -795,6 +873,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             nonNullableType: nonNullableType,
             fullyQualifiedType: propertyType,
             fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
+            metadataTypeName: metadataTypeName,
             isComplexType: typeAnalysis.IsComplexType,
             isCollection: typeAnalysis.IsCollection,
             isDictionary: typeAnalysis.IsDictionary,
@@ -810,7 +889,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             foreignKeyCollectionName: foreignKeyCollectionName,
             idGenerationStrategyValue: idGenerationInfo.StrategyValue,
             idGenerationSequenceName: idGenerationInfo.SequenceName,
-            canSet: canSet);
+            canSet: canSet,
+            displayName: GetConstructorString(propertyMetadataAttribute, 0) ?? propertySymbol.Name,
+            description: GetNamedString(propertyMetadataAttribute, "Description"),
+            order: GetNamedInt(propertyMetadataAttribute, "Order"),
+            required: GetNamedBool(propertyMetadataAttribute, "Required"));
         return true;
     }
 
@@ -921,6 +1004,68 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         return constant.Value is int value ? value : 0;
     }
 
+    private static string? GetConstructorString(AttributeData? attribute, int index)
+    {
+        if (attribute == null || attribute.ConstructorArguments.Length <= index) return null;
+        return attribute.ConstructorArguments[index].Value?.ToString();
+    }
+
+    private static string? GetNamedString(AttributeData? attribute, string name)
+    {
+        if (attribute == null) return null;
+
+        var argument = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == name);
+        return argument.Value.Value?.ToString();
+    }
+
+    private static int GetNamedInt(AttributeData? attribute, string name, int defaultValue = 0)
+    {
+        if (attribute == null) return defaultValue;
+
+        var argument = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == name);
+        return argument.Value.Value is int value ? value : defaultValue;
+    }
+
+    private static bool GetNamedBool(AttributeData? attribute, string name, bool defaultValue = false)
+    {
+        if (attribute == null) return defaultValue;
+
+        var argument = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == name);
+        return argument.Value.Value is bool value ? value : defaultValue;
+    }
+
+    private static string GetEntityMetadataDisplayName(INamedTypeSymbol? classSymbol, string fallback)
+    {
+        if (classSymbol == null) return fallback;
+
+        foreach (var attribute in classSymbol.GetAttributes().Where(attr => attr.AttributeClass?.Name == "EntityMetadataAttribute"))
+        {
+            var displayName = GetConstructorString(attribute, 0) ?? GetNamedString(attribute, "DisplayName");
+            if (!string.IsNullOrEmpty(displayName)) return displayName!;
+        }
+
+        return fallback;
+    }
+
+    private static string? GetEntityMetadataDescription(INamedTypeSymbol? classSymbol)
+    {
+        if (classSymbol == null) return null;
+
+        foreach (var attribute in classSymbol.GetAttributes().Where(attr => attr.AttributeClass?.Name == "EntityMetadataAttribute"))
+        {
+            var description = GetNamedString(attribute, "Description");
+            if (!string.IsNullOrEmpty(description)) return description;
+        }
+
+        return null;
+    }
+
+    private static AttributeData? GetPropertyMetadataAttribute(ISymbol symbol)
+    {
+        return symbol.GetAttributes()
+            .FirstOrDefault(attr => attr.AttributeClass?.Name == "PropertyMetadataAttribute");
+    }
+
     /// <summary>
     /// 生成AOT静态帮助器类
     /// </summary>
@@ -962,6 +1107,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         if (classInfo.IdProperty != null)
         {
             var idProp = classInfo.IdProperty;
+            var idAccess = idProp.AccessName;
             var normalizedIdType = NormalizeTypeName(idProp.NonNullableType);
             var isObjectId = normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal);
 
@@ -983,29 +1129,29 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             {
                 if (idProp.IsNullableValueType)
                 {
-                    sb.AppendLine($"            return entity.{idProp.Name}.HasValue ? new BsonObjectId(entity.{idProp.Name}.Value) : BsonNull.Value;");
+                    sb.AppendLine($"            return entity.{idAccess}.HasValue ? new BsonObjectId(entity.{idAccess}.Value) : BsonNull.Value;");
                 }
                 else
                 {
-                    sb.AppendLine($"            return new BsonObjectId(entity.{idProp.Name});");
+                    sb.AppendLine($"            return new BsonObjectId(entity.{idAccess});");
                 }
             }
             else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
             {
-                sb.AppendLine($"            return new BsonString(entity.{idProp.Name} ?? \"\");");
+                sb.AppendLine($"            return new BsonString(entity.{idAccess} ?? \"\");");
             }
             else if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
             {
-                sb.AppendLine($"            return new BsonInt32(entity.{idProp.Name});");
+                sb.AppendLine($"            return new BsonInt32(entity.{idAccess});");
             }
             else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
             {
-                sb.AppendLine($"            return new BsonInt64(entity.{idProp.Name});");
+                sb.AppendLine($"            return new BsonInt64(entity.{idAccess});");
             }
             else
             {
                 // 对于其他类型，使用BsonConversion辅助方法
-                sb.AppendLine($"            return TinyDb.Serialization.BsonConversion.ConvertToBsonValue(entity.{idProp.Name});");
+                sb.AppendLine($"            return TinyDb.Serialization.BsonConversion.ConvertToBsonValue(entity.{idAccess});");
             }
 
             sb.AppendLine("        }");
@@ -1034,33 +1180,33 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             else if (isObjectId)
             {
                 sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
-                sb.AppendLine($"                entity.{idProp.Name} = bsonObjectId.Value;");
+                sb.AppendLine($"                entity.{idAccess} = bsonObjectId.Value;");
                 sb.AppendLine("            else if (id is BsonString bsonString && ObjectId.TryParse(bsonString.Value, out var parsedObjectId))");
-                sb.AppendLine($"                entity.{idProp.Name} = parsedObjectId;");
+                sb.AppendLine($"                entity.{idAccess} = parsedObjectId;");
             }
             else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonString bsonString)");
-                sb.AppendLine($"                entity.{idProp.Name} = bsonString.Value ?? \"\";");
+                sb.AppendLine($"                entity.{idAccess} = bsonString.Value ?? \"\";");
                 sb.AppendLine("            else if (id != null && !id.IsNull)");
-                sb.AppendLine($"                entity.{idProp.Name} = id.ToString();");
+                sb.AppendLine($"                entity.{idAccess} = id.ToString();");
             }
             else if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonInt32 bsonInt32)");
-                sb.AppendLine($"                entity.{idProp.Name} = bsonInt32.Value;");
+                sb.AppendLine($"                entity.{idAccess} = bsonInt32.Value;");
             }
             else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
             {
                 sb.AppendLine("            if (id is BsonInt64 bsonInt64)");
-                sb.AppendLine($"                entity.{idProp.Name} = bsonInt64.Value;");
+                sb.AppendLine($"                entity.{idAccess} = bsonInt64.Value;");
             }
             else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
             {
                 sb.AppendLine("            if (id is BsonBinary bsonBinary)");
-                sb.AppendLine($"                entity.{idProp.Name} = new Guid(bsonBinary.Bytes);");
+                sb.AppendLine($"                entity.{idAccess} = new Guid(bsonBinary.Bytes);");
                 sb.AppendLine("            else if (id is BsonString bsonGuidString && Guid.TryParse(bsonGuidString.Value, out var parsedGuid))");
-                sb.AppendLine($"                entity.{idProp.Name} = parsedGuid;");
+                sb.AppendLine($"                entity.{idAccess} = parsedGuid;");
             }
 
             sb.AppendLine("        }");
@@ -1081,36 +1227,36 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
             if (isObjectId)
             {
-                sb.AppendLine($"            return entity.{idProp.Name} != ObjectId.Empty;");
+                sb.AppendLine($"            return entity.{idAccess} != ObjectId.Empty;");
             }
             else
             {
                 if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
                 {
-                    sb.AppendLine($"            return !string.IsNullOrWhiteSpace(entity.{idProp.Name});");
+                    sb.AppendLine($"            return !string.IsNullOrWhiteSpace(entity.{idAccess});");
                 }
                 else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
                 {
                     if (idProp.IsNullableValueType)
                     {
-                        sb.AppendLine($"            return entity.{idProp.Name}.HasValue && entity.{idProp.Name}.Value != Guid.Empty;");
+                        sb.AppendLine($"            return entity.{idAccess}.HasValue && entity.{idAccess}.Value != Guid.Empty;");
                     }
                     else
                     {
-                        sb.AppendLine($"            return entity.{idProp.Name} != Guid.Empty;");
+                        sb.AppendLine($"            return entity.{idAccess} != Guid.Empty;");
                     }
                 }
                 else if (idProp.IsNullableValueType)
                 {
-                    sb.AppendLine($"            return entity.{idProp.Name}.HasValue && !System.Collections.Generic.EqualityComparer<{idProp.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProp.Name}.Value, default);");
+                    sb.AppendLine($"            return entity.{idAccess}.HasValue && !System.Collections.Generic.EqualityComparer<{idProp.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idAccess}.Value, default);");
                 }
                 else if (idProp.IsValueType)
                 {
-                    sb.AppendLine($"            return !System.Collections.Generic.EqualityComparer<{idProp.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProp.Name}, default);");
+                    sb.AppendLine($"            return !System.Collections.Generic.EqualityComparer<{idProp.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idAccess}, default);");
                 }
                 else
                 {
-                    sb.AppendLine($"            return entity.{idProp.Name} != null;");
+                    sb.AppendLine($"            return entity.{idAccess} != null;");
                 }
             }
 
@@ -1188,7 +1334,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         sb.AppendLine("            // 确保包含集合名称字段");
         sb.AppendLine("            if (!documentBuilder.ContainsKey(\"_collection\"))");
         sb.AppendLine("            {");
-        sb.AppendLine($"                documentBuilder.Set(\"_collection\", \"{classInfo.CollectionName ?? classInfo.Name}\");");
+        sb.AppendLine($"                documentBuilder.Set(\"_collection\", {ToCSharpStringLiteral(classInfo.CollectionName ?? classInfo.Name)});");
         sb.AppendLine("            }");
 
         sb.AppendLine("            return documentBuilder.Build();");
@@ -1258,7 +1404,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute))
         {
-            sb.AppendLine($"                \"{prop.Name}\" => entity.{prop.Name},");
+            sb.AppendLine($"                \"{prop.Name}\" => entity.{prop.AccessName},");
         }
 
         sb.AppendLine("                _ => null");
@@ -1278,7 +1424,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute && p.CanSet))
         {
             sb.AppendLine($"                case \"{prop.Name}\":");
-            sb.AppendLine($"                    entity.{prop.Name} = value is null ? default! : ({prop.FullyQualifiedType})value;");
+            sb.AppendLine($"                    entity.{prop.AccessName} = value is null ? default! : ({prop.FullyQualifiedType})value;");
             sb.AppendLine("                    return true;");
         }
 
@@ -1391,6 +1537,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     private static void AppendConfiguredIdGeneration(StringBuilder sb, ClassInfo classInfo, PropertyInfo idProperty)
     {
         var idType = idProperty.FullyQualifiedNonNullableType;
+        var idAccess = idProperty.AccessName;
         var defaultSequenceName = ToCSharpStringLiteral($"{classInfo.Name}_{idProperty.Name}");
         var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
 
@@ -1405,23 +1552,23 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
         {
-            sb.AppendLine($"                entity.{idProperty.Name} = (int)generatedId;");
+            sb.AppendLine($"                entity.{idAccess} = (int)generatedId;");
         }
         else if (string.Equals(normalizedIdType, "long", StringComparison.OrdinalIgnoreCase))
         {
-            sb.AppendLine($"                entity.{idProperty.Name} = (long)generatedId;");
+            sb.AppendLine($"                entity.{idAccess} = (long)generatedId;");
         }
         else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
         {
-            sb.AppendLine($"                entity.{idProperty.Name} = (Guid)generatedId;");
+            sb.AppendLine($"                entity.{idAccess} = (Guid)generatedId;");
         }
         else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
         {
-            sb.AppendLine($"                entity.{idProperty.Name} = (string)generatedId;");
+            sb.AppendLine($"                entity.{idAccess} = (string)generatedId;");
         }
         else if (normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal))
         {
-            sb.AppendLine($"                entity.{idProperty.Name} = (ObjectId)generatedId;");
+            sb.AppendLine($"                entity.{idAccess} = (ObjectId)generatedId;");
         }
         else
         {
@@ -1435,6 +1582,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
     private static void AppendDefaultIdGeneration(StringBuilder sb, ClassInfo classInfo, PropertyInfo idProperty)
     {
         var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
+        var idAccess = idProperty.AccessName;
 
         if (string.Equals(normalizedIdType, "int", StringComparison.OrdinalIgnoreCase))
         {
@@ -1446,17 +1594,17 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         }
         else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
         {
-            sb.AppendLine($"            entity.{idProperty.Name} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7();");
+            sb.AppendLine($"            entity.{idAccess} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7();");
             sb.AppendLine("            return true;");
         }
         else if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
         {
-            sb.AppendLine($"            entity.{idProperty.Name} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7().ToString();");
+            sb.AppendLine($"            entity.{idAccess} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7().ToString();");
             sb.AppendLine("            return true;");
         }
         else if (normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal))
         {
-            sb.AppendLine($"            entity.{idProperty.Name} = ObjectId.NewObjectId();");
+            sb.AppendLine($"            entity.{idAccess} = ObjectId.NewObjectId();");
             sb.AppendLine("            return true;");
         }
         else
@@ -1561,12 +1709,43 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             sb.AppendLine($"            {helperFullName}.IdGenerationStrategy,");
             sb.AppendLine($"            {helperFullName}.IdGenerationSequenceName,");
             sb.AppendLine($"            entity => {helperFullName}.GenerateIdIfNeeded(entity)));");
+            AppendMetadataRegistryRegistration(sb, classInfo);
         }
 
         sb.AppendLine("    }");
         sb.AppendLine("}");
 
         return sb.ToString();
+    }
+
+    private static void AppendMetadataRegistryRegistration(StringBuilder sb, ClassInfo classInfo)
+    {
+        sb.AppendLine($"        global::TinyDb.Metadata.MetadataRegistry.Register(typeof({classInfo.FullName}), new global::TinyDb.Metadata.EntityMetadata");
+        sb.AppendLine("        {");
+        sb.AppendLine($"            TypeName = {ToCSharpStringLiteral(classInfo.RuntimeFullName)},");
+        sb.AppendLine($"            CollectionName = {ToCSharpStringLiteral(classInfo.CollectionName ?? classInfo.Name)},");
+        sb.AppendLine($"            DisplayName = {ToCSharpStringLiteral(classInfo.DisplayName)},");
+        sb.AppendLine($"            Description = {ToCSharpStringLiteral(classInfo.Description)},");
+        sb.AppendLine("            Properties = new List<global::TinyDb.Metadata.PropertyMetadata>");
+        sb.AppendLine("            {");
+
+        foreach (var property in classInfo.Properties.Where(static p => !p.HasIgnoreAttribute))
+        {
+            sb.AppendLine("                new global::TinyDb.Metadata.PropertyMetadata");
+            sb.AppendLine("                {");
+            sb.AppendLine($"                    PropertyName = {ToCSharpStringLiteral(property.Name)},");
+            sb.AppendLine($"                    PropertyType = {ToCSharpStringLiteral(property.MetadataTypeName)},");
+            sb.AppendLine($"                    DisplayName = {ToCSharpStringLiteral(property.DisplayName)},");
+            sb.AppendLine($"                    Description = {ToCSharpStringLiteral(property.Description)},");
+            sb.AppendLine($"                    Order = {property.Order},");
+            sb.AppendLine($"                    Required = {(property.Required ? "true" : "false")},");
+            sb.AppendLine($"                    IsPrimaryKey = {(property.IsId ? "true" : "false")},");
+            sb.AppendLine($"                    ForeignKeyCollection = {ToCSharpStringLiteral(property.ForeignKeyCollectionName)}");
+            sb.AppendLine("                },");
+        }
+
+        sb.AppendLine("            }");
+        sb.AppendLine("        });");
     }
 
     /// <summary>
@@ -1638,7 +1817,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         foreach (var property in classInfo.Properties)
         {
-            sb.AppendLine($"            documentBuilder.Set(\"{property.Name}\", ConvertToBsonValue(entity.{property.Name}));");
+            sb.AppendLine($"            documentBuilder.Set(\"{property.Name}\", ConvertToBsonValue(entity.{property.AccessName}));");
         }
 
         sb.AppendLine("            return documentBuilder.Build();");
@@ -1666,7 +1845,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         {
             sb.AppendLine($"            if (doc.ContainsKey(\"{property.Name}\"))");
             sb.AppendLine($"            {{");
-            sb.AppendLine($"                entity.{property.Name} = ConvertFromBsonValue<{property.Type}>(doc[\"{property.Name}\"]);");
+            sb.AppendLine($"                entity.{property.AccessName} = ConvertFromBsonValue<{property.Type}>(doc[\"{property.Name}\"]);");
             sb.AppendLine($"            }}");
         }
 
@@ -2014,12 +2193,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                     // 对非可空引用类型保持构造时默认值，避免生成 CS8625。
                     if (prop.IsNullable)
                     {
-                        sb.AppendLine($"                    result.{prop.Name} = default;");
+                        sb.AppendLine($"                    result.{prop.AccessName} = default;");
                     }
                     sb.AppendLine("                }");
                     sb.AppendLine($"                else if (bson_{prop.Name} is BsonDocument nested_{prop.Name})");
                     sb.AppendLine("                {");
-                    sb.AppendLine($"                    result.{prop.Name} = DeserializeComplexObject<{prop.FullyQualifiedTypeName}>(nested_{prop.Name});");
+                    sb.AppendLine($"                    result.{prop.AccessName} = DeserializeComplexObject<{prop.FullyQualifiedTypeName}>(nested_{prop.Name});");
                     sb.AppendLine("                }");
                     sb.AppendLine("            }");
                 }
@@ -2034,7 +2213,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 sb.AppendLine("                {");
                 if (prop.IsNullable)
                 {
-                    sb.AppendLine($"                    result.{prop.Name} = default!;");
+                    sb.AppendLine($"                    result.{prop.AccessName} = default!;");
                 }
                 sb.AppendLine("                }");
                 sb.AppendLine($"                else if (bson_{prop.Name} is BsonArray array_{prop.Name})");
@@ -2061,11 +2240,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 sb.AppendLine("                    }");
                 if (prop.IsArray)
                 {
-                    sb.AppendLine($"                    result.{prop.Name} = list_{prop.Name}.ToArray();");
+                    sb.AppendLine($"                    result.{prop.AccessName} = list_{prop.Name}.ToArray();");
                 }
                 else
                 {
-                    sb.AppendLine($"                    result.{prop.Name} = list_{prop.Name};");
+                    sb.AppendLine($"                    result.{prop.AccessName} = list_{prop.Name};");
                 }
                 sb.AppendLine("                }");
                 sb.AppendLine("            }");
@@ -2084,7 +2263,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 sb.AppendLine("                {");
                 if (prop.IsNullable)
                 {
-                    sb.AppendLine($"                    result.{prop.Name} = default!;");
+                    sb.AppendLine($"                    result.{prop.AccessName} = default!;");
                 }
                 sb.AppendLine("                }");
                 sb.AppendLine($"                else if (bson_{prop.Name} is BsonDocument dict_{prop.Name})");
@@ -2109,7 +2288,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 }
 
                 sb.AppendLine("                    }");
-                sb.AppendLine($"                    result.{prop.Name} = result_{prop.Name};");
+                sb.AppendLine($"                    result.{prop.AccessName} = result_{prop.Name};");
                 sb.AppendLine("                }");
                 sb.AppendLine("            }");
             }
@@ -2118,7 +2297,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 // 简单类型使用 ConvertFromBsonValue
                 sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}) && !bson_{prop.Name}.IsNull)");
                 sb.AppendLine("            {");
-                sb.AppendLine($"                result.{prop.Name} = ConvertFromBsonValue<{prop.FullyQualifiedTypeName}>(bson_{prop.Name});");
+                sb.AppendLine($"                result.{prop.AccessName} = ConvertFromBsonValue<{prop.FullyQualifiedTypeName}>(bson_{prop.Name});");
                 sb.AppendLine("            }");
             }
         }
@@ -2136,6 +2315,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         if (classInfo.IdProperty == null) return;
 
         var idProperty = classInfo.IdProperty;
+        var idAccess = idProperty.AccessName;
         var normalizedIdType = NormalizeTypeName(idProperty.NonNullableType);
         var isObjectId = normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal);
 
@@ -2151,11 +2331,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         if (isObjectId)
         {
-            sb.AppendLine($"            return new BsonObjectId(entity.{idProperty.Name});");
+            sb.AppendLine($"            return new BsonObjectId(entity.{idAccess});");
         }
         else
         {
-            sb.AppendLine($"            return ConvertToBsonValue(entity.{idProperty.Name});");
+            sb.AppendLine($"            return ConvertToBsonValue(entity.{idAccess});");
         }
 
         sb.AppendLine("        }");
@@ -2173,11 +2353,11 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         if (isObjectId)
         {
             sb.AppendLine("            if (id is BsonObjectId bsonObjectId)");
-            sb.AppendLine($"                entity.{idProperty.Name} = bsonObjectId.Value;");
+            sb.AppendLine($"                entity.{idAccess} = bsonObjectId.Value;");
         }
         else
         {
-            sb.AppendLine($"            entity.{idProperty.Name} = ConvertFromBsonValue<{idProperty.Type}>(id);");
+            sb.AppendLine($"            entity.{idAccess} = ConvertFromBsonValue<{idProperty.Type}>(id);");
         }
 
         sb.AppendLine("        }");
@@ -2194,36 +2374,36 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
         if (isObjectId)
         {
-            sb.AppendLine($"            return entity.{idProperty.Name} != ObjectId.Empty;");
+            sb.AppendLine($"            return entity.{idAccess} != ObjectId.Empty;");
         }
         else
         {
             if (string.Equals(normalizedIdType, "string", StringComparison.OrdinalIgnoreCase))
             {
-                sb.AppendLine($"            return !string.IsNullOrWhiteSpace(entity.{idProperty.Name});");
+                sb.AppendLine($"            return !string.IsNullOrWhiteSpace(entity.{idAccess});");
             }
             else if (string.Equals(normalizedIdType, "Guid", StringComparison.Ordinal))
             {
                 if (idProperty.IsNullableValueType)
                 {
-                    sb.AppendLine($"            return entity.{idProperty.Name}.HasValue && entity.{idProperty.Name}.Value != Guid.Empty;");
+                    sb.AppendLine($"            return entity.{idAccess}.HasValue && entity.{idAccess}.Value != Guid.Empty;");
                 }
                 else
                 {
-                    sb.AppendLine($"            return entity.{idProperty.Name} != Guid.Empty;");
+                    sb.AppendLine($"            return entity.{idAccess} != Guid.Empty;");
                 }
             }
             else if (idProperty.IsNullableValueType)
             {
-                sb.AppendLine($"            return entity.{idProperty.Name}.HasValue && !System.Collections.Generic.EqualityComparer<{idProperty.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProperty.Name}.Value, default);");
+                sb.AppendLine($"            return entity.{idAccess}.HasValue && !System.Collections.Generic.EqualityComparer<{idProperty.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idAccess}.Value, default);");
             }
             else if (idProperty.IsValueType)
             {
-                sb.AppendLine($"            return !System.Collections.Generic.EqualityComparer<{idProperty.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idProperty.Name}, default);");
+                sb.AppendLine($"            return !System.Collections.Generic.EqualityComparer<{idProperty.FullyQualifiedNonNullableType}>.Default.Equals(entity.{idAccess}, default);");
             }
             else
             {
-                sb.AppendLine($"            return entity.{idProperty.Name} != null;");
+                sb.AppendLine($"            return entity.{idAccess} != null;");
             }
         }
 
@@ -2263,8 +2443,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         };
     }
 
-    private static string ToCSharpStringLiteral(string value)
+    internal static string ToCSharpStringLiteral(string? value)
     {
+        if (value == null) return "null";
+
         var sb = new StringBuilder(value.Length + 2);
         sb.Append('"');
 
@@ -2278,6 +2460,18 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 case '"':
                     sb.Append("\\\"");
                     break;
+                case '\0':
+                    sb.Append(@"\0");
+                    break;
+                case '\a':
+                    sb.Append(@"\a");
+                    break;
+                case '\b':
+                    sb.Append(@"\b");
+                    break;
+                case '\f':
+                    sb.Append(@"\f");
+                    break;
                 case '\r':
                     sb.Append(@"\r");
                     break;
@@ -2287,8 +2481,19 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 case '\t':
                     sb.Append(@"\t");
                     break;
+                case '\v':
+                    sb.Append(@"\v");
+                    break;
                 default:
-                    sb.Append(ch);
+                    if (char.IsControl(ch))
+                    {
+                        sb.Append(@"\u");
+                        sb.Append(((int)ch).ToString("x4"));
+                    }
+                    else
+                    {
+                        sb.Append(ch);
+                    }
                     break;
             }
         }
@@ -3210,6 +3415,70 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
 
 }
 
+public readonly struct DiagnosticLocationInfo : IEquatable<DiagnosticLocationInfo>
+{
+    public string FilePath { get; }
+    public TextSpan TextSpan { get; }
+    public LinePositionSpan LineSpan { get; }
+
+    private DiagnosticLocationInfo(string filePath, TextSpan textSpan, LinePositionSpan lineSpan)
+    {
+        FilePath = filePath;
+        TextSpan = textSpan;
+        LineSpan = lineSpan;
+    }
+
+    public static DiagnosticLocationInfo? From(Location? location)
+    {
+        if (location == null || location == Location.None || !location.IsInSource)
+        {
+            return null;
+        }
+
+        var lineSpan = location.GetLineSpan();
+        return new DiagnosticLocationInfo(lineSpan.Path ?? string.Empty, location.SourceSpan, lineSpan.Span);
+    }
+
+    public Location? ToLocation()
+    {
+        return string.IsNullOrEmpty(FilePath)
+            ? null
+            : Location.Create(FilePath, TextSpan, LineSpan);
+    }
+
+    public bool Equals(DiagnosticLocationInfo other)
+    {
+        return string.Equals(FilePath, other.FilePath, StringComparison.Ordinal) &&
+               TextSpan.Equals(other.TextSpan) &&
+               LineSpan.Equals(other.LineSpan);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is DiagnosticLocationInfo other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = hash * 31 + StringComparer.Ordinal.GetHashCode(FilePath ?? string.Empty);
+            hash = hash * 31 + TextSpan.GetHashCode();
+            hash = hash * 31 + LineSpan.GetHashCode();
+            return hash;
+        }
+    }
+}
+
+internal static class DiagnosticLocationInfoExtensions
+{
+    public static Location? ToLocation(this DiagnosticLocationInfo? location)
+    {
+        return location.HasValue ? location.Value.ToLocation() : null;
+    }
+}
+
     public sealed class ConstructorParameterInfo
     {
         public string ParameterName { get; }
@@ -3262,6 +3531,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
                 return $"{baseName}{Name}";
             }
         }
+        public string RuntimeFullName { get; }
         public string UniqueFileName
         {
             get
@@ -3290,10 +3560,12 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         public List<PropertyInfo> Properties { get; }
         public PropertyInfo? IdProperty { get; }
         public string? CollectionName { get; }
+        public string DisplayName { get; }
+        public string? Description { get; }
         /// <summary>
         /// 类声明的源代码位置（用于诊断报告）
         /// </summary>
-        public Location? Location { get; }
+        public DiagnosticLocationInfo? Location { get; }
         
         /// <summary>
         /// 依赖的非Entity复杂类型（需要生成内联序列化代码）
@@ -3316,7 +3588,7 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
         public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
         public List<ConstructorParameterInfo> ConstructorParameters { get; }
 
-        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? containingTypePath = null, Location? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null)
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null)
         {
             Namespace = @namespace;
             Name = name;
@@ -3324,7 +3596,10 @@ public class TinyDbSourceGenerator : IIncrementalGenerator
             Properties = properties;
             IdProperty = idProperty;
             CollectionName = collectionName;
+            DisplayName = string.IsNullOrEmpty(displayName) ? name : displayName!;
+            Description = string.IsNullOrEmpty(description) ? null : description;
             ContainingTypePath = containingTypePath ?? string.Empty;
+            RuntimeFullName = runtimeFullName ?? FullName;
             Location = location;
             DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
             CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
@@ -3384,6 +3659,10 @@ public class DependentComplexType
 public class DependentTypeProperty
 {
     public string Name { get; }
+    public string AccessName => SyntaxFacts.GetKeywordKind(Name) != SyntaxKind.None ||
+                                SyntaxFacts.GetContextualKeywordKind(Name) != SyntaxKind.None
+        ? "@" + Name
+        : Name;
     public string TypeName { get; }
     public string FullyQualifiedTypeName { get; }
     public bool IsValueType { get; }
@@ -3452,10 +3731,18 @@ public class DependentTypeProperty
 public class PropertyInfo
 {
     public string Name { get; }
+    public string AccessName => SyntaxFacts.GetKeywordKind(Name) != SyntaxKind.None ||
+                                SyntaxFacts.GetContextualKeywordKind(Name) != SyntaxKind.None
+        ? "@" + Name
+        : Name;
     public string Type { get; }
     public bool IsId { get; set; }
     public bool IsIgnored { get; }
     public bool HasIgnoreAttribute { get; set; }
+    public string DisplayName { get; }
+    public string? Description { get; }
+    public int Order { get; }
+    public bool Required { get; }
     public bool IsValueType { get; }
     public bool IsNullableValueType { get; }
     public bool IsNullableReferenceType { get; }
@@ -3463,6 +3750,7 @@ public class PropertyInfo
     public string NonNullableType { get; }
     public string FullyQualifiedType { get; }
     public string FullyQualifiedNonNullableType { get; }
+    public string MetadataTypeName { get; }
     
     /// <summary>
     /// 是否是复杂对象类型（非基本类型、非集合、非字典的类或结构体）
@@ -3547,6 +3835,7 @@ public class PropertyInfo
         string? nonNullableType = null,
         string? fullyQualifiedType = null,
         string? fullyQualifiedNonNullableType = null,
+        string? metadataTypeName = null,
         bool isComplexType = false,
         bool isCollection = false,
         bool isDictionary = false,
@@ -3562,13 +3851,21 @@ public class PropertyInfo
         string? foreignKeyCollectionName = null,
         int idGenerationStrategyValue = 0,
         string? idGenerationSequenceName = null,
-        bool canSet = true)
+        bool canSet = true,
+        string? displayName = null,
+        string? description = null,
+        int order = 0,
+        bool required = false)
     {
         Name = name;
         Type = type;
         IsId = isId;
         IsIgnored = isIgnored;
         HasIgnoreAttribute = hasIgnoreAttribute;
+        DisplayName = string.IsNullOrEmpty(displayName) ? name : displayName!;
+        Description = string.IsNullOrEmpty(description) ? null : description;
+        Order = order;
+        Required = required;
         IsValueType = isValueType;
         IsNullableValueType = isNullableValueType;
         IsNullableReferenceType = isNullableReferenceType;
@@ -3576,6 +3873,7 @@ public class PropertyInfo
         NonNullableType = nonNullableType ?? type.TrimEnd('?');
         FullyQualifiedType = fullyQualifiedType ?? type;
         FullyQualifiedNonNullableType = fullyQualifiedNonNullableType ?? NonNullableType;
+        MetadataTypeName = metadataTypeName ?? FullyQualifiedType.Replace("global::", "");
         IsComplexType = isComplexType;
         IsCollection = isCollection;
         IsDictionary = isDictionary;
@@ -3686,9 +3984,9 @@ public class BsonRefMissingEntityInfo
     /// <summary>
     /// 属性声明的位置（用于诊断报告）
     /// </summary>
-    public Location? Location { get; }
+    public DiagnosticLocationInfo? Location { get; }
 
-    public BsonRefMissingEntityInfo(string propertyName, string containingTypeName, string referencedTypeName, Location? location = null)
+    public BsonRefMissingEntityInfo(string propertyName, string containingTypeName, string referencedTypeName, DiagnosticLocationInfo? location = null)
     {
         PropertyName = propertyName;
         ContainingTypeName = containingTypeName;
@@ -3700,6 +3998,354 @@ public class BsonRefMissingEntityInfo
 /// <summary>
 /// 生成属性序列化代码的辅助方法
 /// </summary>
+internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
+{
+    public static readonly ClassInfoComparer Instance = new();
+
+    public bool Equals(ClassInfo? x, ClassInfo? y)
+    {
+        if (ReferenceEquals(x, y)) return true;
+        if (x is null || y is null) return false;
+
+        return StringEquals(x.Namespace, y.Namespace) &&
+               StringEquals(x.Name, y.Name) &&
+               StringEquals(x.ContainingTypePath, y.ContainingTypePath) &&
+               x.IsValueType == y.IsValueType &&
+               StringEquals(x.RuntimeFullName, y.RuntimeFullName) &&
+               StringEquals(x.CollectionName, y.CollectionName) &&
+               StringEquals(x.DisplayName, y.DisplayName) &&
+               StringEquals(x.Description, y.Description) &&
+               Nullable.Equals(x.Location, y.Location) &&
+               StringEquals(x.IdProperty?.Name, y.IdProperty?.Name) &&
+               ListEquals(x.Properties, y.Properties, PropertyEquals) &&
+               ListEquals(x.DependentComplexTypes, y.DependentComplexTypes, DependentComplexTypeEquals) &&
+               ListEquals(x.CircularReferences, y.CircularReferences, CircularReferenceEquals) &&
+               ListEquals(x.EntityCircularReferences, y.EntityCircularReferences, EntityCircularReferenceEquals) &&
+               ListEquals(x.BsonRefMissingEntityErrors, y.BsonRefMissingEntityErrors, BsonRefMissingEntityEquals) &&
+               ListEquals(x.ConstructorParameters, y.ConstructorParameters, ConstructorParameterEquals);
+    }
+
+    public int GetHashCode(ClassInfo? obj)
+    {
+        if (obj is null) return 0;
+
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, obj.Namespace);
+            hash = Add(hash, obj.Name);
+            hash = Add(hash, obj.ContainingTypePath);
+            hash = Add(hash, obj.IsValueType);
+            hash = Add(hash, obj.RuntimeFullName);
+            hash = Add(hash, obj.CollectionName);
+            hash = Add(hash, obj.DisplayName);
+            hash = Add(hash, obj.Description);
+            hash = Add(hash, obj.Location);
+            hash = Add(hash, obj.IdProperty?.Name);
+            hash = AddList(hash, obj.Properties, GetPropertyHashCode);
+            hash = AddList(hash, obj.DependentComplexTypes, GetDependentComplexTypeHashCode);
+            hash = AddList(hash, obj.CircularReferences, GetCircularReferenceHashCode);
+            hash = AddList(hash, obj.EntityCircularReferences, GetEntityCircularReferenceHashCode);
+            hash = AddList(hash, obj.BsonRefMissingEntityErrors, GetBsonRefMissingEntityHashCode);
+            hash = AddList(hash, obj.ConstructorParameters, GetConstructorParameterHashCode);
+            return hash;
+        }
+    }
+
+    private static bool ListEquals<T>(IReadOnlyList<T> x, IReadOnlyList<T> y, Func<T, T, bool> comparer)
+    {
+        if (ReferenceEquals(x, y)) return true;
+        if (x.Count != y.Count) return false;
+
+        for (var i = 0; i < x.Count; i++)
+        {
+            if (!comparer(x[i], y[i])) return false;
+        }
+
+        return true;
+    }
+
+    private static int AddList<T>(int hash, IReadOnlyList<T> values, Func<T, int> getHashCode)
+    {
+        unchecked
+        {
+            hash = Add(hash, values.Count);
+            for (var i = 0; i < values.Count; i++)
+            {
+                hash = hash * 31 + getHashCode(values[i]);
+            }
+
+            return hash;
+        }
+    }
+
+    private static bool PropertyEquals(PropertyInfo x, PropertyInfo y)
+    {
+        return StringEquals(x.Name, y.Name) &&
+               StringEquals(x.Type, y.Type) &&
+               x.IsId == y.IsId &&
+               x.IsIgnored == y.IsIgnored &&
+               x.HasIgnoreAttribute == y.HasIgnoreAttribute &&
+               StringEquals(x.DisplayName, y.DisplayName) &&
+               StringEquals(x.Description, y.Description) &&
+               x.Order == y.Order &&
+               x.Required == y.Required &&
+               x.IsValueType == y.IsValueType &&
+               x.IsNullableValueType == y.IsNullableValueType &&
+               x.IsNullableReferenceType == y.IsNullableReferenceType &&
+               x.IsEnum == y.IsEnum &&
+               StringEquals(x.NonNullableType, y.NonNullableType) &&
+               StringEquals(x.FullyQualifiedType, y.FullyQualifiedType) &&
+               StringEquals(x.FullyQualifiedNonNullableType, y.FullyQualifiedNonNullableType) &&
+               StringEquals(x.MetadataTypeName, y.MetadataTypeName) &&
+               x.IsComplexType == y.IsComplexType &&
+               x.IsCollection == y.IsCollection &&
+               x.IsDictionary == y.IsDictionary &&
+               x.IsArray == y.IsArray &&
+               StringEquals(x.ElementType, y.ElementType) &&
+               x.IsElementComplexType == y.IsElementComplexType &&
+               x.IsElementValueType == y.IsElementValueType &&
+               StringEquals(x.DictionaryKeyType, y.DictionaryKeyType) &&
+               StringEquals(x.DictionaryValueType, y.DictionaryValueType) &&
+               x.IsDictionaryValueComplexType == y.IsDictionaryValueComplexType &&
+               x.IsDictionaryValueValueType == y.IsDictionaryValueValueType &&
+               StringEquals(x.BsonRefCollectionName, y.BsonRefCollectionName) &&
+               StringEquals(x.ForeignKeyCollectionName, y.ForeignKeyCollectionName) &&
+               x.IdGenerationStrategyValue == y.IdGenerationStrategyValue &&
+               StringEquals(x.IdGenerationSequenceName, y.IdGenerationSequenceName) &&
+               x.CanSet == y.CanSet;
+    }
+
+    private static int GetPropertyHashCode(PropertyInfo value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.Name);
+            hash = Add(hash, value.Type);
+            hash = Add(hash, value.IsId);
+            hash = Add(hash, value.IsIgnored);
+            hash = Add(hash, value.HasIgnoreAttribute);
+            hash = Add(hash, value.DisplayName);
+            hash = Add(hash, value.Description);
+            hash = Add(hash, value.Order);
+            hash = Add(hash, value.Required);
+            hash = Add(hash, value.IsValueType);
+            hash = Add(hash, value.IsNullableValueType);
+            hash = Add(hash, value.IsNullableReferenceType);
+            hash = Add(hash, value.IsEnum);
+            hash = Add(hash, value.NonNullableType);
+            hash = Add(hash, value.FullyQualifiedType);
+            hash = Add(hash, value.FullyQualifiedNonNullableType);
+            hash = Add(hash, value.MetadataTypeName);
+            hash = Add(hash, value.IsComplexType);
+            hash = Add(hash, value.IsCollection);
+            hash = Add(hash, value.IsDictionary);
+            hash = Add(hash, value.IsArray);
+            hash = Add(hash, value.ElementType);
+            hash = Add(hash, value.IsElementComplexType);
+            hash = Add(hash, value.IsElementValueType);
+            hash = Add(hash, value.DictionaryKeyType);
+            hash = Add(hash, value.DictionaryValueType);
+            hash = Add(hash, value.IsDictionaryValueComplexType);
+            hash = Add(hash, value.IsDictionaryValueValueType);
+            hash = Add(hash, value.BsonRefCollectionName);
+            hash = Add(hash, value.ForeignKeyCollectionName);
+            hash = Add(hash, value.IdGenerationStrategyValue);
+            hash = Add(hash, value.IdGenerationSequenceName);
+            hash = Add(hash, value.CanSet);
+            return hash;
+        }
+    }
+
+    private static bool DependentComplexTypeEquals(DependentComplexType x, DependentComplexType y)
+    {
+        return StringEquals(x.FullyQualifiedName, y.FullyQualifiedName) &&
+               StringEquals(x.ShortName, y.ShortName) &&
+               x.IsValueType == y.IsValueType &&
+               ListEquals(x.Properties, y.Properties, DependentTypePropertyEquals);
+    }
+
+    private static int GetDependentComplexTypeHashCode(DependentComplexType value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.FullyQualifiedName);
+            hash = Add(hash, value.ShortName);
+            hash = Add(hash, value.IsValueType);
+            hash = AddList(hash, value.Properties, GetDependentTypePropertyHashCode);
+            return hash;
+        }
+    }
+
+    private static bool DependentTypePropertyEquals(DependentTypeProperty x, DependentTypeProperty y)
+    {
+        return StringEquals(x.Name, y.Name) &&
+               StringEquals(x.TypeName, y.TypeName) &&
+               StringEquals(x.FullyQualifiedTypeName, y.FullyQualifiedTypeName) &&
+               x.IsValueType == y.IsValueType &&
+               x.IsNullable == y.IsNullable &&
+               x.IsComplexType == y.IsComplexType &&
+               StringEquals(x.ComplexTypeFullName, y.ComplexTypeFullName) &&
+               x.IsCollection == y.IsCollection &&
+               x.IsDictionary == y.IsDictionary &&
+               x.IsArray == y.IsArray &&
+               StringEquals(x.ElementType, y.ElementType) &&
+               x.IsElementComplexType == y.IsElementComplexType &&
+               x.IsElementValueType == y.IsElementValueType &&
+               StringEquals(x.DictionaryKeyType, y.DictionaryKeyType) &&
+               StringEquals(x.DictionaryValueType, y.DictionaryValueType) &&
+               x.IsDictionaryValueComplexType == y.IsDictionaryValueComplexType &&
+               x.IsDictionaryValueValueType == y.IsDictionaryValueValueType &&
+               x.IsCircularReference == y.IsCircularReference;
+    }
+
+    private static int GetDependentTypePropertyHashCode(DependentTypeProperty value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.Name);
+            hash = Add(hash, value.TypeName);
+            hash = Add(hash, value.FullyQualifiedTypeName);
+            hash = Add(hash, value.IsValueType);
+            hash = Add(hash, value.IsNullable);
+            hash = Add(hash, value.IsComplexType);
+            hash = Add(hash, value.ComplexTypeFullName);
+            hash = Add(hash, value.IsCollection);
+            hash = Add(hash, value.IsDictionary);
+            hash = Add(hash, value.IsArray);
+            hash = Add(hash, value.ElementType);
+            hash = Add(hash, value.IsElementComplexType);
+            hash = Add(hash, value.IsElementValueType);
+            hash = Add(hash, value.DictionaryKeyType);
+            hash = Add(hash, value.DictionaryValueType);
+            hash = Add(hash, value.IsDictionaryValueComplexType);
+            hash = Add(hash, value.IsDictionaryValueValueType);
+            hash = Add(hash, value.IsCircularReference);
+            return hash;
+        }
+    }
+
+    private static bool CircularReferenceEquals(CircularReferenceInfo x, CircularReferenceInfo y)
+    {
+        return StringEquals(x.ContainingTypeName, y.ContainingTypeName) &&
+               StringEquals(x.TargetTypeName, y.TargetTypeName) &&
+               StringEquals(x.PropertyName, y.PropertyName) &&
+               StringEquals(x.CycleChain, y.CycleChain);
+    }
+
+    private static int GetCircularReferenceHashCode(CircularReferenceInfo value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.ContainingTypeName);
+            hash = Add(hash, value.TargetTypeName);
+            hash = Add(hash, value.PropertyName);
+            hash = Add(hash, value.CycleChain);
+            return hash;
+        }
+    }
+
+    private static bool EntityCircularReferenceEquals(EntityCircularReferenceInfo x, EntityCircularReferenceInfo y)
+    {
+        return StringEquals(x.CurrentEntityName, y.CurrentEntityName) &&
+               StringEquals(x.TargetEntityName, y.TargetEntityName) &&
+               StringEquals(x.PropertyName, y.PropertyName) &&
+               StringEquals(x.CycleChain, y.CycleChain);
+    }
+
+    private static int GetEntityCircularReferenceHashCode(EntityCircularReferenceInfo value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.CurrentEntityName);
+            hash = Add(hash, value.TargetEntityName);
+            hash = Add(hash, value.PropertyName);
+            hash = Add(hash, value.CycleChain);
+            return hash;
+        }
+    }
+
+    private static bool BsonRefMissingEntityEquals(BsonRefMissingEntityInfo x, BsonRefMissingEntityInfo y)
+    {
+        return StringEquals(x.PropertyName, y.PropertyName) &&
+               StringEquals(x.ContainingTypeName, y.ContainingTypeName) &&
+               StringEquals(x.ReferencedTypeName, y.ReferencedTypeName) &&
+               Nullable.Equals(x.Location, y.Location);
+    }
+
+    private static int GetBsonRefMissingEntityHashCode(BsonRefMissingEntityInfo value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.PropertyName);
+            hash = Add(hash, value.ContainingTypeName);
+            hash = Add(hash, value.ReferencedTypeName);
+            hash = Add(hash, value.Location);
+            return hash;
+        }
+    }
+
+    private static bool ConstructorParameterEquals(ConstructorParameterInfo x, ConstructorParameterInfo y)
+    {
+        return StringEquals(x.ParameterName, y.ParameterName) &&
+               StringEquals(x.Property.Name, y.Property.Name);
+    }
+
+    private static int GetConstructorParameterHashCode(ConstructorParameterInfo value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.ParameterName);
+            hash = Add(hash, value.Property.Name);
+            return hash;
+        }
+    }
+
+    private static bool StringEquals(string? x, string? y)
+    {
+        return string.Equals(x, y, StringComparison.Ordinal);
+    }
+
+    private static int Add(int hash, string? value)
+    {
+        unchecked
+        {
+            return hash * 31 + (value == null ? 0 : StringComparer.Ordinal.GetHashCode(value));
+        }
+    }
+
+    private static int Add(int hash, bool value)
+    {
+        unchecked
+        {
+            return hash * 31 + (value ? 1 : 0);
+        }
+    }
+
+    private static int Add(int hash, int value)
+    {
+        unchecked
+        {
+            return hash * 31 + value;
+        }
+    }
+
+    private static int Add(int hash, DiagnosticLocationInfo? value)
+    {
+        unchecked
+        {
+            return hash * 31 + (value.HasValue ? value.Value.GetHashCode() : 0);
+        }
+    }
+}
+
 public static partial class SourceGeneratorHelpers
 {
     /// <summary>
@@ -3716,6 +4362,7 @@ public static partial class SourceGeneratorHelpers
     public static string GeneratePropertySerialization(PropertyInfo prop)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var propertyType = prop.Type;
 
         // 检查是否是ID属性，如果是则映射到_id字段，否则使用camelCase
@@ -3747,18 +4394,18 @@ public static partial class SourceGeneratorHelpers
 
         return propertyType switch
         {
-            "string" => $"document = document.Set(\"{bsonFieldName}\", string.IsNullOrEmpty(entity.{propertyName}) ? BsonNull.Value : new BsonString(entity.{propertyName}));",
-            "int" or "Int32" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt32(entity.{propertyName}));",
-            "long" or "Int64" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt64(entity.{propertyName}));",
-            "double" or "Double" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyName}));",
-            "float" or "Single" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyName}));",
-            "decimal" or "Decimal" => $"document = document.Set(\"{bsonFieldName}\", new BsonDecimal128(entity.{propertyName}));",
-            "bool" or "Boolean" => $"document = document.Set(\"{bsonFieldName}\", new BsonBoolean(entity.{propertyName}));",
-            "DateTime" => $"document = document.Set(\"{bsonFieldName}\", new BsonDateTime(entity.{propertyName}));",
-            "Guid" => $"document = document.Set(\"{bsonFieldName}\", new BsonBinary(entity.{propertyName}));",
-            "ObjectId" => $"document = document.Set(\"{bsonFieldName}\", new BsonObjectId(entity.{propertyName}));",
+            "string" => $"document = document.Set(\"{bsonFieldName}\", string.IsNullOrEmpty(entity.{propertyAccess}) ? BsonNull.Value : new BsonString(entity.{propertyAccess}));",
+            "int" or "Int32" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt32(entity.{propertyAccess}));",
+            "long" or "Int64" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt64(entity.{propertyAccess}));",
+            "double" or "Double" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyAccess}));",
+            "float" or "Single" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyAccess}));",
+            "decimal" or "Decimal" => $"document = document.Set(\"{bsonFieldName}\", new BsonDecimal128(entity.{propertyAccess}));",
+            "bool" or "Boolean" => $"document = document.Set(\"{bsonFieldName}\", new BsonBoolean(entity.{propertyAccess}));",
+            "DateTime" => $"document = document.Set(\"{bsonFieldName}\", new BsonDateTime(entity.{propertyAccess}));",
+            "Guid" => $"document = document.Set(\"{bsonFieldName}\", new BsonBinary(entity.{propertyAccess}));",
+            "ObjectId" => $"document = document.Set(\"{bsonFieldName}\", new BsonObjectId(entity.{propertyAccess}));",
             _ when propertyType.EndsWith("?") => GenerateNullablePropertySerialization(prop, bsonFieldName),
-            _ => $"document = document.Set(\"{bsonFieldName}\", ConvertToBsonValue(entity.{propertyName}));"
+            _ => $"document = document.Set(\"{bsonFieldName}\", ConvertToBsonValue(entity.{propertyAccess}));"
         };
     }
 
@@ -3768,6 +4415,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateDbRefSerialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var collectionName = prop.BsonRefCollectionName!;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
         
@@ -3778,14 +4426,14 @@ public static partial class SourceGeneratorHelpers
         {
             if (isNullable)
             {
-                sb.AppendLine($@"if (entity.{propertyName} == null)
+                sb.AppendLine($@"if (entity.{propertyAccess} == null)
                 document = document.Set(""{bsonFieldName}"", BsonNull.Value);
             else
             {{");
             }
             
             sb.AppendLine($@"var dbRefArray_{propertyName} = new BsonArray();
-            foreach (var item in entity.{propertyName})
+            foreach (var item in entity.{propertyAccess})
             {{
                 if (item == null)
                     dbRefArray_{propertyName} = dbRefArray_{propertyName}.AddValue(BsonNull.Value);
@@ -3794,7 +4442,7 @@ public static partial class SourceGeneratorHelpers
                     var itemId = global::TinyDb.References.DbRefSerializer.GetEntityId(item);
                     var itemRef = new BsonDocument()
                         .Set(""$id"", itemId)
-                        .Set(""$ref"", ""{collectionName}"");
+                        .Set(""$ref"", {TinyDbSourceGenerator.ToCSharpStringLiteral(collectionName)});
                     dbRefArray_{propertyName} = dbRefArray_{propertyName}.AddValue(itemRef);
                 }}
             }}
@@ -3810,24 +4458,24 @@ public static partial class SourceGeneratorHelpers
             // 单个对象引用
             if (isNullable)
             {
-                sb.AppendLine($@"if (entity.{propertyName} == null)
+                sb.AppendLine($@"if (entity.{propertyAccess} == null)
                 document = document.Set(""{bsonFieldName}"", BsonNull.Value);
             else
             {{
-                var refId_{propertyName} = global::TinyDb.References.DbRefSerializer.GetEntityId(entity.{propertyName});
+                var refId_{propertyName} = global::TinyDb.References.DbRefSerializer.GetEntityId(entity.{propertyAccess});
                 var refDoc_{propertyName} = new BsonDocument()
                     .Set(""$id"", refId_{propertyName})
-                    .Set(""$ref"", ""{collectionName}"");
+                    .Set(""$ref"", {TinyDbSourceGenerator.ToCSharpStringLiteral(collectionName)});
                 document = document.Set(""{bsonFieldName}"", refDoc_{propertyName});
             }}");
             }
             else
             {
                 sb.AppendLine($@"{{
-                var refId_{propertyName} = global::TinyDb.References.DbRefSerializer.GetEntityId(entity.{propertyName});
+                var refId_{propertyName} = global::TinyDb.References.DbRefSerializer.GetEntityId(entity.{propertyAccess});
                 var refDoc_{propertyName} = new BsonDocument()
                     .Set(""$id"", refId_{propertyName})
-                    .Set(""$ref"", ""{collectionName}"");
+                    .Set(""$ref"", {TinyDbSourceGenerator.ToCSharpStringLiteral(collectionName)});
                 document = document.Set(""{bsonFieldName}"", refDoc_{propertyName});
             }}");
             }
@@ -3842,17 +4490,18 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateNullablePropertySerialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         
         // 如果底层类型是复杂类型
         if (prop.IsComplexType)
         {
-            return $@"if (entity.{propertyName} == null)
+            return $@"if (entity.{propertyAccess} == null)
                 document = document.Set(""{bsonFieldName}"", BsonNull.Value);
             else
-                document = document.Set(""{bsonFieldName}"", SerializeComplexObject(entity.{propertyName}));";
+                document = document.Set(""{bsonFieldName}"", SerializeComplexObject(entity.{propertyAccess}));";
         }
         
-        return $"document = document.Set(\"{bsonFieldName}\", entity.{propertyName} == null ? BsonNull.Value : ConvertToBsonValue(entity.{propertyName}));";
+        return $"document = document.Set(\"{bsonFieldName}\", entity.{propertyAccess} == null ? BsonNull.Value : ConvertToBsonValue(entity.{propertyAccess}));";
     }
 
     /// <summary>
@@ -3861,17 +4510,18 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateComplexTypeSerialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
         
         if (isNullable)
         {
-            return $@"if (entity.{propertyName} == null)
+            return $@"if (entity.{propertyAccess} == null)
                 document = document.Set(""{bsonFieldName}"", BsonNull.Value);
             else
-                document = document.Set(""{bsonFieldName}"", SerializeComplexObject(entity.{propertyName}));";
+                document = document.Set(""{bsonFieldName}"", SerializeComplexObject(entity.{propertyAccess}));";
         }
         
-        return $"document = document.Set(\"{bsonFieldName}\", SerializeComplexObject(entity.{propertyName}));";
+        return $"document = document.Set(\"{bsonFieldName}\", SerializeComplexObject(entity.{propertyAccess}));";
     }
 
     /// <summary>
@@ -3880,6 +4530,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateCollectionWithComplexElementSerialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
         var isElementValueType = prop.IsElementValueType;
         
@@ -3887,14 +4538,14 @@ public static partial class SourceGeneratorHelpers
         
         if (isNullable)
         {
-            sb.AppendLine($@"if (entity.{propertyName} == null)
+            sb.AppendLine($@"if (entity.{propertyAccess} == null)
                 document = document.Set(""{bsonFieldName}"", BsonNull.Value);
             else
             {{");
         }
         
         sb.AppendLine($@"var array_{propertyName} = new BsonArray();
-            foreach (var item in entity.{propertyName})
+            foreach (var item in entity.{propertyAccess})
             {{");
         
         // 值类型不能与 null 比较
@@ -3927,6 +4578,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateDictionaryWithComplexValueSerialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
         var isValueValueType = prop.IsDictionaryValueValueType;
         
@@ -3934,14 +4586,14 @@ public static partial class SourceGeneratorHelpers
         
         if (isNullable)
         {
-            sb.AppendLine($@"if (entity.{propertyName} == null)
+            sb.AppendLine($@"if (entity.{propertyAccess} == null)
                 document = document.Set(""{bsonFieldName}"", BsonNull.Value);
             else
             {{");
         }
         
         sb.AppendLine($@"var dict_{propertyName} = new BsonDocument();
-            foreach (var kvp in entity.{propertyName})
+            foreach (var kvp in entity.{propertyAccess})
             {{");
         
         // 值类型不能与 null 比较
@@ -3974,6 +4626,7 @@ public static partial class SourceGeneratorHelpers
     public static string GeneratePropertyDeserialization(PropertyInfo prop)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var propertyType = prop.Type;
 
         // 检查是否是ID属性，如果是则从_id字段读取，否则使用camelCase
@@ -4006,23 +4659,23 @@ public static partial class SourceGeneratorHelpers
 
         if (prop.IsEnum && !prop.IsNullableValueType && !prop.Type.EndsWith("?", StringComparison.Ordinal))
         {
-            return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyName} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});";
+            return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyAccess} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});";
         }
 
         return propertyType switch
         {
-            "string" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonString str{propertyName}) entity.{propertyName} = str{propertyName}.Value;",
-            "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value;",
-            "long" or "Int64" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value;",
-            "double" or "Double" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value;",
-            "float" or "Single" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = (float)dbl{propertyName}.Value;",
-            "decimal" or "Decimal" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDecimal128 dec{propertyName}) entity.{propertyName} = dec{propertyName}.Value;",
-            "bool" or "Boolean" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value;",
-            "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value;",
-            "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = new Guid(guid{propertyName}.Bytes);",
-            "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value;",
+            "string" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonString str{propertyName}) entity.{propertyAccess} = str{propertyName}.Value;",
+            "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyAccess} = int{propertyName}.Value;",
+            "long" or "Int64" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyAccess} = long{propertyName}.Value;",
+            "double" or "Double" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyAccess} = dbl{propertyName}.Value;",
+            "float" or "Single" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyAccess} = (float)dbl{propertyName}.Value;",
+            "decimal" or "Decimal" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDecimal128 dec{propertyName}) entity.{propertyAccess} = dec{propertyName}.Value;",
+            "bool" or "Boolean" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyAccess} = bool{propertyName}.Value;",
+            "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyAccess} = dt{propertyName}.Value;",
+            "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) {{ if (bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyAccess} = new Guid(guid{propertyName}.Bytes); else if (bson{propertyName} is BsonString guidString{propertyName} && Guid.TryParse(guidString{propertyName}.Value, out var parsedGuid{propertyName})) entity.{propertyAccess} = parsedGuid{propertyName}; }}",
+            "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyAccess} = oid{propertyName}.Value;",
             _ when propertyType.EndsWith("?") => GenerateNullablePropertyDeserialization(prop, bsonFieldName),
-            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyName} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});"
+            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyAccess} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});"
         };
     }
 
@@ -4057,6 +4710,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateNullablePropertyDeserialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var underlyingType = prop.NonNullableType;
 
         // 如果底层类型是复杂类型
@@ -4067,19 +4721,19 @@ public static partial class SourceGeneratorHelpers
 
         if (prop.IsEnum)
         {
-            return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyName} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName}); else entity.{propertyName} = null;";
+            return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyAccess} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName}); else entity.{propertyAccess} = null;";
         }
 
         return underlyingType switch
         {
-            "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyName} = int{propertyName}.Value; else entity.{propertyName} = null;",
-            "long" or "Int64" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyName} = long{propertyName}.Value; else entity.{propertyName} = null;",
-            "double" or "Double" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyName} = dbl{propertyName}.Value; else entity.{propertyName} = null;",
-            "bool" or "Boolean" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyName} = bool{propertyName}.Value; else entity.{propertyName} = null;",
-            "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyName} = dt{propertyName}.Value; else entity.{propertyName} = null;",
-            "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyName} = new Guid(guid{propertyName}.Bytes); else entity.{propertyName} = null;",
-            "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyName} = oid{propertyName}.Value; else entity.{propertyName} = null;",
-            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyName} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName}); else entity.{propertyName} = null;"
+            "int" or "Int32" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt32 int{propertyName}) entity.{propertyAccess} = int{propertyName}.Value; else entity.{propertyAccess} = null;",
+            "long" or "Int64" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonInt64 long{propertyName}) entity.{propertyAccess} = long{propertyName}.Value; else entity.{propertyAccess} = null;",
+            "double" or "Double" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDouble dbl{propertyName}) entity.{propertyAccess} = dbl{propertyName}.Value; else entity.{propertyAccess} = null;",
+            "bool" or "Boolean" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonBoolean bool{propertyName}) entity.{propertyAccess} = bool{propertyName}.Value; else entity.{propertyAccess} = null;",
+            "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyAccess} = dt{propertyName}.Value; else entity.{propertyAccess} = null;",
+            "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) {{ if (bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyAccess} = new Guid(guid{propertyName}.Bytes); else if (bson{propertyName} is BsonString guidString{propertyName} && Guid.TryParse(guidString{propertyName}.Value, out var parsedGuid{propertyName})) entity.{propertyAccess} = parsedGuid{propertyName}; else entity.{propertyAccess} = null; }} else entity.{propertyAccess} = null;",
+            "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyAccess} = oid{propertyName}.Value; else entity.{propertyAccess} = null;",
+            _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && !bson{propertyName}.IsNull) entity.{propertyAccess} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName}); else entity.{propertyAccess} = null;"
         };
     }
 
@@ -4089,6 +4743,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateComplexTypeDeserialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var propertyType = prop.FullyQualifiedNonNullableType;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
         
@@ -4100,13 +4755,13 @@ public static partial class SourceGeneratorHelpers
         
         if (isNullable)
         {
-            sb.AppendLine($"                    entity.{propertyName} = null;");
+            sb.AppendLine($"                    entity.{propertyAccess} = null;");
         }
         
         sb.AppendLine($@"                }}
                 else if (bson{propertyName} is BsonDocument nested{propertyName})
                 {{
-                    entity.{propertyName} = DeserializeComplexObject<{propertyType}>(nested{propertyName});
+                    entity.{propertyAccess} = DeserializeComplexObject<{propertyType}>(nested{propertyName});
                 }}
             }}");
         
@@ -4119,6 +4774,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateCollectionDeserialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var elementType = prop.ElementType ?? "object";
         var isArray = prop.IsArray;
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
@@ -4132,7 +4788,7 @@ public static partial class SourceGeneratorHelpers
         
         if (isNullable)
         {
-            sb.AppendLine($"                    entity.{propertyName} = null;");
+            sb.AppendLine($"                    entity.{propertyAccess} = null;");
         }
         
         sb.AppendLine($@"                }}
@@ -4161,11 +4817,11 @@ public static partial class SourceGeneratorHelpers
         
         if (isArray)
         {
-            sb.AppendLine($"                    entity.{propertyName} = list_{propertyName}.ToArray();");
+            sb.AppendLine($"                    entity.{propertyAccess} = list_{propertyName}.ToArray();");
         }
         else
         {
-            sb.AppendLine($"                    entity.{propertyName} = list_{propertyName};");
+            sb.AppendLine($"                    entity.{propertyAccess} = list_{propertyName};");
         }
         
         sb.AppendLine(@"                }
@@ -4180,6 +4836,7 @@ public static partial class SourceGeneratorHelpers
     private static string GenerateDictionaryDeserialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
+        var propertyAccess = prop.AccessName;
         var keyType = prop.DictionaryKeyType ?? "string";
         var valueType = prop.DictionaryValueType ?? "object";
         var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
@@ -4193,7 +4850,7 @@ public static partial class SourceGeneratorHelpers
         
         if (isNullable)
         {
-            sb.AppendLine($"                    entity.{propertyName} = null;");
+            sb.AppendLine($"                    entity.{propertyAccess} = null;");
         }
         
         sb.AppendLine($@"                }}
@@ -4219,7 +4876,7 @@ public static partial class SourceGeneratorHelpers
         }
 
         sb.AppendLine($@"                    }}
-                    entity.{propertyName} = result_{propertyName};
+                    entity.{propertyAccess} = result_{propertyName};
                 }}
             }}");
         

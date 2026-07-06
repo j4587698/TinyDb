@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using TinyDb.Attributes;
 using TinyDb.Bson;
+using TinyDb.Serialization;
 
 namespace TinyDb.Metadata;
 
@@ -60,6 +61,9 @@ public class MetadataDocument
             if (!string.IsNullOrEmpty(p.ForeignKeyCollection))
                 col = col.Set("fk", p.ForeignKeyCollection);
 
+            if (p.Password != null)
+                col = col.Set("pwd", PasswordToDocument(p.Password));
+
             cols.Add(col);
         }
         doc.Columns = new BsonArray(cols);
@@ -84,6 +88,9 @@ public class MetadataDocument
             var required = colDoc.ContainsKey("r") && colDoc["r"].ToBoolean();
             var isPrimaryKey = colDoc.ContainsKey("pk") && colDoc["pk"].ToBoolean();
             var foreignKeyCollection = colDoc.ContainsKey("fk") ? colDoc["fk"].ToString() : null;
+            var password = colDoc.ContainsKey("pwd") && colDoc["pwd"] is BsonDocument passwordDoc
+                ? PasswordFromDocument(passwordDoc)
+                : null;
 
             if (string.IsNullOrWhiteSpace(description)) description = null;
             if (string.IsNullOrWhiteSpace(foreignKeyCollection)) foreignKeyCollection = null;
@@ -97,6 +104,7 @@ public class MetadataDocument
                 Order = order,
                 Required = required,
                 IsPrimaryKey = isPrimaryKey,
+                Password = password,
                 ForeignKeyCollection = foreignKeyCollection
             });
         }
@@ -111,10 +119,44 @@ public class MetadataDocument
         };
     }
 
+    private static BsonDocument PasswordToDocument(PasswordMetadata password)
+    {
+        return new BsonDocument()
+            .Set("is", password.IsPassword)
+            .Set("strength", (int)password.RequiredStrength)
+            .Set("min", password.MinLength)
+            .Set("max", password.MaxLength)
+            .Set("special", password.RequireSpecialChar)
+            .Set("number", password.RequireNumber)
+            .Set("upper", password.RequireUppercase)
+            .Set("lower", password.RequireLowercase)
+            .Set("hint", string.IsNullOrWhiteSpace(password.Hint) ? (BsonValue)BsonNull.Value : new BsonString(password.Hint))
+            .Set("indicator", password.ShowStrengthIndicator)
+            .Set("toggle", password.AllowToggle);
+    }
+
+    private static PasswordMetadata PasswordFromDocument(BsonDocument document)
+    {
+        return new PasswordMetadata
+        {
+            IsPassword = document.ContainsKey("is") && document["is"].ToBoolean(),
+            RequiredStrength = document.ContainsKey("strength")
+                ? (PasswordStrength)document["strength"].ToInt32()
+                : PasswordStrength.Medium,
+            MinLength = document.ContainsKey("min") ? document["min"].ToInt32() : 8,
+            MaxLength = document.ContainsKey("max") ? document["max"].ToInt32() : 128,
+            RequireSpecialChar = !document.ContainsKey("special") || document["special"].ToBoolean(),
+            RequireNumber = !document.ContainsKey("number") || document["number"].ToBoolean(),
+            RequireUppercase = !document.ContainsKey("upper") || document["upper"].ToBoolean(),
+            RequireLowercase = !document.ContainsKey("lower") || document["lower"].ToBoolean(),
+            Hint = document.ContainsKey("hint") && !document["hint"].IsNull ? document["hint"].ToString() : null,
+            ShowStrengthIndicator = !document.ContainsKey("indicator") || document["indicator"].ToBoolean(),
+            AllowToggle = !document.ContainsKey("toggle") || document["toggle"].ToBoolean()
+        };
+    }
+
     private static string ToCamelCase(string name)
     {
-        if (string.IsNullOrEmpty(name)) return name;
-        if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        return BsonFieldName.ToCamelCase(name);
     }
 }

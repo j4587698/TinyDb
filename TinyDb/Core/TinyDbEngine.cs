@@ -669,7 +669,79 @@ public sealed class TinyDbEngine : IDisposable
             : null;
     }
 
-    internal Transaction? GetCurrentTransaction() => _currentTransaction.Value as Transaction;
+    private void RollbackImplicitWalTransaction(
+        WriteAheadLog.WalTransactionScope? durabilityScope,
+        Exception originalException)
+    {
+        if (durabilityScope == null)
+        {
+            return;
+        }
+
+        try
+        {
+            RollbackTransactionDurabilityScope(durabilityScope);
+        }
+        catch (Exception rollbackException)
+        {
+            var aggregate = new AggregateException(
+                "Implicit WAL transaction failed and rollback encountered errors.",
+                originalException,
+                rollbackException);
+            MarkCorrupted(aggregate);
+            throw aggregate;
+        }
+    }
+
+    internal Transaction? GetCurrentTransaction()
+    {
+        if (_currentTransaction.Value is not Transaction transaction)
+        {
+            return null;
+        }
+
+        var state = transaction.State;
+        if (state is TransactionState.Committed or TransactionState.RolledBack ||
+            state == TransactionState.Failed && transaction.FailureReason == null)
+        {
+            ClearCurrentTransaction();
+            return null;
+        }
+
+        _transactionManager.EnsureTransactionReadable(transaction);
+        return transaction;
+    }
+
+    internal IDisposable SuppressCurrentTransaction()
+    {
+        var previous = _currentTransaction.Value;
+        _currentTransaction.Value = null;
+        return new CurrentTransactionScope(this, previous);
+    }
+
+    private sealed class CurrentTransactionScope : IDisposable
+    {
+        private readonly TinyDbEngine _engine;
+        private readonly ITransaction? _previous;
+        private bool _disposed;
+
+        public CurrentTransactionScope(TinyDbEngine engine, ITransaction? previous)
+        {
+            _engine = engine;
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _engine._currentTransaction.Value = _previous;
+            _disposed = true;
+        }
+    }
 
     /// <summary>
     /// 获取关于事务的统计信息。
@@ -1927,8 +1999,16 @@ public sealed class TinyDbEngine : IDisposable
             _metadataManager.ValidateDocumentForWrite(col, pr.Document, _options.SchemaValidationMode);
             using var documentLock = st.EnterDocumentLock(pr.Id);
             using var durabilityScope = BeginImplicitWalTransaction();
-            res = InsertPreparedDocument(col, pr, st, idx, true);
-            durabilityScope?.Commit();
+            try
+            {
+                res = InsertPreparedDocument(col, pr, st, idx, true);
+                durabilityScope?.Commit();
+            }
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
         EnsureWriteDurability();
         return res;
@@ -1953,8 +2033,16 @@ public sealed class TinyDbEngine : IDisposable
             var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
             await pendingWalTransaction.BeginTask.ConfigureAwait(false);
             using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
-            res = InsertPreparedDocument(col, pr, st, idx, true);
-            if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                res = InsertPreparedDocument(col, pr, st, idx, true);
+                if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
@@ -1974,8 +2062,16 @@ public sealed class TinyDbEngine : IDisposable
         using (st.EnterDocumentLock(id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
-            updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
-            if (updated) durabilityScope?.Commit();
+            try
+            {
+                updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
+                if (updated) durabilityScope?.Commit();
+            }
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
 
         if (!updated) return 0;
@@ -2008,8 +2104,16 @@ public sealed class TinyDbEngine : IDisposable
             var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
             await pendingWalTransaction.BeginTask.ConfigureAwait(false);
             using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
-            updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
-            if (updated && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
+                if (updated && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
 
         if (!updated) return 0;
@@ -2046,14 +2150,22 @@ public sealed class TinyDbEngine : IDisposable
         using (st.EnterDocumentLocks(prepared, static item => item.Id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
-            foreach (var (doc, id) in prepared)
+            try
             {
-                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                foreach (var (doc, id) in prepared)
                 {
-                    updatedCount++;
+                    if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                    {
+                        updatedCount++;
+                    }
                 }
+                if (updatedCount > 0) durabilityScope?.Commit();
             }
-            if (updatedCount > 0) durabilityScope?.Commit();
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
 
         if (updatedCount > 0)
@@ -2095,15 +2207,23 @@ public sealed class TinyDbEngine : IDisposable
             var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
             await pendingWalTransaction.BeginTask.ConfigureAwait(false);
             using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
-            foreach (var (doc, id) in prepared)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                foreach (var (doc, id) in prepared)
                 {
-                    updatedCount++;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                    {
+                        updatedCount++;
+                    }
                 }
+                if (updatedCount > 0 && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
-            if (updatedCount > 0 && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
 
         if (updatedCount > 0)
@@ -2157,19 +2277,27 @@ public sealed class TinyDbEngine : IDisposable
         using (st.EnterDocumentLocks(prepared, static item => item.Id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
-            foreach (var (doc, id) in prepared)
+            try
             {
-                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                foreach (var (doc, id) in prepared)
                 {
-                    updatedCount++;
+                    if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                    {
+                        updatedCount++;
+                    }
+                    else
+                    {
+                        InsertPreparedDocument(col, doc, id, st, idxMgr, true);
+                        insertedCount++;
+                    }
                 }
-                else
-                {
-                    InsertPreparedDocument(col, doc, id, st, idxMgr, true);
-                    insertedCount++;
-                }
+                if (insertedCount + updatedCount > 0) durabilityScope?.Commit();
             }
-            if (insertedCount + updatedCount > 0) durabilityScope?.Commit();
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
 
         if (insertedCount + updatedCount > 0)
@@ -2210,22 +2338,30 @@ public sealed class TinyDbEngine : IDisposable
             var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
             await pendingWalTransaction.BeginTask.ConfigureAwait(false);
             using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
-            foreach (var (doc, id) in prepared)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                foreach (var (doc, id) in prepared)
                 {
-                    updatedCount++;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                    {
+                        updatedCount++;
+                    }
+                    else
+                    {
+                        InsertPreparedDocument(col, doc, id, st, idxMgr, true);
+                        insertedCount++;
+                    }
                 }
-                else
+                if (insertedCount + updatedCount > 0 && durabilityScope != null)
                 {
-                    InsertPreparedDocument(col, doc, id, st, idxMgr, true);
-                    insertedCount++;
+                    await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
-            if (insertedCount + updatedCount > 0 && durabilityScope != null)
+            catch (Exception ex)
             {
-                await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
             }
         }
 
@@ -2308,33 +2444,53 @@ public sealed class TinyDbEngine : IDisposable
             using (st.EnterDocumentLocks(preparedPayloads, static payload => payload.Id))
             {
                 using var durabilityScope = BeginImplicitWalTransaction();
-
-                foreach (var payload in preparedPayloads)
+                try
                 {
-                    try
+                    foreach (var payload in preparedPayloads)
                     {
-                        InsertPreparedDocument(col, payload, st, idx, true);
-                        insertedPayloads.Add(payload);
-                        insertedCount++;
+                        try
+                        {
+                            InsertPreparedDocument(col, payload, st, idx, true);
+                            insertedPayloads.Add(payload);
+                            insertedCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            exceptions.Add(ex);
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        exceptions.Add(ex);
-                    }
-                }
 
-                if (exceptions.Count > 0)
+                    if (exceptions.Count > 0)
+                    {
+                        if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
+                        {
+                            throw pageSelectionException;
+                        }
+
+                        throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+                    }
+
+                    durabilityScope?.Commit();
+                }
+                catch (Exception ex)
                 {
-                    RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
-                    if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
+                    if (durabilityScope != null)
                     {
-                        throw pageSelectionException;
+                        RollbackImplicitWalTransaction(durabilityScope, ex);
                     }
+                    else
+                    {
+                        var exceptionCountBeforeRollback = exceptions.Count;
+                        RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
+                        if (ex is WritableDataPageSelectionException && exceptions.Count == exceptionCountBeforeRollback)
+                        {
+                            throw;
+                        }
 
-                    throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+                        throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+                    }
+                    throw;
                 }
-
-                durabilityScope?.Commit();
             }
 
             EnsureWriteDurability();
@@ -2399,47 +2555,67 @@ public sealed class TinyDbEngine : IDisposable
                 var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
                 await pendingWalTransaction.BeginTask.ConfigureAwait(false);
                 using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
-
-                foreach (var payload in preparedPayloads)
+                try
                 {
-                    if (cancellationToken.IsCancellationRequested)
+                    foreach (var payload in preparedPayloads)
                     {
-                        exceptions.Add(new OperationCanceledException(cancellationToken));
-                        break;
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            exceptions.Add(new OperationCanceledException(cancellationToken));
+                            break;
+                        }
+
+                        try
+                        {
+                            InsertPreparedDocument(col, payload, st, idx, true);
+                            insertedPayloads.Add(payload);
+                            insertedCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            exceptions.Add(ex);
+                        }
                     }
 
-                    try
+                    if (exceptions.Count > 0)
                     {
-                        InsertPreparedDocument(col, payload, st, idx, true);
-                        insertedPayloads.Add(payload);
-                        insertedCount++;
+                        var cancellationException = exceptions.Count == 1
+                            ? exceptions[0] as OperationCanceledException
+                            : null;
+                        if (cancellationException != null)
+                        {
+                            throw cancellationException;
+                        }
+
+                        if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
+                        {
+                            throw pageSelectionException;
+                        }
+
+                        throw new AggregateException("One or more errors occurred during batch insert", exceptions);
                     }
-                    catch (Exception ex)
-                    {
-                        exceptions.Add(ex);
-                    }
+
+                    if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
                 }
-
-                if (exceptions.Count > 0)
+                catch (Exception ex)
                 {
-                    var cancellationException = exceptions.Count == 1
-                        ? exceptions[0] as OperationCanceledException
-                        : null;
-                    RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
-                    if (cancellationException != null && exceptions.Count == 1)
+                    if (durabilityScope != null)
                     {
-                        throw cancellationException;
+                        RollbackImplicitWalTransaction(durabilityScope, ex);
                     }
-
-                    if (exceptions.FirstOrDefault(static ex => ex is WritableDataPageSelectionException) is { } pageSelectionException)
+                    else
                     {
-                        throw pageSelectionException;
-                    }
+                        var exceptionCountBeforeRollback = exceptions.Count;
+                        RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
+                        if (ex is WritableDataPageSelectionException && exceptions.Count == exceptionCountBeforeRollback)
+                        {
+                            throw;
+                        }
 
-                    throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+                        throw new AggregateException("One or more errors occurred during batch insert", exceptions);
+                    }
+                    throw;
                 }
-
-                if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
 
             await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
@@ -3109,8 +3285,16 @@ public sealed class TinyDbEngine : IDisposable
         using (st.EnterDocumentLock(pr.Id))
         {
             using var durabilityScope = BeginImplicitWalTransaction();
-            result = InsertPreparedDocument(col, pr, st, idx, true);
-            durabilityScope?.Commit();
+            try
+            {
+                result = InsertPreparedDocument(col, pr, st, idx, true);
+                durabilityScope?.Commit();
+            }
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
         }
 
         return result;
@@ -3177,32 +3361,47 @@ public sealed class TinyDbEngine : IDisposable
     {
         var doc = prepared.Document;
         var indexDocument = doc;
+        uint largeDocumentPageId = 0;
+        bool appendedDocument = false;
 
         ThrowIfPrimaryKeyExists(st, prepared.Id);
 
-        if (LargeDocumentStorage.RequiresLargeDocumentStorage(prepared.SerializedLength, _dataPageAccess.GetMaxDocumentSize()))
+        try
         {
-            var originalLength = prepared.SerializedLength;
-            var lId = _largeDocumentStorage.StoreLargeDocument(prepared.SerializedSpan, col);
-            doc = CreateLargeDocumentIndexDocument(prepared.Id, col, lId, originalLength);
-            prepared.ReplaceDocument(doc);
-        }
+            if (LargeDocumentStorage.RequiresLargeDocumentStorage(prepared.SerializedLength, _dataPageAccess.GetMaxDocumentSize()))
+            {
+                var originalLength = prepared.SerializedLength;
+                largeDocumentPageId = StoreLargeDocumentOrThrow(prepared.SerializedSpan, col);
+                doc = CreateLargeDocumentIndexDocument(prepared.Id, col, largeDocumentPageId, originalLength);
+                prepared.ReplaceDocument(doc);
+            }
 
-        AppendDocumentBytesToWritableDataPage(st, prepared.Id, prepared.SerializedSpan);
-        if (u)
+            AppendDocumentBytesToWritableDataPage(st, prepared.Id, prepared.SerializedSpan);
+            appendedDocument = true;
+            if (u)
+            {
+                try
+                {
+                    idx.InsertDocument(indexDocument, prepared.Id);
+                }
+                catch
+                {
+                    DeleteDocumentCore(col, prepared.Id, st, idx);
+                    throw;
+                }
+            }
+
+            return prepared.Id;
+        }
+        catch (Exception ex)
         {
-            try
+            if (!appendedDocument && largeDocumentPageId != 0)
             {
-                idx.InsertDocument(indexDocument, prepared.Id);
+                CleanupLargeDocumentAfterFailedInsert(largeDocumentPageId, ex);
             }
-            catch
-            {
-                DeleteDocumentCore(col, prepared.Id, st, idx);
-                throw;
-            }
-        }
 
-        return prepared.Id;
+            throw;
+        }
     }
 
     private void ThrowIfPrimaryKeyExists(CollectionState st, BsonValue id)
@@ -3291,48 +3490,63 @@ public sealed class TinyDbEngine : IDisposable
         var updatedDocument = doc;
         var newIndexDocument = doc;
         uint newLargeDocumentPageId = 0;
+        bool newLargeDocumentReferenceAttempted = false;
         byte[]? relocationBytes = null;
 
         if (!st.Index.TryGet(id, out var initialLocation)) return false;
 
-        using (st.EnterPageMutationLock(initialLocation.PageId))
+        try
         {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return false;
-            try
+            using (st.EnterPageMutationLock(initialLocation.PageId))
             {
-                if (i >= e.Count) return false;
-                old = e[i];
-
-                var bs = BsonSerializer.SerializeDocument(updatedDocument);
-                if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return false;
+                try
                 {
-                    var largeDocumentPageId = _largeDocumentStorage.StoreLargeDocument(bs, col);
-                    newLargeDocumentPageId = largeDocumentPageId;
-                    updatedDocument = CreateLargeDocumentIndexDocument(id, col, largeDocumentPageId, bs.Length);
-                    bs = BsonSerializer.SerializeDocument(updatedDocument);
+                    if (i >= e.Count) return false;
+                    old = e[i];
+
+                    var bs = BsonSerializer.SerializeDocument(updatedDocument);
+                    if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+                    {
+                        var largeDocumentPageId = StoreLargeDocumentOrThrow(bs, col);
+                        newLargeDocumentPageId = largeDocumentPageId;
+                        updatedDocument = CreateLargeDocumentIndexDocument(id, col, largeDocumentPageId, bs.Length);
+                        bs = BsonSerializer.SerializeDocument(updatedDocument);
+                    }
+
+                    e[i] = new PageDocumentEntry(updatedDocument, bs);
+
+                    if (!_dataPageAccess.CanFitInPage(p, e))
+                    {
+                        e[i] = old;
+                        relocationBytes = bs;
+                    }
+                    else
+                    {
+                        newLargeDocumentReferenceAttempted = true;
+                        _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    }
                 }
-
-                e[i] = new PageDocumentEntry(updatedDocument, bs);
-
-                if (!_dataPageAccess.CanFitInPage(p, e))
+                finally
                 {
-                    e[i] = old;
-                    relocationBytes = bs;
-                }
-                else
-                {
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    p.Unpin();
                 }
             }
-            finally
+
+            if (relocationBytes != null)
             {
-                p.Unpin();
+                newLargeDocumentReferenceAttempted = true;
+                MoveUpdatedDocumentToWritablePage(col, st, id, updatedDocument, relocationBytes);
             }
         }
-
-        if (relocationBytes != null)
+        catch (Exception ex)
         {
-            MoveUpdatedDocumentToWritablePage(col, st, id, updatedDocument, relocationBytes);
+            if (newLargeDocumentPageId != 0 && !newLargeDocumentReferenceAttempted)
+            {
+                CleanupLargeDocumentAfterFailedUpdate(newLargeDocumentPageId, ex);
+            }
+
+            throw;
         }
 
         try
@@ -3505,85 +3719,6 @@ public sealed class TinyDbEngine : IDisposable
         return doc;
     }
 
-    private int DeleteDocumentCore(string col, BsonValue id, CollectionState st, IndexManager idxMgr)
-    {
-        if (!st.Index.TryGet(id, out var loc)) return 0;
-
-        using var durabilityScope = BeginImplicitWalTransaction();
-        using (st.EnterPageMutationLock(loc.PageId))
-        {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-            try
-            {
-                if (i >= e.Count) return 0;
-                var entry = e[i];
-                e.RemoveAt(i);
-                st.Index.Remove(id);
-                if (e.Count == 0)
-                {
-                    FreeDataPage(st, p);
-                }
-                else
-                {
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-                }
-
-                var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
-                if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
-                idxMgr.DeleteDocument(indexDocument, id);
-                durabilityScope?.Commit();
-                return 1;
-            }
-            finally
-            {
-                p.Unpin();
-            }
-        }
-    }
-
-    private async Task<int> DeleteDocumentCoreAsync(
-        string col,
-        BsonValue id,
-        CollectionState st,
-        IndexManager idxMgr,
-        CancellationToken cancellationToken)
-    {
-        if (!st.Index.TryGet(id, out var loc)) return 0;
-
-        var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
-        await pendingWalTransaction.BeginTask.ConfigureAwait(false);
-        using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
-        using (st.EnterPageMutationLock(loc.PageId))
-        {
-            if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
-            try
-            {
-                if (i >= e.Count) return 0;
-                var entry = e[i];
-                e.RemoveAt(i);
-                st.Index.Remove(id);
-                if (e.Count == 0)
-                {
-                    FreeDataPage(st, p);
-                }
-                else
-                {
-                    _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
-                }
-
-                var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
-                if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
-                idxMgr.DeleteDocument(indexDocument, id);
-                if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return 1;
-            }
-            finally
-            {
-                p.Unpin();
-            }
-        }
-    }
-
     private void RollbackInsertedDocuments(
         string collectionName,
         IReadOnlyList<PreparedInsertPayload> insertedPayloads,
@@ -3615,6 +3750,101 @@ public sealed class TinyDbEngine : IDisposable
             {
                 exceptions.Add(new InvalidOperationException($"Failed to rollback inserted document '{id}' in collection '{collectionName}'.", ex));
             }
+        }
+    }
+
+    private int DeleteDocumentCore(string col, BsonValue id, CollectionState st, IndexManager idxMgr)
+    {
+        if (!st.Index.TryGet(id, out var loc)) return 0;
+
+        using var durabilityScope = BeginImplicitWalTransaction();
+        try
+        {
+            using (st.EnterPageMutationLock(loc.PageId))
+            {
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+                try
+                {
+                    if (i >= e.Count) return 0;
+                    var entry = e[i];
+                    e.RemoveAt(i);
+                    st.Index.Remove(id);
+                    if (e.Count == 0)
+                    {
+                        FreeDataPage(st, p);
+                    }
+                    else
+                    {
+                        _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    }
+
+                    var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
+                    if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
+                    idxMgr.DeleteDocument(indexDocument, id);
+                    durabilityScope?.Commit();
+                    return 1;
+                }
+                finally
+                {
+                    p.Unpin();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            RollbackImplicitWalTransaction(durabilityScope, ex);
+            throw;
+        }
+    }
+
+    private async Task<int> DeleteDocumentCoreAsync(
+        string col,
+        BsonValue id,
+        CollectionState st,
+        IndexManager idxMgr,
+        CancellationToken cancellationToken)
+    {
+        if (!st.Index.TryGet(id, out var loc)) return 0;
+
+        var pendingWalTransaction = PrepareImplicitWalTransactionAsync(cancellationToken);
+        await pendingWalTransaction.BeginTask.ConfigureAwait(false);
+        using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
+        try
+        {
+            using (st.EnterPageMutationLock(loc.PageId))
+            {
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return 0;
+                try
+                {
+                    if (i >= e.Count) return 0;
+                    var entry = e[i];
+                    e.RemoveAt(i);
+                    st.Index.Remove(id);
+                    if (e.Count == 0)
+                    {
+                        FreeDataPage(st, p);
+                    }
+                    else
+                    {
+                        _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    }
+
+                    var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
+                    if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
+                    idxMgr.DeleteDocument(indexDocument, id);
+                    if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return 1;
+                }
+                finally
+                {
+                    p.Unpin();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            RollbackImplicitWalTransaction(durabilityScope, ex);
+            throw;
         }
     }
 
@@ -4025,9 +4255,76 @@ public sealed class TinyDbEngine : IDisposable
         }
     }
 
+    private uint StoreLargeDocumentOrThrow(ReadOnlySpan<byte> documentBytes, string collectionName)
+    {
+        try
+        {
+            var pageId = _largeDocumentStorage.StoreLargeDocument(documentBytes, collectionName);
+            WriteHeader();
+            return pageId;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                WriteHeader();
+            }
+            catch (Exception headerException)
+            {
+                throw new AggregateException(
+                    "Failed to store large document and persist page allocation state.",
+                    ex,
+                    headerException);
+            }
+
+            throw;
+        }
+    }
+
+    private void CleanupLargeDocumentAfterFailedInsert(uint largeDocumentIndexPageId, Exception originalException)
+    {
+        try
+        {
+            DeleteLargeDocumentOrThrow(largeDocumentIndexPageId);
+        }
+        catch (Exception cleanupException)
+        {
+            var aggregate = new AggregateException(
+                $"Failed to clean up large document pages after insert failure at index page {largeDocumentIndexPageId}.",
+                originalException,
+                cleanupException);
+            MarkCorrupted(aggregate);
+            throw aggregate;
+        }
+    }
+
+    private void CleanupLargeDocumentAfterFailedUpdate(uint largeDocumentIndexPageId, Exception originalException)
+    {
+        try
+        {
+            DeleteLargeDocumentOrThrow(largeDocumentIndexPageId);
+        }
+        catch (Exception cleanupException)
+        {
+            var aggregate = new AggregateException(
+                $"Failed to clean up large document pages after update failure at index page {largeDocumentIndexPageId}.",
+                originalException,
+                cleanupException);
+            MarkCorrupted(aggregate);
+            throw aggregate;
+        }
+    }
+
     private void DeleteLargeDocumentOrThrow(uint largeDocumentIndexPageId)
     {
-        _largeDocumentStorage.DeleteLargeDocument(largeDocumentIndexPageId);
+        try
+        {
+            _largeDocumentStorage.DeleteLargeDocument(largeDocumentIndexPageId);
+        }
+        finally
+        {
+            WriteHeader();
+        }
     }
 
     private void DisposeIndexManagers() { foreach (var m in _indexManagers.Values) m.Dispose(); _indexManagers.Clear(); }

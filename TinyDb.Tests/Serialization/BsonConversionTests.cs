@@ -186,7 +186,7 @@ public class BsonConversionTests
     public async Task ToBsonValue_PrimitiveBranches_ShouldWork()
     {
         var guid = Guid.NewGuid();
-        await Assert.That(BsonConversion.ToBsonValue(guid)).IsTypeOf<BsonString>();
+        await Assert.That(BsonConversion.ToBsonValue(guid)).IsTypeOf<BsonBinary>();
 
         var oid = ObjectId.NewObjectId();
         await Assert.That(BsonConversion.ToBsonValue(oid)).IsTypeOf<BsonObjectId>();

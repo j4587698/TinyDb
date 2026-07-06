@@ -9,7 +9,7 @@ namespace TinyDb.Core;
 /// <summary>
 /// 事务管理器
 /// </summary>
-public sealed class TransactionManager : IDisposable
+public sealed class TransactionManager : IDisposable, IAsyncDisposable
 {
     private static readonly TimeSpan TimeoutCheckStopTimeout = TimeSpan.FromSeconds(5);
     internal readonly TinyDbEngine _engine;
@@ -149,6 +149,30 @@ public sealed class TransactionManager : IDisposable
                     _engine.MarkCorrupted(aggregate);
                     throw aggregate;
                 }
+            }
+            catch (Exception applyEx) when (durabilityScope != null)
+            {
+                var rollbackErrors = RollbackDurabilityScope(durabilityScope);
+                durabilityScope = null;
+                if (rollbackErrors.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "Transaction apply failed; applied page changes were rolled back.",
+                        applyEx);
+                }
+
+                var errors = new List<Exception>
+                {
+                    new InvalidOperationException(
+                        "Transaction apply failed.",
+                        applyEx)
+                };
+                errors.AddRange(rollbackErrors);
+                var aggregate = new AggregateException(
+                    "Transaction apply failed and durability rollback encountered errors.",
+                    errors);
+                _engine.MarkCorrupted(aggregate);
+                throw aggregate;
             }
             finally
             {
@@ -415,7 +439,22 @@ public sealed class TransactionManager : IDisposable
             {
                 if (TryGetForeignKeyValue(op.NewDocument, fk.FieldName, out var fkValue))
                 {
-                    var referencedDoc = _engine.FindById(fk.ReferencedCollection, fkValue!);
+                    var pendingExistence = GetPendingDocumentExistence(transactionOperations, fk.ReferencedCollection, fkValue!);
+                    if (pendingExistence == true)
+                    {
+                        continue;
+                    }
+
+                    if (pendingExistence == false)
+                    {
+                        throw new InvalidOperationException($"Foreign key constraint violation: Field '{fk.FieldName}' in collection '{op.CollectionName}' references non-existent document ID '{fkValue}' in collection '{fk.ReferencedCollection}'.");
+                    }
+
+                    BsonDocument? referencedDoc;
+                    using (_engine.SuppressCurrentTransaction())
+                    {
+                        referencedDoc = _engine.FindById(fk.ReferencedCollection, fkValue!);
+                    }
 
                     if (referencedDoc == null)
                     {
@@ -428,6 +467,33 @@ public sealed class TransactionManager : IDisposable
                 }
             }
         }
+    }
+
+    private static bool? GetPendingDocumentExistence(
+        IReadOnlyList<TransactionOperation> operations,
+        string collectionName,
+        BsonValue documentId)
+    {
+        bool? exists = null;
+
+        foreach (var operation in operations)
+        {
+            if (!string.Equals(operation.CollectionName, collectionName, StringComparison.Ordinal) ||
+                operation.DocumentId == null ||
+                !BsonValuesValueEqual(operation.DocumentId, documentId))
+            {
+                continue;
+            }
+
+            exists = operation.OperationType switch
+            {
+                TransactionOperationType.Insert or TransactionOperationType.Update => true,
+                TransactionOperationType.Delete => false,
+                _ => exists
+            };
+        }
+
+        return exists;
     }
 
     private static bool TryGetForeignKeyValue(BsonDocument document, string fieldName, out BsonValue value)
@@ -574,6 +640,7 @@ public sealed class TransactionManager : IDisposable
         {
             try
             {
+                using var _ = _engine.SuppressCurrentTransaction();
                 var metaCol = _engine.GetCollection<MetadataDocument>(metaColName);
                 var metaDoc = metaCol.FindById(name);
 
@@ -871,6 +938,17 @@ public sealed class TransactionManager : IDisposable
         throw new InvalidOperationException("Transaction is not active");
     }
 
+    internal void EnsureTransactionReadable(Transaction transaction)
+    {
+        if (transaction == null) throw new ArgumentNullException(nameof(transaction));
+        EnsureTransactionActive(transaction);
+
+        if (transaction.State != TransactionState.Active)
+        {
+            throw new InvalidOperationException($"Transaction cannot be read in state {transaction.State}");
+        }
+    }
+
     private string CreateTransactionTimeoutMessage(Guid transactionId, DateTime timedOutAt)
     {
         return $"Transaction {transactionId} timed out at {timedOutAt:O} after exceeding the configured timeout of {TransactionTimeout}.";
@@ -941,6 +1019,24 @@ public sealed class TransactionManager : IDisposable
         _timeoutCheckCts.Cancel();
 
         // 回滚所有活动事务
+        FailActiveTransactions();
+
+        WaitForTimeoutCheckTask();
+        _timeoutCheckCts.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _timeoutCheckCts.Cancel();
+
+        FailActiveTransactions();
+        await WaitForTimeoutCheckTaskAsync().ConfigureAwait(false);
+        _timeoutCheckCts.Dispose();
+    }
+
+    private void FailActiveTransactions()
+    {
         lock (_lock)
         {
             foreach (var transaction in _activeTransactions.Values)
@@ -950,22 +1046,17 @@ public sealed class TransactionManager : IDisposable
 
             _activeTransactions.Clear();
         }
-
-        WaitForTimeoutCheckTask();
-        _timeoutCheckCts.Dispose();
     }
 
     private void WaitForTimeoutCheckTask()
     {
         try
         {
-            if (!_timeoutCheckTask.Wait(TimeoutCheckStopTimeout))
-            {
-                _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check task did not stop before dispose timeout.");
-                return;
-            }
-
-            _timeoutCheckTask.GetAwaiter().GetResult();
+            _timeoutCheckTask.WaitAsync(TimeoutCheckStopTimeout).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException)
+        {
+            _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check task did not stop before dispose timeout.");
         }
         catch (OperationCanceledException)
         {
@@ -979,6 +1070,21 @@ public sealed class TransactionManager : IDisposable
     /// <summary>
     /// 重写 ToString 方法
     /// </summary>
+    private async Task WaitForTimeoutCheckTaskAsync()
+    {
+        try
+        {
+            await _timeoutCheckTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check task stopped with an error.", ex);
+        }
+    }
+
     public override string ToString()
     {
         return $"TransactionManager: {ActiveTransactionCount}/{MaxTransactions} active, Timeout={TransactionTimeout.TotalMinutes:F1}min";
