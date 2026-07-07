@@ -48,7 +48,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        public static Type? IdPropertyType => null;");
             sb.AppendLine("        public static global::TinyDb.Attributes.IdGenerationStrategy IdGenerationStrategy => global::TinyDb.Attributes.IdGenerationStrategy.None;");
             sb.AppendLine("        public static string? IdGenerationSequenceName => null;");
-            sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.TypeReference} entity) => false;");
+            sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.FullyQualifiedTypeReference} entity) => false;");
             return;
         }
 
@@ -64,7 +64,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine($"        public static global::TinyDb.Attributes.IdGenerationStrategy IdGenerationStrategy => {strategy};");
         sb.AppendLine($"        public static string? IdGenerationSequenceName => {sequenceName};");
         sb.AppendLine();
-        sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.TypeReference} entity)");
+        sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.FullyQualifiedTypeReference} entity)");
         sb.AppendLine("        {");
         if (!classInfo.IsValueType)
         {

@@ -49,6 +49,40 @@ public partial class TinyDbSourceGenerator
     }
 
 
+    private static void AddMissingSymbolFields(
+        INamedTypeSymbol? classSymbol,
+        string containingTypeName,
+        List<PropertyInfo> properties,
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors)
+    {
+        if (classSymbol == null)
+        {
+            return;
+        }
+
+        var existingNames = new HashSet<string>(properties.Select(static p => p.Name), StringComparer.Ordinal);
+        foreach (var member in classSymbol.GetMembers())
+        {
+            if (member is not IFieldSymbol fieldSymbol ||
+                !existingNames.Add(fieldSymbol.Name))
+            {
+                continue;
+            }
+
+            if (TryCreatePropertyInfoFromFieldSymbol(
+                    fieldSymbol,
+                    containingTypeName,
+                    typeSymbolMap,
+                    bsonRefMissingEntityErrors,
+                    out var propertyInfo))
+            {
+                properties.Add(propertyInfo!);
+            }
+        }
+    }
+
+
     private static List<ConstructorParameterInfo> AddConstructorBoundProperties(
         INamedTypeSymbol? classSymbol,
         string containingTypeName,
@@ -170,6 +204,112 @@ public partial class TinyDbSourceGenerator
         }
 
         return false;
+    }
+
+
+    private static bool TryCreatePropertyInfoFromFieldSymbol(
+        IFieldSymbol fieldSymbol,
+        string containingTypeName,
+        Dictionary<string, ITypeSymbol> typeSymbolMap,
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
+        out PropertyInfo? propertyInfo)
+    {
+        propertyInfo = null;
+        if (fieldSymbol.DeclaredAccessibility != Accessibility.Public ||
+            fieldSymbol.IsStatic ||
+            fieldSymbol.IsConst)
+        {
+            return false;
+        }
+
+        var attributes = fieldSymbol.GetAttributes();
+        var hasIgnoreAttribute = HasAttribute(attributes, "BsonIgnoreAttribute", "BsonIgnore");
+
+        var bsonRefAttribute = FindAttribute(attributes, "BsonRefAttribute");
+        var bsonRefCollectionName = GetConstructorString(bsonRefAttribute, 0);
+
+        var foreignKeyAttribute = FindAttribute(attributes, "ForeignKeyAttribute", "ForeignKey");
+        var foreignKeyCollectionName = GetConstructorString(foreignKeyAttribute, 0);
+        var propertyMetadataAttribute = GetPropertyMetadataAttribute(fieldSymbol);
+
+        var typeSymbol = fieldSymbol.Type;
+        if (!string.IsNullOrEmpty(bsonRefCollectionName))
+        {
+            var refTypeSymbol = GetBsonRefTargetType(typeSymbol);
+            if (refTypeSymbol != null &&
+                !HasAttribute(refTypeSymbol.GetAttributes(), "EntityAttribute"))
+            {
+                bsonRefMissingEntityErrors.Add(new BsonRefMissingEntityInfo(
+                    fieldSymbol.Name,
+                    containingTypeName,
+                    refTypeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
+                    DiagnosticLocationInfo.From(fieldSymbol.Locations.Length > 0 ? fieldSymbol.Locations[0] : null)));
+            }
+        }
+
+        var fieldType = typeSymbol.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+        var propIsValueType = typeSymbol.IsValueType;
+        var isNullableValueType = typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+                                  namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
+        var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
+                                      fieldSymbol.NullableAnnotation == NullableAnnotation.Annotated;
+        var isEnumType = typeSymbol.TypeKind == TypeKind.Enum;
+        var nonNullableType = fieldType;
+        var fullyQualifiedNonNullableType = fieldType;
+
+        if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
+        {
+            var underlyingType = nullableType.TypeArguments[0];
+            isEnumType = underlyingType.TypeKind == TypeKind.Enum;
+            nonNullableType = underlyingType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+            fullyQualifiedNonNullableType = nonNullableType;
+            AddTypeSymbolIfMissing(typeSymbolMap, fullyQualifiedNonNullableType, underlyingType);
+        }
+        else if (!propIsValueType && fieldType.EndsWith("?", StringComparison.Ordinal))
+        {
+            nonNullableType = fieldType.TrimEnd('?').Trim();
+            fullyQualifiedNonNullableType = nonNullableType;
+        }
+
+        var typeAnalysis = AnalyzePropertyType(typeSymbol);
+        AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis);
+
+        var idGenerationInfo = GetIdGenerationInfo(fieldSymbol);
+        var metadataTypeName = GetStableMetadataTypeName(typeSymbol);
+        propertyInfo = new PropertyInfo(
+            fieldSymbol.Name,
+            fieldType,
+            isId: false,
+            isIgnored: hasIgnoreAttribute,
+            hasIgnoreAttribute: hasIgnoreAttribute,
+            isValueType: propIsValueType,
+            isNullableValueType: isNullableValueType,
+            isNullableReferenceType: isNullableReferenceType,
+            isEnum: isEnumType,
+            nonNullableType: nonNullableType,
+            fullyQualifiedType: fieldType,
+            fullyQualifiedNonNullableType: fullyQualifiedNonNullableType,
+            metadataTypeName: metadataTypeName,
+            isComplexType: typeAnalysis.IsComplexType,
+            isCollection: typeAnalysis.IsCollection,
+            isDictionary: typeAnalysis.IsDictionary,
+            isArray: typeAnalysis.IsArray,
+            elementType: typeAnalysis.ElementType,
+            isElementComplexType: typeAnalysis.IsElementComplexType,
+            isElementValueType: typeAnalysis.IsElementValueType,
+            dictionaryKeyType: typeAnalysis.DictionaryKeyType,
+            dictionaryValueType: typeAnalysis.DictionaryValueType,
+            isDictionaryValueComplexType: typeAnalysis.IsDictionaryValueComplexType,
+            isDictionaryValueValueType: typeAnalysis.IsDictionaryValueValueType,
+            bsonRefCollectionName: bsonRefCollectionName,
+            foreignKeyCollectionName: foreignKeyCollectionName,
+            idGenerationStrategyValue: idGenerationInfo.StrategyValue,
+            idGenerationSequenceName: idGenerationInfo.SequenceName,
+            displayName: GetConstructorString(propertyMetadataAttribute, 0) ?? fieldSymbol.Name,
+            description: GetNamedString(propertyMetadataAttribute, "Description"),
+            order: GetNamedInt(propertyMetadataAttribute, "Order"),
+            required: GetNamedBool(propertyMetadataAttribute, "Required"));
+        return true;
     }
 
 

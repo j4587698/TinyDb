@@ -19,6 +19,7 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
     private readonly object _lock = new();
     private readonly CancellationTokenSource _timeoutCheckCts = new();
     private readonly Task _timeoutCheckTask;
+    private int _activeTransactionCount;
     private int _disposed;
 
     internal record ForeignKeyDefinition(string FieldName, string ReferencedCollection);
@@ -28,7 +29,7 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
     /// </summary>
     public int ActiveTransactionCount
     {
-        get => _activeTransactions.Count;
+        get => Volatile.Read(ref _activeTransactionCount);
     }
 
     /// <summary>
@@ -68,7 +69,7 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
         ThrowIfDisposed();
         lock (_lock)
         {
-            if (_activeTransactions.Count >= MaxTransactions)
+            if (Volatile.Read(ref _activeTransactionCount) >= MaxTransactions)
             {
                 throw new InvalidOperationException($"Maximum number of transactions ({MaxTransactions}) reached");
             }
@@ -79,6 +80,7 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
                 throw new InvalidOperationException($"Transaction '{transaction.TransactionId}' already exists");
             }
 
+            Interlocked.Increment(ref _activeTransactionCount);
             return transaction;
         }
     }
@@ -189,8 +191,19 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
         }
         finally
         {
-            _activeTransactions.TryRemove(transaction.TransactionId, out _);
+            RemoveActiveTransaction(transaction.TransactionId);
         }
+    }
+
+    private bool RemoveActiveTransaction(Guid transactionId)
+    {
+        if (!_activeTransactions.TryRemove(transactionId, out _))
+        {
+            return false;
+        }
+
+        Interlocked.Decrement(ref _activeTransactionCount);
+        return true;
     }
 
 }

@@ -156,6 +156,30 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
         await Assert.That(targetWalAppends).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task SourceGenerator_ShouldIncludePublicFieldsFromOtherPartialDeclaration()
+    {
+        var document = AotBsonMapper.ToDocument(new SplitPartialFieldEntity
+        {
+            Id = 1,
+            Name = "from-field"
+        });
+
+        await Assert.That(document["name"].ToString()).IsEqualTo("from-field");
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldHandleUnderscoreInNestedTypeName()
+    {
+        var document = AotBsonMapper.ToDocument(new Outer_Class.NestedEntity
+        {
+            Id = 2,
+            Name = "nested"
+        });
+
+        await Assert.That(document["name"].ToString()).IsEqualTo("nested");
+    }
+
     private static long ReadGuidV7Timestamp(Guid guid)
     {
         return long.Parse(guid.ToString("N")[..12], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
@@ -174,6 +198,27 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
         public int Value { get; set; }
+    }
+
+    [Entity("SplitPartialFieldEntities")]
+    public partial class SplitPartialFieldEntity
+    {
+        public int Id { get; set; }
+    }
+
+    public partial class SplitPartialFieldEntity
+    {
+        public string Name = string.Empty;
+    }
+
+    public sealed class Outer_Class
+    {
+        [Entity("NestedUnderscoreEntities")]
+        public partial class NestedEntity
+        {
+            public int Id { get; set; }
+            public string Name { get; set; } = string.Empty;
+        }
     }
 
     private sealed class MemoryDiskStream : IDiskStream

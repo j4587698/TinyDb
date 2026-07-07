@@ -1180,12 +1180,12 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
-    public async Task AotBsonMapper_ShouldUseAsyncLocalSerializationContext()
+    public async Task AotBsonMapper_ShouldUseThreadLocalSerializationContext()
     {
         var contextType = AotBsonMapper.SerializationContextType;
 
         await Assert.That(contextType.IsGenericType).IsTrue();
-        await Assert.That(contextType.GetGenericTypeDefinition()).IsEqualTo(typeof(AsyncLocal<>));
+        await Assert.That(contextType.GetGenericTypeDefinition()).IsEqualTo(typeof(ThreadLocal<>));
     }
 
     [Test]

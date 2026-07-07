@@ -83,6 +83,7 @@ public sealed partial class TransactionManager
             }
 
             _activeTransactions.Clear();
+            Interlocked.Exchange(ref _activeTransactionCount, 0);
         }
     }
 
@@ -91,11 +92,17 @@ public sealed partial class TransactionManager
     {
         try
         {
-            _timeoutCheckTask.WaitAsync(TimeoutCheckStopTimeout).GetAwaiter().GetResult();
+            if (!_timeoutCheckTask.Wait(TimeoutCheckStopTimeout))
+            {
+                throw new TimeoutException();
+            }
         }
         catch (TimeoutException)
         {
             _engine.Log(TinyDbLogLevel.Warning, "Transaction timeout check task did not stop before dispose timeout.");
+        }
+        catch (AggregateException ex) when (ex.InnerExceptions.Count == 1 && ex.InnerException is OperationCanceledException)
+        {
         }
         catch (OperationCanceledException)
         {

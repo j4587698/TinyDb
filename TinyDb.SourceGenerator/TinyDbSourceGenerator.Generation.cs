@@ -39,7 +39,7 @@ public partial class TinyDbSourceGenerator
 
         // 添加静态帮助器类
         sb.AppendLine($"    /// <summary>");
-        sb.AppendLine($"    /// {classInfo.TypeReference} 的AOT支持帮助器（源代码生成器生成）");
+        sb.AppendLine($"    /// {classInfo.FullyQualifiedTypeReference} 的AOT支持帮助器（源代码生成器生成）");
         sb.AppendLine($"    /// </summary>");
         sb.AppendLine($"    internal static class {classInfo.HelperClassName}");
         sb.AppendLine("    {");
@@ -58,7 +58,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <returns>ID值</returns>");
-            sb.AppendLine($"        public static BsonValue GetId({classInfo.TypeReference} entity)");
+            sb.AppendLine($"        public static BsonValue GetId({classInfo.FullyQualifiedTypeReference} entity)");
             sb.AppendLine("        {");
             if (!classInfo.IsValueType)
             {
@@ -103,7 +103,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <param name=\"id\">ID值</param>");
-            sb.AppendLine($"        public static void SetId({classInfo.TypeReference} entity, BsonValue id)");
+            sb.AppendLine($"        public static void SetId({classInfo.FullyQualifiedTypeReference} entity, BsonValue id)");
             sb.AppendLine("        {");
             if (!classInfo.IsValueType)
             {
@@ -158,7 +158,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <returns>是否有有效ID</returns>");
-            sb.AppendLine($"        public static bool HasValidId({classInfo.TypeReference} entity)");
+            sb.AppendLine($"        public static bool HasValidId({classInfo.FullyQualifiedTypeReference} entity)");
             sb.AppendLine("        {");
             if (!classInfo.IsValueType)
             {
@@ -211,7 +211,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <returns>ID值</returns>");
-            sb.AppendLine($"        public static BsonValue GetId({classInfo.TypeReference} entity)");
+            sb.AppendLine($"        public static BsonValue GetId({classInfo.FullyQualifiedTypeReference} entity)");
             sb.AppendLine("        {");
             sb.AppendLine("            // 没有找到ID属性");
             sb.AppendLine("            return BsonNull.Value;");
@@ -223,7 +223,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <param name=\"id\">ID值</param>");
-            sb.AppendLine($"        public static void SetId({classInfo.TypeReference} entity, BsonValue id)");
+            sb.AppendLine($"        public static void SetId({classInfo.FullyQualifiedTypeReference} entity, BsonValue id)");
             sb.AppendLine("        {");
             sb.AppendLine("            // 没有找到ID属性，忽略设置");
             sb.AppendLine("        }");
@@ -234,7 +234,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <returns>是否有有效ID</returns>");
-            sb.AppendLine($"        public static bool HasValidId({classInfo.TypeReference} entity)");
+            sb.AppendLine($"        public static bool HasValidId({classInfo.FullyQualifiedTypeReference} entity)");
             sb.AppendLine("        {");
             sb.AppendLine("            // 没有找到ID属性");
             sb.AppendLine("            return false;");
@@ -250,7 +250,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// </summary>");
         sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
         sb.AppendLine("        /// <returns>BSON文档</returns>");
-        sb.AppendLine($"        public static BsonDocument ToDocument({classInfo.TypeReference} entity)");
+        sb.AppendLine($"        public static BsonDocument ToDocument({classInfo.FullyQualifiedTypeReference} entity)");
         sb.AppendLine("        {");
         if (!classInfo.IsValueType)
         {
@@ -288,7 +288,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// </summary>");
         sb.AppendLine("        /// <param name=\"document\">BSON文档</param>");
         sb.AppendLine("        /// <returns>实体实例</returns>");
-        sb.AppendLine($"        public static {classInfo.TypeReference} FromDocument(BsonDocument document)");
+        sb.AppendLine($"        public static {classInfo.FullyQualifiedTypeReference} FromDocument(BsonDocument document)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (document == null) throw new ArgumentNullException(nameof(document));");
         if (classInfo.ConstructorParameters.Count > 0)
@@ -305,11 +305,11 @@ public partial class TinyDbSourceGenerator
             }
 
             var arguments = string.Join(", ", classInfo.ConstructorParameters.Select(p => $"ctor_{p.Property.Name}"));
-            sb.AppendLine($"            var entity = new {classInfo.TypeReference}({arguments});");
+            sb.AppendLine($"            var entity = new {classInfo.FullyQualifiedTypeReference}({arguments});");
         }
         else
         {
-            sb.AppendLine($"            var entity = new {classInfo.TypeReference}();");
+            sb.AppendLine($"            var entity = new {classInfo.FullyQualifiedTypeReference}();");
         }
         sb.AppendLine();
 
@@ -334,7 +334,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
         sb.AppendLine("        /// <param name=\"propertyName\">属性名称</param>");
         sb.AppendLine("        /// <returns>属性值</returns>");
-        sb.AppendLine($"        public static object? GetPropertyValue({classInfo.TypeReference} entity, string propertyName)");
+        sb.AppendLine($"        public static object? GetPropertyValue({classInfo.FullyQualifiedTypeReference} entity, string propertyName)");
         sb.AppendLine("        {");
         if (!classInfo.IsValueType)
         {
@@ -353,7 +353,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
-        sb.AppendLine("        public static bool TrySetPropertyValue(" + classInfo.TypeReference + " entity, string propertyName, object? value)");
+        sb.AppendLine("        public static bool TrySetPropertyValue(" + classInfo.FullyQualifiedTypeReference + " entity, string propertyName, object? value)");
         sb.AppendLine("        {");
         if (!classInfo.IsValueType)
         {
