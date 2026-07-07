@@ -1,4 +1,3 @@
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Metadata;
@@ -124,9 +123,7 @@ public class TransactionManagerAdditionalCoverageTests
             _ = manager.BeginTransaction();
             await Assert.That(manager.ActiveTransactionCount).IsEqualTo(1);
 
-            var method = typeof(TransactionManager).GetMethod("CheckAndCleanupExpiredTransactions", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(method).IsNotNull();
-            method!.Invoke(manager, null);
+            manager.CheckAndCleanupExpiredTransactions();
 
             await Assert.That(manager.ActiveTransactionCount).IsEqualTo(0);
         }
@@ -147,9 +144,7 @@ public class TransactionManagerAdditionalCoverageTests
             using var manager = new TransactionManager(engine, maxTransactions: 10, transactionTimeout: TimeSpan.FromTicks(-1));
             using var transaction = manager.BeginTransaction();
 
-            var method = typeof(TransactionManager).GetMethod("CheckAndCleanupExpiredTransactions", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(method).IsNotNull();
-            method!.Invoke(manager, null);
+            manager.CheckAndCleanupExpiredTransactions();
 
             InvalidOperationException? exception = null;
             try

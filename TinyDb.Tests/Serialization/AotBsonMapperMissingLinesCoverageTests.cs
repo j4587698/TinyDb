@@ -318,12 +318,12 @@ public class AotBsonMapperMissingLinesCoverageTests
     [Test]
     public async Task AotBsonMapper_PrivateHelpers_ShouldCoverRemainingBranches()
     {
-        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", string.Empty)).IsEqualTo(string.Empty);
-        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "A")).IsEqualTo("a");
-        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "Abc")).IsEqualTo("abc");
-        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "ID")).IsEqualTo("id");
-        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "URLValue")).IsEqualTo("urlValue");
-        await Assert.That(InvokePrivateStatic<string>("ToCamelCase", "_Id")).IsEqualTo("_id");
+        await Assert.That(BsonFieldName.ToCamelCase(string.Empty)).IsEqualTo(string.Empty);
+        await Assert.That(BsonFieldName.ToCamelCase("A")).IsEqualTo("a");
+        await Assert.That(BsonFieldName.ToCamelCase("Abc")).IsEqualTo("abc");
+        await Assert.That(BsonFieldName.ToCamelCase("ID")).IsEqualTo("id");
+        await Assert.That(BsonFieldName.ToCamelCase("URLValue")).IsEqualTo("urlValue");
+        await Assert.That(BsonFieldName.ToCamelCase("_Id")).IsEqualTo("_id");
 
         await Assert.That(InvokePrivateStatic<object?>("UnwrapBsonValue", BsonNull.Value)).IsNull();
 

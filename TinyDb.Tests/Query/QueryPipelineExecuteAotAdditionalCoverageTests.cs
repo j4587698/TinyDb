@@ -38,7 +38,7 @@ public class QueryPipelineExecuteAotAdditionalCoverageTests
             .Select(x => x.Category)
             .Where(x => x == "A");
 
-        var result = QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null);
+        var result = QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null);
         await Assert.That(result).IsNotNull();
 
         var count = ((IEnumerable)result!).Cast<object>().Count();
@@ -56,7 +56,7 @@ public class QueryPipelineExecuteAotAdditionalCoverageTests
 
         var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
 
-        var result = QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: Expression.Constant(true));
+        var result = QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: Expression.Constant(true));
         var list = (IEnumerable)result!;
 
         await Assert.That(list.Cast<object>().Count()).IsEqualTo(2);
@@ -73,7 +73,7 @@ public class QueryPipelineExecuteAotAdditionalCoverageTests
 
         var query = TestQueryables.InMemory(items).GroupBy(x => x.Category);
 
-        await Assert.That(() => QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null))
+        await Assert.That(() => QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null))
             .Throws<NotSupportedException>();
     }
 
@@ -88,7 +88,7 @@ public class QueryPipelineExecuteAotAdditionalCoverageTests
 
         var query = TestQueryables.InMemory(items).Reverse();
 
-        await Assert.That(() => QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null))
+        await Assert.That(() => QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null))
             .Throws<NotSupportedException>();
     }
 
@@ -104,7 +104,7 @@ public class QueryPipelineExecuteAotAdditionalCoverageTests
 
         var query = TestQueryables.InMemory(items).OrderBy(x => new OrderByKey(x.Id));
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
         await Assert.That(result.Cast<object>().Count()).IsEqualTo(3);
     }
 }

@@ -1,11 +1,9 @@
 using TinyDb.Bson;
-using System.Linq;
-using TinyDb.Storage;
 
 namespace TinyDb.Index;
 
 /// <summary>
-/// B+ 树节点 (Disk Wrapper for BTreeIndex integration)
+/// Disk-backed BTreeIndex node wrapper.
 /// </summary>
 public sealed class BTreeNode
 {
@@ -28,8 +26,8 @@ public sealed class BTreeNode
 
     public int DocumentCount => IsLeaf ? _diskNode.Values.Count : 0; // Approximate for disk mode
 
-    public int MaxKeys => 200; // Mock property
-    public int MinKeys => 100; // Mock property
+    public int MaxKeys => _diskTree.MaxKeys;
+    public int MinKeys => Math.Max(1, MaxKeys / 2);
 
     public IndexKey GetKey(int index) => _diskNode.Keys[index];
 
@@ -41,31 +39,27 @@ public sealed class BTreeNode
         return new BTreeNode(childNode, _diskTree);
     }
 
-    // Helper for Tests: FindKeyPosition
     public int FindKeyPosition(IndexKey key)
     {
         int count = KeyCount;
         for (int i = 0; i < count; i++)
         {
             if (key.CompareTo(GetKey(i)) < 0) return i;
-            if (key.CompareTo(GetKey(i)) == 0) return i; 
+            if (key.CompareTo(GetKey(i)) == 0) return i;
         }
         return count;
     }
 
-    // Helper: GetDocumentIds (Shim for tests)
     public IReadOnlyList<BsonValue> GetDocumentIds(int index)
     {
          return new List<BsonValue> { _diskNode.Values[index] };
     }
 
-    // Stub other methods to throw NotSupported
     public void SetKey(int index, IndexKey key) => throw new NotSupportedException();
     public void SetChild(int index, BTreeNode child) => throw new NotSupportedException();
     public void RemoveKeyAt(int index) => throw new NotSupportedException();
     public void RemoveChildAt(int index) => throw new NotSupportedException();
 
-    // Required for compatibility
     public BTreeNode? Parent { get; set; }
     public BTreeNode? NextSibling { get; set; }
     public BTreeNode? PreviousSibling { get; set; }
@@ -84,7 +78,7 @@ public sealed class BTreeNode
             NeedsMerge = KeyCount < MinKeys
         };
     }
-    
+
     public override string ToString()
     {
         var type = IsLeaf ? "Leaf" : "Internal";

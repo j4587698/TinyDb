@@ -93,7 +93,7 @@ public class QueryPipelineAotPredicateExtractorOverrideCoverageTests : IDisposab
             .Select(g => g.Key)
             .Expression;
 
-        var obj = QueryPipeline.ExecuteAotForTests<TestProduct>(expr, items, extractedPredicate: null);
+        var obj = QueryPipelineTestDriver.ExecuteAot<TestProduct>(expr, items, extractedPredicate: null);
         var keys = ((System.Collections.IEnumerable)obj!).Cast<string?>();
 
         await Assert.That(keys).IsEmpty();

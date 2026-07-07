@@ -1,8 +1,6 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Collections;
 using TinyDb.Core;
@@ -28,14 +26,13 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
             var colName = "sync_wrap_col";
             engine.GetBsonCollection(colName).Insert(new BsonDocument().Set("_id", 1).Set("v", 1));
 
-            var states = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
-            var state = states[colName];
+            var state = engine.GetCollectionState(colName);
             if (state.PageState.PageId == 0)
             {
                 state.PageState.PageId = state.OwnedPages.Keys.First();
             }
 
-            UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine).Dispose();
+            engine.PageManager.Dispose();
 
             await Assert.That(() => engine.InsertDocuments(
                     colName,
@@ -59,14 +56,13 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
             var colName = "async_wrap_col";
             engine.GetBsonCollection(colName).Insert(new BsonDocument().Set("_id", 1).Set("v", 1));
 
-            var states = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
-            var state = states[colName];
+            var state = engine.GetCollectionState(colName);
             if (state.PageState.PageId == 0)
             {
                 state.PageState.PageId = state.OwnedPages.Keys.First();
             }
 
-            UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine).Dispose();
+            engine.PageManager.Dispose();
 
             await Assert.That(async () =>
                     await engine.InsertDocumentsAsync(
@@ -91,15 +87,11 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
             var colName = "rebuild_col";
             engine.GetBsonCollection(colName).Insert(new BsonDocument().Set("_id", 1).Set("v", 1));
 
-            var states = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
-            var state = states[colName];
+            var state = engine.GetCollectionState(colName);
 
-            UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine).Dispose();
+            engine.PageManager.Dispose();
 
-            var method = typeof(TinyDbEngine).GetMethod("BuildDocumentLocationCache", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingMethodException(typeof(TinyDbEngine).FullName, "BuildDocumentLocationCache");
-
-            await Assert.That(() => InvokeAndUnwrap(method, engine, colName, state))
+            await Assert.That(() => engine.BuildDocumentLocationCache(colName, state))
                 .Throws<InvalidOperationException>();
         }
         finally
@@ -116,12 +108,11 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
         var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
         try
         {
-            var states = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
-            var pageManager = UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine);
+            var pageManager = engine.PageManager;
 
             var emptyCol = "raw_empty_col";
             engine.GetBsonCollection(emptyCol).Insert(new BsonDocument().Set("_id", 1).Set("v", 1));
-            var emptyState = states[emptyCol];
+            var emptyState = engine.GetCollectionState(emptyCol);
             var emptyPageId = emptyState.OwnedPages.Keys.First();
             var emptyPage = pageManager.GetPage(emptyPageId);
             emptyPage.ClearData();
@@ -135,7 +126,7 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
 
             var disposedCol = "raw_disposed_col";
             engine.GetBsonCollection(disposedCol).Insert(new BsonDocument().Set("_id", 2).Set("v", 2));
-            var disposedState = states[disposedCol];
+            var disposedState = engine.GetCollectionState(disposedCol);
             var disposedPageId = disposedState.OwnedPages.Keys.First();
             var poisonedPage = pageManager.GetPage(disposedPageId);
             poisonedPage.Dispose();
@@ -160,13 +151,8 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
             var colName = "raw_snapshot_col";
             engine.GetBsonCollection(colName).Insert(new BsonDocument().Set("_id", 1).Set("v", 1));
 
-            var getState = typeof(TinyDbEngine).GetMethod("GetCollectionState", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingMethodException(typeof(TinyDbEngine).FullName, "GetCollectionState");
-            var state = getState.Invoke(engine, new object[] { colName })!;
-
-            var readRawSnapshot = typeof(TinyDbEngine).GetMethod("ReadRawDocumentSnapshot", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingMethodException(typeof(TinyDbEngine).FullName, "ReadRawDocumentSnapshot");
-            var enumerable = (IEnumerable<ReadOnlyMemory<byte>>)readRawSnapshot.Invoke(engine, new object?[] { colName, state, null })!;
+            var state = engine.GetCollectionState(colName);
+            var enumerable = engine.ReadRawDocumentSnapshot(colName, state, null);
 
             var all = enumerable.ToList();
             await Assert.That(all.Count).IsGreaterThan(0);
@@ -184,10 +170,7 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
         using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
         try
         {
-            var storageField = typeof(TinyDbEngine).GetField("_largeDocumentStorage", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingFieldException(typeof(TinyDbEngine).FullName, "_largeDocumentStorage");
-
-            var storage = (LargeDocumentStorage)storageField.GetValue(engine)!;
+            var storage = engine.LargeDocumentStorage;
             var original = new BsonDocument().Set("_id", 10).Set("name", "large");
             var indexPageId = storage.StoreLargeDocument(original, "resolve_async_col");
 
@@ -252,11 +235,7 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
         var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
         try
         {
-            var collectionsField = typeof(TinyDbEngine).GetField("_collections", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingFieldException(typeof(TinyDbEngine).FullName, "_collections");
-
-            var collections = (ConcurrentDictionary<string, IDocumentCollection>)collectionsField.GetValue(engine)!;
-            collections["throwing_collection"] = new ThrowingDocumentCollection();
+            engine.TrackCollection(new ThrowingDocumentCollection());
 
             await Assert.That(() => engine.Dispose()).Throws<AggregateException>();
         }
@@ -270,31 +249,21 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
     public async Task Dispose_WhenOnlyFlushFails_ShouldRethrowFlushException()
     {
         var dbPath = CreateDbPath("engine_dispose_flush_branch");
-        var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
+        var diskStream = new DiskStream(dbPath, FileAccess.ReadWrite, FileShare.ReadWrite);
+        var failingDiskStream = new FlushFailingDiskStream(diskStream);
+        var engine = new TinyDbEngine(
+            dbPath,
+            new TinyDbOptions { EnableJournaling = false },
+            failingDiskStream);
         try
         {
-            var diskStreamField = typeof(TinyDbEngine).GetField("_diskStream", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingFieldException(typeof(TinyDbEngine).FullName, "_diskStream");
-            var innerDiskStream = (IDiskStream)diskStreamField.GetValue(engine)!;
-            diskStreamField.SetValue(engine, new FlushFailingDiskStream(innerDiskStream));
-
+            failingDiskStream.SuccessfulFlushesBeforeFailure = 1;
+            failingDiskStream.FailOnFlush = true;
             await Assert.That(() => engine.Dispose()).Throws<InvalidOperationException>();
         }
         finally
         {
             CleanupDb(dbPath);
-        }
-    }
-
-    private static object? InvokeAndUnwrap(MethodInfo method, params object?[] args)
-    {
-        try
-        {
-            return method.Invoke(args[0], args.Skip(1).ToArray());
-        }
-        catch (TargetInvocationException ex) when (ex.InnerException != null)
-        {
-            throw ex.InnerException;
         }
     }
 
@@ -347,6 +316,9 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
             _inner = inner;
         }
 
+        public bool FailOnFlush { get; set; }
+        public int SuccessfulFlushesBeforeFailure { get; set; }
+
         public string FilePath => _inner.FilePath;
         public long Size => _inner.Size;
         public bool IsReadable => _inner.IsReadable;
@@ -356,7 +328,23 @@ public sealed class TinyDbEngineCoverageEdgeCasesTests
         public void WritePage(long pageOffset, byte[] pageData) => _inner.WritePage(pageOffset, pageData);
         public Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default) => _inner.ReadPageAsync(pageOffset, pageSize, cancellationToken);
         public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default) => _inner.WritePageAsync(pageOffset, pageData, cancellationToken);
-        public void Flush() => throw new InvalidOperationException("Simulated flush failure from wrapper stream.");
+        public void Flush()
+        {
+            if (FailOnFlush)
+            {
+                if (SuccessfulFlushesBeforeFailure > 0)
+                {
+                    SuccessfulFlushesBeforeFailure--;
+                    _inner.Flush();
+                    return;
+                }
+
+                FailOnFlush = false;
+                throw new InvalidOperationException("Simulated flush failure from wrapper stream.");
+            }
+
+            _inner.Flush();
+        }
         public Task FlushAsync(CancellationToken cancellationToken = default) => _inner.FlushAsync(cancellationToken);
         public void SetLength(long length) => _inner.SetLength(length);
         public DiskStreamStatistics GetStatistics() => _inner.GetStatistics();

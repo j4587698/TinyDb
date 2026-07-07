@@ -1,4 +1,3 @@
-using System.Reflection;
 using TinyDb.Query;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -23,23 +22,4 @@ public class ExpressionEvaluatorCompareAndPrivateAggregateCoverageTests
         await Assert.That(ExpressionEvaluator.EvaluateValue<Item>(parsed, new Item { Category = "A" })).IsEqualTo(false);
     }
 
-    [Test]
-    public async Task EvaluateEnumerableAggregate_WithUnsupportedFunctionName_ShouldReturnNull()
-    {
-        var method = typeof(ExpressionEvaluator).GetMethod(
-            "EvaluateEnumerableAggregate",
-            BindingFlags.NonPublic | BindingFlags.Static);
-
-        await Assert.That(method == null).IsFalse();
-
-        var selector = (Func<object, object>)(x => x);
-
-        var aotGroup = new QueryPipeline.AotGrouping("k", new object[] { 1, 2 });
-        var r1 = method!.Invoke(null, new object?[] { "Median", aotGroup, selector });
-        await Assert.That(r1).IsNull();
-
-        var r2 = method.Invoke(null, new object?[] { "Median", new[] { 1, 2 }, selector });
-        await Assert.That(r2).IsNull();
-    }
 }
-

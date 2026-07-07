@@ -78,7 +78,7 @@ public class TransactionManagerTimeoutTests
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         var stats = manager.GetStatistics();
-        
+
         await Assert.That(stats.ActiveTransactionCount).IsEqualTo(0);
         await Assert.That(stats.AverageOperationCount).IsEqualTo(0);
         await Assert.That(stats.TotalOperations).IsEqualTo(0);
@@ -91,9 +91,9 @@ public class TransactionManagerTimeoutTests
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         using var txn1 = manager.BeginTransaction();
         using var txn2 = manager.BeginTransaction();
-        
+
         var stats = manager.GetStatistics();
-        
+
         await Assert.That(stats.ActiveTransactionCount).IsEqualTo(2);
         await Assert.That(stats.States).ContainsKey(TransactionState.Active);
         await Assert.That(stats.ToString()).Contains("TransactionManager");
@@ -103,37 +103,25 @@ public class TransactionManagerTimeoutTests
     public async Task CommitTransaction_WithNullTransaction_ShouldThrow()
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
-        
+
         // 使用反射调用内部方法
-        var method = typeof(TransactionManager).GetMethod("CommitTransaction", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        await Assert.That(() => method!.Invoke(manager, new object?[] { null }))
-            .Throws<System.Reflection.TargetInvocationException>();
+        await Assert.That(() => manager.CommitTransaction(null!)).Throws<ArgumentNullException>();
     }
 
     [Test]
     public async Task RollbackTransaction_WithNullTransaction_ShouldThrow()
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
-        
-        var method = typeof(TransactionManager).GetMethod("RollbackTransaction", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        await Assert.That(() => method!.Invoke(manager, new object?[] { null }))
-            .Throws<System.Reflection.TargetInvocationException>();
+
+        await Assert.That(() => manager.RollbackTransaction(null!)).Throws<ArgumentNullException>();
     }
 
     [Test]
     public async Task CreateSavepoint_WithNullTransaction_ShouldThrow()
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
-        
-        var method = typeof(TransactionManager).GetMethod("CreateSavepoint", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        await Assert.That(() => method!.Invoke(manager, new object?[] { null, "test" }))
-            .Throws<System.Reflection.TargetInvocationException>();
+
+        await Assert.That(() => manager.CreateSavepoint(null!, "test")).Throws<ArgumentNullException>();
     }
 
     [Test]
@@ -141,7 +129,7 @@ public class TransactionManagerTimeoutTests
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         using var txn = manager.BeginTransaction();
-        
+
         await Assert.That(() => txn.CreateSavepoint("")).Throws<ArgumentException>();
         await Assert.That(() => txn.CreateSavepoint(null!)).Throws<ArgumentException>();
     }
@@ -151,7 +139,7 @@ public class TransactionManagerTimeoutTests
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         using var txn = manager.BeginTransaction();
-        
+
         await Assert.That(() => txn.RollbackToSavepoint(Guid.NewGuid()))
             .Throws<ArgumentException>();
     }
@@ -160,13 +148,9 @@ public class TransactionManagerTimeoutTests
     public async Task RecordOperation_WithNullTransaction_ShouldThrow()
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
-        
-        var method = typeof(TransactionManager).GetMethod("RecordOperation", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
+
         var op = new TransactionOperation(TransactionOperationType.Insert, "test", new BsonInt32(1));
-        await Assert.That(() => method!.Invoke(manager, new object?[] { null, op }))
-            .Throws<System.Reflection.TargetInvocationException>();
+        await Assert.That(() => manager.RecordOperation(null!, op)).Throws<ArgumentNullException>();
     }
 
     [Test]
@@ -174,12 +158,8 @@ public class TransactionManagerTimeoutTests
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         using var txn = manager.BeginTransaction();
-        
-        var method = typeof(TransactionManager).GetMethod("RecordOperation", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        await Assert.That(() => method!.Invoke(manager, new object?[] { txn, null }))
-            .Throws<System.Reflection.TargetInvocationException>();
+
+        await Assert.That(() => manager.RecordOperation((Transaction)txn, null!)).Throws<ArgumentNullException>();
     }
 
     [Test]
@@ -188,11 +168,11 @@ public class TransactionManagerTimeoutTests
         var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         var txn1 = manager.BeginTransaction();
         var txn2 = manager.BeginTransaction();
-        
+
         await Assert.That(manager.ActiveTransactionCount).IsEqualTo(2);
-        
+
         manager.Dispose();
-        
+
         await Assert.That(manager.ActiveTransactionCount).IsEqualTo(0);
     }
 
@@ -210,7 +190,7 @@ public class TransactionManagerTimeoutTests
     {
         var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         manager.Dispose();
-        
+
         await Assert.That(() => manager.BeginTransaction())
             .Throws<ObjectDisposedException>();
     }
@@ -220,7 +200,7 @@ public class TransactionManagerTimeoutTests
     {
         var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         manager.Dispose();
-        
+
         await Assert.That(() => manager.GetStatistics())
             .Throws<ObjectDisposedException>();
     }
@@ -230,10 +210,10 @@ public class TransactionManagerTimeoutTests
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
         using var txn = manager.BeginTransaction();
-        
+
         var stats = manager.GetStatistics();
         var str = stats.ToString();
-        
+
         await Assert.That(str).Contains("TransactionManager");
         await Assert.That(str).Contains("1/10");
     }
@@ -242,23 +222,15 @@ public class TransactionManagerTimeoutTests
     public async Task RollbackToSavepoint_WithNullTransaction_ShouldThrow()
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
-        
-        var method = typeof(TransactionManager).GetMethod("RollbackToSavepoint", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        await Assert.That(() => method!.Invoke(manager, new object?[] { null, Guid.NewGuid() }))
-            .Throws<System.Reflection.TargetInvocationException>();
+
+        await Assert.That(() => manager.RollbackToSavepoint(null!, Guid.NewGuid())).Throws<ArgumentNullException>();
     }
 
     [Test]
     public async Task ReleaseSavepoint_WithNullTransaction_ShouldThrow()
     {
         using var manager = new TransactionManager(_engine, 10, TimeSpan.FromMinutes(5));
-        
-        var method = typeof(TransactionManager).GetMethod("ReleaseSavepoint", 
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        
-        await Assert.That(() => method!.Invoke(manager, new object?[] { null, Guid.NewGuid() }))
-            .Throws<System.Reflection.TargetInvocationException>();
+
+        await Assert.That(() => manager.ReleaseSavepoint(null!, Guid.NewGuid())).Throws<ArgumentNullException>();
     }
 }

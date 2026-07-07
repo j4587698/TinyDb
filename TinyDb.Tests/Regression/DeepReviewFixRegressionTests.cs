@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Reflection;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
@@ -105,13 +104,9 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     [Test]
     public async Task BsonConversion_ShouldReleaseCycleTrackingSetAfterTopLevelConversion()
     {
-        var field = typeof(BsonConversion).GetField(
-            "_serializingObjects",
-            BindingFlags.Static | BindingFlags.NonPublic)!;
-
         _ = BsonConversion.ToBsonValue(new List<object> { "value" });
 
-        await Assert.That(field.GetValue(null)).IsNull();
+        await Assert.That(BsonConversion.HasActiveSerializationTracking).IsFalse();
     }
 
     [Test]

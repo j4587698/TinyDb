@@ -233,13 +233,8 @@ public class ExpressionParserConstantEvaluationAdditionalCoverageTests
     [Test]
     public async Task TryEvaluateBinary_WhenNodeTypeUnsupported_ShouldReturnNull()
     {
-        var method = typeof(ExpressionParser).GetMethod(
-            "TryEvaluateBinary",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         var modulo = Expression.Modulo(Expression.Constant(10), Expression.Constant(3));
-        var result = method!.Invoke(null, new object[] { modulo });
+        var result = ExpressionConstantEvaluator.TryEvaluateBinary(modulo);
 
         await Assert.That(result).IsNull();
     }
@@ -247,12 +242,7 @@ public class ExpressionParserConstantEvaluationAdditionalCoverageTests
     [Test]
     public async Task TryEvaluateBinary_ShouldCover_AllSupportedArithmeticNodeTypes()
     {
-        var method = typeof(ExpressionParser).GetMethod(
-            "TryEvaluateBinary",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        object? Invoke(System.Linq.Expressions.BinaryExpression expr) => method!.Invoke(null, new object[] { expr });
+        object? Invoke(System.Linq.Expressions.BinaryExpression expr) => ExpressionConstantEvaluator.TryEvaluateBinary(expr);
 
         await Assert.That(Invoke(Expression.Add(Expression.Constant(1), Expression.Constant(2)))).IsEqualTo(3);
         await Assert.That(Invoke(Expression.Subtract(Expression.Constant(10), Expression.Constant(3)))).IsEqualTo(7);

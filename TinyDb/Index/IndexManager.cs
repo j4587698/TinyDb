@@ -1,26 +1,19 @@
 using TinyDb.Bson;
-using TinyDb.Storage;
 using TinyDb.Serialization;
-using System.Buffers;
-using System.Collections.Concurrent;
+using TinyDb.Storage;
 
 namespace TinyDb.Index;
 
-internal readonly record struct PersistedIndexDefinition(string Name, string[] Fields, bool IsUnique, bool IsSparse, uint RootPageId, int MaxKeys);
-
 public sealed class IndexManager : IDisposable
 {
-    private readonly ConcurrentDictionary<string, BTreeIndex> _indexes;
+    private readonly IndexCatalog _catalog = new();
     private readonly string _collectionName;
     private readonly PageManager _pm;
     private readonly Action<IReadOnlyList<PersistedIndexDefinition>, bool>? _persistDefinitions;
     private readonly ReaderWriterLockSlim _rwLock = new();
-    private bool _disposed;
-    
-    // 为了兼容性
     private readonly bool _ownsPageManager;
     private readonly string? _tempFilePath;
-    private readonly PageManager? _tempPm;
+    private bool _disposed;
 
     /// <summary>
     /// 获取此管理器所属集合的名称。
@@ -30,12 +23,40 @@ public sealed class IndexManager : IDisposable
     /// <summary>
     /// 获取管理的索引数量。
     /// </summary>
-    public int IndexCount => _indexes.Count;
+    public int IndexCount
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _catalog.Count;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+    }
 
     /// <summary>
-    /// 获取所有受管理索引的名称。
+    /// 获取所有受管理索引的名称快照。
     /// </summary>
-    public IEnumerable<string> IndexNames => _indexes.Keys;
+    public IEnumerable<string> IndexNames
+    {
+        get
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                return _catalog.Names;
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+        }
+    }
 
     /// <summary>
     /// 初始化 <see cref="IndexManager"/> 类的新实例。
@@ -55,7 +76,6 @@ public sealed class IndexManager : IDisposable
     {
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
-        _indexes = new ConcurrentDictionary<string, BTreeIndex>();
         _persistDefinitions = persistDefinitions;
         _ownsPageManager = false;
 
@@ -75,9 +95,8 @@ public sealed class IndexManager : IDisposable
             FileAccess.ReadWrite,
             FileShare.ReadWrite | FileShare.Delete,
             FileOptions.DeleteOnClose);
-        _tempPm = new PageManager(ds);
-        _pm = _tempPm;
-        _indexes = new ConcurrentDictionary<string, BTreeIndex>();
+
+        _pm = new PageManager(ds);
         _persistDefinitions = null;
         _ownsPageManager = true;
     }
@@ -87,7 +106,8 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     /// <param name="name">索引名称。</param>
     /// <param name="fields">要索引的字段。</param>
-    /// <param name="unique">索引是否应该是唯一的。</param>
+    /// <param name="unique">索引是否唯一。</param>
+    /// <param name="sparse">索引是否跳过缺失字段的文档。</param>
     /// <returns>如果创建成功则为 true；如果已存在则为 false。</returns>
     public bool CreateIndex(string name, string[] fields, bool unique = false, bool sparse = false)
     {
@@ -97,99 +117,6 @@ public sealed class IndexManager : IDisposable
     internal bool CreateIndexForBackfill(string name, string[] fields, bool unique = false, bool sparse = false)
     {
         return CreateIndexCore(name, fields, unique, sparse, persistImmediately: false);
-    }
-
-    private bool CreateIndexCore(string name, string[] fields, bool unique, bool sparse, bool persistImmediately)
-    {
-        if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
-        if (fields == null || fields.Length == 0) throw new ArgumentException("Fields cannot be null or empty", nameof(fields));
-        
-        _rwLock.EnterWriteLock();
-        try
-        {
-            var normalizedFields = fields.Select(ToCamelCase).ToArray();
-
-            if (_indexes.TryGetValue(name, out var existing))
-            {
-                if (existing.IsUnique != unique)
-                {
-                    throw new InvalidOperationException($"Index '{name}' already exists with different uniqueness (existing: {existing.IsUnique}, new: {unique})");
-                }
-
-                if (existing.IsSparse != sparse)
-                {
-                    throw new InvalidOperationException($"Index '{name}' already exists with different sparse setting (existing: {existing.IsSparse}, new: {sparse})");
-                }
-
-                if (!normalizedFields.SequenceEqual(existing.Fields))
-                {
-                    throw new InvalidOperationException($"Index '{name}' already exists with different fields (existing: {string.Join(",", existing.Fields)}, new: {string.Join(",", normalizedFields)})");
-                }
-
-                return false;
-            }
-            
-            // 关键修复：尝试从底层存储加载已存在的索引
-            // 扫描 IndexInfoPage 以查找匹配的索引名和根页面ID
-            // 如果没找到，才创建新的
-            
-            var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse);
-            if (_indexes.TryAdd(name, index))
-            {
-                if (persistImmediately)
-                {
-                    PersistDefinitions(forceFlush: false);
-                }
-                return true;
-            }
-            else
-            {
-                try
-                {
-                    index.DropStorage();
-                }
-                finally
-                {
-                    index.Dispose();
-                }
-
-                return false;
-            }
-        }
-        finally
-        {
-            _rwLock.ExitWriteLock();
-        }
-    }
-
-    private static string ToCamelCase(string name)
-    {
-        return BsonFieldName.ToCamelCase(name);
-    }
-
-    private void LoadPersistedIndexes(IReadOnlyList<PersistedIndexDefinition>? definitions)
-    {
-        if (definitions == null || definitions.Count == 0) return;
-
-        foreach (var definition in definitions)
-        {
-            if (string.IsNullOrEmpty(definition.Name) || definition.Fields == null || definition.Fields.Length == 0 || definition.RootPageId == 0)
-            {
-                continue;
-            }
-
-            var normalizedFields = definition.Fields.Select(ToCamelCase).ToArray();
-            var index = new BTreeIndex(_pm, definition.Name, normalizedFields, definition.IsUnique, definition.RootPageId, definition.MaxKeys, definition.IsSparse);
-            if (!_indexes.TryAdd(definition.Name, index))
-            {
-                index.Dispose();
-            }
-        }
-    }
-
-    private void PersistDefinitions(bool forceFlush)
-    {
-        _persistDefinitions?.Invoke(CreateDefinitionSnapshot(), forceFlush);
     }
 
     internal void PersistCurrentDefinitions(bool forceFlush = false)
@@ -205,20 +132,6 @@ public sealed class IndexManager : IDisposable
         }
     }
 
-    private IReadOnlyList<PersistedIndexDefinition> CreateDefinitionSnapshot()
-    {
-        return _indexes.Values
-            .OrderBy(index => index.Name, StringComparer.Ordinal)
-            .Select(index => new PersistedIndexDefinition(
-                index.Name,
-                index.Fields.ToArray(),
-                index.IsUnique,
-                index.IsSparse,
-                index.RootPageId,
-                index.MaxKeys))
-            .ToArray();
-    }
-
     /// <summary>
     /// 根据名称删除索引。
     /// </summary>
@@ -227,18 +140,19 @@ public sealed class IndexManager : IDisposable
     public bool DropIndex(string name)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
-        
+
         _rwLock.EnterWriteLock();
         try
         {
-            if (_indexes.TryRemove(name, out var index))
+            if (!_catalog.Remove(name, out var index))
             {
-                index.DropStorage();
-                index.Dispose();
-                PersistDefinitions(forceFlush: false);
-                return true;
+                return false;
             }
-            return false;
+
+            index.DropStorage();
+            index.Dispose();
+            PersistDefinitions(forceFlush: false);
+            return true;
         }
         finally
         {
@@ -250,12 +164,21 @@ public sealed class IndexManager : IDisposable
     /// 根据名称检索索引。
     /// </summary>
     /// <param name="name">索引名称。</param>
-    /// <returns>索引实例，如果未找到则为 null。</returns>
+    /// <returns>索引实例；如果未找到则为 null。</returns>
     public BTreeIndex? GetIndex(string name)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
-        _indexes.TryGetValue(name, out var index);
-        return index;
+
+        _rwLock.EnterReadLock();
+        try
+        {
+            _catalog.TryGet(name, out var index);
+            return index;
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -266,11 +189,16 @@ public sealed class IndexManager : IDisposable
     public bool IndexExists(string name)
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
-        if (_indexes.ContainsKey(name)) return true;
-        
-        // 如果字典中没有，可能在底层存储中已存在但尚未加载
-        // 实际上 IndexManager 应该由 TinyDbEngine 初始化时从 Metadata 加载
-        return false;
+
+        _rwLock.EnterReadLock();
+        try
+        {
+            return _catalog.Contains(name);
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -279,24 +207,40 @@ public sealed class IndexManager : IDisposable
     /// <returns>索引统计信息的集合。</returns>
     public IEnumerable<IndexStatistics> GetAllStatistics()
     {
-        return _indexes.Values.Select(i => i.GetStatistics());
+        _rwLock.EnterReadLock();
+        try
+        {
+            return _catalog.Indexes.Select(index => index.GetStatistics()).ToArray();
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     internal IEnumerable<IndexStatistics> GetPlanningStatistics()
     {
-        return _indexes.Values.Select(i => new IndexStatistics
+        _rwLock.EnterReadLock();
+        try
         {
-            Name = i.Name,
-            Type = i.Type,
-            Fields = i.Fields.ToArray(),
-            IsUnique = i.IsUnique,
-            IsSparse = i.IsSparse,
-            NodeCount = 0,
-            EntryCount = 0,
-            AverageKeysPerNode = 0,
-            TreeHeight = 0,
-            MaxKeysPerNode = i.MaxKeys
-        });
+            return _catalog.Indexes.Select(index => new IndexStatistics
+            {
+                Name = index.Name,
+                Type = index.Type,
+                Fields = index.Fields.ToArray(),
+                IsUnique = index.IsUnique,
+                IsSparse = index.IsSparse,
+                NodeCount = 0,
+                EntryCount = 0,
+                AverageKeysPerNode = 0,
+                TreeHeight = 0,
+                MaxKeysPerNode = index.MaxKeys
+            }).ToArray();
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
     }
 
     /// <summary>
@@ -307,14 +251,11 @@ public sealed class IndexManager : IDisposable
     public BTreeIndex? GetBestIndex(string[] fields)
     {
         if (fields == null || fields.Length == 0) return null;
-        
+
         _rwLock.EnterReadLock();
         try
         {
-            // 简单策略：选择匹配字段最多的索引
-            return _indexes.Values
-                .OrderByDescending(idx => CalculateMatchScore(idx, fields))
-                .FirstOrDefault();
+            return IndexSelectionPolicy.SelectBest(_catalog.Indexes, fields);
         }
         finally
         {
@@ -327,29 +268,15 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public IndexValidationResult ValidateAllIndexes()
     {
-        var result = new IndexValidationResult();
         _rwLock.EnterReadLock();
         try
         {
-            result.TotalIndexes = _indexes.Count;
-            foreach (var index in _indexes.Values)
-            {
-                if (!index.Validate())
-                {
-                    result.InvalidIndexes++;
-                    result.Errors.Add($"Index '{index.Name}' failed validation.");
-                }
-                else
-                {
-                    result.ValidIndexes++;
-                }
-            }
+            return _catalog.ValidateAll();
         }
         finally
         {
             _rwLock.ExitReadLock();
         }
-        return result;
     }
 
     /// <summary>
@@ -360,10 +287,7 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterWriteLock();
         try
         {
-            foreach (var index in _indexes.Values)
-            {
-                index.Clear();
-            }
+            _catalog.ClearIndexes();
         }
         finally
         {
@@ -376,85 +300,37 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public void DropAllIndexes()
     {
-        var names = _indexes.Keys.ToList();
+        IReadOnlyList<string> names;
+        _rwLock.EnterReadLock();
+        try
+        {
+            names = _catalog.Names;
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+
         foreach (var name in names)
         {
             DropIndex(name);
         }
     }
 
-    private int CalculateMatchScore(BTreeIndex index, string[] queryFields)
-    {
-        int score = 0;
-        var indexFields = index.Fields;
-        
-        for (int i = 0; i < Math.Min(indexFields.Count, queryFields.Length); i++)
-        {
-            if (string.Equals(indexFields[i], queryFields[i], StringComparison.OrdinalIgnoreCase))
-            {
-                score++;
-            }
-            else
-            {
-                break; // 前缀匹配
-            }
-        }
-        
-        // 唯一索引加分
-        if (score > 0 && index.IsUnique) score += 10;
-        
-        return score;
-    }
-
     /// <summary>
     /// 插入文档时更新所有索引。
     /// </summary>
     /// <param name="document">正在插入的文档。</param>
-    /// <param name="documentId">文档的 ID。</param>
+    /// <param name="documentId">文档 ID。</param>
     public void InsertDocument(BsonDocument document, BsonValue documentId)
     {
         _rwLock.EnterReadLock();
-        (BTreeIndex Index, IndexKey Key)[]? inserted = null;
-        var insertedCount = 0;
         try
         {
-            var indexCount = _indexes.Count;
-            foreach (var index in _indexes.Values)
-            {
-                IndexKey? key = null;
-                try
-                {
-                    key = ExtractIndexKey(index, document);
-                    if (key == null) continue;
-
-                    if (!index.Insert(key, documentId))
-                    {
-                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
-                    }
-
-                    inserted ??= ArrayPool<(BTreeIndex Index, IndexKey Key)>.Shared.Rent(indexCount);
-                    inserted[insertedCount++] = (index, key);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    ThrowWithRollbackErrors(ex, RollbackInsertedIndexes(inserted, insertedCount, documentId));
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    var insertException = new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
-                    ThrowWithRollbackErrors(insertException, RollbackInsertedIndexes(inserted, insertedCount, documentId));
-                    throw insertException;
-                }
-            }
+            IndexMutationCoordinator.InsertDocument(_catalog.Indexes, document, documentId);
         }
         finally
         {
-            if (inserted != null)
-            {
-                ArrayPool<(BTreeIndex Index, IndexKey Key)>.Shared.Return(inserted, clearArray: true);
-            }
-
             _rwLock.ExitReadLock();
         }
     }
@@ -472,24 +348,13 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterWriteLock();
         try
         {
-            if (!_indexes.TryGetValue(name, out var index))
+            if (!_catalog.TryGet(name, out var index))
             {
                 throw new InvalidOperationException($"Index '{name}' does not exist.");
             }
 
             index.Clear();
-
-            foreach (var document in documents)
-            {
-                if (document == null) continue;
-                if (!document.TryGetValue("_id", out var documentId) || documentId == null || documentId.IsNull) continue;
-
-                var key = ExtractIndexKey(index, document);
-                if (key != null && !index.Insert(key, documentId))
-                {
-                    throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}' while rebuilding index");
-                }
-            }
+            IndexMutationCoordinator.RebuildIndex(index, documents);
         }
         finally
         {
@@ -508,144 +373,12 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterReadLock();
         try
         {
-            var applied = new List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)>();
-            foreach (var index in _indexes.Values)
-            {
-                var oldKey = ExtractIndexKey(index, oldDoc);
-                var newKey = ExtractIndexKey(index, newDoc);
-
-                if (oldKey != null && newKey != null && oldKey.Equals(newKey))
-                {
-                    continue;
-                }
-
-                var oldDeleted = false;
-                var newInserted = false;
-                try
-                {
-                    if (oldKey != null)
-                    {
-                        oldDeleted = index.Delete(oldKey, id);
-                    }
-
-                    if (newKey != null)
-                    {
-                        if (!index.Insert(newKey, id))
-                        {
-                            throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
-                        }
-
-                        newInserted = true;
-                    }
-
-                    applied.Add((index, oldKey, newKey));
-
-                    oldDeleted = false;
-                    newInserted = false;
-                }
-                catch (Exception ex)
-                {
-                    var rollbackErrors = new List<Exception>();
-                    if (newInserted && newKey != null)
-                    {
-                        try
-                        {
-                            index.Delete(newKey, id);
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            rollbackErrors.Add(new InvalidOperationException(
-                                $"Failed to rollback inserted key in index '{index.Name}'.",
-                                rollbackEx));
-                        }
-                    }
-
-                    if (oldDeleted && oldKey != null)
-                    {
-                        try
-                        {
-                            if (!index.Insert(oldKey, id))
-                            {
-                                throw new InvalidOperationException($"Failed to restore old key in index '{index.Name}'.");
-                            }
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            rollbackErrors.Add(new InvalidOperationException(
-                                $"Failed to rollback deleted key in index '{index.Name}'.",
-                                rollbackEx));
-                        }
-                    }
-
-                    rollbackErrors.AddRange(RollbackUpdatedIndexes(applied, id));
-                    ThrowWithRollbackErrors(ex, rollbackErrors);
-                    throw;
-                }
-            }
+            IndexMutationCoordinator.UpdateDocument(_catalog.Indexes, oldDoc, newDoc, id);
         }
         finally
         {
             _rwLock.ExitReadLock();
         }
-    }
-
-    private static List<Exception> RollbackInsertedIndexes(
-        (BTreeIndex Index, IndexKey Key)[]? inserted,
-        int insertedCount,
-        BsonValue documentId)
-    {
-        var errors = new List<Exception>();
-        if (inserted == null) return errors;
-
-        for (int i = insertedCount - 1; i >= 0; i--)
-        {
-            try
-            {
-                inserted[i].Index.Delete(inserted[i].Key, documentId);
-            }
-            catch (Exception ex)
-            {
-                errors.Add(new InvalidOperationException(
-                    $"Failed to rollback inserted key in index '{inserted[i].Index.Name}'.",
-                    ex));
-            }
-        }
-
-        return errors;
-    }
-
-    private static List<Exception> RollbackUpdatedIndexes(List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)> applied, BsonValue documentId)
-    {
-        var errors = new List<Exception>();
-        for (int i = applied.Count - 1; i >= 0; i--)
-        {
-            var (index, oldKey, newKey) = applied[i];
-            try
-            {
-                if (newKey != null) index.Delete(newKey, documentId);
-                if (oldKey != null && !index.Insert(oldKey, documentId))
-                {
-                    throw new InvalidOperationException($"Failed to rollback index '{index.Name}'");
-                }
-            }
-            catch (Exception ex)
-            {
-                errors.Add(new InvalidOperationException(
-                    $"Failed to rollback update in index '{index.Name}'.",
-                    ex));
-            }
-        }
-
-        return errors;
-    }
-
-    private static void ThrowWithRollbackErrors(Exception original, List<Exception> rollbackErrors)
-    {
-        if (rollbackErrors.Count == 0) return;
-
-        var errors = new List<Exception> { original };
-        errors.AddRange(rollbackErrors);
-        throw new AggregateException("Index operation failed and rollback encountered errors.", errors);
     }
 
     /// <summary>
@@ -658,11 +391,7 @@ public sealed class IndexManager : IDisposable
         _rwLock.EnterReadLock();
         try
         {
-            foreach (var index in _indexes.Values)
-            {
-                var key = ExtractIndexKey(index, doc);
-                if (key != null) index.Delete(key, id);
-            }
+            IndexMutationCoordinator.DeleteDocument(_catalog.Indexes, doc, id);
         }
         finally
         {
@@ -670,57 +399,136 @@ public sealed class IndexManager : IDisposable
         }
     }
 
-    private IndexKey? ExtractIndexKey(BTreeIndex index, BsonDocument doc)
-    {
-
-        // 单字段优化
-        if (index.Fields.Count == 1)
-        {
-            if (doc.TryGetValue(index.Fields[0], out var val))
-            {
-                return IndexKey.Create(val);
-            }
-
-            return index.IsSparse ? null : IndexKey.Create(BsonNull.Value);
-        }
-
-        // 复合索引
-        var values = new BsonValue[index.Fields.Count];
-        for (int i = 0; i < index.Fields.Count; i++)
-        {
-            if (doc.TryGetValue(index.Fields[i], out var val))
-            {
-                values[i] = val;
-            }
-            else
-            {
-                if (index.IsSparse) return null;
-                values[i] = BsonNull.Value;
-            }
-        }
-        
-        return new IndexKey(values);
-    }
-
     /// <summary>
     /// 释放索引管理器和所有索引。
     /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
+        if (_disposed) return;
+
+        _disposed = true;
+        _catalog.Dispose();
+
+        if (_ownsPageManager)
         {
-            _rwLock.Dispose();
-            foreach (var i in _indexes.Values) i.Dispose();
-            
-            if (_ownsPageManager)
+            _pm.Dispose();
+            if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
             {
-                _tempPm!.Dispose();
-                if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
-                {
-                    File.Delete(_tempFilePath);
-                }
+                File.Delete(_tempFilePath);
             }
-            _disposed = true;
+        }
+
+        _rwLock.Dispose();
+    }
+
+    private bool CreateIndexCore(string name, string[] fields, bool unique, bool sparse, bool persistImmediately)
+    {
+        if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
+        if (fields == null || fields.Length == 0) throw new ArgumentException("Fields cannot be null or empty", nameof(fields));
+
+        _rwLock.EnterWriteLock();
+        try
+        {
+            var normalizedFields = fields.Select(BsonFieldName.ToCamelCase).ToArray();
+            if (_catalog.TryGet(name, out var existing))
+            {
+                EnsureExistingIndexIsCompatible(name, existing, normalizedFields, unique, sparse);
+                return false;
+            }
+
+            var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse);
+            AddNewIndex(index);
+
+            if (persistImmediately)
+            {
+                PersistDefinitions(forceFlush: false);
+            }
+
+            return true;
+        }
+        finally
+        {
+            _rwLock.ExitWriteLock();
+        }
+    }
+
+    private void AddNewIndex(BTreeIndex index)
+    {
+        try
+        {
+            _catalog.Add(index);
+        }
+        catch
+        {
+            try
+            {
+                index.DropStorage();
+            }
+            finally
+            {
+                index.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    private void LoadPersistedIndexes(IReadOnlyList<PersistedIndexDefinition>? definitions)
+    {
+        if (definitions == null || definitions.Count == 0) return;
+
+        foreach (var definition in definitions)
+        {
+            if (string.IsNullOrEmpty(definition.Name) ||
+                definition.Fields == null ||
+                definition.Fields.Length == 0 ||
+                definition.RootPageId == 0)
+            {
+                continue;
+            }
+
+            var normalizedFields = definition.Fields.Select(BsonFieldName.ToCamelCase).ToArray();
+            var index = new BTreeIndex(
+                _pm,
+                definition.Name,
+                normalizedFields,
+                definition.IsUnique,
+                definition.RootPageId,
+                definition.MaxKeys,
+                definition.IsSparse);
+
+            if (!_catalog.TryAddLoaded(index))
+            {
+                index.Dispose();
+            }
+        }
+    }
+
+    private void PersistDefinitions(bool forceFlush)
+    {
+        _persistDefinitions?.Invoke(_catalog.CreateDefinitionSnapshot(), forceFlush);
+    }
+
+    private static void EnsureExistingIndexIsCompatible(
+        string name,
+        BTreeIndex existing,
+        string[] normalizedFields,
+        bool unique,
+        bool sparse)
+    {
+        if (existing.IsUnique != unique)
+        {
+            throw new InvalidOperationException($"Index '{name}' already exists with different uniqueness (existing: {existing.IsUnique}, new: {unique})");
+        }
+
+        if (existing.IsSparse != sparse)
+        {
+            throw new InvalidOperationException($"Index '{name}' already exists with different sparse setting (existing: {existing.IsSparse}, new: {sparse})");
+        }
+
+        if (!normalizedFields.SequenceEqual(existing.Fields))
+        {
+            throw new InvalidOperationException($"Index '{name}' already exists with different fields (existing: {string.Join(",", existing.Fields)}, new: {string.Join(",", normalizedFields)})");
         }
     }
 }

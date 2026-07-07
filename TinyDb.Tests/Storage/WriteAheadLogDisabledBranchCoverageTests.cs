@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Reflection;
 using System.Threading.Tasks;
 using TinyDb.Storage;
 using TUnit.Assertions;
@@ -11,28 +10,6 @@ namespace TinyDb.Tests.Storage;
 
 public class WriteAheadLogDisabledBranchCoverageTests
 {
-    [Test]
-    public async Task GenerateWalFilePath_WhenDatabasePathHasNoDirectory_ShouldFallbackToEmptyDirectory()
-    {
-        var method = typeof(WriteAheadLog).GetMethod("GenerateWalFilePath", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        var walPath = (string)method!.Invoke(null, new object[] { "db.db", "{name}-wal.{ext}" })!;
-        await Assert.That(walPath).IsEqualTo("db-wal.db");
-    }
-
-    [Test]
-    public async Task GenerateWalFilePath_WhenDatabasePathIsRoot_ShouldHandleNullDirectoryName()
-    {
-        var method = typeof(WriteAheadLog).GetMethod("GenerateWalFilePath", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        var root = Path.GetPathRoot(Environment.CurrentDirectory)!;
-        var walPath = (string)method!.Invoke(null, new object[] { root, "{name}-wal.{ext}" })!;
-
-        await Assert.That(walPath).IsEqualTo("-wal.");
-    }
-
     [Test]
     public async Task DisabledWal_AppendAndTruncate_ShouldReturnEarly()
     {

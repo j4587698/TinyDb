@@ -213,7 +213,7 @@ public sealed class AsyncQueryExecutionTests
 
     private static IDisposable ForceDiskReads(TinyDbEngine engine, TrackingDiskStream disk)
     {
-        UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine).ClearCache();
+        engine.PageManager.ClearCache();
         disk.ResetCounts();
         disk.ThrowOnSyncRead = true;
         return new SyncReadGuard(disk);

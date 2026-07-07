@@ -29,7 +29,7 @@ public class QueryPipelineMissingBranchCoverageTests
 
         var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: Expression.Constant(true))!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: Expression.Constant(true))!;
         var list = result.Cast<Item>().Select(x => x.Id).OrderBy(x => x).ToList();
         await Assert.That(list.SequenceEqual(new[] { 1, 2 })).IsTrue();
     }
@@ -60,7 +60,7 @@ public class QueryPipelineMissingBranchCoverageTests
         var skipExpr = Expression.Call(skipMethod, sourceExpr, countExpr);
         var takeExpr = Expression.Call(takeMethod, skipExpr, countExpr);
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(takeExpr, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(takeExpr, items, extractedPredicate: null)!;
         var ids = result.Cast<Item>().Select(x => x.Id).ToList();
 
         // AOT mode only applies Skip/Take when argument is a ConstantExpression.
@@ -79,7 +79,7 @@ public class QueryPipelineMissingBranchCoverageTests
 
         var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
         var list = result.Cast<Item>().Where(x => x != null).Select(x => x.Id).ToList();
 
         await Assert.That(list.SequenceEqual(new[] { 2 })).IsTrue();
@@ -99,7 +99,7 @@ public class QueryPipelineMissingBranchCoverageTests
             .Select(x => x.Category)
             .Where(x => x == "A");
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
         var categories = result.Cast<object?>().OfType<string>().ToList();
 
         await Assert.That(categories.SequenceEqual(new[] { "A" })).IsTrue();
@@ -114,7 +114,7 @@ public class QueryPipelineMissingBranchCoverageTests
         var reverseMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, IQueryable<Item>>>)(q => Queryable.Reverse(q))).Body).Method;
         var reverseExpr = Expression.Call(reverseMethod, sourceExpr);
-        await Assert.That(() => QueryPipeline.ExecuteAotForTests<Item>(reverseExpr, items, extractedPredicate: null))
+        await Assert.That(() => QueryPipelineTestDriver.ExecuteAot<Item>(reverseExpr, items, extractedPredicate: null))
             .ThrowsExactly<NotSupportedException>();
     }
 
@@ -132,7 +132,7 @@ public class QueryPipelineMissingBranchCoverageTests
             .OrderBy(x => x.Id)
             .ThenByDescending(x => x.Category);
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
         var ordered = result.Cast<Item>().Select(x => $"{x.Id}:{x.Category}").ToList();
 
         await Assert.That(ordered.SequenceEqual(new[] { "1:B", "1:A", "2:C" })).IsTrue();
@@ -151,7 +151,7 @@ public class QueryPipelineMissingBranchCoverageTests
         var sourceExpr = TestQueryables.InMemory(items).Expression;
 
         object Execute(Expression expr) =>
-            QueryPipeline.ExecuteAotForTests<Item>(expr, items, extractedPredicate: null)!;
+            QueryPipelineTestDriver.ExecuteAot<Item>(expr, items, extractedPredicate: null)!;
 
         var countMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int>>)(q => Queryable.Count(q))).Body).Method;
         var countPredicateMethod =
@@ -244,10 +244,10 @@ public class QueryPipelineMissingBranchCoverageTests
                      "Last", "LastOrDefault", "ElementAt", "ElementAtOrDefault"
                  })
         {
-            await Assert.That(QueryPipeline.IsTerminalForTests(name)).IsTrue();
+            await Assert.That(QueryPipelineTestDriver.IsTerminal(name)).IsTrue();
         }
 
-        await Assert.That(QueryPipeline.IsTerminalForTests("Where")).IsFalse();
+        await Assert.That(QueryPipelineTestDriver.IsTerminal("Where")).IsFalse();
     }
 
     [Test]
@@ -267,12 +267,12 @@ public class QueryPipelineMissingBranchCoverageTests
                 ((q, sel) => Queryable.Select(q, sel))).Body).Method;
         var dummyCall = Expression.Call(selectMethod, queryable.Expression, Expression.Quote(selector));
 
-        var filteredGeneric = QueryPipeline.ExecuteWhereGenericForTests(items, dummyCall);
+        var filteredGeneric = QueryPipelineTestDriver.ExecuteWhereGeneric(items, dummyCall);
         await Assert.That(filteredGeneric.Any()).IsFalse();
 
         // ExecuteWhereLambda: same idea for the non-generic path
         var source = new object?[] { items[0], null, items[1] };
-        var filtered = QueryPipeline.ExecuteWhereLambdaForTests(source, selector);
+        var filtered = QueryPipelineTestDriver.ExecuteWhereLambda(source, selector);
         await Assert.That(filtered.Cast<object>().Any()).IsFalse();
     }
 

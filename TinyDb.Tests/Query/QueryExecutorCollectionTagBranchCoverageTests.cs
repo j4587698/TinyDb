@@ -1,8 +1,6 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
@@ -28,15 +26,10 @@ public class QueryExecutorCollectionTagBranchCoverageTests
 
             col.Insert(new BsonDocument().Set("x", 1));
 
-            var getCollectionState = typeof(TinyDbEngine).GetMethod("GetCollectionState", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(getCollectionState).IsNotNull();
-
-            var state = (CollectionState)getCollectionState!.Invoke(engine, new object[] { collectionName })!;
+            var state = engine.GetCollectionState(collectionName);
             var ownedPages = state.OwnedPages;
 
-            var pmField = typeof(TinyDbEngine).GetField("_pageManager", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(pmField).IsNotNull();
-            var pm = (PageManager)pmField!.GetValue(engine)!;
+            var pm = engine.PageManager;
 
             uint dataPageId = 0;
             foreach (var pageId in ownedPages.Keys)

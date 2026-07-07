@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Query;
 using TinyDb.Storage;
@@ -67,13 +66,10 @@ public sealed class ReportedBugRegressionTests : IDisposable
     [Test]
     public async Task ExpressionParser_TryCompare_ShouldTreatShortAndIntAsComparableNumbers()
     {
-        var method = typeof(ExpressionParser).GetMethod("TryCompare", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var args = new object?[] { (short)5, 5, 0 };
-
-        var compared = (bool)method.Invoke(null, args)!;
+        var compared = ExpressionConstantEvaluator.TryCompare((short)5, 5, out var result);
 
         await Assert.That(compared).IsTrue();
-        await Assert.That((int)args[2]!).IsEqualTo(0);
+        await Assert.That(result).IsEqualTo(0);
     }
 
     [Test]

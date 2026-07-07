@@ -79,18 +79,18 @@ internal sealed class DataPageAccess
         int count = p.Header.ItemCount;
         var span = p.ValidDataSpan;
         int offset = InternalReserved;
-        
+
         for (int i = 0; i < count; i++)
         {
             if (offset + 4 > span.Length) break;
             int len = BitConverter.ToInt32(span.Slice(offset, 4));
             offset += 4;
-            
+
             if (len < 0) break;
             if (len > span.Length - offset) break;
             var rawDocument = p.Memory.Slice(Page.DataStartOffset + offset, len);
             offset += len;
-            
+
             try
             {
                 var doc = BsonSerializer.DeserializeDocument(rawDocument);
@@ -306,7 +306,7 @@ internal sealed class DataPageAccess
         }
     }
 
-    private static bool TryMatchPredicates(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch)
+    internal static bool TryMatchPredicates(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch)
     {
         definitiveMatch = false;
 
@@ -445,7 +445,7 @@ internal sealed class DataPageAccess
         return true;
     }
 
-    private static bool TryMatchPredicatesSlow(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch)
+    internal static bool TryMatchPredicatesSlow(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch)
     {
         definitiveMatch = false;
         if (document.Length < 5) return true;
@@ -508,7 +508,7 @@ internal sealed class DataPageAccess
         uint next = p.Header.NextPageID;
         p.ResetBytes(InternalReserved);
         p.SetLinks(prev, next);
-        
+
         for (ushort i = 0; i < docs.Count; i++)
         {
             AppendDocumentToPage(p, docs[i].RawMemory.Span);

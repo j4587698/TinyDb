@@ -24,28 +24,26 @@ public class PageManagerRestoreTests : IDisposable
     {
         using var ds = new DiskStream(_testDbPath);
         using var pm = new PageManager(ds, 4096);
-        
+
         var page = pm.NewPage(PageType.Data);
         page.WriteData(0, new byte[] { 1, 2, 3 });
         pm.SavePage(page);
-        
+
         // Corrupt in memory
         page.WriteData(0, new byte[] { 9, 9, 9 });
-        
+
         var restoreData = new byte[4096];
         var header = new PageHeader();
         header.Initialize(PageType.Data, page.PageID);
         var headerBytes = header.ToByteArray();
         Array.Copy(headerBytes, restoreData, headerBytes.Length);
-        
+
         restoreData[PageHeader.Size] = 1;
         restoreData[PageHeader.Size + 1] = 2;
         restoreData[PageHeader.Size + 2] = 3;
-        
-        // Use reflection to call internal RestorePage
-        var method = typeof(PageManager).GetMethod("RestorePage", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        method!.Invoke(pm, new object[] { page.PageID, restoreData });
-        
+
+        pm.RestorePage(page.PageID, restoreData);
+
         var restoredPage = pm.GetPage(page.PageID);
         var data = restoredPage.ReadData(0, 3);
         await Assert.That(data.SequenceEqual(new byte[] { 1, 2, 3 })).IsTrue();
@@ -70,8 +68,7 @@ public class PageManagerRestoreTests : IDisposable
         restoreData[PageHeader.Size + 1] = 8;
         restoreData[PageHeader.Size + 2] = 9;
 
-        var method = typeof(PageManager).GetMethod("RestorePage", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        method!.Invoke(pm, new object[] { page.PageID, restoreData });
+        pm.RestorePage(page.PageID, restoreData);
 
         var restored = pm.GetPage(page.PageID);
         var data = restored.ReadData(0, 3);
@@ -89,8 +86,7 @@ public class PageManagerRestoreTests : IDisposable
 
         var tooLong = new byte[4097];
 
-        var method = typeof(PageManager).GetMethod("RestorePage", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        await Assert.That(() => method!.Invoke(pm, new object[] { page.PageID, tooLong }))
-            .Throws<System.Reflection.TargetInvocationException>();
+        await Assert.That(() => pm.RestorePage(page.PageID, tooLong))
+            .Throws<ArgumentException>();
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Tests.Utils;
@@ -21,13 +20,11 @@ public sealed class TransactionManagerCoverageEdgeCasesTests
         var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
         try
         {
-            var manager = GetTransactionManager(engine);
-            var method = typeof(TransactionManager).GetMethod("GetForeignKeyDefinitions", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingMethodException(typeof(TransactionManager).FullName, "GetForeignKeyDefinitions");
+            var manager = engine.TransactionManager;
 
             engine.Dispose();
 
-            await Assert.That(() => InvokeAndUnwrap(method, manager, "orders"))
+            await Assert.That(() => manager.GetForeignKeyDefinitions("orders"))
                 .Throws<InvalidOperationException>();
         }
         finally
@@ -47,9 +44,7 @@ public sealed class TransactionManagerCoverageEdgeCasesTests
             var col = engine.GetBsonCollection(collectionName);
             col.Insert(new BsonDocument().Set("_id", 1).Set("v", 1));
 
-            var manager = GetTransactionManager(engine);
-            var rollbackMethod = typeof(TransactionManager).GetMethod("RollbackSingleOperation", BindingFlags.NonPublic | BindingFlags.Instance)
-                ?? throw new MissingMethodException(typeof(TransactionManager).FullName, "RollbackSingleOperation");
+            var manager = engine.TransactionManager;
 
             var updateCompensation = new TransactionOperation(
                 TransactionOperationType.Update,
@@ -59,7 +54,7 @@ public sealed class TransactionManagerCoverageEdgeCasesTests
                     .Set("_id", 1)
                     .Set("_collection", collectionName)
                     .Set("v", 99));
-            InvokeAndUnwrap(rollbackMethod, manager, updateCompensation);
+            manager.RollbackSingleOperation(updateCompensation);
 
             var updated = engine.FindById(collectionName, new BsonInt32(1));
             await Assert.That(updated).IsNotNull();
@@ -73,7 +68,7 @@ public sealed class TransactionManagerCoverageEdgeCasesTests
                     .Set("_id", 2)
                     .Set("_collection", collectionName)
                     .Set("v", 2));
-            InvokeAndUnwrap(rollbackMethod, manager, deleteCompensation);
+            manager.RollbackSingleOperation(deleteCompensation);
 
             var reinserted = engine.FindById(collectionName, new BsonInt32(2));
             await Assert.That(reinserted).IsNotNull();
@@ -84,7 +79,7 @@ public sealed class TransactionManagerCoverageEdgeCasesTests
                 indexName: "idx_v",
                 indexFields: new[] { "v" },
                 indexUnique: false);
-            InvokeAndUnwrap(rollbackMethod, manager, dropIndexCompensation);
+            manager.RollbackSingleOperation(dropIndexCompensation);
 
             var index = engine.GetIndexManager(collectionName).GetIndex("idx_v");
             await Assert.That(index).IsNotNull();
@@ -93,25 +88,6 @@ public sealed class TransactionManagerCoverageEdgeCasesTests
         {
             try { engine.Dispose(); } catch { }
             CleanupDb(dbPath);
-        }
-    }
-
-    private static TransactionManager GetTransactionManager(TinyDbEngine engine)
-    {
-        var field = typeof(TinyDbEngine).GetField("_transactionManager", BindingFlags.NonPublic | BindingFlags.Instance)
-            ?? throw new MissingFieldException(typeof(TinyDbEngine).FullName, "_transactionManager");
-        return (TransactionManager)field.GetValue(engine)!;
-    }
-
-    private static object? InvokeAndUnwrap(MethodInfo method, object instance, params object?[] args)
-    {
-        try
-        {
-            return method.Invoke(instance, args);
-        }
-        catch (TargetInvocationException ex) when (ex.InnerException != null)
-        {
-            throw ex.InnerException;
         }
     }
 

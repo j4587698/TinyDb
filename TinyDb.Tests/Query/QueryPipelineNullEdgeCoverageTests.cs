@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using TinyDb.Query;
 using TinyDb.Tests.Utils;
 using TUnit.Assertions;
@@ -35,7 +34,7 @@ public class QueryPipelineNullEdgeCoverageTests
         };
 
         var query = TestQueryables.InMemory(items).Where(x => x.Id > 1);
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
 
         var ids = result.Cast<Item>().Select(x => x.Id).ToList();
         await Assert.That(ids.SequenceEqual(new[] { 2 })).IsTrue();
@@ -55,7 +54,7 @@ public class QueryPipelineNullEdgeCoverageTests
             .GroupBy(x => x.Category)
             .Select(g => g.Key);
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
         var keys = result.Cast<string?>().ToList();
 
         await Assert.That(keys.Count(x => x == null)).IsEqualTo(1);
@@ -78,7 +77,7 @@ public class QueryPipelineNullEdgeCoverageTests
             .GroupBy(x => x.Category)
             .Select(g => g.Key);
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(query.Expression, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(query.Expression, items, extractedPredicate: null)!;
         var keys = result.Cast<string?>().ToList();
 
         await Assert.That(keys.Count(x => x == null)).IsEqualTo(1);
@@ -89,10 +88,7 @@ public class QueryPipelineNullEdgeCoverageTests
     [Test]
     public async Task ObjectComparer_Compare_ShouldHandleNull_String_IComparable_AndFallback()
     {
-        var comparerType = typeof(QueryPipeline).GetNestedType("ObjectComparer", BindingFlags.NonPublic);
-        await Assert.That(comparerType).IsNotNull();
-
-        var comparer = (IComparer<object>)Activator.CreateInstance(comparerType!)!;
+        var comparer = QueryObjectComparer.Instance;
 
         await Assert.That(comparer.Compare(null!, new object())).IsEqualTo(-1);
         await Assert.That(comparer.Compare(new object(), null!)).IsEqualTo(1);

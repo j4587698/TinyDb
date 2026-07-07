@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using TinyDb.Core;
-using TinyDb.Storage;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -34,18 +33,11 @@ public class PageManagerPersistenceTests
         using var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { PageSize = pageSize });
 
         // 通过反射获取PageManager实例
-        var pageManagerProperty = typeof(TinyDbEngine).GetField("_pageManager",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var pageManager = pageManagerProperty?.GetValue(engine) as PageManager;
+        var pageManager = engine.PageManager;
 
         await Assert.That(pageManager).IsNotNull();
 
         // 通过反射调用CalculatePageOffset方法
-        var calculateOffsetMethod = typeof(PageManager).GetMethod("CalculatePageOffset",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        await Assert.That(calculateOffsetMethod).IsNotNull();
-
         // 测试页面偏移量计算
         var tests = new[]
         {
@@ -57,12 +49,12 @@ public class PageManagerPersistenceTests
 
         foreach (var (pageId, expectedOffset) in tests)
         {
-            var actualOffset = (long)calculateOffsetMethod!.Invoke(pageManager!, new object[] { pageId })!;
+            var actualOffset = pageManager.CalculatePageOffset(pageId);
             await Assert.That(actualOffset).IsEqualTo(expectedOffset);
         }
     }
 
-    
+
     [Test]
     public async Task Database_Should_Recover_From_Corrupted_Pages()
     {

@@ -34,7 +34,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
             .Skip(1)
             .Take(2);
 
-        var orderedSlice = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(orderedSliceQuery.Expression, items, extractedPredicate: null)!;
+        var orderedSlice = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(orderedSliceQuery.Expression, items, extractedPredicate: null)!;
         var orderedIds = orderedSlice.Cast<Item>().Select(x => x.Id).ToList();
         await Assert.That(orderedIds.SequenceEqual(new[] { 2, 3 })).IsTrue();
 
@@ -42,7 +42,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
             .Select(x => x.Category)
             .Distinct();
 
-        var distinctCategories = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(distinctCategoryQuery.Expression, items, extractedPredicate: null)!;
+        var distinctCategories = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(distinctCategoryQuery.Expression, items, extractedPredicate: null)!;
         var categories = distinctCategories.Cast<object>().Select(x => (string)x!).OrderBy(x => x).ToList();
         await Assert.That(categories.SequenceEqual(new[] { "A", "B", "C" })).IsTrue();
 
@@ -50,7 +50,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
             .OrderBy(x => x.Category)
             .ThenByDescending(x => x.Id);
 
-        var thenByResult = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(thenByQuery.Expression, items, extractedPredicate: null)!;
+        var thenByResult = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(thenByQuery.Expression, items, extractedPredicate: null)!;
         var pairs = thenByResult.Cast<Item>().Select(x => (x.Category, x.Id)).ToList();
         await Assert.That(pairs.SequenceEqual(new[] { ("A", 2), ("A", 1), ("B", 3), ("C", 4) })).IsTrue();
     }
@@ -74,7 +74,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
                 ((q, key) => Queryable.ThenBy(q, key))).Body).Method;
         var thenByExpr = Expression.Call(thenByMethod, sourceExpr, Expression.Quote(keySelector));
 
-        var result = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(thenByExpr, items, extractedPredicate: null)!;
+        var result = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(thenByExpr, items, extractedPredicate: null)!;
         var ids = result.Cast<Item>().Select(x => x.Id).ToList();
         await Assert.That(ids.SequenceEqual(new[] { 1, 2, 3 })).IsTrue();
     }
@@ -99,83 +99,83 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
 
         var countMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int>>)(q => Queryable.Count(q))).Body).Method;
         var countExpr = Expression.Call(countMethod, sourceExpr);
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(countExpr, items, extractedPredicate: null)).IsEqualTo(2);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(countExpr, items, extractedPredicate: null)).IsEqualTo(2);
 
         var longCountMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, long>>)(q => Queryable.LongCount(q))).Body).Method;
         var longCountExpr = Expression.Call(longCountMethod, sourceExpr);
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(longCountExpr, items, extractedPredicate: null)).IsEqualTo(2L);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(longCountExpr, items, extractedPredicate: null)).IsEqualTo(2L);
 
         var anyMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, bool>>)(q => Queryable.Any(q))).Body).Method;
         var anyExpr = Expression.Call(anyMethod, sourceExpr);
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(anyExpr, items, extractedPredicate: null)).IsEqualTo(true);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(anyExpr, items, extractedPredicate: null)).IsEqualTo(true);
 
         var anyOnEmptyExpr = Expression.Call(anyMethod, emptySourceExpr);
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(anyOnEmptyExpr, empty, extractedPredicate: null)).IsEqualTo(false);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(anyOnEmptyExpr, empty, extractedPredicate: null)).IsEqualTo(false);
 
         var anyPredicateMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, bool>>)
                 ((q, pred) => Queryable.Any(q, pred))).Body).Method;
         var anyPredicateExpr = Expression.Call(anyPredicateMethod, sourceExpr, Expression.Quote(idGreaterThan1));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(anyPredicateExpr, items, extractedPredicate: null)).IsEqualTo(true);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(anyPredicateExpr, items, extractedPredicate: null)).IsEqualTo(true);
 
         var allMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, bool>>)
                 ((q, pred) => Queryable.All(q, pred))).Body).Method;
         var allTrueExpr = Expression.Call(allMethod, sourceExpr, Expression.Quote(allIdGreaterThan0));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(allTrueExpr, items, extractedPredicate: null)).IsEqualTo(true);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(allTrueExpr, items, extractedPredicate: null)).IsEqualTo(true);
 
         var allFalseExpr = Expression.Call(allMethod, sourceExpr, Expression.Quote(allIdGreaterThan1));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(allFalseExpr, items, extractedPredicate: null)).IsEqualTo(false);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(allFalseExpr, items, extractedPredicate: null)).IsEqualTo(false);
 
         var firstMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Item>>)(q => Queryable.First(q))).Body).Method;
         var firstExpr = Expression.Call(firstMethod, sourceExpr);
-        var first = (Item)QueryPipeline.ExecuteAotForTests<Item>(firstExpr, items, extractedPredicate: null)!;
+        var first = (Item)QueryPipelineTestDriver.ExecuteAot<Item>(firstExpr, items, extractedPredicate: null)!;
         await Assert.That(first.Id).IsEqualTo(1);
 
         var firstOrDefaultMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Item?>>)(q => Queryable.FirstOrDefault(q))).Body).Method;
         var firstOrDefaultEmptyExpr = Expression.Call(firstOrDefaultMethod, emptySourceExpr);
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(firstOrDefaultEmptyExpr, empty, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(firstOrDefaultEmptyExpr, empty, extractedPredicate: null)).IsNull();
 
         var singleMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, Item>>)
                 ((q, pred) => Queryable.Single(q, pred))).Body).Method;
         var singlePredicateExpr = Expression.Call(singleMethod, sourceExpr, Expression.Quote(idGreaterThan1));
-        var single = (Item)QueryPipeline.ExecuteAotForTests<Item>(singlePredicateExpr, items, extractedPredicate: null)!;
+        var single = (Item)QueryPipelineTestDriver.ExecuteAot<Item>(singlePredicateExpr, items, extractedPredicate: null)!;
         await Assert.That(single.Id).IsEqualTo(2);
 
         var singleOrDefaultMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Expression<Func<Item, bool>>, Item?>>)
                 ((q, pred) => Queryable.SingleOrDefault(q, pred))).Body).Method;
         var singleOrDefaultPredicateExpr = Expression.Call(singleOrDefaultMethod, sourceExpr, Expression.Quote((Expression<Func<Item, bool>>)(x => x.Id > 10)));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(singleOrDefaultPredicateExpr, items, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(singleOrDefaultPredicateExpr, items, extractedPredicate: null)).IsNull();
 
         var lastMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Item>>)(q => Queryable.Last(q))).Body).Method;
         var lastExpr = Expression.Call(lastMethod, sourceExpr);
-        var last = (Item)QueryPipeline.ExecuteAotForTests<Item>(lastExpr, items, extractedPredicate: null)!;
+        var last = (Item)QueryPipelineTestDriver.ExecuteAot<Item>(lastExpr, items, extractedPredicate: null)!;
         await Assert.That(last.Id).IsEqualTo(2);
 
         var lastOrDefaultMethod = ((MethodCallExpression)((Expression<Func<IQueryable<Item>, Item?>>)(q => Queryable.LastOrDefault(q))).Body).Method;
         var lastOrDefaultEmptyExpr = Expression.Call(lastOrDefaultMethod, emptySourceExpr);
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(lastOrDefaultEmptyExpr, empty, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(lastOrDefaultEmptyExpr, empty, extractedPredicate: null)).IsNull();
 
         var elementAtMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, Item>>)
                 ((q, index) => Queryable.ElementAt(q, index))).Body).Method;
         var elementAtExpr = Expression.Call(elementAtMethod, sourceExpr, Expression.Constant(1));
-        var elementAt = (Item)QueryPipeline.ExecuteAotForTests<Item>(elementAtExpr, items, extractedPredicate: null)!;
+        var elementAt = (Item)QueryPipelineTestDriver.ExecuteAot<Item>(elementAtExpr, items, extractedPredicate: null)!;
         await Assert.That(elementAt.Id).IsEqualTo(2);
 
         var elementAtOrDefaultMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<Item>, int, Item?>>)
                 ((q, index) => Queryable.ElementAtOrDefault(q, index))).Body).Method;
         var elementAtOrDefaultOutOfRangeExpr = Expression.Call(elementAtOrDefaultMethod, sourceExpr, Expression.Constant(10));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(elementAtOrDefaultOutOfRangeExpr, items, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(elementAtOrDefaultOutOfRangeExpr, items, extractedPredicate: null)).IsNull();
 
         // Malformed: "All" is considered terminal, but the predicate isn't quoted lambda.
         // This drives ExecuteTerminal's default return branch.
         var malformedPredicate = (Expression<Func<Item, bool>>)(x => true);
         var malformedAllExpr = Expression.Call(allMethod, sourceExpr, Expression.Constant(malformedPredicate));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(malformedAllExpr, items, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(malformedAllExpr, items, extractedPredicate: null)).IsNull();
     }
 
     [Test]
@@ -210,34 +210,34 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
             ((MethodCallExpression)((Expression<Func<IQueryable<IGrouping<string, Item>>, Expression<Func<IGrouping<string, Item>, decimal>>, decimal>>)
                 ((q, selector) => Queryable.Sum(q, selector))).Body).Method;
         var sumExpr = Expression.Call(sumMethod, groupByExpr, Expression.Quote(countAsDecimal));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(sumExpr, items, extractedPredicate: null)).IsEqualTo(4m);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(sumExpr, items, extractedPredicate: null)).IsEqualTo(4m);
 
         var averageMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<IGrouping<string, Item>>, Expression<Func<IGrouping<string, Item>, decimal>>, decimal>>)
                 ((q, selector) => Queryable.Average(q, selector))).Body).Method;
         var avgExpr = Expression.Call(averageMethod, groupByExpr, Expression.Quote(countAsDecimal));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(avgExpr, items, extractedPredicate: null)).IsEqualTo(2m);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(avgExpr, items, extractedPredicate: null)).IsEqualTo(2m);
 
         var minMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<IGrouping<string, Item>>, Expression<Func<IGrouping<string, Item>, string>>, string?>>)
                 ((q, selector) => Queryable.Min(q, selector))).Body).Method;
         var minKeyExpr = Expression.Call(minMethod, groupByExpr, Expression.Quote(keySelector));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(minKeyExpr, items, extractedPredicate: null)).IsEqualTo("A");
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(minKeyExpr, items, extractedPredicate: null)).IsEqualTo("A");
 
         var maxMethod =
             ((MethodCallExpression)((Expression<Func<IQueryable<IGrouping<string, Item>>, Expression<Func<IGrouping<string, Item>, string>>, string?>>)
                 ((q, selector) => Queryable.Max(q, selector))).Body).Method;
         var maxKeyExpr = Expression.Call(maxMethod, groupByExpr, Expression.Quote(keySelector));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(maxKeyExpr, items, extractedPredicate: null)).IsEqualTo("B");
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(maxKeyExpr, items, extractedPredicate: null)).IsEqualTo("B");
 
         var avgEmptyExpr = Expression.Call(averageMethod, emptyGroupByExpr, Expression.Quote(countAsDecimal));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(avgEmptyExpr, empty, extractedPredicate: null)).IsEqualTo(0m);
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(avgEmptyExpr, empty, extractedPredicate: null)).IsEqualTo(0m);
 
         var minEmptyExpr = Expression.Call(minMethod, emptyGroupByExpr, Expression.Quote(keySelector));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(minEmptyExpr, empty, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(minEmptyExpr, empty, extractedPredicate: null)).IsNull();
 
         var maxEmptyExpr = Expression.Call(maxMethod, emptyGroupByExpr, Expression.Quote(keySelector));
-        await Assert.That(QueryPipeline.ExecuteAotForTests<Item>(maxEmptyExpr, empty, extractedPredicate: null)).IsNull();
+        await Assert.That(QueryPipelineTestDriver.ExecuteAot<Item>(maxEmptyExpr, empty, extractedPredicate: null)).IsNull();
     }
 
     [Test]
@@ -256,7 +256,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
             .OrderBy(x => x)
             .ThenBy(x => x);
 
-        var thenByResult = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(queryThenBy.Expression, items, extractedPredicate: null)!;
+        var thenByResult = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(queryThenBy.Expression, items, extractedPredicate: null)!;
         var ids = thenByResult.Cast<object>().Select(x => (int)x!).ToList();
         await Assert.That(ids.SequenceEqual(new[] { 1, 2, 3 })).IsTrue();
 
@@ -266,7 +266,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
             .OrderBy(_ => 0)
             .ThenByDescending(x => x);
 
-        var thenByDescResult = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(queryThenByDesc.Expression, items, extractedPredicate: null)!;
+        var thenByDescResult = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(queryThenByDesc.Expression, items, extractedPredicate: null)!;
         var idsDesc = thenByDescResult.Cast<object>().Select(x => (int)x!).ToList();
         await Assert.That(idsDesc.SequenceEqual(new[] { 3, 2, 1 })).IsTrue();
 
@@ -277,7 +277,7 @@ public class QueryPipelineTerminalOrderingAggregateAdditionalCoverageTests
                 ((q, key) => Queryable.ThenBy(q, key))).Body).Method;
         var thenByFallbackExpr = Expression.Call(thenByMethod, Expression.Constant(orderedPlaceholder), Expression.Quote((Expression<Func<Item, int>>)(x => x.Id)));
 
-        var thenByFallbackResult = (IEnumerable)QueryPipeline.ExecuteAotForTests<Item>(thenByFallbackExpr, items, extractedPredicate: null)!;
+        var thenByFallbackResult = (IEnumerable)QueryPipelineTestDriver.ExecuteAot<Item>(thenByFallbackExpr, items, extractedPredicate: null)!;
         var fallbackIds = thenByFallbackResult.Cast<object>().Select(x => ((Item)x!).Id).ToList();
         await Assert.That(fallbackIds.SequenceEqual(new[] { 1, 2, 3 })).IsTrue();
     }

@@ -99,7 +99,7 @@ public static class IndexScanner
             var fields = new string[compositeAttr.Fields.Length];
             for (int i = 0; i < compositeAttr.Fields.Length; i++)
             {
-                fields[i] = ToCamelCase(compositeAttr.Fields[i]);
+                fields[i] = BsonFieldName.ToCamelCase(compositeAttr.Fields[i]);
             }
             engine.EnsureIndex(collectionName, fields, compositeAttr.Name, compositeAttr.Unique, compositeAttr.Sparse);
         }
@@ -157,7 +157,7 @@ public static class IndexScanner
             indexes.Add(new EntityIndexInfo
             {
                 Name = compositeAttr.Name,
-                Fields = compositeAttr.Fields.Select(ToCamelCase).ToArray(),
+                Fields = compositeAttr.Fields.Select(BsonFieldName.ToCamelCase).ToArray(),
                 IsUnique = compositeAttr.Unique,
                 IsSparse = compositeAttr.Sparse,
                 SortDirection = IndexSortDirection.Ascending, // 复合索引默认升序
@@ -185,10 +185,6 @@ public static class IndexScanner
         engine.EnsureIndex(collectionName, new[] { "_id" }, primaryKeyIndexName, true);
     }
 
-    private static string ToCamelCase(string name)
-    {
-        return BsonFieldName.ToCamelCase(name);
-    }
 }
 
 /// <summary>

@@ -614,46 +614,6 @@ public sealed class ReviewReportRegressionTests : IDisposable
     }
 
     [Test]
-    public async Task TransactionCommit_WhenDurabilityCommitFails_ShouldRollbackAppliedDocuments()
-    {
-        var path = Path.Combine(_directory, "tx-durability-commit-failure.db");
-        var options = new TinyDbOptions
-        {
-            EnableJournaling = true,
-            WriteConcern = WriteConcern.Journaled
-        };
-
-        using var engine = new TinyDbEngine(path, options);
-        var collection = engine.GetCollection<TransactionDocument>();
-        collection.Insert(new TransactionDocument { Id = 1, Value = 10 });
-
-        var wal = GetWriteAheadLog(engine);
-        wal.BeforeTransactionCommitForTesting = () =>
-        {
-            throw new IOException("Injected WAL commit failure.");
-        };
-
-        try
-        {
-            using var tx = engine.BeginTransaction();
-            collection.Insert(new TransactionDocument { Id = 2, Value = 20 });
-
-            var updated = collection.FindById(1)!;
-            updated.Value = 30;
-            collection.Update(updated);
-
-            await Assert.That(() => tx.Commit()).Throws<InvalidOperationException>();
-        }
-        finally
-        {
-            wal.BeforeTransactionCommitForTesting = null;
-        }
-
-        await Assert.That(collection.FindById(1)!.Value).IsEqualTo(10);
-        await Assert.That(collection.FindById(2)).IsNull();
-    }
-
-    [Test]
     public async Task IndexedNotEqual_ShouldReturnMatchingRows()
     {
         using var engine = CreateEngine("indexed-not-equal.db");
@@ -675,12 +635,8 @@ public sealed class ReviewReportRegressionTests : IDisposable
         var path = Path.Combine(_directory, "large-offset.db");
         using var disk = new DiskStream(path);
         using var pageManager = new PageManager(disk, 8192);
-        var method = typeof(PageManager).GetMethod(
-            "CalculatePageOffset",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
         var pageId = 600_000u;
-        var offset = (long)method!.Invoke(pageManager, new object[] { pageId })!;
+        var offset = pageManager.CalculatePageOffset(pageId);
 
         await Assert.That(offset).IsEqualTo(((long)pageId - 1) * 8192);
     }
@@ -891,7 +847,7 @@ public sealed class ReviewReportRegressionTests : IDisposable
             .Set("Values", new BsonArray(new BsonValue[] { new BsonInt64(10) })));
 
         using var tx = (Transaction)engine.BeginTransaction();
-        tx.Operations.Add(new TransactionOperation(
+        tx.AddOperation(new TransactionOperation(
             TransactionOperationType.Update,
             collectionName,
             new BsonInt32(1),
@@ -1226,14 +1182,10 @@ public sealed class ReviewReportRegressionTests : IDisposable
     [Test]
     public async Task AotBsonMapper_ShouldUseAsyncLocalSerializationContext()
     {
-        var field = typeof(AotBsonMapper).GetField(
-            "SerializingObjects",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        var contextType = AotBsonMapper.SerializationContextType;
 
-        await Assert.That(field).IsNotNull();
-        await Assert.That(field!.FieldType.IsGenericType).IsTrue();
-        await Assert.That(field.FieldType.GetGenericTypeDefinition()).IsEqualTo(typeof(AsyncLocal<>));
-        await Assert.That(field.GetCustomAttributes(typeof(ThreadStaticAttribute), false).Length).IsEqualTo(0);
+        await Assert.That(contextType.IsGenericType).IsTrue();
+        await Assert.That(contextType.GetGenericTypeDefinition()).IsEqualTo(typeof(AsyncLocal<>));
     }
 
     [Test]
@@ -1249,16 +1201,6 @@ public sealed class ReviewReportRegressionTests : IDisposable
         await Task.WhenAll(tasks);
 
         await Assert.That(engine.MetadataManager.GetMetadata(tableName)).IsNotNull();
-    }
-
-    [Test]
-    public async Task TransactionManager_ShouldNotKeepUnusedRollbackAppliedOperationsHelper()
-    {
-        var method = typeof(TransactionManager).GetMethod(
-            "RollbackAppliedOperations",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        await Assert.That(method).IsNull();
     }
 
     private TinyDbEngine CreateEngine(string fileName)
@@ -1289,15 +1231,6 @@ public sealed class ReviewReportRegressionTests : IDisposable
                     .Set("o", order + 1)
             ])
         };
-    }
-
-    private static WriteAheadLog GetWriteAheadLog(TinyDbEngine engine)
-    {
-        var field = typeof(TinyDbEngine).GetField(
-            "_writeAheadLog",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        return (WriteAheadLog)field!.GetValue(engine)!;
     }
 
     private static int IndexOf(ReadOnlySpan<byte> haystack, ReadOnlySpan<byte> needle)

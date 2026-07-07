@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Core;
 using TinyDb.Query;
 using TUnit.Assertions;
@@ -34,9 +33,6 @@ public class QueryableAdditionalBranchCoverageTests
     [Test]
     public async Task ExecuteTerminal_All_WhenPredicateEvaluatesToNonBool_ShouldReturnFalse()
     {
-        var executeTerminal = typeof(QueryPipeline).GetMethod("ExecuteTerminal", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(executeTerminal).IsNotNull();
-
         var items = new[] { new Entity { Id = 1 } };
         Expression<Func<Entity, int>> nonBoolPredicate = x => x.Id;
 
@@ -45,7 +41,7 @@ public class QueryableAdditionalBranchCoverageTests
                 ((source, predicate) => FakeTerminalMethods.All(source, predicate))).Body).Method;
 
         var call = Expression.Call(allMethod, Expression.Constant(items), Expression.Quote(nonBoolPredicate));
-        var result = executeTerminal!.Invoke(null, new object[] { items, call });
+        var result = QueryPipelineTerminalExecutor.Execute(items, call);
 
         await Assert.That((bool)result!).IsFalse();
     }

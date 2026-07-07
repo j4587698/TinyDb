@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using TinyDb.Query;
 using TUnit.Assertions;
@@ -8,12 +9,15 @@ namespace TinyDb.Tests.Query;
 
 public class QueryableToEnumerableRewriterAdditionalCoverageTests
 {
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "This test intentionally verifies that an internal type name is absent from the assembly metadata.")]
     private static bool ContainsType(Assembly assembly, string fullTypeName)
     {
         return assembly.GetType(fullTypeName, throwOnError: false) != null;
     }
 
-    private static bool ContainsDeclaredMethod(Type type, string methodName)
+    private static bool ContainsDeclaredMethod(
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.NonPublicMethods)] Type type,
+        string methodName)
     {
         var methods = type.GetMethods(
             BindingFlags.Public |

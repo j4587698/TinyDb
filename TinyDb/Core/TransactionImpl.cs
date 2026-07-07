@@ -45,7 +45,7 @@ internal sealed class Transaction : ITransaction
     /// <summary>
     /// 操作列表
     /// </summary>
-    internal List<TransactionOperation> Operations => _operations;
+    internal IReadOnlyList<TransactionOperation> Operations => _operations;
     internal object SyncRoot => _syncRoot;
 
     internal int OperationCount
@@ -401,11 +401,11 @@ internal sealed class Transaction : ITransaction
 
         // 为了回滚删除索引操作，我们需要知道被删除的索引的定义
         // 在 Record 阶段，我们查询现有索引信息并保存到 TransactionOperation 中
-        
+
         string[]? indexFields = null;
         bool unique = false;
         bool sparse = false;
-        
+
         // 尝试从元数据获取现有索引信息用于回滚
         try
         {

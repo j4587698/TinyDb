@@ -65,7 +65,7 @@ public sealed class TinyDbOptions
     public bool StrictMode { get; set; } = true;
 
     /// <summary>
-    /// å†™å…¥æ—¶çš„ Schema éªŒè¯æ¨¡å¼ï¼ˆé»˜è®¤å…³é—­ï¼Œä»¥ä¿æŒæœ€é«˜æ€§èƒ½ä¸Žå…¼å®¹æ€§ï¼‰ã€‚
+    /// 写入时的 Schema 验证模式（默认关闭，以保持最高性能与兼容性）。
     /// </summary>
     public SchemaValidationMode SchemaValidationMode { get; set; } = SchemaValidationMode.None;
 
@@ -216,7 +216,7 @@ public sealed class TinyDbOptions
     /// </summary>
     /// <param name="value">要检查的数字</param>
     /// <returns>是否为2的幂</returns>
-    private static bool IsPowerOfTwo(uint value)
+    internal static bool IsPowerOfTwo(uint value)
     {
         return value != 0 && (value & (value - 1)) == 0;
     }

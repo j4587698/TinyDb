@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Reflection;
 using System.Linq;
 using System.Linq.Expressions;
 using TinyDb.Query;
@@ -27,16 +26,7 @@ public class QueryPipelinePrivateFallbackCoverageTests
             Expression.Constant(null, typeof(IOrderedQueryable<int>)),
             Expression.Quote(keySelector));
 
-        var executeOrderBy = typeof(QueryPipeline).GetMethod(
-            "ExecuteOrderBy",
-            BindingFlags.NonPublic | BindingFlags.Static,
-            binder: null,
-            types: new[] { typeof(IEnumerable), typeof(MethodCallExpression) },
-            modifiers: null);
-
-        await Assert.That(executeOrderBy == null).IsFalse();
-
-        var result = (IEnumerable)executeOrderBy!.Invoke(null, new object?[] { source, thenByExpr })!;
+        var result = QueryPipelineOrdering.Execute(source, thenByExpr);
         var sorted = result.Cast<object>().Select(x => (int)x!).ToList();
         await Assert.That(sorted.SequenceEqual(new[] { 1, 2, 3 })).IsTrue();
     }
@@ -49,16 +39,7 @@ public class QueryPipelinePrivateFallbackCoverageTests
             ((MethodCallExpression)((Expression<Func<IEnumerable<int>, int>>)(items => Median(items))).Body).Method;
         var expr = Expression.Call(medianMethod, Expression.Constant(source, typeof(IEnumerable<int>)));
 
-        var executeAggregation = typeof(QueryPipeline).GetMethod(
-            "ExecuteAggregation",
-            BindingFlags.NonPublic | BindingFlags.Static,
-            binder: null,
-            types: new[] { typeof(IEnumerable), typeof(MethodCallExpression) },
-            modifiers: null);
-
-        await Assert.That(executeAggregation == null).IsFalse();
-
-        await Assert.That(() => executeAggregation!.Invoke(null, new object?[] { source, expr }))
-            .Throws<TargetInvocationException>();
+        await Assert.That(() => QueryPipelineAggregation.Execute(source, expr))
+            .Throws<NotSupportedException>();
     }
 }

@@ -40,8 +40,7 @@ public sealed class WriteAheadLogSyncReplayCoverageTests : IDisposable
 
         wal.FlushLog();
 
-        var flushedLsn = UnsafeAccessors.WriteAheadLogAccessor.FlushedLsn(wal);
-        await Assert.That(flushedLsn > 0).IsTrue();
+        await Assert.That(wal.FlushedLSN > 0).IsTrue();
     }
 
     [Test]

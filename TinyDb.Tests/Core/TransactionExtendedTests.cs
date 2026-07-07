@@ -65,7 +65,7 @@ public class TransactionExtendedTests : IDisposable
         // Insert same ID twice in transaction
         var user1 = new UserWithIntId { Id = 10, Name = "User1" };
         collection.Insert(user1);
-        
+
         var user2 = new UserWithIntId { Id = 10, Name = "User1_Duplicate" };
         collection.Insert(user2);
 
@@ -127,18 +127,16 @@ public class TransactionExtendedTests : IDisposable
     public async Task Transaction_Index_Operations_Should_Be_Handled_Gracefully()
     {
         using var trans = (Transaction)_engine.BeginTransaction();
-        
-        // Get TransactionManager via reflection
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
-        
+
+        var manager = _engine.TransactionManager;
+
         // Create Index Op
         var opCreate = new TransactionOperation(TransactionOperationType.CreateIndex, "Users");
         manager.RecordOperation(trans, opCreate);
-        
+
         // Commit (hits ApplySingleOperation -> CreateIndex break)
         trans.Commit();
-        
+
         // Rollback Index Op
         using var trans2 = (Transaction)_engine.BeginTransaction();
         var opDrop = new TransactionOperation(TransactionOperationType.DropIndex, "Users");

@@ -18,7 +18,7 @@ public class MetadataDocument
     public string TypeName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? Description { get; set; }
-    
+
     // 核心：直接存储 BsonArray 格式的字段定义
     public BsonArray Columns { get; set; } = new BsonArray();
 
@@ -43,7 +43,7 @@ public class MetadataDocument
         var cols = new List<BsonValue>(metadata.Properties.Count);
         foreach (var p in metadata.Properties)
         {
-            var fieldName = p.IsPrimaryKey ? "_id" : ToCamelCase(p.PropertyName);
+            var fieldName = p.IsPrimaryKey ? "_id" : BsonFieldName.ToCamelCase(p.PropertyName);
             var col = new BsonDocument()
                 .Set("n", fieldName)
                 .Set("pn", p.PropertyName)
@@ -155,8 +155,4 @@ public class MetadataDocument
         };
     }
 
-    private static string ToCamelCase(string name)
-    {
-        return BsonFieldName.ToCamelCase(name);
-    }
 }

@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using TinyDb.Bson;
 using TinyDb.Core;
+using TinyDb.Serialization;
 
 namespace TinyDb.Metadata;
 
@@ -16,7 +17,7 @@ public class MetadataManager
     private readonly TinyDbEngine _engine;
     private const string CATALOG_COLLECTION = "__sys_catalog";
     private readonly object _schemaSyncRoot = new();
-    
+
     // 内存 LRU 模式缓存 (AOT 环境下使用 ConcurrentDictionary 极其稳定)
     private readonly ConcurrentDictionary<string, SchemaCacheEntry> _cache = new();
 
@@ -79,7 +80,7 @@ public class MetadataManager
                 if (!TryGetFieldName(col, out var fieldName)) continue;
 
                 allowed.Add(fieldName);
-                var camel = ToCamelCase(fieldName);
+                var camel = BsonFieldName.ToCamelCase(fieldName);
                 if (!string.Equals(camel, fieldName, StringComparison.Ordinal))
                 {
                     allowed.Add(camel);
@@ -390,7 +391,7 @@ public class MetadataManager
         {
             if ((builder?.ContainsKey(field.Name) ?? document.ContainsKey(field.Name))) continue;
 
-            // ååŽå…¼å®¹ï¼šæ—§ Schema å¯èƒ½ç”¨ PascalCase å­˜ï¼Œæ–‡æ¡£ç”¨ camelCase å­˜
+            // �?后兼容：旧 Schema 可能用 PascalCase 存，文档用 camelCase 存
             if (field.CamelName != field.Name &&
                 (builder?.ContainsKey(field.CamelName) ?? document.ContainsKey(field.CamelName)))
             {
@@ -684,10 +685,4 @@ public class MetadataManager
         return BsonNull.Value;
     }
 
-    private static string ToCamelCase(string name)
-    {
-        if (string.IsNullOrEmpty(name)) return name;
-        if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
-    }
 }

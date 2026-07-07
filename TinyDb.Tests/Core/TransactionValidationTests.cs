@@ -25,13 +25,12 @@ public class TransactionValidationTests : IDisposable
     public async Task ValidateOperations_Should_Detect_Duplicate_Ids()
     {
         using var trans = (Transaction)_engine.BeginTransaction();
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         // Manually record two inserts with same ID
         var op1 = new TransactionOperation(TransactionOperationType.Insert, "Users", new TinyDb.Bson.BsonInt32(1));
         var op2 = new TransactionOperation(TransactionOperationType.Insert, "Users", new TinyDb.Bson.BsonInt32(1));
-        
+
         manager.RecordOperation(trans, op1);
         manager.RecordOperation(trans, op2);
 

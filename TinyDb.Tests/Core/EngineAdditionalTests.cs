@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-using System.Reflection;
 using TinyDb.Core;
 using TinyDb.Bson;
 using TUnit.Assertions;
@@ -29,11 +27,11 @@ public class EngineAdditionalTests : IDisposable
     {
         var doc = new BsonDocument();
         doc = doc.Set("name", "test");
-        
+
         // Use internal InsertDocument via reflection or if internal is visible
         // TinyDb.Tests has InternalsVisibleTo
         var id = _engine.InsertDocument("test_col", doc);
-        
+
         await Assert.That(id).IsNotNull();
         await Assert.That(id.IsObjectId).IsTrue();
     }
@@ -63,15 +61,15 @@ public class EngineAdditionalTests : IDisposable
     [Test]
     public async Task InsertDocuments_Should_Insert_Multiple()
     {
-        var docs = new BsonDocument[] 
+        var docs = new BsonDocument[]
         {
             new BsonDocument().Set("val", 1),
             new BsonDocument().Set("val", 2)
         };
-        
+
         var count = _engine.InsertDocuments("batch_col", docs);
         await Assert.That(count).IsEqualTo(2);
-        
+
         var all = _engine.FindAll("batch_col").ToList();
         await Assert.That(all.Count).IsEqualTo(2);
     }
@@ -93,9 +91,7 @@ public class EngineAdditionalTests : IDisposable
         const string col = "owned_pages_skip";
         _engine.InsertDocument(col, new BsonDocument().Set("_id", 1).Set("val", 1));
 
-        var statesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
-        var states = (ConcurrentDictionary<string, CollectionState>)statesField!.GetValue(_engine)!;
-        var st = states[col];
+        var st = _engine.GetCollectionState(col);
         st.OwnedPages.TryAdd(0, 0);
 
         await Assert.That(() => _engine.FindAll(col).ToList()).Throws<InvalidOperationException>();

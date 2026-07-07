@@ -18,7 +18,7 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
 
         var expression = source.Where(x => x.Category.PadLeft(2) == "ZZ").Expression;
 
-        var result = (IEnumerable<Item>)QueryPipeline.ExecuteAotForTests<Item>(
+        var result = (IEnumerable<Item>)QueryPipelineTestDriver.ExecuteAot<Item>(
             expression,
             data,
             extractedPredicate: Expression.Constant(true))!;
@@ -34,7 +34,7 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
 
         var expression = source.Where(x => x.InStock).Expression;
 
-        var result = (IEnumerable<Item>)QueryPipeline.ExecuteAotForTests<Item>(
+        var result = (IEnumerable<Item>)QueryPipelineTestDriver.ExecuteAot<Item>(
             expression,
             data,
             extractedPredicate: null)!;
@@ -60,7 +60,7 @@ public sealed class QueryPipelineAdditionalBranchCoverageTests
         var skip = Expression.Call(skipMethod, source.Expression, countExpr);
         var take = Expression.Call(takeMethod, skip, countExpr);
 
-        var result = (IEnumerable<Item>)QueryPipeline.ExecuteAotForTests<Item>(
+        var result = (IEnumerable<Item>)QueryPipelineTestDriver.ExecuteAot<Item>(
             take,
             data,
             extractedPredicate: null)!;

@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TUnit.Assertions;
@@ -50,7 +49,7 @@ public sealed class TransactionImplAdditionalCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task Dispose_WhenOperationsListIsCorrupted_ShouldNotThrow()
+    public async Task Dispose_WhenActiveTransactionHasOperations_ShouldRollbackAndClearOperations()
     {
         using var engine = new TinyDbEngine(_dbPath);
         engine.BeginTransaction();
@@ -58,11 +57,11 @@ public sealed class TransactionImplAdditionalCoverageTests : IDisposable
         var tx = engine.GetCurrentTransaction();
         await Assert.That(tx).IsNotNull();
 
-        var operationsField = typeof(Transaction).GetField("_operations", BindingFlags.Instance | BindingFlags.NonPublic);
-        await Assert.That(operationsField).IsNotNull();
+        tx!.RecordInsert("col", new BsonDocument().Set("_id", 1));
+        await Assert.That(tx.OperationCount).IsEqualTo(1);
 
-        operationsField!.SetValue(tx, null);
-
-        await Assert.That(() => tx!.Dispose()).ThrowsNothing();
+        await Assert.That(() => tx.Dispose()).ThrowsNothing();
+        await Assert.That(tx.OperationCount).IsEqualTo(0);
+        await Assert.That(tx.State).IsEqualTo(TransactionState.RolledBack);
     }
 }

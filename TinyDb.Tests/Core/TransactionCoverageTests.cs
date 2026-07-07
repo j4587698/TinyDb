@@ -1,6 +1,5 @@
 using TinyDb.Core;
 using TinyDb.Bson;
-using System.Reflection;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -37,9 +36,9 @@ public class TransactionCoverageTests : IDisposable
     {
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
-        
+
         trans.Commit(); // State becomes Committed
-        
+
         await Assert.That(() => trans.Commit()).Throws<InvalidOperationException>();
     }
 
@@ -54,9 +53,9 @@ public class TransactionCoverageTests : IDisposable
     {
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
-        
+
         trans.Commit(); // State becomes Committed
-        
+
         await Assert.That(() => trans.Rollback()).Throws<InvalidOperationException>();
     }
 
@@ -79,7 +78,7 @@ public class TransactionCoverageTests : IDisposable
     {
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
-        
+
         await Assert.That(() => trans.CreateSavepoint(null!)).Throws<ArgumentException>();
         await Assert.That(() => trans.CreateSavepoint("")).Throws<ArgumentException>();
     }
@@ -90,7 +89,7 @@ public class TransactionCoverageTests : IDisposable
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
         trans.Commit();
-        
+
         await Assert.That(() => trans.CreateSavepoint("sp1")).Throws<InvalidOperationException>();
     }
 
@@ -101,7 +100,7 @@ public class TransactionCoverageTests : IDisposable
         using var trans = engine.BeginTransaction();
         var sp = trans.CreateSavepoint("sp1");
         trans.Commit();
-        
+
         await Assert.That(() => trans.RollbackToSavepoint(sp)).Throws<InvalidOperationException>();
     }
 
@@ -112,7 +111,7 @@ public class TransactionCoverageTests : IDisposable
         using var trans = engine.BeginTransaction();
         var sp = trans.CreateSavepoint("sp1");
         trans.Commit();
-        
+
         await Assert.That(() => trans.ReleaseSavepoint(sp)).Throws<InvalidOperationException>();
     }
 
@@ -122,9 +121,9 @@ public class TransactionCoverageTests : IDisposable
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
         trans.Commit();
-        
+
         var t = (Transaction)trans;
-        
+
         await Assert.That(() => t.RecordInsert("col", new BsonDocument())).Throws<InvalidOperationException>();
         await Assert.That(() => t.RecordUpdate("col", new BsonDocument(), new BsonDocument())).Throws<InvalidOperationException>();
         await Assert.That(() => t.RecordDelete("col", new BsonDocument())).Throws<InvalidOperationException>();
@@ -137,13 +136,13 @@ public class TransactionCoverageTests : IDisposable
     {
         using var engine = CreateTestEngine();
         var col = engine.GetBsonCollection("users");
-        
+
         var trans = engine.BeginTransaction();
         col.Insert(new BsonDocument().Set("_id", 1).Set("name", "active"));
-        
+
         // Don't commit, just dispose
         trans.Dispose();
-        
+
         // Verify rollback
         var count = col.Count();
         await Assert.That(count).IsEqualTo(0);
@@ -155,10 +154,7 @@ public class TransactionCoverageTests : IDisposable
     {
         using var engine = CreateTestEngine();
 
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", BindingFlags.Instance | BindingFlags.NonPublic);
-        await Assert.That(managerField).IsNotNull();
-
-        var manager = (TransactionManager)managerField!.GetValue(engine)!;
+        var manager = engine.TransactionManager;
         var untracked = new Transaction(manager);
 
         await Assert.That(() => untracked.Dispose()).ThrowsNothing();
@@ -171,7 +167,7 @@ public class TransactionCoverageTests : IDisposable
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
         trans.CreateSavepoint("sp1");
-        
+
         var str = trans.ToString();
         await Assert.That(str).Contains("Transaction[");
         await Assert.That(str).Contains("Active");
@@ -183,19 +179,19 @@ public class TransactionCoverageTests : IDisposable
     {
         using var engine = CreateTestEngine();
         using var trans = engine.BeginTransaction();
-        
+
         var col = engine.GetBsonCollection("users");
         col.Insert(new BsonDocument().Set("a", 1));
         trans.CreateSavepoint("sp1");
-        
+
         var t = (Transaction)trans;
         var stats = t.GetStatistics();
-        
+
         await Assert.That(stats.OperationCount).IsGreaterThan(0);
         await Assert.That(stats.SavepointCount).IsEqualTo(1);
         await Assert.That(stats.IsReadOnly).IsFalse();
         await Assert.That(stats.State).IsEqualTo(TransactionState.Active);
-        
+
         var statsStr = stats.ToString();
         await Assert.That(statsStr).Contains("ops");
         await Assert.That(statsStr).Contains("read-write");
@@ -220,16 +216,16 @@ public class TransactionCoverageTests : IDisposable
         using var engine = CreateTestEngine();
         var col = engine.GetBsonCollection("users");
         engine.EnsureIndex("users", "name", "idx_name");
-        
+
         using var trans = engine.BeginTransaction();
         var t = (Transaction)trans;
-        
+
         // Manual call to internal method to verify it captures info
         t.RecordDropIndex("users", "idx_name");
-        
+
         // Verify operation recorded
         var op = t.Operations.LastOrDefault(o => o.OperationType == TransactionOperationType.DropIndex);
-        
+
         await Assert.That(op).IsNotNull();
         // IndexFields should be captured if IndexManager works
         // We can't access op.IndexFields directly easily as it is public property?

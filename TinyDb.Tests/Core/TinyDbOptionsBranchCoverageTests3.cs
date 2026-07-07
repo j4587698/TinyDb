@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Reflection;
 using TinyDb.Core;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -13,12 +12,9 @@ public class TinyDbOptionsBranchCoverageTests3
     [Test]
     public async Task IsPowerOfTwo_ShouldCoverZeroPowerAndNonPower()
     {
-        var method = typeof(TinyDbOptions).GetMethod("IsPowerOfTwo", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        await Assert.That((bool)method!.Invoke(null, new object[] { 0u })!).IsFalse();
-        await Assert.That((bool)method.Invoke(null, new object[] { 8u })!).IsTrue();
-        await Assert.That((bool)method.Invoke(null, new object[] { 6u })!).IsFalse();
+        await Assert.That(TinyDbOptions.IsPowerOfTwo(0)).IsFalse();
+        await Assert.That(TinyDbOptions.IsPowerOfTwo(8)).IsTrue();
+        await Assert.That(TinyDbOptions.IsPowerOfTwo(6)).IsFalse();
     }
 
     [Test]
@@ -46,4 +42,3 @@ public class TinyDbOptionsBranchCoverageTests3
         await Assert.That(clone2.EncryptionKey!.SequenceEqual(options2.EncryptionKey!)).IsTrue();
     }
 }
-
