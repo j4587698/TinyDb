@@ -22,7 +22,7 @@ public static class DbRefSerializer
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type type)
     {
         var result = new List<(PropertyInfo, ForeignKeyAttribute)>();
-        
+
         foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             var attr = property.GetCustomAttribute<ForeignKeyAttribute>();
@@ -31,7 +31,7 @@ public static class DbRefSerializer
                 result.Add((property, attr));
             }
         }
-        
+
         return result;
     }
 
@@ -118,7 +118,7 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
     {
         var collection = _engine.GetCollection<T>(_collectionName);
         var documents = collection.FindAll();
-        
+
         foreach (var doc in documents)
         {
             LoadReferences(doc);
@@ -133,12 +133,12 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
     {
         var collection = _engine.GetCollection<T>(_collectionName);
         var doc = collection.FindById(id);
-        
+
         if (doc != null)
         {
             LoadReferences(doc);
         }
-        
+
         return doc;
     }
 
@@ -149,7 +149,7 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
     {
         var collection = _engine.GetCollection<T>(_collectionName);
         var documents = collection.Find(predicate);
-        
+
         foreach (var doc in documents)
         {
             LoadReferences(doc);
@@ -158,7 +158,7 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
     }
 
     /// <summary>
-    /// æ ¹æ®å­—ç¬¦ä¸²æ¡ä»¶æŸ¥æ‰¾æ–‡æ¡£å¹¶åŠ è½½å¼•ç”¨
+    /// 根据字符串条件查找文档并加载引用
     /// </summary>
     public IEnumerable<T> Find(string predicate, IReadOnlyDictionary<string, object?>? parameters = null)
     {
@@ -173,7 +173,7 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
     }
 
     /// <summary>
-    /// æ ¹æ® SQL æŸ¥è¯¢æ–‡æ¡£å¹¶åŠ è½½å¼•ç”¨
+    /// 根据 SQL 查询文档并加载引用
     /// </summary>
     public IEnumerable<T> FindSql(string sql, IReadOnlyDictionary<string, object?>? parameters = null)
     {
@@ -199,7 +199,7 @@ public class IncludeQueryBuilder<[DynamicallyAccessedMembers(DynamicallyAccessed
             throw new InvalidOperationException(
                 $"Type '{typeof(T).FullName}' must have [Entity] attribute for Include reference loading.");
         }
-        
+
         foreach (var includePath in _includes)
         {
             var reference = adapter.ForeignKeyReferences.FirstOrDefault(r =>

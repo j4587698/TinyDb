@@ -3,6 +3,7 @@ using TinyDb.Collections;
 using TinyDb.Core;
 using TinyDb.Index;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TinyDb.Attributes;
 using System.Linq.Expressions;
 
@@ -23,16 +24,16 @@ public class QueryExecutorIndexSeekTests : IDisposable
         _dbPath = Path.Combine(Path.GetTempPath(), $"indexseek_test_{Guid.NewGuid()}.db");
         _engine = new TinyDbEngine(_dbPath);
         _users = _engine.GetCollection<User>();
-        
+
         // Create a unique index on Email using EnsureIndex
         _engine.EnsureIndex(_users.CollectionName, "Email", "idx_email", unique: true);
-        
+
         // Create a non-unique index on Category
         _engine.EnsureIndex(_users.CollectionName, "Category", "idx_category", unique: false);
 
         // Create a non-unique index on Score for ordered query planning tests
         _engine.EnsureIndex(_users.CollectionName, "Score", "idx_score", unique: false);
-        
+
         SeedData();
     }
 
@@ -421,7 +422,7 @@ public class QueryExecutorIndexSeekTests : IDisposable
     private IEnumerable<User> ExecuteIndexSeekDirect(QueryExecutionPlan plan)
     {
         var executor = new QueryExecutor(_engine);
-        return executor.ExecuteIndexSeekForTests<User>(plan);
+        return QueryExecutorTestDriver.ExecuteIndexSeek<User>(executor, plan);
     }
 
     private IndexStatistics GetIndexStats(string name)

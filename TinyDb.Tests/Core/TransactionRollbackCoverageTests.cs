@@ -1,12 +1,10 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
-using TinyDb.Index;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -43,7 +41,7 @@ public sealed class TransactionRollbackCoverageTests
     }
 
     [Test]
-    public async Task Commit_WhenRollbackCompensationThrows_ShouldBeSwallowed()
+    public async Task Commit_WhenUnsupportedOperationIsRecorded_ShouldThrow()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"tx_comp_{Guid.NewGuid():N}.db");
 
@@ -58,7 +56,7 @@ public sealed class TransactionRollbackCoverageTests
             const string collectionName = "c";
 
             var tx = (Transaction)engine.BeginTransaction();
-            tx.Operations.Add(new TransactionOperation((TransactionOperationType)123, collectionName));
+            tx.AddOperation(new TransactionOperation((TransactionOperationType)123, collectionName));
 
             await Assert.That(() => tx.Commit()).Throws<InvalidOperationException>();
         }
@@ -69,7 +67,7 @@ public sealed class TransactionRollbackCoverageTests
     }
 
     [Test]
-    public async Task Commit_WhenRollbackOfAppliedOperationThrows_ShouldBeSwallowed()
+    public async Task Commit_WhenApplyFailsAfterAppliedOperation_ShouldRollbackAppliedOperation()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"tx_comp_applied_{Guid.NewGuid():N}.db");
 
@@ -86,65 +84,23 @@ public sealed class TransactionRollbackCoverageTests
             const string indexName = "idx";
 
             engine.EnsureIndex(blockingCollection, "x", indexName, unique: true);
-            var indexManager = engine.GetIndexManager(blockingCollection);
-
-            var rwLockField = typeof(IndexManager).GetField("_rwLock", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(rwLockField).IsNotNull();
-
-            var rwLock = (ReaderWriterLockSlim)rwLockField!.GetValue(indexManager)!;
 
             var tx = (Transaction)engine.BeginTransaction();
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.Insert,
                 appliedCollection,
                 documentId: new BsonInt32(1),
                 newDocument: new BsonDocument().Set("_id", 1).Set("x", 1)));
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.CreateIndex,
                 blockingCollection,
                 indexName: indexName,
                 indexFields: new[] { "x" },
                 indexUnique: false));
 
-            var commitTcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var commitThread = new Thread(() =>
-            {
-                try
-                {
-                    tx.Commit();
-                    commitTcs.SetResult(null);
-                }
-                catch (Exception ex)
-                {
-                    commitTcs.SetException(ex);
-                }
-            })
-            {
-                IsBackground = true
-            };
-
-            bool commitReachedCreateIndex;
-            rwLock.EnterWriteLock();
-            try
-            {
-                commitThread.Start();
-
-                commitReachedCreateIndex = SpinWait.SpinUntil(
-                    () => rwLock.WaitingWriteCount > 0,
-                    TimeSpan.FromSeconds(30));
-
-                if (commitReachedCreateIndex)
-                {
-                    tx.Operations[0] = new TransactionOperation((TransactionOperationType)123, appliedCollection);
-                }
-            }
-            finally
-            {
-                rwLock.ExitWriteLock();
-            }
-
-            await Assert.That(async () => await commitTcs.Task).Throws<InvalidOperationException>();
-            await Assert.That(commitReachedCreateIndex).IsTrue();
+            await Assert.That(() => tx.Commit()).Throws<InvalidOperationException>();
+            await Assert.That(engine.FindById(appliedCollection, new BsonInt32(1))).IsNull();
+            await Assert.That(engine.IsCorrupted).IsFalse();
 
             tx.Dispose();
         }

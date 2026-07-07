@@ -1,8 +1,6 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using TinyDb.Query;
 using TinyDb.Core;
@@ -38,66 +36,62 @@ public class QueryExecutorCoverageTests
     public async Task Execute_Validation_Coverage()
     {
         var executor = new QueryExecutor(_engine);
-        
-        try 
+
+        try
         {
             executor.Execute<object>(null!);
             Assert.Fail("Should throw ArgumentException for null collection");
-        } 
+        }
         catch (ArgumentException) {}
 
-        try 
+        try
         {
             executor.Execute<object>("   ");
             Assert.Fail("Should throw ArgumentException for empty collection");
-        } 
+        }
         catch (ArgumentException) {}
     }
 
     [Test]
     public async Task BuildIndexScanRange_Coverage()
     {
-        // Use reflection to invoke private static BuildIndexScanRange
-        var method = typeof(QueryExecutor).GetMethod("BuildIndexScanRange", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         // Case 1: No keys
         var planEmpty = new QueryExecutionPlan { IndexScanKeys = new List<IndexScanKey>() };
-        var rangeEmpty = (IndexScanRange)method!.Invoke(null, new object[] { planEmpty })!;
+        var rangeEmpty = QueryExecutor.BuildIndexScanRange(planEmpty);
         await Assert.That(rangeEmpty.IncludeMin).IsTrue();
         await Assert.That(rangeEmpty.IncludeMax).IsTrue();
 
         // Case 2: GreaterThan
-        var planGT = new QueryExecutionPlan 
-        { 
-            IndexScanKeys = new List<IndexScanKey> 
-            { 
+        var planGT = new QueryExecutionPlan
+        {
+            IndexScanKeys = new List<IndexScanKey>
+            {
                 new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.GreaterThan }
-            } 
+            }
         };
-        var rangeGT = (IndexScanRange)method.Invoke(null, new object[] { planGT })!;
+        var rangeGT = QueryExecutor.BuildIndexScanRange(planGT);
         await Assert.That(rangeGT.IncludeMin).IsFalse();
-        
+
         // Case 3: LessThan
-        var planLT = new QueryExecutionPlan 
-        { 
-            IndexScanKeys = new List<IndexScanKey> 
-            { 
+        var planLT = new QueryExecutionPlan
+        {
+            IndexScanKeys = new List<IndexScanKey>
+            {
                 new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.LessThan }
-            } 
+            }
         };
-        var rangeLT = (IndexScanRange)method.Invoke(null, new object[] { planLT })!;
+        var rangeLT = QueryExecutor.BuildIndexScanRange(planLT);
         await Assert.That(rangeLT.IncludeMax).IsFalse();
-        
+
         // Case 4: LessThanOrEqual
-        var planLTE = new QueryExecutionPlan 
-        { 
-            IndexScanKeys = new List<IndexScanKey> 
-            { 
+        var planLTE = new QueryExecutionPlan
+        {
+            IndexScanKeys = new List<IndexScanKey>
+            {
                 new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.LessThanOrEqual }
-            } 
+            }
         };
-        var rangeLTE = (IndexScanRange)method.Invoke(null, new object[] { planLTE })!;
+        var rangeLTE = QueryExecutor.BuildIndexScanRange(planLTE);
         await Assert.That(rangeLTE.IncludeMax).IsTrue();
 
         // Case 5: NotEqual (falls through switch without explicit handling)
@@ -108,7 +102,7 @@ public class QueryExecutorCoverageTests
                 new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.NotEqual }
             }
         };
-        var rangeNE = (IndexScanRange)method.Invoke(null, new object[] { planNE })!;
+        var rangeNE = QueryExecutor.BuildIndexScanRange(planNE);
         await Assert.That(rangeNE).IsNotNull();
 
         // Case 6: Bounded range on the same field
@@ -128,7 +122,7 @@ public class QueryExecutorCoverageTests
                 }
             }
         };
-        var rangeBounded = (IndexScanRange)method.Invoke(null, new object[] { planRange })!;
+        var rangeBounded = QueryExecutor.BuildIndexScanRange(planRange);
         await Assert.That(rangeBounded.MinKey.Values[0].RawValue).IsEqualTo(18);
         await Assert.That(rangeBounded.MaxKey.Values[0].RawValue).IsEqualTo(65);
         await Assert.That(rangeBounded.IncludeMin).IsFalse();
@@ -147,21 +141,15 @@ public class QueryExecutorCoverageTests
         _ = a.Insert(new BsonDocument().Set("n", 1));
         _ = b.Insert(new BsonDocument().Set("n", 2));
 
-        var statesField = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(statesField).IsNotNull();
-
-        var states = (ConcurrentDictionary<string, CollectionState>?)statesField!.GetValue(_engine);
-        await Assert.That(states).IsNotNull();
-
-        var stateA = states![colA];
-        var stateB = states[colB];
+        var stateA = _engine.GetCollectionState(colA);
+        var stateB = _engine.GetCollectionState(colB);
 
         var foreignPage = stateB.OwnedPages.Keys.First();
         stateA.OwnedPages.TryAdd(foreignPage, 0);
 
         using var tx = (Transaction)_engine.BeginTransaction();
-        tx.Operations.Add(new TransactionOperation(TransactionOperationType.Delete, colA, documentId: null));
-        tx.Operations.Add(new TransactionOperation(TransactionOperationType.Delete, colA, documentId: ObjectId.NewObjectId()));
+        tx.AddOperation(new TransactionOperation(TransactionOperationType.Delete, colA, documentId: null));
+        tx.AddOperation(new TransactionOperation(TransactionOperationType.Delete, colA, documentId: ObjectId.NewObjectId()));
 
         var executor = new QueryExecutor(_engine);
         var results = executor.Execute<BsonDocument>(colA).ToList();
@@ -170,29 +158,25 @@ public class QueryExecutorCoverageTests
         await Assert.That(results[0].TryGetValue("_collection", out var c)).IsTrue();
         await Assert.That(c!.ToString()).IsEqualTo(colA);
     }
-    
+
     [Test]
     public async Task BuildExactIndexKey_Coverage()
     {
-        // Use reflection to invoke private static BuildExactIndexKey
-        var method = typeof(QueryExecutor).GetMethod("BuildExactIndexKey", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         // Case 1: Empty
         var planEmpty = new QueryExecutionPlan { IndexScanKeys = new List<IndexScanKey>() };
-        var keyEmpty = method!.Invoke(null, new object[] { planEmpty });
+        var keyEmpty = QueryExecutor.BuildExactIndexKey(planEmpty);
         await Assert.That(keyEmpty).IsNull();
 
         // Case 2: Mixed comparisons (should return null)
-        var planMixed = new QueryExecutionPlan 
-        { 
-            IndexScanKeys = new List<IndexScanKey> 
-            { 
+        var planMixed = new QueryExecutionPlan
+        {
+            IndexScanKeys = new List<IndexScanKey>
+            {
                 new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.Equal },
                 new IndexScanKey { FieldName = "b", Value = new BsonInt32(5), ComparisonType = ComparisonType.GreaterThan }
-            } 
+            }
         };
-        var keyMixed = method.Invoke(null, new object[] { planMixed });
+        var keyMixed = QueryExecutor.BuildExactIndexKey(planMixed);
         await Assert.That(keyMixed).IsNull();
     }
 
@@ -213,7 +197,7 @@ public class QueryExecutorCoverageTests
         };
 
         var executor = new QueryExecutor(_engine);
-        var result = executor.ExecuteIndexScanForTests(plan);
+        var result = QueryExecutorTestDriver.ExecuteIndexScan(executor, plan);
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Count()).IsEqualTo(1);
     }

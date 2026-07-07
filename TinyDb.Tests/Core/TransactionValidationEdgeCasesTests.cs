@@ -25,8 +25,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     [Test]
     public async Task Commit_Null_Transaction_Should_Throw()
     {
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         await Assert.That(() => manager.CommitTransaction(null!)).Throws<ArgumentNullException>();
     }
@@ -34,8 +33,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     [Test]
     public async Task Rollback_Null_Transaction_Should_Throw()
     {
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         await Assert.That(() => manager.RollbackTransaction(null!)).Throws<ArgumentNullException>();
     }
@@ -43,8 +41,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     [Test]
     public async Task CreateSavepoint_Null_Transaction_Should_Throw()
     {
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         await Assert.That(() => manager.CreateSavepoint(null!, "sp")).Throws<ArgumentNullException>();
     }
@@ -53,8 +50,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     public async Task CreateSavepoint_Invalid_Name_Should_Throw()
     {
         using var trans = (Transaction)_engine.BeginTransaction();
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         await Assert.That(() => manager.CreateSavepoint(trans, null!)).Throws<ArgumentException>();
         await Assert.That(() => manager.CreateSavepoint(trans, "")).Throws<ArgumentException>();
@@ -63,8 +59,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     [Test]
     public async Task RollbackToSavepoint_Null_Transaction_Should_Throw()
     {
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         await Assert.That(() => manager.RollbackToSavepoint(null!, Guid.NewGuid())).Throws<ArgumentNullException>();
     }
@@ -73,8 +68,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     public async Task RollbackToSavepoint_Invalid_Id_Should_Throw()
     {
         using var trans = (Transaction)_engine.BeginTransaction();
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
 
         await Assert.That(() => manager.RollbackToSavepoint(trans, Guid.NewGuid())).Throws<ArgumentException>();
     }
@@ -83,8 +77,7 @@ public class TransactionValidationEdgeCasesTests : IDisposable
     public async Task RecordOperation_Null_Args_Should_Throw()
     {
         using var trans = (Transaction)_engine.BeginTransaction();
-        var managerField = typeof(TinyDbEngine).GetField("_transactionManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        var manager = (TransactionManager)managerField!.GetValue(_engine)!;
+        var manager = _engine.TransactionManager;
         var op = new TransactionOperation(TransactionOperationType.Insert, "col");
 
         await Assert.That(() => manager.RecordOperation(null!, op)).Throws<ArgumentNullException>();

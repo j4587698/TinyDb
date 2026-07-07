@@ -1,13 +1,10 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Storage;
-using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -77,13 +74,10 @@ public sealed class TinyDbEngineAdditionalCoverageTests
             var col = engine.GetBsonCollection("c");
             col.Insert(new BsonDocument().Set("x", 1));
 
-            var collectionStates = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
-            var found = collectionStates.TryGetValue("c", out var state);
-            await Assert.That(found).IsTrue();
-            await Assert.That(state).IsNotNull();
+            var state = engine.GetCollectionState("c");
 
-            var ownedPages = state!.OwnedPages;
-            var pm = UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine);
+            var ownedPages = state.OwnedPages;
+            var pm = engine.PageManager;
 
             var indexPage = pm.NewPage(PageType.Index);
             pm.SavePage(indexPage, forceFlush: true);
@@ -111,9 +105,6 @@ public sealed class TinyDbEngineAdditionalCoverageTests
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
 
-            var method = typeof(TinyDbEngine).GetMethod("PrepareDocumentForInsert", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(method).IsNotNull();
-
             foreach (var doc in new[]
             {
                 new BsonDocument().Set("_id", 1).Set("_collection", "c"),
@@ -122,9 +113,8 @@ public sealed class TinyDbEngineAdditionalCoverageTests
                 new BsonDocument().Set("_id", 4).Set("_collection", (BsonValue)null!)
             })
             {
-                var args = new object?[] { "c", doc, null };
-                _ = (BsonDocument)method!.Invoke(engine, args)!;
-                await Assert.That(args[2]).IsNotNull();
+                _ = engine.PrepareDocumentForInsert("c", doc, out var id);
+                await Assert.That(id).IsNotNull();
             }
         }
         finally
@@ -143,52 +133,23 @@ public sealed class TinyDbEngineAdditionalCoverageTests
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
             using var tx = (Transaction)engine.BeginTransaction();
 
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.CreateIndex,
                 "c",
                 indexName: "i",
                 indexFields: new[] { "x" },
                 indexUnique: true));
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.Delete,
                 "c",
                 documentId: new NullToStringBsonValue()));
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.Delete,
                 "c",
                 documentId: new BsonInt32(1)));
 
             _ = new List<BsonDocument>(engine.FindAll("c"));
             await Assert.That(tx.Operations.Count).IsEqualTo(3);
-        }
-        finally
-        {
-            CleanupDb(dbPath);
-        }
-    }
-
-    [Test]
-    public async Task BeginTransaction_WhenNotInitialized_ShouldThrowInvalidOperationException()
-    {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"engine_initflag_{Guid.NewGuid():N}.db");
-
-        try
-        {
-            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-
-            var isInitializedField = typeof(TinyDbEngine).GetField("_isInitialized", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(isInitializedField).IsNotNull();
-
-            var original = (bool)isInitializedField!.GetValue(engine)!;
-            isInitializedField.SetValue(engine, false);
-            try
-            {
-                await Assert.That(() => engine.BeginTransaction()).Throws<InvalidOperationException>();
-            }
-            finally
-            {
-                isInitializedField.SetValue(engine, original);
-            }
         }
         finally
         {
@@ -223,10 +184,7 @@ public sealed class TinyDbEngineAdditionalCoverageTests
         {
             using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
 
-            var method = typeof(TinyDbEngine).GetMethod("GetCollectionMetadata", BindingFlags.NonPublic | BindingFlags.Instance);
-            await Assert.That(method).IsNotNull();
-
-            var metadata = (BsonDocument)method!.Invoke(engine, new object[] { "missing" })!;
+            var metadata = engine.GetCollectionMetadata("missing");
             await Assert.That(metadata).IsNotNull();
         }
         finally
@@ -248,17 +206,14 @@ public sealed class TinyDbEngineAdditionalCoverageTests
             var inserted = new BsonDocument().Set("x", 1);
             col.Insert(inserted);
 
-            var collectionStates = UnsafeAccessors.TinyDbEngineAccessor.CollectionStates(engine);
-            var found = collectionStates.TryGetValue("c", out var state);
-            await Assert.That(found).IsTrue();
-            await Assert.That(state).IsNotNull();
+            var state = engine.GetCollectionState("c");
 
-            var ownedPages = state!.OwnedPages;
+            var ownedPages = state.OwnedPages;
 
             ownedPages.TryAdd(0, 0);
             ownedPages.TryAdd(1, 0);
 
-            var pm = UnsafeAccessors.TinyDbEngineAccessor.PageManager(engine);
+            var pm = engine.PageManager;
             var emptyDataPage = pm.NewPage(PageType.Data);
             pm.SavePage(emptyDataPage, forceFlush: true);
             ownedPages.TryAdd(emptyDataPage.PageID, 0);

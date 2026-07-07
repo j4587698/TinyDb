@@ -180,55 +180,46 @@ public sealed class ExpressionParserCoverage100Tests
     [Test]
     public async Task TryEvaluateMethodCall_WhenTargetOrArgumentNotEvaluatable_ShouldReturnNull()
     {
-        var method = typeof(ExpressionParser).GetMethod("TryEvaluateMethodCall", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         // target not evaluatable
         var p = Expression.Parameter(typeof(string), "s");
         var toLowerInvariantMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string>>)(s => s.ToLowerInvariant())).Body).Method;
         var callOnParam = Expression.Call(p, toLowerInvariantMethod);
-        var result1 = method!.Invoke(null, new object[] { callOnParam });
+        var result1 = ExpressionConstantEvaluator.TryEvaluateMethodCall(callOnParam);
         await Assert.That(result1).IsNull();
 
         // argument not evaluatable
         var arg = Expression.Parameter(typeof(string), "arg");
         var containsMethod = ((System.Linq.Expressions.MethodCallExpression)((System.Linq.Expressions.Expression<Func<string, string, bool>>)((s, value) => s.Contains(value))).Body).Method;
         var callWithParamArg = Expression.Call(Expression.Constant("abc"), containsMethod, arg);
-        var result2 = method!.Invoke(null, new object[] { callWithParamArg });
+        var result2 = ExpressionConstantEvaluator.TryEvaluateMethodCall(callWithParamArg);
         await Assert.That(result2).IsNull();
 
         // constant null argument is allowed but patterns won't match => null
         var callWithNullArg = Expression.Call(Expression.Constant("abc"), containsMethod, Expression.Constant(null, typeof(string)));
-        var result3 = method!.Invoke(null, new object[] { callWithNullArg });
+        var result3 = ExpressionConstantEvaluator.TryEvaluateMethodCall(callWithNullArg);
         await Assert.That(result3).IsNull();
 
         // fall-through return null
         var getHashCode = typeof(object).GetMethod(nameof(object.GetHashCode), Type.EmptyTypes)!;
         var callOther = Expression.Call(Expression.Constant(new object()), getHashCode);
-        var result4 = method!.Invoke(null, new object[] { callOther });
+        var result4 = ExpressionConstantEvaluator.TryEvaluateMethodCall(callOther);
         await Assert.That(result4).IsNull();
     }
 
     [Test]
     public async Task TryEvaluateMethodCall_ToStringOnNullTarget_ShouldReturnNull()
     {
-        var method = typeof(ExpressionParser).GetMethod("TryEvaluateMethodCall", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         var toString = typeof(object).GetMethod(nameof(object.ToString), Type.EmptyTypes)!;
         var call = Expression.Call(Expression.Constant(null, typeof(object)), toString);
 
-        var result = method!.Invoke(null, new object[] { call });
+        var result = ExpressionConstantEvaluator.TryEvaluateMethodCall(call);
         await Assert.That(result).IsNull();
     }
 
     [Test]
     public async Task TryEvaluateBinary_AndAlsoOrElse_ShortCircuitBranches_ShouldBeCovered()
     {
-        var method = typeof(ExpressionParser).GetMethod("TryEvaluateBinary", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        object? Invoke(System.Linq.Expressions.BinaryExpression expr) => method!.Invoke(null, new object[] { expr });
+        object? Invoke(System.Linq.Expressions.BinaryExpression expr) => ExpressionConstantEvaluator.TryEvaluateBinary(expr);
 
         var p = Expression.Parameter(typeof(bool), "b");
         await Assert.That(Invoke(Expression.AndAlso(p, Expression.Constant(true)))).IsNull();
@@ -255,79 +246,69 @@ public sealed class ExpressionParserCoverage100Tests
     [Test]
     public async Task EvaluateArithmeticOperators_AllTypeCombinations_ShouldBeCovered()
     {
-        var add = typeof(ExpressionParser).GetMethod("EvaluateAdd", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var sub = typeof(ExpressionParser).GetMethod("EvaluateSubtract", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var mul = typeof(ExpressionParser).GetMethod("EvaluateMultiply", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var div = typeof(ExpressionParser).GetMethod("EvaluateDivide", BindingFlags.NonPublic | BindingFlags.Static)!;
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(1, 2)).IsEqualTo(3);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(1L, 2L)).IsEqualTo(3L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(1d, 2d)).IsEqualTo(3d);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(1m, 2m)).IsEqualTo(3m);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(1, 2L)).IsEqualTo(3L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(1L, 2)).IsEqualTo(3L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(new DateTime(2024, 1, 1), TimeSpan.FromDays(1))).IsEqualTo(new DateTime(2024, 1, 2));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2))).IsEqualTo(TimeSpan.FromSeconds(3));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateAdd(new object(), new object())).IsNull();
 
-        await Assert.That(add.Invoke(null, new object[] { 1, 2 })).IsEqualTo(3);
-        await Assert.That(add.Invoke(null, new object[] { 1L, 2L })).IsEqualTo(3L);
-        await Assert.That(add.Invoke(null, new object[] { 1d, 2d })).IsEqualTo(3d);
-        await Assert.That(add.Invoke(null, new object[] { 1m, 2m })).IsEqualTo(3m);
-        await Assert.That(add.Invoke(null, new object[] { 1, 2L })).IsEqualTo(3L);
-        await Assert.That(add.Invoke(null, new object[] { 1L, 2 })).IsEqualTo(3L);
-        await Assert.That(add.Invoke(null, new object[] { new DateTime(2024, 1, 1), TimeSpan.FromDays(1) })).IsEqualTo(new DateTime(2024, 1, 2));
-        await Assert.That(add.Invoke(null, new object[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2) })).IsEqualTo(TimeSpan.FromSeconds(3));
-        await Assert.That(add.Invoke(null, new object[] { new object(), new object() })).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(3, 2)).IsEqualTo(1);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(3L, 2L)).IsEqualTo(1L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(3d, 2d)).IsEqualTo(1d);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(3m, 2m)).IsEqualTo(1m);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(3, 2L)).IsEqualTo(1L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(3L, 2)).IsEqualTo(1L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(new DateTime(2024, 1, 2), TimeSpan.FromDays(1))).IsEqualTo(new DateTime(2024, 1, 1));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(new DateTime(2024, 1, 2), new DateTime(2024, 1, 1))).IsEqualTo(TimeSpan.FromDays(1));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1))).IsEqualTo(TimeSpan.FromSeconds(1));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateSubtract(new object(), new object())).IsNull();
 
-        await Assert.That(sub.Invoke(null, new object[] { 3, 2 })).IsEqualTo(1);
-        await Assert.That(sub.Invoke(null, new object[] { 3L, 2L })).IsEqualTo(1L);
-        await Assert.That(sub.Invoke(null, new object[] { 3d, 2d })).IsEqualTo(1d);
-        await Assert.That(sub.Invoke(null, new object[] { 3m, 2m })).IsEqualTo(1m);
-        await Assert.That(sub.Invoke(null, new object[] { 3, 2L })).IsEqualTo(1L);
-        await Assert.That(sub.Invoke(null, new object[] { 3L, 2 })).IsEqualTo(1L);
-        await Assert.That(sub.Invoke(null, new object[] { new DateTime(2024, 1, 2), TimeSpan.FromDays(1) })).IsEqualTo(new DateTime(2024, 1, 1));
-        await Assert.That(sub.Invoke(null, new object[] { new DateTime(2024, 1, 2), new DateTime(2024, 1, 1) })).IsEqualTo(TimeSpan.FromDays(1));
-        await Assert.That(sub.Invoke(null, new object[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(1) })).IsEqualTo(TimeSpan.FromSeconds(1));
-        await Assert.That(sub.Invoke(null, new object[] { new object(), new object() })).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2, 3)).IsEqualTo(6);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2L, 3L)).IsEqualTo(6L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2d, 3d)).IsEqualTo(6d);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2m, 3m)).IsEqualTo(6m);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2, 3L)).IsEqualTo(6L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2L, 3)).IsEqualTo(6L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(TimeSpan.FromSeconds(2), 2d)).IsEqualTo(TimeSpan.FromSeconds(4));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2d, TimeSpan.FromSeconds(2))).IsEqualTo(TimeSpan.FromSeconds(4));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(TimeSpan.FromSeconds(2), 2)).IsEqualTo(TimeSpan.FromSeconds(4));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(2, TimeSpan.FromSeconds(2))).IsEqualTo(TimeSpan.FromSeconds(4));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateMultiply(new object(), new object())).IsNull();
 
-        await Assert.That(mul.Invoke(null, new object[] { 2, 3 })).IsEqualTo(6);
-        await Assert.That(mul.Invoke(null, new object[] { 2L, 3L })).IsEqualTo(6L);
-        await Assert.That(mul.Invoke(null, new object[] { 2d, 3d })).IsEqualTo(6d);
-        await Assert.That(mul.Invoke(null, new object[] { 2m, 3m })).IsEqualTo(6m);
-        await Assert.That(mul.Invoke(null, new object[] { 2, 3L })).IsEqualTo(6L);
-        await Assert.That(mul.Invoke(null, new object[] { 2L, 3 })).IsEqualTo(6L);
-        await Assert.That(mul.Invoke(null, new object[] { TimeSpan.FromSeconds(2), 2d })).IsEqualTo(TimeSpan.FromSeconds(4));
-        await Assert.That(mul.Invoke(null, new object[] { 2d, TimeSpan.FromSeconds(2) })).IsEqualTo(TimeSpan.FromSeconds(4));
-        await Assert.That(mul.Invoke(null, new object[] { TimeSpan.FromSeconds(2), 2 })).IsEqualTo(TimeSpan.FromSeconds(4));
-        await Assert.That(mul.Invoke(null, new object[] { 2, TimeSpan.FromSeconds(2) })).IsEqualTo(TimeSpan.FromSeconds(4));
-        await Assert.That(mul.Invoke(null, new object[] { new object(), new object() })).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10, 2)).IsEqualTo(5);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10L, 2L)).IsEqualTo(5L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10d, 2d)).IsEqualTo(5d);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10m, 2m)).IsEqualTo(5m);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10, 2L)).IsEqualTo(5L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10L, 2)).IsEqualTo(5L);
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(TimeSpan.FromSeconds(10), 2d)).IsEqualTo(TimeSpan.FromSeconds(5));
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(TimeSpan.FromSeconds(10), 2)).IsEqualTo(TimeSpan.FromSeconds(5));
 
-        await Assert.That(div.Invoke(null, new object[] { 10, 2 })).IsEqualTo(5);
-        await Assert.That(div.Invoke(null, new object[] { 10L, 2L })).IsEqualTo(5L);
-        await Assert.That(div.Invoke(null, new object[] { 10d, 2d })).IsEqualTo(5d);
-        await Assert.That(div.Invoke(null, new object[] { 10m, 2m })).IsEqualTo(5m);
-        await Assert.That(div.Invoke(null, new object[] { 10, 2L })).IsEqualTo(5L);
-        await Assert.That(div.Invoke(null, new object[] { 10L, 2 })).IsEqualTo(5L);
-        await Assert.That(div.Invoke(null, new object[] { TimeSpan.FromSeconds(10), 2d })).IsEqualTo(TimeSpan.FromSeconds(5));
-        await Assert.That(div.Invoke(null, new object[] { TimeSpan.FromSeconds(10), 2 })).IsEqualTo(TimeSpan.FromSeconds(5));
-
-        await Assert.That(div.Invoke(null, new object[] { 10, 0 })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { 10L, 0L })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { 10d, 0d })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { 10m, 0m })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { 10, 0L })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { 10L, 0 })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { TimeSpan.FromSeconds(10), 0d })).IsNull();
-        await Assert.That(div.Invoke(null, new object[] { TimeSpan.FromSeconds(10), 0 })).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10, 0)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10L, 0L)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10d, 0d)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10m, 0m)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10, 0L)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(10L, 0)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(TimeSpan.FromSeconds(10), 0d)).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.EvaluateDivide(TimeSpan.FromSeconds(10), 0)).IsNull();
     }
 
     [Test]
     public async Task TryCompare_AllTypeCombinations_ShouldBeCovered()
     {
-        var method = typeof(ExpressionParser).GetMethod("TryCompare", BindingFlags.NonPublic | BindingFlags.Static)!;
         object Invoke(object left, object right)
         {
-            var args = new object?[] { left, right, 0 };
-            return method.Invoke(null, args)!;
+            return ExpressionConstantEvaluator.TryCompare(left, right, out _);
         }
 
         bool TryCompare(object left, object right, out int result)
         {
-            var args = new object?[] { left, right, 0 };
-            var ok = (bool)method.Invoke(null, args)!;
-            result = (int)args[2]!;
-            return ok;
+            return ExpressionConstantEvaluator.TryCompare(left, right, out result);
         }
 
         await Assert.That(TryCompare(1, 2, out _)).IsTrue();
@@ -357,48 +338,32 @@ public sealed class ExpressionParserCoverage100Tests
     [Test]
     public async Task TryEvaluateConvert_And_TryEvaluateConditional_NullBranches_ShouldBeCovered()
     {
-        var convert = typeof(ExpressionParser).GetMethod("TryEvaluateConvert", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var conditional = typeof(ExpressionParser).GetMethod("TryEvaluateConditional", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         var p = Expression.Parameter(typeof(int), "x");
         var unary = Expression.Convert(p, typeof(long));
-        await Assert.That(convert.Invoke(null, new object[] { unary })).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.TryEvaluateConvert(unary)).IsNull();
 
         var b = Expression.Parameter(typeof(bool), "b");
         var cond = Expression.Condition(b, Expression.Constant(1), Expression.Constant(2));
-        await Assert.That(conditional.Invoke(null, new object[] { cond })).IsNull();
+        await Assert.That(ExpressionConstantEvaluator.TryEvaluateConditional(cond)).IsNull();
     }
 
     [Test]
     public async Task ParseMemberExpression_StaticDateTimeCases_ShouldBeCovered()
     {
         var parser = new ExpressionParser();
-        var parseMember = typeof(ExpressionParser).GetMethod("ParseMemberExpression", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
         var now = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.Now));
-        await Assert.That(parseMember.Invoke(parser, new object[] { now })).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(now)).IsTypeOf<ConstantExpression>();
 
         var utcNow = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.UtcNow));
-        await Assert.That(parseMember.Invoke(parser, new object[] { utcNow })).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(utcNow)).IsTypeOf<ConstantExpression>();
 
         var today = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.Today));
-        await Assert.That(parseMember.Invoke(parser, new object[] { today })).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(today)).IsTypeOf<ConstantExpression>();
 
         var machineName = Expression.Property(null, ExpressionMemberInfo.Property(() => Environment.MachineName));
 
-        static object? InvokeUnwrap(MethodInfo method, object instance, object[] args)
-        {
-            try
-            {
-                return method.Invoke(instance, args);
-            }
-            catch (TargetInvocationException tie) when (tie.InnerException != null)
-            {
-                throw tie.InnerException;
-            }
-        }
-
-        await Assert.That(() => InvokeUnwrap(parseMember, parser, new object[] { machineName }))
+        await Assert.That(() => parser.ParseMemberExpression(machineName))
             .Throws<NotSupportedException>();
     }
 
@@ -406,26 +371,23 @@ public sealed class ExpressionParserCoverage100Tests
     public async Task ParseMemberExpression_ConstantContainerFieldAndKnownProperty_ShouldBeCovered()
     {
         var parser = new ExpressionParser();
-        var parseMember = typeof(ExpressionParser).GetMethod("ParseMemberExpression", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
         var container = new InstanceFieldContainer { Value = 123 };
         var field = typeof(InstanceFieldContainer).GetField(nameof(InstanceFieldContainer.Value))!;
         var fieldExpr = Expression.Field(Expression.Constant(container), field);
-        await Assert.That(parseMember.Invoke(parser, new object[] { fieldExpr })).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(fieldExpr)).IsTypeOf<ConstantExpression>();
 
         var lengthProp = typeof(string).GetProperty(nameof(string.Length))!;
         var lengthExpr = Expression.Property(Expression.Constant("abc"), lengthProp);
-        var parsed = (ConstantExpression)parseMember.Invoke(parser, new object[] { lengthExpr })!;
+        var parsed = (ConstantExpression)parser.ParseMemberExpression(lengthExpr);
         await Assert.That(parsed.Value).IsEqualTo(3);
     }
 
     [Test]
     public async Task EvaluateKnownProperty_StringAndDateTime_ShouldBeCovered()
     {
-        var method = typeof(ExpressionParser).GetMethod("EvaluateKnownProperty", BindingFlags.NonPublic | BindingFlags.Static)!;
-
         var lengthProp = typeof(string).GetProperty(nameof(string.Length))!;
-        await Assert.That(method.Invoke(null, new object?[] { "abc", lengthProp })).IsEqualTo(3);
+        await Assert.That(ExpressionKnownMemberEvaluator.EvaluateProperty("abc", lengthProp)).IsEqualTo(3);
 
         var dt = new DateTime(2024, 2, 3, 4, 5, 6, DateTimeKind.Utc);
         var properties = new[]
@@ -443,11 +405,11 @@ public sealed class ExpressionParserCoverage100Tests
         foreach (var name in properties)
         {
             var prop = typeof(DateTime).GetProperty(name)!;
-            await Assert.That(method.Invoke(null, new object?[] { dt, prop })).IsNotNull();
+            await Assert.That(ExpressionKnownMemberEvaluator.EvaluateProperty(dt, prop)).IsNotNull();
         }
 
         var ticks = typeof(DateTime).GetProperty(nameof(DateTime.Ticks))!;
-        await Assert.That(method.Invoke(null, new object?[] { dt, ticks })).IsNull();
+        await Assert.That(ExpressionKnownMemberEvaluator.EvaluateProperty(dt, ticks)).IsNull();
     }
 
     [Test]

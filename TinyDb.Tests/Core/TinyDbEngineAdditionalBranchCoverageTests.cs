@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TUnit.Assertions;
@@ -11,17 +9,6 @@ namespace TinyDb.Tests.Core;
 
 public class TinyDbEngineAdditionalBranchCoverageTests
 {
-    private static CollectionState GetCollectionState(TinyDbEngine engine, string collectionName)
-    {
-        var field = typeof(TinyDbEngine).GetField("_collectionStates", BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field == null) throw new InvalidOperationException("Unable to access _collectionStates");
-
-        var states = (ConcurrentDictionary<string, CollectionState>?)field.GetValue(engine);
-        if (states == null) throw new InvalidOperationException("Unable to read _collectionStates");
-
-        return states[collectionName];
-    }
-
     [Test]
     public async Task Ctor_WhenDirectoryMissing_ShouldCreateDirectory()
     {
@@ -167,7 +154,7 @@ public class TinyDbEngineAdditionalBranchCoverageTests
             var collection = engine.GetBsonCollection("c");
             var id = collection.Insert(new BsonDocument().Set("x", 1));
 
-            var state = GetCollectionState(engine, "c");
+            var state = engine.GetCollectionState("c");
             await Assert.That(state.Index.TryGet(id, out var location)).IsTrue();
 
             state.Index.Set(id, new DocumentLocation(location.PageId, (ushort)(location.EntryIndex + 100)));
@@ -207,7 +194,7 @@ public class TinyDbEngineAdditionalBranchCoverageTests
             var collection = engine.GetBsonCollection(collectionName);
             collection.Insert(new BsonDocument().Set("_id", 7).Set("v", "stored"));
 
-            var state = GetCollectionState(engine, collectionName);
+            var state = engine.GetCollectionState(collectionName);
             state.Index.Clear();
             logs.Clear();
             var baselineFallbacks = engine.FindByIdFullScanCount;
@@ -252,7 +239,7 @@ public class TinyDbEngineAdditionalBranchCoverageTests
             var collection = engine.GetBsonCollection(collectionName);
             collection.Insert(new BsonDocument().Set("_id", 7).Set("v", "stored"));
 
-            var state = GetCollectionState(engine, collectionName);
+            var state = engine.GetCollectionState(collectionName);
             state.Index.Set(new BsonInt32(7), new DocumentLocation(1, 0));
             logs.Clear();
             var baselineStaleHits = engine.FindByIdStaleIndexHitCount;

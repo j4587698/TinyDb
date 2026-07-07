@@ -54,7 +54,7 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
         return cache[index];
     }
 
-    
+
     /// <summary>
     /// 获取指定索引的值
     /// </summary>
@@ -227,7 +227,7 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
 
         foreach (var item in list)
         {
-            builder.Add(ConvertToBsonValue(item));
+            builder.Add(BsonObjectConverter.ToBsonValue(item));
         }
 
         return new BsonArray(builder.ToImmutable());
@@ -295,26 +295,11 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
             if (!first) sb.Append(", ");
             first = false;
 
-            sb.Append(ToJsonString(element));
+            sb.Append(BsonJson.ToJsonString(element));
         }
 
         sb.Append(']');
         return sb.ToString();
-    }
-
-    private static string ToJsonString(BsonValue value)
-    {
-        return value switch
-        {
-            BsonString str => $"\"{str.Value.Replace("\"", "\\\"")}\"",
-            BsonBoolean boolean => boolean.Value.ToString().ToLowerInvariant(),
-            BsonNull => "null",
-            BsonDocument doc => doc.ToString(),
-            BsonArray array => array.ToString(),
-            BsonObjectId oid => $"{{ \"$oid\": \"{oid.Value}\" }}",
-            BsonDateTime dt => $"{{ \"$date\": \"{dt.Value:yyyy-MM-ddTHH:mm:ss.fffZ}\" }}",
-            _ => value.ToString()
-        };
     }
 
     /// <summary>
@@ -326,47 +311,10 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
 
         foreach (var element in _elements)
         {
-            result.Add(ConvertFromBsonValue(element));
+            result.Add(BsonObjectConverter.FromBsonValue(element));
         }
 
         return result;
-    }
-
-    private static BsonValue ConvertToBsonValue(object? value)
-    {
-        return value switch
-        {
-            null => BsonNull.Value,
-            string str => str,
-            int i => i,
-            long l => l,
-            double d => d,
-            float f => (double)f,
-            bool b => b,
-            DateTime dt => dt,
-            ObjectId oid => oid,
-            Dictionary<string, object?> dict => BsonDocument.FromDictionary(dict),
-            List<object?> list => FromList(list),
-            _ => throw new NotSupportedException($"Type {value.GetType()} is not supported")
-        };
-    }
-
-    private static object? ConvertFromBsonValue(BsonValue value)
-    {
-        return value switch
-        {
-            BsonNull => null,
-            BsonString str => str.Value,
-            BsonInt32 i => i.Value,
-            BsonInt64 l => l.Value,
-            BsonDouble d => d.Value,
-            BsonBoolean b => b.Value,
-            BsonDateTime dt => dt.Value,
-            BsonObjectId oid => oid.Value,
-            BsonDocument doc => doc.ToDictionary(),
-            BsonArray array => array.ToList(),
-            _ => value.RawValue
-        };
     }
 
     /// <summary>
@@ -382,7 +330,7 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     /// </summary>
     public static implicit operator BsonArray(object?[] array)
     {
-        return new BsonArray(array.Select(ConvertToBsonValue));
+        return new BsonArray(array.Select(BsonObjectConverter.ToBsonValue));
     }
 
     // IConvertible 实现
@@ -404,13 +352,13 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     {
         if (conversionType == typeof(BsonArray)) return this;
         if (conversionType == typeof(List<object?>)) return ToList();
-        
+
         // Delegate to Convert.ChangeType for standard types (primitives, string, datetime, etc.)
         if (Type.GetTypeCode(conversionType) != TypeCode.Object)
         {
             return Convert.ChangeType(this, conversionType, provider);
         }
-        
+
         throw new InvalidCastException($"Cannot convert BsonArray to {conversionType.Name}");
     }
     public override ushort ToUInt16(IFormatProvider? provider) => Convert.ToUInt16(Count, provider);

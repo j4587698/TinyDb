@@ -1,7 +1,5 @@
 using TinyDb.Core;
 using TinyDb.Bson;
-using TinyDb.Storage;
-using System.Reflection;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -31,14 +29,14 @@ public class EngineCorruptPageTests : IDisposable
             var colName = "col";
             var id = engine.InsertDocument(colName, new BsonDocument().Set("_id", 1));
             engine.Flush();
-            
+
             // Ensure cache is initialized
             engine.FindAll(colName).ToList();
-            
+
             // Dispose engine to release file lock
             engine.Dispose();
-            
-            // Corrupt data page. Header is page 1 (8192 bytes). 
+
+            // Corrupt data page. Header is page 1 (8192 bytes).
             // Data page is likely page 4 or higher.
             using (var fs = new FileStream(_testDbPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
             {
@@ -47,7 +45,7 @@ public class EngineCorruptPageTests : IDisposable
                 new Random().NextBytes(garbage);
                 fs.Write(garbage, 0, garbage.Length);
             }
-            
+
             using var reopened = new TinyDbEngine(_testDbPath);
             await Assert.That(() => reopened.FindAll(colName).ToList())
                 .Throws<InvalidOperationException>();

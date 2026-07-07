@@ -1,4 +1,3 @@
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Storage;
@@ -46,14 +45,9 @@ public class EngineWalReplayCallbackCoverageTests : IDisposable
 
         try { if (File.Exists(_walPath)) File.Delete(_walPath); } catch { }
 
-        var dataField = typeof(Page).GetField("_data", BindingFlags.NonPublic | BindingFlags.Instance);
-        await Assert.That(dataField == null).IsFalse();
-
         using (var wal = new WriteAheadLog(_dbPath, pageSize, enabled: true))
-        using (var page = new Page(1, pageSize, PageType.Header))
+        using (var page = new Page(1, pageBytes))
         {
-            var raw = (byte[])dataField!.GetValue(page)!;
-            Array.Copy(pageBytes, raw, pageBytes.Length);
             wal.AppendPage(page);
             await wal.FlushLogAsync();
         }

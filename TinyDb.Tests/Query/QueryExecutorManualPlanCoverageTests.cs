@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -37,7 +38,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
             IndexScanKeys = new()
         };
 
-        using var enumerator = _executor.ExecutePrimaryKeyLookupForTests<BsonDocument>(plan).GetEnumerator();
+        using var enumerator = QueryExecutorTestDriver.ExecutePrimaryKeyLookup<BsonDocument>(_executor, plan).GetEnumerator();
         await Assert.That(enumerator.MoveNext()).IsFalse();
     }
 
@@ -60,7 +61,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
             }
         };
 
-        var enumerable = _executor.ExecutePrimaryKeyLookupForTests<BsonDocument>(plan);
+        var enumerable = QueryExecutorTestDriver.ExecutePrimaryKeyLookup<BsonDocument>(_executor, plan);
         int count = 0;
         foreach (var _ in enumerable) count++;
 
@@ -80,7 +81,7 @@ public sealed class QueryExecutorManualPlanCoverageTests : IDisposable
         };
 
         int count = 0;
-        foreach (var _ in _executor.ExecuteIndexScanForTests(plan)) count++;
+        foreach (var _ in QueryExecutorTestDriver.ExecuteIndexScan(_executor, plan)) count++;
 
         await Assert.That(count).IsEqualTo(1);
     }

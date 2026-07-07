@@ -2,28 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using TinyDb.Serialization;
 using LinqExp = System.Linq.Expressions;
 
 namespace TinyDb.Query;
 
 internal static class QueryShapeExtractor
 {
-    private static readonly HashSet<string> TerminalMethods = new(StringComparer.Ordinal)
-    {
-        "Count",
-        "LongCount",
-        "Any",
-        "All",
-        "First",
-        "FirstOrDefault",
-        "Single",
-        "SingleOrDefault",
-        "Last",
-        "LastOrDefault",
-        "ElementAt",
-        "ElementAtOrDefault"
-    };
-
     public static (QueryShape<TSource> Shape, LinqExp.ConstantExpression? Source) Extract<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] TSource>(
         LinqExp.Expression expression)
@@ -55,7 +40,7 @@ internal static class QueryShapeExtractor
         {
             var methodName = call.Method.Name;
 
-            if (TerminalMethods.Contains(methodName))
+            if (QueryTerminalMethods.Contains(methodName))
             {
                 continue;
             }
@@ -64,7 +49,7 @@ internal static class QueryShapeExtractor
             {
                 case "Where":
                     if (stage != ExtractionStage.BeforePagination) break;
-                    if (!TryGetUnaryQuotedLambda(call, out var whereLambda)) break;
+                    if (!QueryExpressionCallHelpers.TryGetLambdaArgument(call, out var whereLambda)) break;
                     if (whereLambda.Parameters.Count != 1 || whereLambda.ReturnType != typeof(bool)) break;
                     if (whereLambda.Parameters[0].Type != typeof(TSource)) break;
                     predicate = predicate == null
@@ -146,26 +131,6 @@ internal static class QueryShapeExtractor
         return (shape, sourceConstant);
     }
 
-    private static bool TryGetUnaryQuotedLambda(LinqExp.MethodCallExpression call, [NotNullWhen(true)] out LinqExp.LambdaExpression? lambda)
-    {
-        lambda = null;
-        if (call.Arguments.Count < 2) return false;
-
-        if (call.Arguments[1] is LinqExp.UnaryExpression u && u.Operand is LinqExp.LambdaExpression l)
-        {
-            lambda = l;
-            return true;
-        }
-
-        if (call.Arguments[1] is LinqExp.LambdaExpression l2)
-        {
-            lambda = l2;
-            return true;
-        }
-
-        return false;
-    }
-
     private static bool TryGetIntConstant(LinqExp.MethodCallExpression call, out int value)
     {
         value = default;
@@ -180,7 +145,7 @@ internal static class QueryShapeExtractor
         where TSource : class
     {
         field = default;
-        if (!TryGetUnaryQuotedLambda(call, out var lambda)) return false;
+        if (!QueryExpressionCallHelpers.TryGetLambdaArgument(call, out var lambda)) return false;
         if (lambda.Parameters.Count != 1) return false;
         if (lambda.Parameters[0].Type != typeof(TSource)) return false;
 
@@ -206,40 +171,15 @@ internal static class QueryShapeExtractor
             return "_id";
         }
 
-        return ToCamelCase(memberName);
-    }
-
-    private static string ToCamelCase(string name)
-    {
-        if (string.IsNullOrEmpty(name)) return name;
-        if (name.Length == 1) return name.ToLowerInvariant();
-        return char.ToLowerInvariant(name[0]) + name.Substring(1);
+        return BsonFieldName.ToCamelCase(memberName);
     }
 
     private static LinqExp.Expression<Func<T, bool>> AndAlso<T>(LinqExp.Expression<Func<T, bool>> left, LinqExp.Expression<Func<T, bool>> right)
     {
         var p = left.Parameters[0];
-        var rightBody = new ParameterReplaceVisitor(right.Parameters[0], p).Visit(right.Body) ?? right.Body;
+        var rightBody = QueryExpressionCallHelpers.ReplaceParameter(right.Body, right.Parameters[0], p);
         var body = LinqExp.Expression.AndAlso(left.Body, rightBody);
         return LinqExp.Expression.Lambda<Func<T, bool>>(body, p);
-    }
-
-    private sealed class ParameterReplaceVisitor : LinqExp.ExpressionVisitor
-    {
-        private readonly LinqExp.ParameterExpression _from;
-        private readonly LinqExp.ParameterExpression _to;
-
-        public ParameterReplaceVisitor(LinqExp.ParameterExpression from, LinqExp.ParameterExpression to)
-        {
-            _from = from;
-            _to = to;
-        }
-
-        protected override LinqExp.Expression VisitParameter(LinqExp.ParameterExpression node)
-        {
-            if (node == _from) return _to;
-            return base.VisitParameter(node);
-        }
     }
 
     private enum ExtractionStage

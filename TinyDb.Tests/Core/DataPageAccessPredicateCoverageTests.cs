@@ -1,6 +1,5 @@
 using System;
 using System.Linq.Expressions;
-using System.Reflection;
 using System.Text;
 using TinyDb.Bson;
 using TinyDb.Core;
@@ -13,17 +12,12 @@ namespace TinyDb.Tests.Core;
 
 public sealed class DataPageAccessPredicateCoverageTests
 {
-    private delegate bool TryMatchPredicatesDelegate(ReadOnlySpan<byte> document, ScanPredicate[] predicates, out bool definitiveMatch);
-
-    private static readonly TryMatchPredicatesDelegate TryMatchPredicates = CreateDelegate("TryMatchPredicates");
-    private static readonly TryMatchPredicatesDelegate TryMatchPredicatesSlow = CreateDelegate("TryMatchPredicatesSlow");
-
     [Test]
     public async Task TryMatchPredicates_BaseBranches_ShouldReturnExpectedFlags()
     {
         var doc = BsonSerializer.SerializeDocument(new BsonDocument().Set("a", 1));
 
-        var okEmpty = TryMatchPredicates(doc, Array.Empty<ScanPredicate>(), out var definitiveEmpty);
+        var okEmpty = DataPageAccess.TryMatchPredicates(doc, Array.Empty<ScanPredicate>(), out var definitiveEmpty);
         await Assert.That(okEmpty).IsTrue();
         await Assert.That(definitiveEmpty).IsTrue();
 
@@ -33,7 +27,7 @@ public sealed class DataPageAccessPredicateCoverageTests
             new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.NotEqual)
         };
 
-        var okOnlyEmpty = TryMatchPredicates(doc, onlyEmptyPredicates, out var definitiveOnlyEmpty);
+        var okOnlyEmpty = DataPageAccess.TryMatchPredicates(doc, onlyEmptyPredicates, out var definitiveOnlyEmpty);
         await Assert.That(okOnlyEmpty).IsTrue();
         await Assert.That(definitiveOnlyEmpty).IsTrue();
     }
@@ -51,7 +45,7 @@ public sealed class DataPageAccessPredicateCoverageTests
             CreatePredicate("missing", 1, ExpressionType.Equal)
         };
 
-        var largeResult = TryMatchPredicates(largeDoc, missingEqOne, out var largeDefinitive);
+        var largeResult = DataPageAccess.TryMatchPredicates(largeDoc, missingEqOne, out var largeDefinitive);
         await Assert.That(largeResult).IsTrue();
         await Assert.That(largeDefinitive).IsFalse();
 
@@ -69,7 +63,7 @@ public sealed class DataPageAccessPredicateCoverageTests
             CreatePredicate("missing", null, ExpressionType.Equal)
         };
 
-        var malformedResult = TryMatchPredicates(malformed, malformedPredicates, out var malformedDefinitive);
+        var malformedResult = DataPageAccess.TryMatchPredicates(malformed, malformedPredicates, out var malformedDefinitive);
         await Assert.That(malformedResult).IsTrue();
         await Assert.That(malformedDefinitive).IsFalse();
 
@@ -83,11 +77,11 @@ public sealed class DataPageAccessPredicateCoverageTests
             CreatePredicate("missing", null, ExpressionType.NotEqual)
         };
 
-        var nullEqResult = TryMatchPredicates(normalDoc, missingEqNull, out var nullEqDefinitive);
+        var nullEqResult = DataPageAccess.TryMatchPredicates(normalDoc, missingEqNull, out var nullEqDefinitive);
         await Assert.That(nullEqResult).IsTrue();
         await Assert.That(nullEqDefinitive).IsTrue();
 
-        var nullNeResult = TryMatchPredicates(normalDoc, missingNeNull, out var nullNeDefinitive);
+        var nullNeResult = DataPageAccess.TryMatchPredicates(normalDoc, missingNeNull, out var nullNeDefinitive);
         await Assert.That(nullNeResult).IsFalse();
         await Assert.That(nullNeDefinitive).IsFalse();
     }
@@ -106,12 +100,12 @@ public sealed class DataPageAccessPredicateCoverageTests
             slowPredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
         }
 
-        var slowResult = TryMatchPredicates(doc, slowPredicates, out var slowDefinitive);
+        var slowResult = DataPageAccess.TryMatchPredicates(doc, slowPredicates, out var slowDefinitive);
         await Assert.That(slowResult).IsTrue();
         await Assert.That(slowDefinitive).IsFalse();
 
         var shortDoc = new byte[] { 1, 2, 3, 4 };
-        var shortResult = TryMatchPredicatesSlow(shortDoc, new[] { CreatePredicate("a", 1, ExpressionType.Equal) }, out var shortDefinitive);
+        var shortResult = DataPageAccess.TryMatchPredicatesSlow(shortDoc, new[] { CreatePredicate("a", 1, ExpressionType.Equal) }, out var shortDefinitive);
         await Assert.That(shortResult).IsTrue();
         await Assert.That(shortDefinitive).IsFalse();
 
@@ -122,7 +116,7 @@ public sealed class DataPageAccessPredicateCoverageTests
             slowFalsePredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
         }
 
-        var slowFalseResult = TryMatchPredicates(doc, slowFalsePredicates, out var slowFalseDefinitive);
+        var slowFalseResult = DataPageAccess.TryMatchPredicates(doc, slowFalsePredicates, out var slowFalseDefinitive);
         await Assert.That(slowFalseResult).IsFalse();
         await Assert.That(slowFalseDefinitive).IsFalse();
     }
@@ -133,12 +127,5 @@ public sealed class DataPageAccessPredicateCoverageTests
         var alt1Bytes = alt1 != null ? Encoding.UTF8.GetBytes(alt1) : null;
         var alt2Bytes = alt2 != null ? Encoding.UTF8.GetBytes(alt2) : null;
         return new ScanPredicate(fieldBytes, alt1Bytes, alt2Bytes, value, op);
-    }
-
-    private static TryMatchPredicatesDelegate CreateDelegate(string methodName)
-    {
-        var method = typeof(DataPageAccess).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException(typeof(DataPageAccess).FullName, methodName);
-        return (TryMatchPredicatesDelegate)method.CreateDelegate(typeof(TryMatchPredicatesDelegate));
     }
 }

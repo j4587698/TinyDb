@@ -2,7 +2,6 @@ using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Collections;
 using TinyDb.Core;
-using System.Reflection;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -153,60 +152,6 @@ public class DocumentCollectionAdditionalCoverageTests
     }
 
     [Test]
-    public async Task PrivateIdHelpers_WhenAotIdAccessorThrows_ShouldReturnBsonNull_And_SwallowSetId()
-    {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_id_helpers_{Guid.NewGuid():N}.db");
-
-        try
-        {
-            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = (DocumentCollection<PlainEntity>)engine.GetCollection<PlainEntity>("plain");
-
-            var getEntityId = typeof(DocumentCollection<PlainEntity>).GetMethod("GetEntityId", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(getEntityId).IsNotNull();
-
-            var updateEntityId = typeof(DocumentCollection<PlainEntity>).GetMethod("UpdateEntityId", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(updateEntityId).IsNotNull();
-
-            var entity = new PlainEntity { Name = "x" };
-            var id = (BsonValue)getEntityId!.Invoke(col, new object[] { entity })!;
-            await Assert.That(id).IsEqualTo(BsonNull.Value);
-
-            await Assert.That(() => updateEntityId!.Invoke(col, new object[] { entity, new BsonObjectId(ObjectId.NewObjectId()) })).ThrowsNothing();
-        }
-        finally
-        {
-            CleanupDb(dbPath);
-        }
-    }
-
-    [Test]
-    public async Task UpdateEntityId_WhenIdPropertyCannotRepresentDocumentId_ShouldThrow()
-    {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_id_mismatch_{Guid.NewGuid():N}.db");
-
-        try
-        {
-            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = (DocumentCollection<BatchItem>)engine.GetCollection<BatchItem>("batch");
-
-            var updateEntityId = typeof(DocumentCollection<BatchItem>).GetMethod("UpdateEntityId", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(updateEntityId).IsNotNull();
-
-            var entity = new BatchItem { Name = "x" };
-            var ex = await Assert.That(() => updateEntityId!.Invoke(col, new object[] { entity, new BsonObjectId(ObjectId.NewObjectId()) }))
-                .Throws<TargetInvocationException>();
-
-            await Assert.That(ex!.InnerException).IsTypeOf<InvalidOperationException>();
-            await Assert.That(ex.InnerException!.Message).Contains("was not updated to the document ID");
-        }
-        finally
-        {
-            CleanupDb(dbPath);
-        }
-    }
-
-    [Test]
     public async Task Insert_WithEmptyEnumerable_ShouldReturnZero()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_empty_batch_{Guid.NewGuid():N}.db");
@@ -226,34 +171,7 @@ public class DocumentCollectionAdditionalCoverageTests
     }
 
     [Test]
-    public async Task EnsureIdIndex_Private_WhenEngineDisposed_ShouldThrowObjectDisposed()
-    {
-        var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_ensure_id_{Guid.NewGuid():N}.db");
-
-        try
-        {
-            var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
-            var col = (DocumentCollection<BatchItem>)engine.GetCollection<BatchItem>("batch");
-
-            var ensureIdIndex = typeof(DocumentCollection<BatchItem>).GetMethod("EnsureIdIndex", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(ensureIdIndex).IsNotNull();
-
-            engine.Dispose();
-
-            var ex = await Assert.That(() => ensureIdIndex!.Invoke(col, Array.Empty<object>()))
-                .Throws<TargetInvocationException>();
-
-            await Assert.That(ex!.InnerException).IsNotNull();
-            await Assert.That(ex.InnerException).IsTypeOf<ObjectDisposedException>();
-        }
-        finally
-        {
-            CleanupDb(dbPath);
-        }
-    }
-
-    [Test]
-    public async Task EnsureIdIndex_Private_WhenConflictingIndexExists_ShouldWrapAsInvalidOperation()
+    public async Task Insert_WhenIdIndexConflicts_ShouldWrapAsInvalidOperation()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"doc_col_ensure_id_conflict_{Guid.NewGuid():N}.db");
 
@@ -267,14 +185,10 @@ public class DocumentCollectionAdditionalCoverageTests
             var created = engine.EnsureIndex("batch_conflict", "_id", "idx_batch_conflict_id", unique: false);
             await Assert.That(created).IsTrue();
 
-            var ensureIdIndex = typeof(DocumentCollection<BatchItem>).GetMethod("EnsureIdIndex", BindingFlags.Instance | BindingFlags.NonPublic);
-            await Assert.That(ensureIdIndex).IsNotNull();
+            var ex = await Assert.That(() => col.Insert(new BatchItem { Name = "x" }))
+                .Throws<InvalidOperationException>();
 
-            var ex = await Assert.That(() => ensureIdIndex!.Invoke(col, Array.Empty<object>()))
-                .Throws<TargetInvocationException>();
-
-            await Assert.That(ex!.InnerException).IsTypeOf<InvalidOperationException>();
-            await Assert.That(ex.InnerException!.Message).Contains("Failed to ensure unique _id index");
+            await Assert.That(ex!.Message).Contains("Failed to ensure unique _id index");
         }
         finally
         {

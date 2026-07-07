@@ -1,5 +1,4 @@
 using System.IO;
-using System.Reflection;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
@@ -159,8 +158,9 @@ public sealed class ImplementationFixRegressionTests : IDisposable
             ExpressionEvaluator.EvaluateValue(new TinyDb.Query.MemberExpression("Missing" + i, null), entity);
         }
 
-        await Assert.That(GetExpressionEvaluatorCacheCount("CamelCaseNameCache")).IsLessThanOrEqualTo(2048);
-        await Assert.That(GetExpressionEvaluatorCacheCount("PropertyCache")).IsLessThanOrEqualTo(4096);
+        var cacheCounts = ExpressionEvaluator.GetCacheCounts();
+        await Assert.That(cacheCounts.CamelCaseNames).IsLessThanOrEqualTo(2048);
+        await Assert.That(cacheCounts.Properties).IsLessThanOrEqualTo(4096);
     }
 
     [Test]
@@ -321,13 +321,4 @@ public sealed class ImplementationFixRegressionTests : IDisposable
     {
     }
 
-    private static int GetExpressionEvaluatorCacheCount(string fieldName)
-    {
-        var field = typeof(ExpressionEvaluator).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Static)
-                    ?? throw new MissingFieldException(typeof(ExpressionEvaluator).FullName, fieldName);
-        var cache = field.GetValue(null) ?? throw new InvalidOperationException("Cache field is null.");
-        var count = cache.GetType().GetProperty("Count")?.GetValue(cache)
-                    ?? throw new MissingMemberException(cache.GetType().FullName, "Count");
-        return (int)count;
-    }
 }

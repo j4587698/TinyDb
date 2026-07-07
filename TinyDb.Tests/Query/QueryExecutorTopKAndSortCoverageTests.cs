@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
@@ -72,17 +71,17 @@ public sealed class QueryExecutorTopKAndSortCoverageTests : IDisposable
         col.Insert(new BsonDocument().Set("_id", 10).Set("mixed", BsonNull.Value));
 
         using var tx = (Transaction)_engine.BeginTransaction();
-        tx.Operations.Add(new TransactionOperation(
+        tx.AddOperation(new TransactionOperation(
             TransactionOperationType.Delete,
             "col",
             new BsonInt32(1)));
-        tx.Operations.Add(new TransactionOperation(
+        tx.AddOperation(new TransactionOperation(
             TransactionOperationType.Update,
             "col",
             new BsonInt32(2),
             originalDocument: null,
             newDocument: new BsonDocument().Set("_id", 2).Set("mixed", "tx-updated")));
-        tx.Operations.Add(new TransactionOperation(
+        tx.AddOperation(new TransactionOperation(
             TransactionOperationType.Insert,
             "other_collection",
             new BsonInt32(100),
@@ -128,48 +127,28 @@ public sealed class QueryExecutorTopKAndSortCoverageTests : IDisposable
     [Test]
     public async Task QueryExecutor_InternalSortHelpers_ShouldCoverSortFieldBytesAndSortKeyFromValueBranches()
     {
-        var qeType = typeof(QueryExecutor);
+        var idField = SortFieldBytes.Create("_id");
+        await Assert.That(idField.Alternate).IsNotNull();
+        await Assert.That(idField.SecondAlternate).IsNotNull();
 
-        var sortFieldType = qeType.GetNestedType("SortFieldBytes", BindingFlags.NonPublic);
-        await Assert.That(sortFieldType).IsNotNull();
-        var create = sortFieldType!.GetMethod("Create", BindingFlags.Public | BindingFlags.Static);
-        await Assert.That(create).IsNotNull();
+        var nameField = SortFieldBytes.Create("name");
+        await Assert.That(nameField.Alternate).IsNotNull();
+        await Assert.That(nameField.SecondAlternate).IsNull();
 
-        var idField = create!.Invoke(null, new object[] { "_id" });
-        var altProp = sortFieldType.GetProperty("Alternate", BindingFlags.Public | BindingFlags.Instance);
-        var secondAltProp = sortFieldType.GetProperty("SecondAlternate", BindingFlags.Public | BindingFlags.Instance);
-        await Assert.That(altProp).IsNotNull();
-        await Assert.That(secondAltProp).IsNotNull();
-        await Assert.That((byte[]?)altProp!.GetValue(idField)).IsNotNull();
-        await Assert.That((byte[]?)secondAltProp!.GetValue(idField)).IsNotNull();
+        _ = SortKey.FromBsonValue(null);
+        _ = SortKey.FromBsonValue(new BsonInt32(1));
+        _ = SortKey.FromBsonValue(new BsonInt64(2L));
+        _ = SortKey.FromBsonValue(new BsonDouble(3.14));
+        _ = SortKey.FromBsonValue(new BsonDecimal128(1.5m));
+        _ = SortKey.FromBsonValue(new BsonBoolean(true));
+        _ = SortKey.FromBsonValue(new BsonDateTime(DateTime.UtcNow));
+        _ = SortKey.FromBsonValue(new BsonString("x"));
+        _ = SortKey.FromBsonValue(new BsonObjectId(ObjectId.NewObjectId()));
+        _ = SortKey.FromBsonValue(new BsonArray().AddValue(1));
 
-        var nameField = create.Invoke(null, new object[] { "name" });
-        await Assert.That((byte[]?)altProp.GetValue(nameField)).IsNotNull();
-        await Assert.That((byte[]?)secondAltProp.GetValue(nameField)).IsNull();
-
-        var sortKeyType = qeType.GetNestedType("SortKey", BindingFlags.NonPublic);
-        await Assert.That(sortKeyType).IsNotNull();
-        var fromBsonValue = sortKeyType!.GetMethod("FromBsonValue", BindingFlags.Public | BindingFlags.Static);
-        await Assert.That(fromBsonValue).IsNotNull();
-
-        _ = fromBsonValue!.Invoke(null, new object?[] { null });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonInt32(1) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonInt64(2L) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonDouble(3.14) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonDecimal128(1.5m) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonBoolean(true) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonDateTime(DateTime.UtcNow) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonString("x") });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonObjectId(ObjectId.NewObjectId()) });
-        _ = fromBsonValue.Invoke(null, new object?[] { new BsonArray().AddValue(1) });
-
-        var materializeDoc = qeType.GetMethod("MaterializeKeysFromDocument", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(materializeDoc).IsNotNull();
-        var keys = materializeDoc!.Invoke(null, new object[]
-        {
+        var keys = QuerySortKeyReader.MaterializeKeysFromDocument(
             new BsonDocument().Set("score", 10),
-            new List<QuerySortField> { new QuerySortField("score", typeof(int), false) }
-        });
+            new List<QuerySortField> { new QuerySortField("score", typeof(int), false) });
         await Assert.That(keys).IsNotNull();
     }
 }

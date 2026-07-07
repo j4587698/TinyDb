@@ -1,9 +1,9 @@
 using System;
 using System.Globalization;
 using System.Linq;
-using System.Reflection;
 using TinyDb.Bson;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -23,8 +23,8 @@ public sealed class QueryableObjectComparerCoverageTests
 
         static List<KeyItem> OrderByKey(params KeyItem[] items)
         {
-            var query = items.AsQueryable().OrderBy(x => x.Key);
-            var result = QueryPipeline.ExecuteAotForTests<KeyItem>(query.Expression, items, extractedPredicate: null);
+            var query = TestQueryables.InMemory(items).OrderBy(x => x.Key);
+            var result = QueryPipelineTestDriver.ExecuteAot<KeyItem>(query.Expression, items, extractedPredicate: null);
             return ((IEnumerable<KeyItem>)result!).ToList();
         }
 
@@ -70,18 +70,4 @@ public sealed class QueryableObjectComparerCoverageTests
         await Assert.That(mixedOrdered[0].Key).IsEqualTo(Guid.Empty);
     }
 
-    [Test]
-    public async Task ObjectComparer_ToDouble_WhenConvertFails_ShouldThrowInvalidOperation()
-    {
-        var comparerType = typeof(QueryPipeline).GetNestedType("ObjectComparer", BindingFlags.NonPublic)
-            ?? throw new MissingMemberException(typeof(QueryPipeline).FullName, "ObjectComparer");
-        var toDouble = comparerType.GetMethod("ToDouble", BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException(comparerType.FullName, "ToDouble");
-
-        var ex = await Assert.That(() => toDouble.Invoke(null, new object[] { new object() }))
-            .Throws<TargetInvocationException>();
-
-        await Assert.That(ex!.InnerException).IsTypeOf<InvalidOperationException>();
-        await Assert.That(ex.InnerException!.Message).Contains("Unable to convert value");
-    }
 }

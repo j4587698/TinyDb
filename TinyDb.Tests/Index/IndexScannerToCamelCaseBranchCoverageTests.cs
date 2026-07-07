@@ -1,6 +1,6 @@
-using System.Reflection;
 using TinyDb.Attributes;
 using TinyDb.Index;
+using TinyDb.Serialization;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using TUnit.Core;
@@ -12,16 +12,13 @@ public class IndexScannerToCamelCaseBranchCoverageTests
     [Test]
     public async Task ToCamelCase_ShouldCoverNullEmptySingleAndMultiChar()
     {
-        var method = typeof(IndexScanner).GetMethod("ToCamelCase", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        await Assert.That((string?)method!.Invoke(null, new object?[] { null })).IsNull();
-        await Assert.That((string)method.Invoke(null, new object?[] { "" })!).IsEqualTo("");
-        await Assert.That((string)method.Invoke(null, new object?[] { "A" })!).IsEqualTo("a");
-        await Assert.That((string)method.Invoke(null, new object?[] { "Abc" })!).IsEqualTo("abc");
-        await Assert.That((string)method.Invoke(null, new object?[] { "ID" })!).IsEqualTo("id");
-        await Assert.That((string)method.Invoke(null, new object?[] { "URLValue" })!).IsEqualTo("urlValue");
-        await Assert.That((string)method.Invoke(null, new object?[] { "_Id" })!).IsEqualTo("_id");
+        await Assert.That((string?)BsonFieldName.ToCamelCase(null!)).IsNull();
+        await Assert.That(BsonFieldName.ToCamelCase("")).IsEqualTo("");
+        await Assert.That(BsonFieldName.ToCamelCase("A")).IsEqualTo("a");
+        await Assert.That(BsonFieldName.ToCamelCase("Abc")).IsEqualTo("abc");
+        await Assert.That(BsonFieldName.ToCamelCase("ID")).IsEqualTo("id");
+        await Assert.That(BsonFieldName.ToCamelCase("URLValue")).IsEqualTo("urlValue");
+        await Assert.That(BsonFieldName.ToCamelCase("_Id")).IsEqualTo("_id");
     }
 
     [Test]

@@ -1,6 +1,5 @@
 using System;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Query;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -41,14 +40,18 @@ public class ExpressionEvaluatorNullEdgeCoverageTests
     [Test]
     public async Task BuildSelector_DefaultBranch_ShouldHandleNullAndNonNullArgs()
     {
-        var method = typeof(ExpressionEvaluator).GetMethod("BuildSelector", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
+        var entity = new DummyEntity();
 
-        var selectorNull = (Func<object, object>)method!.Invoke(null, new object?[] { new object?[] { null } })!;
-        await Assert.That(selectorNull(123)).IsEqualTo(123);
+        var minWithNullSelector = new FunctionExpression(
+            "Min",
+            new ConstantExpression(new[] { 2, 1 }),
+            new QueryExpression[] { new ConstantExpression(null) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(minWithNullSelector, entity)).IsEqualTo(1);
 
-        var selectorConstant = (Func<object, object>)method.Invoke(null, new object?[] { new object?[] { 42 } })!;
-        await Assert.That(selectorConstant(123)).IsEqualTo(42);
+        var sumWithConstantSelector = new FunctionExpression(
+            "Sum",
+            new ConstantExpression(new[] { 1, 2 }),
+            new QueryExpression[] { new ConstantExpression(42) });
+        await Assert.That(ExpressionEvaluator.EvaluateValue(sumWithConstantSelector, entity)).IsEqualTo(84m);
     }
 }
-

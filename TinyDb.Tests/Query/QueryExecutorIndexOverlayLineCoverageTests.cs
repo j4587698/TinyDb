@@ -6,6 +6,7 @@ using System.Linq.Expressions;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -33,7 +34,7 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
     }
 
     [Test]
-    public async Task ExecuteIndexScanForTests_ShouldCoverTransactionOverlayYieldBranch()
+    public async Task ExecuteIndexScan_ShouldCoverTransactionOverlayYieldBranch()
     {
         var colName = "idx_scan_overlay";
         var idxMgr = _engine.GetIndexManager(colName);
@@ -46,7 +47,7 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
         var idxStats = idxMgr.GetAllStatistics().Single(s => s.Name == "idx_a");
 
         using var tx = (Transaction)_engine.BeginTransaction();
-        tx.Operations.Add(new TransactionOperation(
+        tx.AddOperation(new TransactionOperation(
             TransactionOperationType.Update,
             colName,
             documentId: new BsonInt32(1),
@@ -60,14 +61,14 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
             IndexScanKeys = new List<IndexScanKey>()
         };
 
-        var result = _executor.ExecuteIndexScanForTests(plan).ToList();
+        var result = QueryExecutorTestDriver.ExecuteIndexScan(_executor, plan).ToList();
         await Assert.That(result.Any(d => d["_id"].ToInt32() == 1 && d["a"].ToInt32() == 100)).IsTrue();
 
         tx.Rollback();
     }
 
     [Test]
-    public async Task ExecuteIndexSeekForTests_ShouldCoverUniqueAndNonUniqueOverlayYieldBranches()
+    public async Task ExecuteIndexSeek_ShouldCoverUniqueAndNonUniqueOverlayYieldBranches()
     {
         var uniqueCol = "idx_seek_unique";
         var uniqueMgr = _engine.GetIndexManager(uniqueCol);
@@ -80,7 +81,7 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
 
         using (var tx = (Transaction)_engine.BeginTransaction())
         {
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.Update,
                 uniqueCol,
                 documentId: new BsonInt32(10),
@@ -97,7 +98,7 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
                 }
             };
 
-            var uniqueResult = _executor.ExecuteIndexSeekForTests<BsonDocument>(uniquePlan).ToList();
+            var uniqueResult = QueryExecutorTestDriver.ExecuteIndexSeek<BsonDocument>(_executor, uniquePlan).ToList();
             await Assert.That(uniqueResult.Any(d => d["_id"].ToInt32() == 10 && d["v"].ToInt32() == 99)).IsTrue();
             tx.Rollback();
         }
@@ -114,7 +115,7 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
 
         using (var tx = (Transaction)_engine.BeginTransaction())
         {
-            tx.Operations.Add(new TransactionOperation(
+            tx.AddOperation(new TransactionOperation(
                 TransactionOperationType.Update,
                 nonUniqueCol,
                 documentId: new BsonInt32(1),
@@ -131,7 +132,7 @@ public sealed class QueryExecutorIndexOverlayLineCoverageTests : IDisposable
                 }
             };
 
-            var nonUniqueResult = _executor.ExecuteIndexSeekForTests<BsonDocument>(nonUniquePlan).ToList();
+            var nonUniqueResult = QueryExecutorTestDriver.ExecuteIndexSeek<BsonDocument>(_executor, nonUniquePlan).ToList();
             await Assert.That(nonUniqueResult.Any(d => d["_id"].ToInt32() == 1 && d["v"].ToInt32() == 500)).IsTrue();
             tx.Rollback();
         }

@@ -1,6 +1,5 @@
 using System;
 using System.Linq.Expressions;
-using System.Reflection;
 using TinyDb.Query;
 using TinyDb.Tests.Utils;
 using TUnit.Assertions;
@@ -18,21 +17,15 @@ public class ExpressionParserEvaluateBranchCoverageTests4
     [Test]
     public async Task TryEvaluateBinary_WithUnsupportedNodeType_ShouldReturnNull()
     {
-        var method = typeof(ExpressionParser).GetMethod("TryEvaluateBinary", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
         var expr = Expression.Modulo(Expression.Constant(5), Expression.Constant(2));
-        var result = method!.Invoke(null, new object[] { expr });
+        var result = ExpressionConstantEvaluator.TryEvaluateBinary(expr);
         await Assert.That(result).IsNull();
     }
 
     [Test]
     public async Task EvaluateDivide_WhenDivisorIsZero_ShouldReturnNull()
     {
-        var method = typeof(ExpressionParser).GetMethod("EvaluateDivide", BindingFlags.NonPublic | BindingFlags.Static);
-        await Assert.That(method).IsNotNull();
-
-        var result = method!.Invoke(null, new object[] { 1, 0 });
+        var result = ExpressionConstantEvaluator.EvaluateDivide(1, 0);
         await Assert.That(result).IsNull();
     }
 

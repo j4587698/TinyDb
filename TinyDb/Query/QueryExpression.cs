@@ -93,8 +93,8 @@ public sealed class FunctionExpression : QueryExpression
         Target = target;
         Arguments = arguments?.ToList() ?? new List<QueryExpression>();
     }
-    
-    public FunctionExpression(string functionName, QueryExpression target, QueryExpression argument) 
+
+    public FunctionExpression(string functionName, QueryExpression target, QueryExpression argument)
         : this(functionName, target, new[] { argument })
     {
     }
@@ -107,7 +107,7 @@ public sealed class UnaryExpression : QueryExpression
 {
     public override ExpressionType NodeType { get; }
     public QueryExpression Operand { get; }
-    
+
     [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicParameterlessConstructor)]
     public Type Type { get; } // Target type for conversion
 
@@ -125,10 +125,10 @@ public sealed class UnaryExpression : QueryExpression
 public sealed class ConstructorExpression : QueryExpression
 {
     public override ExpressionType NodeType => ExpressionType.New;
-    
+
     [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)]
     public Type Type { get; }
-    
+
     public IReadOnlyList<QueryExpression> Arguments { get; }
 
     public ConstructorExpression([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type type, IEnumerable<QueryExpression> arguments)
@@ -144,14 +144,14 @@ public sealed class ConstructorExpression : QueryExpression
 public sealed class MemberInitQueryExpression : QueryExpression
 {
     public override ExpressionType NodeType => ExpressionType.MemberInit;
-    
+
     [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
     public Type Type { get; }
-    
+
     public IReadOnlyList<(string MemberName, QueryExpression Value)> Bindings { get; }
 
     public MemberInitQueryExpression(
-        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)] Type type, 
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)] Type type,
         IEnumerable<(string MemberName, QueryExpression Value)> bindings)
     {
         Type = type;
@@ -160,7 +160,7 @@ public sealed class MemberInitQueryExpression : QueryExpression
 }
 
 /// <summary>
-/// ä¸‰å…ƒè¡¨è¾¾å¼ (condition ? ifTrue : ifFalse)
+/// 三元表达式 (condition ? ifTrue : ifFalse)
 /// </summary>
 public sealed class ConditionalQueryExpression : QueryExpression
 {

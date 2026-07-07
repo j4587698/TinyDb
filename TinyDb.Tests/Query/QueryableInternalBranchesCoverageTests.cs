@@ -112,7 +112,8 @@ public sealed class QueryableInternalBranchesCoverageTests
         var queryable = new Queryable<TestProduct>(_executor, collectionName);
 
         var p = Expression.Parameter(typeof(TestProduct), "p");
-        var selector = Expression.Lambda<Func<TestProduct, decimal>>(Expression.Property(p, nameof(TestProduct.Price)), p);
+        var priceProperty = typeof(TestProduct).GetProperty(nameof(TestProduct.Price))!;
+        var selector = Expression.Lambda<Func<TestProduct, decimal>>(Expression.Property(p, priceProperty), p);
         var sumExpr = Expression.Call(typeof(System.Linq.Queryable), "Sum", new[] { typeof(TestProduct) }, queryable.Expression, selector);
 
         var result = queryable.Provider.Execute<IEnumerable<TestProduct>>(sumExpr);

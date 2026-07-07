@@ -582,26 +582,11 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
             sb.Append('"');
             sb.Append(kvp.Key);
             sb.Append("\": ");
-            sb.Append(ToJsonString(kvp.Value));
+            sb.Append(BsonJson.ToJsonString(kvp.Value));
         }
 
         sb.Append('}');
         return sb.ToString();
-    }
-
-    private static string ToJsonString(BsonValue value)
-    {
-        return value switch
-        {
-            BsonString str => $"\"{str.Value.Replace("\"", "\\\"")}\"",
-            BsonBoolean boolean => boolean.Value.ToString().ToLowerInvariant(),
-            BsonNull => "null",
-            BsonDocument doc => doc.ToString(),
-            BsonArray array => array.ToString(),
-            BsonObjectId oid => $"{{ \"$oid\": \"{oid.Value}\" }}",
-            BsonDateTime dt => $"{{ \"$date\": \"{dt.Value:yyyy-MM-ddTHH:mm:ss.fffZ}\" }}",
-            _ => value.ToString()
-        };
     }
 
     /// <summary>
@@ -613,7 +598,7 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
         foreach (var kvp in dictionary)
         {
-            elements.Add(new KeyValuePair<string, BsonValue>(kvp.Key, ConvertToBsonValue(kvp.Value)));
+            elements.Add(new KeyValuePair<string, BsonValue>(kvp.Key, BsonObjectConverter.ToBsonValue(kvp.Value)));
         }
 
         return new BsonDocument(elements);
@@ -628,47 +613,10 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
 
         foreach (var kvp in Entries)
         {
-            result[kvp.Key] = ConvertFromBsonValue(kvp.Value);
+            result[kvp.Key] = BsonObjectConverter.FromBsonValue(kvp.Value);
         }
 
         return result;
-    }
-
-    private static BsonValue ConvertToBsonValue(object? value)
-    {
-        return value switch
-        {
-            null => BsonNull.Value,
-            string str => str,
-            int i => i,
-            long l => l,
-            double d => d,
-            float f => (double)f,
-            bool b => b,
-            DateTime dt => dt,
-            ObjectId oid => oid,
-            Dictionary<string, object?> dict => FromDictionary(dict),
-            List<object?> list => BsonArray.FromList(list),
-            _ => throw new NotSupportedException($"Type {value.GetType()} is not supported")
-        };
-    }
-
-    private static object? ConvertFromBsonValue(BsonValue value)
-    {
-        return value switch
-        {
-            BsonNull => null,
-            BsonString str => str.Value,
-            BsonInt32 i => i.Value,
-            BsonInt64 l => l.Value,
-            BsonDouble d => d.Value,
-            BsonBoolean b => b.Value,
-            BsonDateTime dt => dt.Value,
-            BsonObjectId oid => oid.Value,
-            BsonDocument doc => doc.ToDictionary(),
-            BsonArray array => array.ToList(),
-            _ => value.RawValue
-        };
     }
 
     /// <summary>
@@ -698,12 +646,12 @@ public sealed class BsonDocument : BsonValue, IDictionary<string, BsonValue>, IR
     {
         if (conversionType == typeof(BsonDocument)) return this;
         if (conversionType == typeof(Dictionary<string, object?>)) return ToDictionary();
-        
+
         if (Type.GetTypeCode(conversionType) != TypeCode.Object)
         {
             return Convert.ChangeType(this, conversionType, provider);
         }
-        
+
         throw new InvalidCastException($"Cannot convert BsonDocument to {conversionType.Name}");
     }
     public override ushort ToUInt16(IFormatProvider? provider) => Convert.ToUInt16(Count, provider);

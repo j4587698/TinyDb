@@ -1,23 +1,12 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using TinyDb.Core;
 using TinyDb.Storage;
 
 namespace TinyDb.Tests.Utils;
 
 internal static class UnsafeAccessors
 {
-    internal static class TinyDbEngineAccessor
-    {
-        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_collectionStates")]
-        internal static extern ref ConcurrentDictionary<string, CollectionState> CollectionStates(TinyDbEngine engine);
-
-        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_pageManager")]
-        internal static extern ref PageManager PageManager(TinyDbEngine engine);
-    }
-
     internal static class FlushSchedulerAccessor
     {
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_journalBatchTcs")]
