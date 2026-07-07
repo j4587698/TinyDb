@@ -119,6 +119,17 @@ public sealed class DataPageAccessPredicateCoverageTests
         var slowFalseResult = DataPageAccess.TryMatchPredicates(doc, slowFalsePredicates, out var slowFalseDefinitive);
         await Assert.That(slowFalseResult).IsFalse();
         await Assert.That(slowFalseDefinitive).IsFalse();
+
+        var slowMissingFalsePredicates = new ScanPredicate[65];
+        slowMissingFalsePredicates[0] = CreatePredicate("Deleted", true, ExpressionType.Equal);
+        for (int i = 1; i < slowMissingFalsePredicates.Length; i++)
+        {
+            slowMissingFalsePredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
+        }
+
+        var slowMissingFalseResult = DataPageAccess.TryMatchPredicates(doc, slowMissingFalsePredicates, out var slowMissingFalseDefinitive);
+        await Assert.That(slowMissingFalseResult).IsFalse();
+        await Assert.That(slowMissingFalseDefinitive).IsFalse();
     }
 
     private static ScanPredicate CreatePredicate(string field, object? value, ExpressionType op, string? alt1 = null, string? alt2 = null)

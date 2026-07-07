@@ -74,6 +74,26 @@ public class TransactionManagerIndexOperationCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task Commit_WhenLaterCreateIndexFails_ShouldNotDropPreexistingCompatibleIndex()
+    {
+        var collectionName = $"products_{Guid.NewGuid():N}";
+        _ = _engine.GetCollection<TestProduct>(collectionName);
+        _engine.EnsureIndex(collectionName, "Price", "idx_price", unique: false);
+
+        var tx = (Transaction)_engine.BeginTransaction();
+        tx.RecordCreateIndex(collectionName, "idx_price", new[] { "Price" }, unique: false);
+        tx.RecordCreateIndex(collectionName, "idx_price", new[] { "Code" }, unique: false);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        {
+            tx.Commit();
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(_engine.GetIndexManager(collectionName).IndexExists("idx_price")).IsTrue();
+    }
+
+    [Test]
     public async Task Commit_WhenCreateUniqueIndexBackfillFails_ShouldDropPartialIndex()
     {
         var collectionName = $"products_{Guid.NewGuid():N}";

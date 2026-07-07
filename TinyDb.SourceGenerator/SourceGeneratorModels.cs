@@ -22,7 +22,11 @@ public class ClassInfo
 {
         public string Namespace { get; }
         public string Name { get; }
+        public string MetadataName { get; }
         public string ContainingTypePath { get; }
+        public bool IsGenericType { get; }
+        public string TypeParameterList { get; }
+        public string TypeParameterConstraints { get; }
         public bool IsValueType { get; }
         /// <summary>
         /// 用于在代码中引用类型的名称（对于嵌套类，使用 OuterClass.InnerClass 格式）
@@ -102,11 +106,15 @@ public class ClassInfo
         public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
         public List<ConstructorParameterInfo> ConstructorParameters { get; }
 
-        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null)
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null, string? metadataName = null, bool isGenericType = false, string? typeParameterList = null, string? typeParameterConstraints = null)
         {
             Namespace = @namespace;
             Name = name;
+            MetadataName = metadataName ?? name;
             IsValueType = isValueType;
+            IsGenericType = isGenericType;
+            TypeParameterList = typeParameterList ?? string.Empty;
+            TypeParameterConstraints = typeParameterConstraints ?? string.Empty;
             Properties = properties;
             IdProperty = idProperty;
             CollectionName = collectionName;
@@ -115,7 +123,7 @@ public class ClassInfo
             ContainingTypePath = containingTypePath ?? string.Empty;
             FullyQualifiedTypeReference = fullyQualifiedTypeReference ?? FullName;
             RuntimeFullName = runtimeFullName ?? FullName;
-            UniqueFileName = CreateUniqueFileName(Namespace, ContainingTypePath, Name);
+            UniqueFileName = CreateUniqueFileName(Namespace, ContainingTypePath, MetadataName);
             Location = location;
             DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
             CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
@@ -126,6 +134,7 @@ public class ClassInfo
 
         private static string CreateUniqueFileName(string @namespace, string containingTypePath, string name)
         {
+            name = SanitizeHintNamePart(name);
             if (string.IsNullOrEmpty(@namespace))
             {
                 return string.IsNullOrEmpty(containingTypePath)
@@ -137,6 +146,16 @@ public class ClassInfo
             return string.IsNullOrEmpty(containingTypePath)
                 ? $"{namespacePart}_{name}"
                 : $"{namespacePart}_{containingTypePath}_{name}";
+        }
+
+        private static string SanitizeHintNamePart(string value)
+        {
+            return value
+                .Replace('`', '_')
+                .Replace('<', '_')
+                .Replace('>', '_')
+                .Replace(',', '_')
+                .Replace('.', '_');
         }
 }
 /// <summary>

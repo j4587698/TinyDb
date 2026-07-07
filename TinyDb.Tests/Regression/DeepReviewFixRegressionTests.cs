@@ -5,6 +5,7 @@ using TinyDb.Core;
 using TinyDb.IdGeneration;
 using TinyDb.Serialization;
 using TinyDb.Storage;
+using TinyDb.Tests.Regression.Systematic.Models;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -178,6 +179,49 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
         });
 
         await Assert.That(document["name"].ToString()).IsEqualTo("nested");
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldNotSkipBusinessNamespaceContainingSystem()
+    {
+        var registered = AotHelperRegistry.TryGetAdapter<SystematicEntity>(out var adapter);
+
+        await Assert.That(registered).IsTrue();
+
+        var document = adapter!.ToDocument(new SystematicEntity
+        {
+            Id = 10,
+            Name = "systematic"
+        });
+
+        await Assert.That(document["name"].ToString()).IsEqualTo("systematic");
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldCompileGenericEntityHelpersWithDistinctArities()
+    {
+        var oneArgumentType = typeof(GenericArityRegressionEntity<int>);
+        var twoArgumentType = typeof(GenericArityRegressionEntity<int, string>);
+
+        await Assert.That(oneArgumentType.Name).StartsWith("GenericArityRegressionEntity`1");
+        await Assert.That(twoArgumentType.Name).StartsWith("GenericArityRegressionEntity`2");
+        await Assert.That(AotHelperRegistry.TryGetAdapter<GenericArityRegressionEntity<int>>(out _)).IsFalse();
+        await Assert.That(AotHelperRegistry.TryGetAdapter<GenericArityRegressionEntity<int, string>>(out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task Decimal128_Bytes_ShouldUseLittleEndianLayout()
+    {
+        var value = new Decimal128(0x0102030405060708UL, 0x1112131415161718UL);
+        var bytes = value.ToBytes();
+        var expected = new byte[]
+        {
+            0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
+            0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11
+        };
+
+        await Assert.That(bytes.SequenceEqual(expected)).IsTrue();
+        await Assert.That(Decimal128.FromBytes(bytes).Equals(value)).IsTrue();
     }
 
     private static long ReadGuidV7Timestamp(Guid guid)

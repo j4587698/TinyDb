@@ -45,7 +45,7 @@ public static class BinaryPredicateEvaluator
 
                 case BsonType.Double:
                     if (!CanRead(data, offset, 8)) return false;
-                    double dValue = BitConverter.ToDouble(data.Slice(offset, 8));
+                    double dValue = BinaryPrimitives.ReadDoubleLittleEndian(data.Slice(offset, 8));
                     result = Compare(dValue, targetValue, op);
                     return true;
 

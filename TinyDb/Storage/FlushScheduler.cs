@@ -179,17 +179,27 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     private Task EnsureJournalFlushAsync(CancellationToken cancellationToken)
     {
-        if (!_wal.IsEnabled)
+        var batchTask = EnqueueJournalFlush();
+        return cancellationToken.CanBeCanceled ? batchTask.WaitAsync(cancellationToken) : batchTask;
+    }
+
+    private void EnsureJournalFlush()
+    {
+        EnqueueJournalFlush().GetAwaiter().GetResult();
+    }
+
+    private Task EnsureSyncedFlushAsync(CancellationToken cancellationToken)
+    {
+        var batchTask = EnqueueSyncedFlush();
+        return cancellationToken.CanBeCanceled ? batchTask.WaitAsync(cancellationToken) : batchTask;
+    }
+
+    private Task EnqueueJournalFlush()
+    {
+        if (!_wal.IsEnabled || !_wal.HasPendingEntries)
         {
             return Task.CompletedTask;
         }
-
-        if (!_wal.HasPendingEntries)
-        {
-            return Task.CompletedTask;
-        }
-
-        Task batchTask;
 
         lock (_flushLock)
         {
@@ -206,41 +216,24 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             }
 
             _journalRequests++;
-            batchTask = _journalBatchTcs.Task;
+            var batchTask = _journalBatchTcs.Task;
 
             if (!_journalWorkerRunning)
             {
                 _journalWorkerRunning = true;
                 _journalWorkerTask = Task.Run(RunJournalWorkerAsync);
             }
-        }
 
-        return cancellationToken.CanBeCanceled ? batchTask.WaitAsync(cancellationToken) : batchTask;
+            return batchTask;
+        }
     }
 
-    private void EnsureJournalFlush()
-    {
-        if (!_wal.IsEnabled)
-        {
-            return;
-        }
-
-        if (!_wal.HasPendingEntries)
-        {
-            return;
-        }
-
-        _wal.FlushLog();
-    }
-
-    private Task EnsureSyncedFlushAsync(CancellationToken cancellationToken)
+    private Task EnqueueSyncedFlush()
     {
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages())
         {
             return Task.CompletedTask;
         }
-
-        Task batchTask;
 
         lock (_flushLock)
         {
@@ -257,36 +250,21 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             }
 
             _syncedRequests++;
-            batchTask = _syncedBatchTcs.Task;
+            var batchTask = _syncedBatchTcs.Task;
 
             if (!_syncedWorkerRunning)
             {
                 _syncedWorkerRunning = true;
                 _syncedWorkerTask = Task.Run(RunSyncedWorkerAsync);
             }
-        }
 
-        return cancellationToken.CanBeCanceled ? batchTask.WaitAsync(cancellationToken) : batchTask;
+            return batchTask;
+        }
     }
 
     private void EnsureSyncedFlush()
     {
-        if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages())
-        {
-            return;
-        }
-
-        lock (_flushLock)
-        {
-            if (Volatile.Read(ref _disposed) != 0)
-            {
-                throw new ObjectDisposedException(nameof(FlushScheduler));
-            }
-
-            ThrowIfBackgroundFailed();
-        }
-
-        _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: false);
+        EnqueueSyncedFlush().GetAwaiter().GetResult();
     }
 
     private async Task RunSyncedWorkerAsync()

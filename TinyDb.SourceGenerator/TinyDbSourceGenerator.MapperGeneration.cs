@@ -26,9 +26,9 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// <summary>");
         sb.AppendLine("        /// è¾…åŠ©æ–¹æ³•ï¼šå°†BSONå€¼è½¬æ¢ä¸ºç›®æ ‡ç±»åž‹");
         sb.AppendLine("        /// </summary>");
-        sb.AppendLine("        private static T ConvertFromBsonValue<T>(BsonValue value)");
+        sb.AppendLine("        private static TGeneratedTinyDbValue ConvertFromBsonValue<TGeneratedTinyDbValue>(BsonValue value)");
         sb.AppendLine("        {");
-        sb.AppendLine("            return global::TinyDb.Serialization.BsonConversion.FromBsonValue<T>(value)!;");
+        sb.AppendLine("            return global::TinyDb.Serialization.BsonConversion.FromBsonValue<TGeneratedTinyDbValue>(value)!;");
         sb.AppendLine("        }");
         sb.AppendLine();
 
@@ -67,7 +67,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// <typeparam name=\"T\">å¯¹è±¡ç±»åž‹</typeparam>");
         sb.AppendLine("        /// <param name=\"obj\">è¦åºåˆ—åŒ–çš„å¯¹è±¡</param>");
         sb.AppendLine("        /// <returns>BSON æ–‡æ¡£</returns>");
-        sb.AppendLine("        private static BsonDocument SerializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(T obj)");
+        sb.AppendLine("        private static BsonDocument SerializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] TGeneratedTinyDbObject>(TGeneratedTinyDbObject obj)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (obj == null) return new BsonDocument();");
         sb.AppendLine();
@@ -100,7 +100,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// <typeparam name=\"T\">ç›®æ ‡ç±»åž‹</typeparam>");
         sb.AppendLine("        /// <param name=\"document\">BSON æ–‡æ¡£</param>");
         sb.AppendLine("        /// <returns>ååºåˆ—åŒ–åŽçš„å¯¹è±¡</returns>");
-        sb.AppendLine("        private static T DeserializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(BsonDocument document)");
+        sb.AppendLine("        private static TGeneratedTinyDbObject DeserializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] TGeneratedTinyDbObject>(BsonDocument document)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (document == null) return default!;");
         sb.AppendLine();
@@ -109,21 +109,21 @@ public partial class TinyDbSourceGenerator
         foreach (var depType in classInfo.DependentComplexTypes)
         {
             sb.AppendLine($"            // æ£€æŸ¥æ˜¯å¦è¦ååºåˆ—åŒ–ä¸º {depType.ShortName}");
-            sb.AppendLine($"            if (typeof(T) == typeof({depType.FullyQualifiedName}))");
+            sb.AppendLine($"            if (typeof(TGeneratedTinyDbObject) == typeof({depType.FullyQualifiedName}))");
             sb.AppendLine("            {");
-            sb.AppendLine($"                return (T)(object)Deserialize_{depType.SafeMethodName}(document);");
+            sb.AppendLine($"                return (TGeneratedTinyDbObject)(object)Deserialize_{depType.SafeMethodName}(document);");
             sb.AppendLine("            }");
             sb.AppendLine();
         }
 
         sb.AppendLine("            // é¦–å…ˆå°è¯•ä½¿ç”¨å·²æ³¨å†Œçš„ AOT é€‚é…å™¨");
-        sb.AppendLine("            if (global::TinyDb.Serialization.AotHelperRegistry.TryGetAdapter<T>(out var adapter))");
+        sb.AppendLine("            if (global::TinyDb.Serialization.AotHelperRegistry.TryGetAdapter<TGeneratedTinyDbObject>(out var adapter))");
         sb.AppendLine("            {");
         sb.AppendLine("                return adapter.FromDocument(document);");
         sb.AppendLine("            }");
         sb.AppendLine();
         sb.AppendLine("            // å›žé€€åˆ°é€šç”¨ååºåˆ—åŒ–ï¼ˆå¯èƒ½ä½¿ç”¨åå°„ï¼‰");
-        sb.AppendLine("            return global::TinyDb.Serialization.AotBsonMapper.FromDocument<T>(document);");
+        sb.AppendLine("            return global::TinyDb.Serialization.AotBsonMapper.FromDocument<TGeneratedTinyDbObject>(document);");
         sb.AppendLine("        }");
         sb.AppendLine();
     }
@@ -139,7 +139,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// <typeparam name=\"T\">å¯¹è±¡ç±»åž‹</typeparam>");
         sb.AppendLine("        /// <param name=\"obj\">è¦åºåˆ—åŒ–çš„å¯¹è±¡</param>");
         sb.AppendLine("        /// <returns>BSON æ–‡æ¡£</returns>");
-        sb.AppendLine("        private static BsonDocument SerializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(T obj)");
+        sb.AppendLine("        private static BsonDocument SerializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] TGeneratedTinyDbObject>(TGeneratedTinyDbObject obj)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (obj == null) return new BsonDocument();");
         sb.AppendLine();
@@ -160,18 +160,18 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        /// <typeparam name=\"T\">ç›®æ ‡ç±»åž‹</typeparam>");
         sb.AppendLine("        /// <param name=\"document\">BSON æ–‡æ¡£</param>");
         sb.AppendLine("        /// <returns>ååºåˆ—åŒ–åŽçš„å¯¹è±¡</returns>");
-        sb.AppendLine("        private static T DeserializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] T>(BsonDocument document)");
+        sb.AppendLine("        private static TGeneratedTinyDbObject DeserializeComplexObject<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields)] TGeneratedTinyDbObject>(BsonDocument document)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (document == null) return default!;");
         sb.AppendLine();
         sb.AppendLine("            // é¦–å…ˆå°è¯•ä½¿ç”¨å·²æ³¨å†Œçš„ AOT é€‚é…å™¨");
-        sb.AppendLine("            if (global::TinyDb.Serialization.AotHelperRegistry.TryGetAdapter<T>(out var adapter))");
+        sb.AppendLine("            if (global::TinyDb.Serialization.AotHelperRegistry.TryGetAdapter<TGeneratedTinyDbObject>(out var adapter))");
         sb.AppendLine("            {");
         sb.AppendLine("                return adapter.FromDocument(document);");
         sb.AppendLine("            }");
         sb.AppendLine();
         sb.AppendLine("            // å›žé€€åˆ°é€šç”¨ååºåˆ—åŒ–ï¼ˆå¯èƒ½ä½¿ç”¨åå°„ï¼‰");
-        sb.AppendLine("            return global::TinyDb.Serialization.AotBsonMapper.FromDocument<T>(document);");
+        sb.AppendLine("            return global::TinyDb.Serialization.AotBsonMapper.FromDocument<TGeneratedTinyDbObject>(document);");
         sb.AppendLine("        }");
         sb.AppendLine();
     }

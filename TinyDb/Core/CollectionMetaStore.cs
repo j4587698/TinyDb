@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -104,7 +105,7 @@ internal sealed class CollectionMetaStore
             var collectionData = collectionPage.ReadBytes(dataOffset, collectionPage.DataSize - dataOffset);
             if (collectionData.Length < 4) return;
 
-            var bsonLength = BitConverter.ToInt32(collectionData, 0);
+            var bsonLength = BinaryPrimitives.ReadInt32LittleEndian(collectionData.AsSpan(0, 4));
             // 新建数据库时该页可能已分配但尚未写入（长度头为 0），按“空元数据”处理。
             if (bsonLength == 0) return;
 

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -41,7 +42,7 @@ internal sealed class DataPageAccess
         for (int i = 0; i < count; i++)
         {
             if (offset + 4 > endOffset) break;
-            int len = BitConverter.ToInt32(mem.Span.Slice(offset, 4));
+            int len = BinaryPrimitives.ReadInt32LittleEndian(mem.Span.Slice(offset, 4));
             offset += 4;
 
             if (len < 0) break;
@@ -83,7 +84,7 @@ internal sealed class DataPageAccess
         for (int i = 0; i < count; i++)
         {
             if (offset + 4 > span.Length) break;
-            int len = BitConverter.ToInt32(span.Slice(offset, 4));
+            int len = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
             offset += 4;
 
             if (len < 0) break;
@@ -122,7 +123,7 @@ internal sealed class DataPageAccess
         for (int i = 0; i < index; i++)
         {
             if (offset + 4 > span.Length) return null;
-            int len = BitConverter.ToInt32(span.Slice(offset, 4));
+            int len = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
             if (len < 0) return null;
             offset += 4;
             if (len > span.Length - offset) return null;
@@ -131,7 +132,7 @@ internal sealed class DataPageAccess
 
         // Read target document
         if (offset + 4 > span.Length) return null;
-        int targetLen = BitConverter.ToInt32(span.Slice(offset, 4));
+        int targetLen = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
         offset += 4;
         if (targetLen < 0) return null;
         if (targetLen > span.Length - offset) return null;
@@ -164,7 +165,7 @@ internal sealed class DataPageAccess
         for (int i = 0; i < index; i++)
         {
             if (offset + 4 > span.Length) return null;
-            int len = BitConverter.ToInt32(span.Slice(offset, 4));
+            int len = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
             if (len < 0) return null;
             offset += 4;
             if (len > span.Length - offset) return null;
@@ -173,7 +174,7 @@ internal sealed class DataPageAccess
 
         // Read target document
         if (offset + 4 > span.Length) return null;
-        int targetLen = BitConverter.ToInt32(span.Slice(offset, 4));
+        int targetLen = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
         offset += 4;
         if (targetLen < 0) return null;
         if (targetLen > span.Length - offset) return null;
@@ -282,7 +283,7 @@ internal sealed class DataPageAccess
         for (int i = 0; i < count; i++)
         {
             if (offset + 4 > endOffset) break;
-            int len = BitConverter.ToInt32(mem.Span.Slice(offset, 4));
+            int len = BinaryPrimitives.ReadInt32LittleEndian(mem.Span.Slice(offset, 4));
             offset += 4;
 
             if (len < 0) break;
@@ -464,7 +465,15 @@ internal sealed class DataPageAccess
                 found = BsonScanner.TryLocateField(document, alt2, out valueOffset, out type);
             }
 
-            if (!found) continue;
+            if (!found)
+            {
+                if (BinaryPredicateEvaluator.TryEvaluate(document, 0, BsonType.Null, pred.Operator, pred.TargetValue, pred.TargetStringUtf8Bytes, out bool missingEvalResult))
+                {
+                    if (!missingEvalResult) return false;
+                }
+
+                continue;
+            }
 
             if (BinaryPredicateEvaluator.TryEvaluate(document, valueOffset, type, pred.Operator, pred.TargetValue, pred.TargetStringUtf8Bytes, out bool evalResult))
             {

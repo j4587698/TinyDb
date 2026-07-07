@@ -149,7 +149,7 @@ public static class BsonScanner
         {
             case BsonType.Double:
                 if (!HasAvailable(data, offset, 8)) return false;
-                var d = BitConverter.ToDouble(data.Slice(offset, 8));
+                var d = BinaryPrimitives.ReadDoubleLittleEndian(data.Slice(offset, 8));
                 offset += 8;
                 value = new BsonDouble(d);
                 return true;

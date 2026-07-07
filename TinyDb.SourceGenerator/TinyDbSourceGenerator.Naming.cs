@@ -73,7 +73,8 @@ public partial class TinyDbSourceGenerator
         if (!string.IsNullOrEmpty(classInfo.Namespace))
         {
             // 明确排除System命名空间
-            if (classInfo.Namespace.Contains("System"))
+            if (classInfo.Namespace == "System" ||
+                classInfo.Namespace.StartsWith("System.", StringComparison.Ordinal))
             {
                 return false;
             }

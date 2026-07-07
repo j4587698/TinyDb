@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.InteropServices;
 
@@ -261,16 +262,16 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     public byte[] ToBytes()
     {
         var bytes = new byte[16];
-        BitConverter.TryWriteBytes(bytes, _lo);
-        BitConverter.TryWriteBytes(bytes.AsSpan(8), _hi);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(0, 8), _lo);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(8, 8), _hi);
         return bytes;
     }
 
     public static Decimal128 FromBytes(byte[] bytes)
     {
         if (bytes == null || bytes.Length != 16) throw new ArgumentException("Bytes must be length 16");
-        ulong lo = BitConverter.ToUInt64(bytes, 0);
-        ulong hi = BitConverter.ToUInt64(bytes, 8);
+        ulong lo = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(0, 8));
+        ulong hi = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(8, 8));
         return new Decimal128(lo, hi);
     }
 
