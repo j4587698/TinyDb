@@ -81,7 +81,7 @@ public sealed partial class PageManager
         lock (_stateLock)
         {
             // 如果文件大小不匹配 TotalPages，优先信任文件大小
-            var calculatedTotal = (uint)(_fileSize / _physicalPageSize);
+            var calculatedTotal = (uint)(ReadFileSize() / _physicalPageSize);
             _nextPageID = Math.Max(totalPages, calculatedTotal);
             _firstFreePageID = firstFreePageID;
             _freePageCount = _firstFreePageID == 0
@@ -243,7 +243,7 @@ public sealed partial class PageManager
         {
             freeCount = _freePageCount;
             nextPageId = _nextPageID;
-            fileSize = _fileSize;
+            fileSize = ReadFileSize();
         }
 
         var totalPages = (uint)(fileSize / _physicalPageSize);

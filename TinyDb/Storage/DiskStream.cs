@@ -10,14 +10,16 @@ namespace TinyDb.Storage;
 public sealed class DiskStream : IDiskStream
 {
     private readonly string _filePath;
+    private readonly string _fullPath;
     private readonly FileStream _fileStream;
+    private readonly ConcurrentDictionary<RegionLock, byte> _ownedRegionLocks = new();
     private bool _disposed;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     /// <summary>
     /// 跨平台文件区域锁管理器（进程内）
     /// </summary>
-    private static readonly ConcurrentDictionary<string, RegionLockManager> _regionLocks = new();
+    private static readonly ConcurrentDictionary<string, RegionLockEntry> _regionLocks = new();
 
     /// <summary>
     /// 文件路径
@@ -92,6 +94,7 @@ public sealed class DiskStream : IDiskStream
         FileOptions options = FileOptions.None)
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
+        _fullPath = Path.GetFullPath(_filePath);
         _fileStream = new FileStream(filePath, FileMode.OpenOrCreate, access, share, 4096, options);
     }
 
@@ -177,13 +180,19 @@ public sealed class DiskStream : IDiskStream
     {
         ThrowIfDisposed();
 
-        // 获取或创建该文件的区域锁管理器
-        var fullPath = Path.GetFullPath(_filePath);
-        var lockManager = _regionLocks.GetOrAdd(fullPath, _ => new RegionLockManager());
-
-        // 获取区域锁
-        var regionLock = lockManager.AcquireLock(position, length);
-        return regionLock;
+        var entry = RentRegionLockEntry(_fullPath);
+        try
+        {
+            var activeLock = entry.Manager.AcquireLock(position, length);
+            var regionLock = new RegionLock(entry, activeLock, this);
+            _ownedRegionLocks.TryAdd(regionLock, 0);
+            return regionLock;
+        }
+        catch
+        {
+            ReleaseRegionLockEntry(entry);
+            throw;
+        }
     }
 
     /// <summary>
@@ -197,10 +206,96 @@ public sealed class DiskStream : IDiskStream
         if (lockHandle is RegionLock regionLock)
         {
             regionLock.Release();
+            regionLock.Owner?.UntrackRegionLock(regionLock);
         }
         else
         {
             throw new ArgumentException("Invalid lock handle", nameof(lockHandle));
+        }
+    }
+
+    private static RegionLockEntry RentRegionLockEntry(string fullPath)
+    {
+        while (true)
+        {
+            var entry = _regionLocks.GetOrAdd(fullPath, static path => new RegionLockEntry(path));
+            if (entry.TryAddReference())
+            {
+                return entry;
+            }
+
+            TryRemoveRegionLockEntry(entry);
+        }
+    }
+
+    private static void ReleaseRegionLockEntry(RegionLockEntry entry)
+    {
+        if (entry.ReleaseReference())
+        {
+            TryRemoveRegionLockEntry(entry);
+        }
+    }
+
+    private static void TryRemoveRegionLockEntry(RegionLockEntry entry)
+    {
+        if (!entry.TryMarkRemoving())
+        {
+            return;
+        }
+
+        ((ICollection<KeyValuePair<string, RegionLockEntry>>)_regionLocks).Remove(
+            new KeyValuePair<string, RegionLockEntry>(entry.FullPath, entry));
+    }
+
+    private void UntrackRegionLock(RegionLock regionLock)
+    {
+        _ownedRegionLocks.TryRemove(regionLock, out _);
+    }
+
+    private sealed class RegionLockEntry
+    {
+        private int _referenceCount;
+
+        public RegionLockEntry(string fullPath)
+        {
+            FullPath = fullPath;
+            Manager = new RegionLockManager();
+        }
+
+        public string FullPath { get; }
+        public RegionLockManager Manager { get; }
+
+        public bool TryAddReference()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref _referenceCount);
+                if (current < 0)
+                {
+                    return false;
+                }
+
+                if (Interlocked.CompareExchange(ref _referenceCount, current + 1, current) == current)
+                {
+                    return true;
+                }
+            }
+        }
+
+        public bool ReleaseReference()
+        {
+            var current = Interlocked.Decrement(ref _referenceCount);
+            if (current < 0)
+            {
+                throw new InvalidOperationException("Region lock reference count became invalid.");
+            }
+
+            return current == 0;
+        }
+
+        public bool TryMarkRemoving()
+        {
+            return Interlocked.CompareExchange(ref _referenceCount, -1, 0) == 0;
         }
     }
 
@@ -212,7 +307,7 @@ public sealed class DiskStream : IDiskStream
         private readonly object _syncRoot = new();
         private readonly List<ActiveRegionLock> _lockedRegions = new();
 
-        public RegionLock AcquireLock(long position, long length)
+        public ActiveRegionLock AcquireLock(long position, long length)
         {
             var end = position + length;
 
@@ -238,7 +333,7 @@ public sealed class DiskStream : IDiskStream
                         // 没有重叠，创建新的锁并立即添加到列表
                         var newLock = new ActiveRegionLock(position, end);
                         _lockedRegions.Add(newLock);
-                        return new RegionLock(this, newLock);
+                        return newLock;
                     }
                 }
 
@@ -290,22 +385,25 @@ public sealed class DiskStream : IDiskStream
     /// </summary>
     private sealed class RegionLock
     {
-        private readonly RegionLockManager _manager;
+        private readonly RegionLockEntry _entry;
         private readonly RegionLockManager.ActiveRegionLock _activeLock;
-        private bool _released;
+        private int _released;
 
-        public RegionLock(RegionLockManager manager, RegionLockManager.ActiveRegionLock activeLock)
+        public RegionLock(RegionLockEntry entry, RegionLockManager.ActiveRegionLock activeLock, DiskStream owner)
         {
-            _manager = manager;
+            _entry = entry;
             _activeLock = activeLock;
+            Owner = owner;
         }
+
+        public DiskStream? Owner { get; }
 
         public void Release()
         {
-            if (!_released)
+            if (Interlocked.Exchange(ref _released, 1) == 0)
             {
-                _released = true;
-                _manager.ReleaseLock(_activeLock);
+                _entry.Manager.ReleaseLock(_activeLock);
+                ReleaseRegionLockEntry(_entry);
             }
         }
     }
@@ -479,6 +577,12 @@ public sealed class DiskStream : IDiskStream
     {
         if (!_disposed)
         {
+            foreach (var regionLock in _ownedRegionLocks.Keys)
+            {
+                regionLock.Release();
+                UntrackRegionLock(regionLock);
+            }
+
             _semaphore.Dispose();
             _fileStream.Dispose();
             _disposed = true;

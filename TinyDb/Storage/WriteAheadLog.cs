@@ -47,7 +47,11 @@ public sealed partial class WriteAheadLog : IDisposable
     /// <summary>
     /// 当前已刷盘的 LSN
     /// </summary>
-    public long FlushedLSN => _flushedLSN;
+    public long FlushedLSN => ReadFlushedLSN();
+
+    private long ReadFlushedLSN() => Interlocked.Read(ref _flushedLSN);
+
+    private void SetFlushedLSN(long value) => Interlocked.Exchange(ref _flushedLSN, value);
 
     /// <summary>
     /// 是否有未提交的日志记录

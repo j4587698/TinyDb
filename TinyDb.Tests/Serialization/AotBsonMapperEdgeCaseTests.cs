@@ -64,6 +64,14 @@ public class AotBsonMapperEdgeCaseTests
     }
 
     [Entity]
+    internal class EntityWithExplicitNullableTypes
+    {
+        public int Id { get; set; }
+        public Nullable<int> Age { get; set; }
+        public Nullable<DateTime> LastSeen { get; set; }
+    }
+
+    [Entity]
     internal class EntityWithPublicField
     {
         public int Id { get; set; }
@@ -236,6 +244,31 @@ public class AotBsonMapperEdgeCaseTests
         await Assert.That(entity.NullableInt).IsNull();
         await Assert.That(entity.NullableDateTime).IsNull();
         await Assert.That(entity.NullableBool).IsNull();
+    }
+
+    [Test]
+    public async Task ExplicitNullableTypes_ShouldRoundTripNullsAndValues()
+    {
+        var valueEntity = new EntityWithExplicitNullableTypes
+        {
+            Id = 1,
+            Age = 42,
+            LastSeen = new DateTime(2025, 1, 1)
+        };
+        var valueDoc = AotBsonMapper.ToDocument(valueEntity);
+        var replayedValue = AotBsonMapper.FromDocument<EntityWithExplicitNullableTypes>(valueDoc);
+
+        await Assert.That(replayedValue.Age).IsEqualTo(42);
+        await Assert.That(replayedValue.LastSeen).IsEqualTo(new DateTime(2025, 1, 1));
+
+        var nullDoc = new BsonDocument()
+            .Set("_id", new BsonInt32(2))
+            .Set("age", BsonNull.Value)
+            .Set("lastSeen", BsonNull.Value);
+        var replayedNull = AotBsonMapper.FromDocument<EntityWithExplicitNullableTypes>(nullDoc);
+
+        await Assert.That(replayedNull.Age).IsNull();
+        await Assert.That(replayedNull.LastSeen).IsNull();
     }
 
     #endregion

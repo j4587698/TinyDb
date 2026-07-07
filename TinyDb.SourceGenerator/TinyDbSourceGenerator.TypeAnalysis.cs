@@ -478,8 +478,7 @@ public partial class TinyDbSourceGenerator
     /// </summary>
     private static bool HasEntityAttribute(ITypeSymbol typeSymbol)
     {
-        return typeSymbol.GetAttributes()
-            .Any(attr => attr.AttributeClass?.Name == "EntityAttribute");
+        return HasAttribute(typeSymbol.GetAttributes(), "EntityAttribute");
     }
 
 }

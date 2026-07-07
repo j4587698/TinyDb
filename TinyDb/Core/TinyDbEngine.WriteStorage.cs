@@ -145,6 +145,72 @@ public sealed partial class TinyDbEngine
         }
     }
 
+    private async Task<BsonValue> InsertPreparedDocumentAsync(
+        string col,
+        BsonDocument doc,
+        BsonValue id,
+        CollectionState st,
+        IndexManager idx,
+        bool updateIndexes,
+        CancellationToken cancellationToken)
+    {
+        using var prepared = PreparedInsertPayload.Create(doc, id);
+        return await InsertPreparedDocumentAsync(col, prepared, st, idx, updateIndexes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<BsonValue> InsertPreparedDocumentAsync(
+        string col,
+        PreparedInsertPayload prepared,
+        CollectionState st,
+        IndexManager idx,
+        bool updateIndexes,
+        CancellationToken cancellationToken)
+    {
+        var doc = prepared.Document;
+        var indexDocument = doc;
+        uint largeDocumentPageId = 0;
+        bool appendedDocument = false;
+
+        ThrowIfPrimaryKeyExists(st, prepared.Id);
+
+        try
+        {
+            if (LargeDocumentStorage.RequiresLargeDocumentStorage(prepared.SerializedLength, _dataPageAccess.GetMaxDocumentSize()))
+            {
+                var originalLength = prepared.SerializedLength;
+                largeDocumentPageId = StoreLargeDocumentOrThrow(prepared.SerializedSpan, col);
+                doc = CreateLargeDocumentIndexDocument(prepared.Id, col, largeDocumentPageId, originalLength);
+                prepared.ReplaceDocument(doc);
+            }
+
+            AppendDocumentBytesToWritableDataPage(st, prepared.Id, prepared.SerializedSpan);
+            appendedDocument = true;
+            if (updateIndexes)
+            {
+                try
+                {
+                    await idx.InsertDocumentAsync(indexDocument, prepared.Id, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await DeleteDocumentCoreAsync(col, prepared.Id, st, idx, CancellationToken.None).ConfigureAwait(false);
+                    throw;
+                }
+            }
+
+            return prepared.Id;
+        }
+        catch (Exception ex)
+        {
+            if (!appendedDocument && largeDocumentPageId != 0)
+            {
+                CleanupLargeDocumentAfterFailedInsert(largeDocumentPageId, ex);
+            }
+
+            throw;
+        }
+    }
+
     private void ThrowIfPrimaryKeyExists(CollectionState st, BsonValue id)
     {
         if (st.Index.TryGet(id, out _))
@@ -294,6 +360,96 @@ public sealed partial class TinyDbEngine
         {
             var oldIndexDocument = old.IsLargeDocument ? ResolveLargeDocument(old.Document) : old.Document;
             idxMgr.UpdateDocument(oldIndexDocument, newIndexDocument, id);
+        }
+        catch
+        {
+            RestoreDocumentDataWithoutIndexUpdate(col, st, id, old);
+            if (newLargeDocumentPageId != 0)
+            {
+                DeleteLargeDocumentOrThrow(newLargeDocumentPageId);
+            }
+            throw;
+        }
+
+        if (old.IsLargeDocument) DeleteLargeDocumentOrThrow(old.LargeDocumentIndexPageId);
+        return true;
+    }
+
+    private async Task<bool> TryUpdatePreparedDocumentAsync(
+        string col,
+        BsonDocument doc,
+        BsonValue id,
+        CollectionState st,
+        IndexManager idxMgr,
+        CancellationToken cancellationToken)
+    {
+        PageDocumentEntry old;
+        var updatedDocument = doc;
+        var newIndexDocument = doc;
+        uint newLargeDocumentPageId = 0;
+        bool newLargeDocumentReferenceAttempted = false;
+        byte[]? relocationBytes = null;
+
+        if (!st.Index.TryGet(id, out var initialLocation)) return false;
+
+        try
+        {
+            using (st.EnterPageMutationLock(initialLocation.PageId))
+            {
+                if (!TryResolveDocumentLocation(col, st, id, out var p, out var e, out var i)) return false;
+                try
+                {
+                    if (i >= e.Count) return false;
+                    old = e[i];
+
+                    var bs = BsonSerializer.SerializeDocument(updatedDocument);
+                    if (LargeDocumentStorage.RequiresLargeDocumentStorage(bs.Length, _dataPageAccess.GetMaxDocumentSize()))
+                    {
+                        var largeDocumentPageId = StoreLargeDocumentOrThrow(bs, col);
+                        newLargeDocumentPageId = largeDocumentPageId;
+                        updatedDocument = CreateLargeDocumentIndexDocument(id, col, largeDocumentPageId, bs.Length);
+                        bs = BsonSerializer.SerializeDocument(updatedDocument);
+                    }
+
+                    e[i] = new PageDocumentEntry(updatedDocument, bs);
+
+                    if (!_dataPageAccess.CanFitInPage(p, e))
+                    {
+                        e[i] = old;
+                        relocationBytes = bs;
+                    }
+                    else
+                    {
+                        newLargeDocumentReferenceAttempted = true;
+                        _dataPageAccess.RewritePageWithDocuments(col, st, p, e, (key, pId, idx) => st.Index.Set(key, new DocumentLocation(pId, idx)));
+                    }
+                }
+                finally
+                {
+                    p.Unpin();
+                }
+            }
+
+            if (relocationBytes != null)
+            {
+                newLargeDocumentReferenceAttempted = true;
+                MoveUpdatedDocumentToWritablePage(col, st, id, updatedDocument, relocationBytes);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (newLargeDocumentPageId != 0 && !newLargeDocumentReferenceAttempted)
+            {
+                CleanupLargeDocumentAfterFailedUpdate(newLargeDocumentPageId, ex);
+            }
+
+            throw;
+        }
+
+        try
+        {
+            var oldIndexDocument = old.IsLargeDocument ? ResolveLargeDocument(old.Document) : old.Document;
+            await idxMgr.UpdateDocumentAsync(oldIndexDocument, newIndexDocument, id, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -494,6 +650,40 @@ public sealed partial class TinyDbEngine
         }
     }
 
+    private async Task RollbackInsertedDocumentsAsync(
+        string collectionName,
+        IReadOnlyList<PreparedInsertPayload> insertedPayloads,
+        CollectionState st,
+        IndexManager idxMgr,
+        List<Exception> exceptions)
+    {
+        HashSet<BsonValue>? rolledBackIds = null;
+
+        for (var i = insertedPayloads.Count - 1; i >= 0; i--)
+        {
+            var id = insertedPayloads[i].Id;
+            if (id == null || id.IsNull)
+            {
+                continue;
+            }
+
+            rolledBackIds ??= new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+            if (!rolledBackIds.Add(id))
+            {
+                continue;
+            }
+
+            try
+            {
+                await DeleteDocumentCoreAsync(collectionName, id, st, idxMgr, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(new InvalidOperationException($"Failed to rollback inserted document '{id}' in collection '{collectionName}'.", ex));
+            }
+        }
+    }
+
     private int DeleteDocumentCore(string col, BsonValue id, CollectionState st, IndexManager idxMgr)
     {
         if (!st.Index.TryGet(id, out var loc)) return 0;
@@ -572,7 +762,7 @@ public sealed partial class TinyDbEngine
 
                     var indexDocument = entry.IsLargeDocument ? ResolveLargeDocument(entry.Document) : entry.Document;
                     if (entry.IsLargeDocument) DeleteLargeDocumentOrThrow(entry.LargeDocumentIndexPageId);
-                    idxMgr.DeleteDocument(indexDocument, id);
+                    await idxMgr.DeleteDocumentAsync(indexDocument, id, CancellationToken.None).ConfigureAwait(false);
                     if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
                     return 1;
                 }

@@ -160,6 +160,11 @@ internal sealed class RecyclableMemoryStream : Stream
 
         var endPosition = checked(_position + buffer.Length);
         EnsureCapacity(endPosition);
+        if (_position > _length)
+        {
+            Array.Clear(_buffer, _length, _position - _length);
+        }
+
         buffer.CopyTo(_buffer.AsSpan(_position));
         _position = endPosition;
         if (_position > _length)
@@ -172,6 +177,11 @@ internal sealed class RecyclableMemoryStream : Stream
     {
         ThrowIfDisposed();
         EnsureCapacity(_position + 1);
+        if (_position > _length)
+        {
+            Array.Clear(_buffer, _length, _position - _length);
+        }
+
         _buffer[_position++] = value;
         if (_position > _length)
         {

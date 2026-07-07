@@ -16,6 +16,67 @@ public partial class TinyDbSourceGenerator
         return constant.Value is int value ? value : 0;
     }
 
+    private static AttributeData? GetFirstAttribute(ImmutableArray<AttributeData> attributes)
+    {
+        return attributes.IsDefaultOrEmpty ? null : attributes[0];
+    }
+
+    private static AttributeData? FindAttribute(ImmutableArray<AttributeData> attributes, string name)
+    {
+        if (attributes.IsDefaultOrEmpty) return null;
+
+        foreach (var attribute in attributes)
+        {
+            if (attribute.AttributeClass?.Name == name)
+            {
+                return attribute;
+            }
+        }
+
+        return null;
+    }
+
+    private static AttributeData? FindAttribute(ImmutableArray<AttributeData> attributes, string name, string alternateName)
+    {
+        if (attributes.IsDefaultOrEmpty) return null;
+
+        foreach (var attribute in attributes)
+        {
+            var attributeName = attribute.AttributeClass?.Name;
+            if (attributeName == name || attributeName == alternateName)
+            {
+                return attribute;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool HasAttribute(ImmutableArray<AttributeData> attributes, string name)
+    {
+        return FindAttribute(attributes, name) != null;
+    }
+
+    private static bool HasAttribute(ImmutableArray<AttributeData> attributes, string name, string alternateName)
+    {
+        return FindAttribute(attributes, name, alternateName) != null;
+    }
+
+    private static bool TryGetNamedArgument(AttributeData attribute, string name, out TypedConstant value)
+    {
+        foreach (var argument in attribute.NamedArguments)
+        {
+            if (argument.Key == name)
+            {
+                value = argument.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
     private static string? GetConstructorString(AttributeData? attribute, int index)
     {
         if (attribute == null || attribute.ConstructorArguments.Length <= index) return null;
@@ -26,32 +87,37 @@ public partial class TinyDbSourceGenerator
     {
         if (attribute == null) return null;
 
-        var argument = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == name);
-        return argument.Value.Value?.ToString();
+        return TryGetNamedArgument(attribute, name, out var argument)
+            ? argument.Value?.ToString()
+            : null;
     }
 
     private static int GetNamedInt(AttributeData? attribute, string name, int defaultValue = 0)
     {
         if (attribute == null) return defaultValue;
 
-        var argument = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == name);
-        return argument.Value.Value is int value ? value : defaultValue;
+        return TryGetNamedArgument(attribute, name, out var argument) && argument.Value is int value
+            ? value
+            : defaultValue;
     }
 
     private static bool GetNamedBool(AttributeData? attribute, string name, bool defaultValue = false)
     {
         if (attribute == null) return defaultValue;
 
-        var argument = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == name);
-        return argument.Value.Value is bool value ? value : defaultValue;
+        return TryGetNamedArgument(attribute, name, out var argument) && argument.Value is bool value
+            ? value
+            : defaultValue;
     }
 
     private static string GetEntityMetadataDisplayName(INamedTypeSymbol? classSymbol, string fallback)
     {
         if (classSymbol == null) return fallback;
 
-        foreach (var attribute in classSymbol.GetAttributes().Where(attr => attr.AttributeClass?.Name == "EntityMetadataAttribute"))
+        foreach (var attribute in classSymbol.GetAttributes())
         {
+            if (attribute.AttributeClass?.Name != "EntityMetadataAttribute") continue;
+
             var displayName = GetConstructorString(attribute, 0) ?? GetNamedString(attribute, "DisplayName");
             if (!string.IsNullOrEmpty(displayName)) return displayName!;
         }
@@ -63,8 +129,10 @@ public partial class TinyDbSourceGenerator
     {
         if (classSymbol == null) return null;
 
-        foreach (var attribute in classSymbol.GetAttributes().Where(attr => attr.AttributeClass?.Name == "EntityMetadataAttribute"))
+        foreach (var attribute in classSymbol.GetAttributes())
         {
+            if (attribute.AttributeClass?.Name != "EntityMetadataAttribute") continue;
+
             var description = GetNamedString(attribute, "Description");
             if (!string.IsNullOrEmpty(description)) return description;
         }
@@ -74,7 +142,6 @@ public partial class TinyDbSourceGenerator
 
     private static AttributeData? GetPropertyMetadataAttribute(ISymbol symbol)
     {
-        return symbol.GetAttributes()
-            .FirstOrDefault(attr => attr.AttributeClass?.Name == "PropertyMetadataAttribute");
+        return FindAttribute(symbol.GetAttributes(), "PropertyMetadataAttribute");
     }
 }

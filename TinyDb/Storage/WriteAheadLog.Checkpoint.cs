@@ -23,7 +23,7 @@ public sealed partial class WriteAheadLog
         WriteLockContext? writeContext,
         CancellationToken cancellationToken = default)
     {
-        if (!IsEnabled || targetLSN < _flushedLSN) return;
+        if (!IsEnabled || targetLSN < ReadFlushedLSN()) return;
 
         if (HasActiveWriteContext(writeContext))
         {
@@ -47,7 +47,7 @@ public sealed partial class WriteAheadLog
 
     internal void FlushToLSN(long targetLSN, WriteLockContext? writeContext)
     {
-        if (!IsEnabled || targetLSN < _flushedLSN) return;
+        if (!IsEnabled || targetLSN < ReadFlushedLSN()) return;
 
         if (HasActiveWriteContext(writeContext))
         {
@@ -61,10 +61,10 @@ public sealed partial class WriteAheadLog
 
     private void FlushToLSNCore(long targetLSN)
     {
-        if (targetLSN >= _flushedLSN)
+        if (targetLSN >= ReadFlushedLSN())
         {
             _stream!.Flush(true);
-            _flushedLSN = _stream.Position;
+            SetFlushedLSN(_stream.Position);
         }
     }
 
@@ -120,7 +120,7 @@ public sealed partial class WriteAheadLog
         if (HasPendingEntriesCore)
         {
             _stream!.Flush(true);
-            _flushedLSN = _stream.Position;
+            SetFlushedLSN(_stream.Position);
         }
     }
 
@@ -162,7 +162,7 @@ public sealed partial class WriteAheadLog
             if (HasPendingEntriesCore)
             {
                 stream.Flush(true);
-                _flushedLSN = stream.Position;
+                SetFlushedLSN(stream.Position);
             }
 
             RunWithCurrentThreadWriteContext(context, () => flushData(context));
@@ -177,7 +177,7 @@ public sealed partial class WriteAheadLog
                 }
 
                 SetHasPendingEntries(false);
-                _flushedLSN = stream.Position;
+                SetFlushedLSN(stream.Position);
             }
         }
         finally
@@ -233,7 +233,7 @@ public sealed partial class WriteAheadLog
             if (HasPendingEntriesCore)
             {
                 stream.Flush(true);
-                _flushedLSN = stream.Position;
+                SetFlushedLSN(stream.Position);
             }
 
             await flushDataAsync(context, cancellationToken).ConfigureAwait(false);
@@ -248,7 +248,7 @@ public sealed partial class WriteAheadLog
                 }
 
                 SetHasPendingEntries(false);
-                _flushedLSN = stream.Position;
+                SetFlushedLSN(stream.Position);
             }
         }
         finally
@@ -271,7 +271,7 @@ public sealed partial class WriteAheadLog
             stream.Seek(0, SeekOrigin.End);
             await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
             SetHasPendingEntries(false);
-            _flushedLSN = stream.Position;
+            SetFlushedLSN(stream.Position);
         }
         finally
         {
@@ -292,7 +292,7 @@ public sealed partial class WriteAheadLog
             stream.Seek(0, SeekOrigin.End);
             stream.Flush(true);
             SetHasPendingEntries(false);
-            _flushedLSN = stream.Position;
+            SetFlushedLSN(stream.Position);
         }
         finally
         {

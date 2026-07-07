@@ -23,7 +23,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                StringEquals(x.CollectionName, y.CollectionName) &&
                StringEquals(x.DisplayName, y.DisplayName) &&
                StringEquals(x.Description, y.Description) &&
-               Nullable.Equals(x.Location, y.Location) &&
                StringEquals(x.IdProperty?.Name, y.IdProperty?.Name) &&
                ListEquals(x.Properties, y.Properties, PropertyEquals) &&
                ListEquals(x.DependentComplexTypes, y.DependentComplexTypes, DependentComplexTypeEquals) &&
@@ -48,7 +47,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, obj.CollectionName);
             hash = Add(hash, obj.DisplayName);
             hash = Add(hash, obj.Description);
-            hash = Add(hash, obj.Location);
             hash = Add(hash, obj.IdProperty?.Name);
             hash = AddList(hash, obj.Properties, GetPropertyHashCode);
             hash = AddList(hash, obj.DependentComplexTypes, GetDependentComplexTypeHashCode);
@@ -282,8 +280,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
     {
         return StringEquals(x.PropertyName, y.PropertyName) &&
                StringEquals(x.ContainingTypeName, y.ContainingTypeName) &&
-               StringEquals(x.ReferencedTypeName, y.ReferencedTypeName) &&
-               Nullable.Equals(x.Location, y.Location);
+               StringEquals(x.ReferencedTypeName, y.ReferencedTypeName);
     }
 
     private static int GetBsonRefMissingEntityHashCode(BsonRefMissingEntityInfo value)
@@ -294,7 +291,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.PropertyName);
             hash = Add(hash, value.ContainingTypeName);
             hash = Add(hash, value.ReferencedTypeName);
-            hash = Add(hash, value.Location);
             return hash;
         }
     }
@@ -345,11 +341,4 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         }
     }
 
-    private static int Add(int hash, DiagnosticLocationInfo? value)
-    {
-        unchecked
-        {
-            return hash * 31 + (value.HasValue ? value.Value.GetHashCode() : 0);
-        }
-    }
 }

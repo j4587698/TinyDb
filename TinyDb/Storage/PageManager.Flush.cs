@@ -186,7 +186,7 @@ public sealed partial class PageManager
 
             RemoveFromCache(pageID);
 
-            Volatile.Write(ref _fileSize, Math.Max(_fileSize, pageOffset + _physicalPageSize));
+            EnsureRecordedFileSizeAtLeast(pageOffset + _physicalPageSize);
         }
     }
 

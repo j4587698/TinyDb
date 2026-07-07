@@ -49,22 +49,18 @@ public partial class TinyDbSourceGenerator
         var runtimeFullName = classSymbol != null ? GetRuntimeFullName(classSymbol) : null;
 
         // 获取Entity属性信息
-        var entityAttribute = context.Attributes.FirstOrDefault();
+        var entityAttribute = GetFirstAttribute(context.Attributes);
 
         // 优先从构造函数参数获取Name，否则从命名参数获取
-        var collectionName = entityAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+        var collectionName = GetConstructorString(entityAttribute, 0);
         if (string.IsNullOrEmpty(collectionName))
         {
-            collectionName = entityAttribute?.NamedArguments
-                .FirstOrDefault(arg => arg.Key == "Name").Value.Value?.ToString();
+            collectionName = GetNamedString(entityAttribute, "Name");
         }
 
         // 获取Entity属性中指定的IdProperty名称
-        var specifiedIdProperty = entityAttribute?.ConstructorArguments.Length > 1
-            ? entityAttribute.ConstructorArguments[1].Value?.ToString()
-            : null;
-        specifiedIdProperty ??= entityAttribute?.NamedArguments
-            .FirstOrDefault(arg => arg.Key == "IdProperty").Value.Value?.ToString();
+        var specifiedIdProperty = GetConstructorString(entityAttribute, 1);
+        specifiedIdProperty ??= GetNamedString(entityAttribute, "IdProperty");
 
         // 获取属性信息
         var entityDisplayName = GetEntityMetadataDisplayName(classSymbol, className);
@@ -105,18 +101,15 @@ public partial class TinyDbSourceGenerator
                     continue;
                 }
 
-                var hasIgnoreAttribute = propertySymbol.GetAttributes()
-                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore");
+                var propertyAttributes = propertySymbol.GetAttributes();
+                var hasIgnoreAttribute = HasAttribute(propertyAttributes, "BsonIgnoreAttribute", "BsonIgnore");
 
                 // 检查是否有 [BsonRef] 特性
-                var bsonRefAttribute = propertySymbol.GetAttributes()
-                    .FirstOrDefault(attr => attr.AttributeClass?.Name == "BsonRefAttribute");
-                var bsonRefCollectionName = bsonRefAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+                var bsonRefAttribute = FindAttribute(propertyAttributes, "BsonRefAttribute");
+                var bsonRefCollectionName = GetConstructorString(bsonRefAttribute, 0);
 
-                var foreignKeyAttribute = propertySymbol.GetAttributes()
-                    .FirstOrDefault(attr => attr.AttributeClass?.Name == "ForeignKeyAttribute" ||
-                                            attr.AttributeClass?.Name == "ForeignKey");
-                var foreignKeyCollectionName = foreignKeyAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+                var foreignKeyAttribute = FindAttribute(propertyAttributes, "ForeignKeyAttribute", "ForeignKey");
+                var foreignKeyCollectionName = GetConstructorString(foreignKeyAttribute, 0);
                 var propertyMetadataAttribute = GetPropertyMetadataAttribute(propertySymbol);
 
                 // 如果有 BsonRef 特性，验证引用类型是否有 Entity 特性
@@ -125,8 +118,7 @@ public partial class TinyDbSourceGenerator
                     var refTypeSymbol = GetBsonRefTargetType(propertySymbol.Type);
                     if (refTypeSymbol != null)
                     {
-                        var hasEntityAttr = refTypeSymbol.GetAttributes()
-                            .Any(attr => attr.AttributeClass?.Name == "EntityAttribute");
+                        var hasEntityAttr = HasAttribute(refTypeSymbol.GetAttributes(), "EntityAttribute");
                         if (!hasEntityAttr)
                         {
                             bsonRefMissingEntityErrors.Add(new BsonRefMissingEntityInfo(
@@ -245,18 +237,18 @@ public partial class TinyDbSourceGenerator
             else if (member is FieldDeclarationSyntax field)
             {
                 // 跳过静态字段
-                if (field.Modifiers.Any(m => m.IsKind(SyntaxKind.ConstKeyword)))
+                if (HasModifier(field.Modifiers, SyntaxKind.ConstKeyword))
                 {
                     continue;
                 }
 
-                if (field.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword)))
+                if (HasModifier(field.Modifiers, SyntaxKind.StaticKeyword))
                 {
                     continue;
                 }
 
                 // 只处理公共字段
-                if (!field.Modifiers.Any(m => m.IsKind(SyntaxKind.PublicKeyword)))
+                if (!HasModifier(field.Modifiers, SyntaxKind.PublicKeyword))
                 {
                     continue;
                 }
@@ -270,13 +262,12 @@ public partial class TinyDbSourceGenerator
                     var fieldSymbol = semanticModel.GetDeclaredSymbol(variable) as IFieldSymbol;
 
                     // 检查是否有 BsonIgnore 属性
-                    var hasIgnoreAttribute = fieldSymbol?.GetAttributes()
-                        .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore") ?? false;
+                    var fieldAttributes = fieldSymbol?.GetAttributes() ?? default;
+                    var hasIgnoreAttribute = HasAttribute(fieldAttributes, "BsonIgnoreAttribute", "BsonIgnore");
 
                     // 检查是否有 [BsonRef] 特性
-                    var bsonRefAttribute = fieldSymbol?.GetAttributes()
-                        .FirstOrDefault(attr => attr.AttributeClass?.Name == "BsonRefAttribute");
-                    var bsonRefCollectionName = bsonRefAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+                    var bsonRefAttribute = FindAttribute(fieldAttributes, "BsonRefAttribute");
+                    var bsonRefCollectionName = GetConstructorString(bsonRefAttribute, 0);
 
                     var typeSymbol = fieldSymbol?.Type;
                     var propIsValueType = typeSymbol?.IsValueType ?? false;

@@ -33,7 +33,7 @@ public sealed partial class PageManager
             var pageOffset = CalculatePageOffset(pageID);
 
             // 检查是否超出文件大小
-            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+            if (IsBeyondFileSize(pageOffset))
             {
                 // 文件不存在该页面，创建新页面
                 return CreateNewPage(pageID, PageType.Empty);
@@ -127,7 +127,7 @@ public sealed partial class PageManager
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
 
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+        if (IsBeyondFileSize(pageOffset))
         {
             pageData = Array.Empty<byte>();
             return false;
@@ -164,7 +164,7 @@ public sealed partial class PageManager
             }
 
             var pageOffset = CalculatePageOffset(pageID);
-            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+            if (IsBeyondFileSize(pageOffset))
             {
                 return CreateNewPage(pageID, PageType.Empty, pinned: true);
             }
@@ -234,7 +234,7 @@ public sealed partial class PageManager
 
             // 从磁盘异步读取
             var pageOffset = CalculatePageOffset(pageID);
-            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+            if (IsBeyondFileSize(pageOffset))
             {
                 return CreateNewPage(pageID, PageType.Empty);
             }
@@ -296,7 +296,7 @@ public sealed partial class PageManager
             }
 
             var pageOffset = CalculatePageOffset(pageID);
-            if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+            if (IsBeyondFileSize(pageOffset))
             {
                 return CreateNewPage(pageID, PageType.Empty, pinned: true);
             }

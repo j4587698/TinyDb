@@ -75,7 +75,7 @@ public sealed partial class TinyDbEngine
             using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
             try
             {
-                res = InsertPreparedDocument(col, pr, st, idx, true);
+                res = await InsertPreparedDocumentAsync(col, pr, st, idx, true, cancellationToken).ConfigureAwait(false);
                 if (durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -146,7 +146,7 @@ public sealed partial class TinyDbEngine
             using var durabilityScope = EnterImplicitWalTransactionContext(pendingWalTransaction);
             try
             {
-                updated = TryUpdatePreparedDocument(col, doc, id, st, idxMgr);
+                updated = await TryUpdatePreparedDocumentAsync(col, doc, id, st, idxMgr, cancellationToken).ConfigureAwait(false);
                 if (updated && durabilityScope != null) await durabilityScope.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -252,7 +252,7 @@ public sealed partial class TinyDbEngine
                 foreach (var (doc, id) in prepared)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                    if (await TryUpdatePreparedDocumentAsync(col, doc, id, st, idxMgr, cancellationToken).ConfigureAwait(false))
                     {
                         updatedCount++;
                     }
@@ -383,13 +383,13 @@ public sealed partial class TinyDbEngine
                 foreach (var (doc, id) in prepared)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (TryUpdatePreparedDocument(col, doc, id, st, idxMgr))
+                    if (await TryUpdatePreparedDocumentAsync(col, doc, id, st, idxMgr, cancellationToken).ConfigureAwait(false))
                     {
                         updatedCount++;
                     }
                     else
                     {
-                        InsertPreparedDocument(col, doc, id, st, idxMgr, true);
+                        await InsertPreparedDocumentAsync(col, doc, id, st, idxMgr, true, cancellationToken).ConfigureAwait(false);
                         insertedCount++;
                     }
                 }
@@ -607,7 +607,7 @@ public sealed partial class TinyDbEngine
 
                         try
                         {
-                            InsertPreparedDocument(col, payload, st, idx, true);
+                            await InsertPreparedDocumentAsync(col, payload, st, idx, true, cancellationToken).ConfigureAwait(false);
                             insertedPayloads.Add(payload);
                             insertedCount++;
                         }
@@ -646,7 +646,7 @@ public sealed partial class TinyDbEngine
                     else
                     {
                         var exceptionCountBeforeRollback = exceptions.Count;
-                        RollbackInsertedDocuments(col, insertedPayloads, st, idx, exceptions);
+                        await RollbackInsertedDocumentsAsync(col, insertedPayloads, st, idx, exceptions).ConfigureAwait(false);
                         if (ex is WritableDataPageSelectionException && exceptions.Count == exceptionCountBeforeRollback)
                         {
                             throw;

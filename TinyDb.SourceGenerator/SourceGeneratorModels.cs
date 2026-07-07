@@ -56,17 +56,7 @@ public class ClassInfo
             }
         }
         public string RuntimeFullName { get; }
-        public string UniqueFileName
-        {
-            get
-            {
-                var parts = new List<string>();
-                if (!string.IsNullOrEmpty(Namespace)) parts.Add(Namespace.Replace(".", "_"));
-                if (!string.IsNullOrEmpty(ContainingTypePath)) parts.Add(ContainingTypePath);
-                parts.Add(Name);
-                return string.Join("_", parts);
-            }
-        }
+        public string UniqueFileName { get; }
         /// <summary>
         /// 用于生成帮助器类名的唯一标识（例如 CoverageSprintFinal_MathEntity）
         /// </summary>
@@ -124,12 +114,28 @@ public class ClassInfo
             Description = string.IsNullOrEmpty(description) ? null : description;
             ContainingTypePath = containingTypePath ?? string.Empty;
             RuntimeFullName = runtimeFullName ?? FullName;
+            UniqueFileName = CreateUniqueFileName(Namespace, ContainingTypePath, Name);
             Location = location;
             DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
             CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
             EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
             BsonRefMissingEntityErrors = bsonRefMissingEntityErrors ?? new List<BsonRefMissingEntityInfo>();
             ConstructorParameters = constructorParameters ?? new List<ConstructorParameterInfo>();
+        }
+
+        private static string CreateUniqueFileName(string @namespace, string containingTypePath, string name)
+        {
+            if (string.IsNullOrEmpty(@namespace))
+            {
+                return string.IsNullOrEmpty(containingTypePath)
+                    ? name
+                    : $"{containingTypePath}_{name}";
+            }
+
+            var namespacePart = @namespace.Replace(".", "_");
+            return string.IsNullOrEmpty(containingTypePath)
+                ? $"{namespacePart}_{name}"
+                : $"{namespacePart}_{containingTypePath}_{name}";
         }
 }
 /// <summary>

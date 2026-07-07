@@ -137,28 +137,44 @@ public sealed class BTreeIndex : IDisposable
 
         using (EnterAsyncWriteGate())
         {
-            _lock.EnterWriteLock();
-            try
-            {
-                if (_unique)
-                {
-                    if (!_tree.TryInsertUnique(key, documentId))
-                    {
-                        return false;
-                    }
-                }
-                else
-                {
-                    _tree.Insert(key, documentId);
-                }
+            return InsertCore(key, documentId);
+        }
+    }
 
-                UpdateRootField();
-                return true;
-            }
-            finally
+    internal async Task<bool> InsertAsync(IndexKey key, BsonValue documentId, CancellationToken cancellationToken = default)
+    {
+        if (key == null) throw new ArgumentNullException(nameof(key));
+        if (documentId == null) throw new ArgumentNullException(nameof(documentId));
+
+        using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return InsertCore(key, documentId);
+        }
+    }
+
+    private bool InsertCore(IndexKey key, BsonValue documentId)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            if (_unique)
             {
-                _lock.ExitWriteLock();
+                if (!_tree.TryInsertUnique(key, documentId))
+                {
+                    return false;
+                }
             }
+            else
+            {
+                _tree.Insert(key, documentId);
+            }
+
+            UpdateRootField();
+            return true;
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
 
@@ -168,17 +184,32 @@ public sealed class BTreeIndex : IDisposable
 
         using (EnterAsyncWriteGate())
         {
-            _lock.EnterWriteLock();
-            try
-            {
-                var res = _tree.Delete(key, documentId);
-                UpdateRootField();
-                return res;
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
-            }
+            return DeleteCore(key, documentId);
+        }
+    }
+
+    internal async Task<bool> DeleteAsync(IndexKey key, BsonValue documentId, CancellationToken cancellationToken = default)
+    {
+        if (key == null) throw new ArgumentNullException(nameof(key));
+
+        using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return DeleteCore(key, documentId);
+        }
+    }
+
+    private bool DeleteCore(IndexKey key, BsonValue documentId)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            var res = _tree.Delete(key, documentId);
+            UpdateRootField();
+            return res;
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
 
@@ -310,7 +341,8 @@ public sealed class BTreeIndex : IDisposable
         BsonValue? continuationValue = null;
         uint continuationPageId = 0;
         int continuationIndex = -1;
-        var yieldedValues = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+        BsonValue? lastYieldedValue = null;
+        var hasLastYieldedValue = false;
 
         while (true)
         {
@@ -338,11 +370,13 @@ public sealed class BTreeIndex : IDisposable
             foreach (var value in batch.Values)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!yieldedValues.Add(value))
+                if (hasLastYieldedValue && BsonValueComparer.ValueEquals(lastYieldedValue, value))
                 {
                     continue;
                 }
 
+                hasLastYieldedValue = true;
+                lastYieldedValue = value;
                 yieldedFromBatch = true;
                 yield return value;
             }
@@ -381,7 +415,8 @@ public sealed class BTreeIndex : IDisposable
         BsonValue? continuationValue = null;
         uint continuationPageId = 0;
         int continuationIndex = -1;
-        var yieldedValues = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+        BsonValue? lastYieldedValue = null;
+        var hasLastYieldedValue = false;
 
         while (true)
         {
@@ -406,11 +441,13 @@ public sealed class BTreeIndex : IDisposable
             var yieldedFromBatch = false;
             foreach (var value in batch.Values)
             {
-                if (!yieldedValues.Add(value))
+                if (hasLastYieldedValue && BsonValueComparer.ValueEquals(lastYieldedValue, value))
                 {
                     continue;
                 }
 
+                hasLastYieldedValue = true;
+                lastYieldedValue = value;
                 yieldedFromBatch = true;
                 yield return value;
             }
@@ -459,16 +496,29 @@ public sealed class BTreeIndex : IDisposable
     {
         using (EnterAsyncWriteGate())
         {
-            _lock.EnterWriteLock();
-            try
-            {
-                _tree.Clear();
-                UpdateRootField();
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
-            }
+            ClearCore();
+        }
+    }
+
+    internal async Task ClearAsync(CancellationToken cancellationToken = default)
+    {
+        using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
+        {
+            ClearCore();
+        }
+    }
+
+    private void ClearCore()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _tree.Clear();
+            UpdateRootField();
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
 
@@ -476,15 +526,28 @@ public sealed class BTreeIndex : IDisposable
     {
         using (EnterAsyncWriteGate())
         {
-            _lock.EnterWriteLock();
-            try
-            {
-                _tree.DropPages();
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
-            }
+            DropStorageCore();
+        }
+    }
+
+    internal async Task DropStorageAsync(CancellationToken cancellationToken = default)
+    {
+        using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
+        {
+            DropStorageCore();
+        }
+    }
+
+    private void DropStorageCore()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _tree.DropPages();
+        }
+        finally
+        {
+            _lock.ExitWriteLock();
         }
     }
 
@@ -497,6 +560,31 @@ public sealed class BTreeIndex : IDisposable
             for (; acquired < MaxConcurrentAsyncReaders; acquired++)
             {
                 _asyncReadGate.Wait();
+            }
+
+            return new AsyncWriteGateScope(this);
+        }
+        catch
+        {
+            for (var i = 0; i < acquired; i++)
+            {
+                _asyncReadGate.Release();
+            }
+
+            _asyncWriteGate.Release();
+            throw;
+        }
+    }
+
+    private async Task<IDisposable> EnterAsyncWriteGateAsync(CancellationToken cancellationToken)
+    {
+        await _asyncWriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var acquired = 0;
+        try
+        {
+            for (; acquired < MaxConcurrentAsyncReaders; acquired++)
+            {
+                await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
 
             return new AsyncWriteGateScope(this);
