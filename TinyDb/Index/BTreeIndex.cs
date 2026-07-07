@@ -21,7 +21,7 @@ public sealed class BTreeIndex : IDisposable
     private readonly bool _unique;
     private readonly bool _sparse;
     private readonly DiskBTree _tree;
-    private bool _disposed;
+    private int _disposed;
 
     private readonly bool _ownsPageManager;
     private readonly string? _tempFilePath;
@@ -44,6 +44,7 @@ public sealed class BTreeIndex : IDisposable
     { 
         get 
         { 
+            ThrowIfDisposed();
             _lock.EnterReadLock(); 
             try { return _tree.NodeCount; } 
             finally { _lock.ExitReadLock(); } 
@@ -54,6 +55,7 @@ public sealed class BTreeIndex : IDisposable
     { 
         get 
         { 
+            ThrowIfDisposed();
             _lock.EnterReadLock(); 
             try { return ClampEntryCount(_tree.EntryCount); }
             finally { _lock.ExitReadLock(); } 
@@ -215,6 +217,7 @@ public sealed class BTreeIndex : IDisposable
 
     public bool Contains(IndexKey key) 
     { 
+        ThrowIfDisposed();
         _lock.EnterReadLock(); 
         try { return _tree.Contains(key); } 
         finally { _lock.ExitReadLock(); } 
@@ -222,6 +225,7 @@ public sealed class BTreeIndex : IDisposable
 
     public bool Contains(IndexKey key, BsonValue documentId) 
     { 
+        ThrowIfDisposed();
         _lock.EnterReadLock(); 
         try { return _tree.Contains(key, documentId); } 
         finally { _lock.ExitReadLock(); } 
@@ -235,6 +239,7 @@ public sealed class BTreeIndex : IDisposable
 
     public BsonValue? FindExact(IndexKey key) 
     { 
+        ThrowIfDisposed();
         _lock.EnterReadLock(); 
         try { return _tree.FindExact(key); } 
         finally { _lock.ExitReadLock(); } 
@@ -274,9 +279,11 @@ public sealed class BTreeIndex : IDisposable
     {
         if (key == null) throw new ArgumentNullException(nameof(key));
 
+        ThrowIfDisposed();
         await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfDisposed();
             return await _tree.FindExactAsync(key, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -347,11 +354,13 @@ public sealed class BTreeIndex : IDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
 
             DiskBTree.IndexScanBatch batch;
             await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                ThrowIfDisposed();
                 batch = descending
                     ? await _tree.FindRangeReverseBatchAsync(startKey, endKey, includeStart, includeEnd, continuationKey, continuationValue, continuationPageId, continuationIndex, DefaultScanBatchSize, cancellationToken).ConfigureAwait(false)
                     : await _tree.FindRangeBatchAsync(startKey, endKey, includeStart, includeEnd, continuationKey, continuationValue, continuationPageId, continuationIndex, DefaultScanBatchSize, cancellationToken).ConfigureAwait(false);
@@ -421,6 +430,7 @@ public sealed class BTreeIndex : IDisposable
         while (true)
         {
             DiskBTree.IndexScanBatch batch;
+            ThrowIfDisposed();
             _lock.EnterReadLock();
             try
             {
@@ -551,8 +561,9 @@ public sealed class BTreeIndex : IDisposable
         }
     }
 
-    private IDisposable EnterAsyncWriteGate()
+    private IDisposable EnterAsyncWriteGate(bool allowDisposed = false)
     {
+        if (!allowDisposed) ThrowIfDisposed();
         _asyncWriteGate.Wait();
         var acquired = 0;
         try
@@ -562,6 +573,7 @@ public sealed class BTreeIndex : IDisposable
                 _asyncReadGate.Wait();
             }
 
+            if (!allowDisposed) ThrowIfDisposed();
             return new AsyncWriteGateScope(this);
         }
         catch
@@ -578,6 +590,7 @@ public sealed class BTreeIndex : IDisposable
 
     private async Task<IDisposable> EnterAsyncWriteGateAsync(CancellationToken cancellationToken)
     {
+        ThrowIfDisposed();
         await _asyncWriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         var acquired = 0;
         try
@@ -587,6 +600,7 @@ public sealed class BTreeIndex : IDisposable
                 await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            ThrowIfDisposed();
             return new AsyncWriteGateScope(this);
         }
         catch
@@ -627,6 +641,7 @@ public sealed class BTreeIndex : IDisposable
 
     public bool Validate() 
     { 
+        ThrowIfDisposed();
         _lock.EnterReadLock(); 
         try { return _tree.Validate(); } 
         finally { _lock.ExitReadLock(); } 
@@ -634,12 +649,22 @@ public sealed class BTreeIndex : IDisposable
 
     public void Dispose()
     {
-        if (!_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+        IDisposable? gate = null;
+        try
         {
-                _lock.Dispose();
-                _asyncReadGate.Dispose();
-                _asyncWriteGate.Dispose();
+            gate = EnterAsyncWriteGate(allowDisposed: true);
+            _lock.EnterWriteLock();
+            try
+            {
                 _tree.Dispose();
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
+
             if (_ownsPageManager)
             {
                 _tempPm!.Dispose();
@@ -648,7 +673,13 @@ public sealed class BTreeIndex : IDisposable
                     File.Delete(_tempFilePath);
                 }
             }
-            _disposed = true;
+        }
+        finally
+        {
+            gate?.Dispose();
+            _lock.Dispose();
+            _asyncReadGate.Dispose();
+            _asyncWriteGate.Dispose();
         }
     }
 
@@ -680,7 +711,10 @@ public sealed class BTreeIndex : IDisposable
         }
     }
 
-    private void ThrowIfDisposed() { if (_disposed) throw new ObjectDisposedException(nameof(BTreeIndex)); }
+    private void ThrowIfDisposed()
+    {
+        if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(BTreeIndex));
+    }
 
     private static int ClampEntryCount(long entryCount)
     {
@@ -689,7 +723,7 @@ public sealed class BTreeIndex : IDisposable
 
     public override string ToString()
     {
-        var countText = _disposed ? "disposed" : EntryCount.ToString();
+        var countText = Volatile.Read(ref _disposed) != 0 ? "disposed" : EntryCount.ToString();
         return $"BTreeIndex[{Name}] ({_fields.Length} fields, {countText} entries)";
     }
 }

@@ -14,7 +14,7 @@ public sealed class IndexManager : IDisposable
     private readonly ReaderWriterLockSlim _rwLock = new();
     private readonly bool _ownsPageManager;
     private readonly string? _tempFilePath;
-    private bool _disposed;
+    private int _disposed;
 
     /// <summary>
     /// 获取此管理器所属集合的名称。
@@ -548,30 +548,36 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (_disposed) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
         _mutationGate.Wait();
-        _disposed = true;
         try
         {
-            _catalog.Dispose();
-
-            if (_ownsPageManager)
+            _rwLock.EnterWriteLock();
+            try
             {
-                _pm.Dispose();
-                if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
+                _catalog.Dispose();
+
+                if (_ownsPageManager)
                 {
-                    File.Delete(_tempFilePath);
+                    _pm.Dispose();
+                    if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
+                    {
+                        File.Delete(_tempFilePath);
+                    }
                 }
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
             }
         }
         finally
         {
             _mutationGate.Release();
+            _rwLock.Dispose();
+            _mutationGate.Dispose();
         }
-
-        _rwLock.Dispose();
-        _mutationGate.Dispose();
     }
 
     private bool CreateIndexCore(string name, string[] fields, bool unique, bool sparse, bool persistImmediately)

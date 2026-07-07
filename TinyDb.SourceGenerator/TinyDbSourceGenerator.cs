@@ -74,6 +74,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
         {
             if (classInfo == null) return;
 
+            ReportDiagnostics(spc, classInfo);
             var partialClassCode = GeneratePartialClass(classInfo);
             var partialFileName = $"{classInfo.UniqueFileName}_AotHelper.g.cs";
             spc.AddSource(partialFileName, SourceText.From(partialClassCode, Encoding.UTF8));
@@ -85,8 +86,6 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
 
             var validClasses = GetValidClasses(classes);
             if (validClasses.Count == 0) return;
-
-            ReportDiagnostics(spc, validClasses);
 
             var registrySource = GenerateRegistrySource(validClasses);
             spc.AddSource("AotHelperRegistry.g.cs", SourceText.From(registrySource, Encoding.UTF8));
@@ -111,14 +110,11 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
         return validClasses;
     }
 
-    private static void ReportDiagnostics(SourceProductionContext context, List<ClassInfo> classInfos)
+    private static void ReportDiagnostics(SourceProductionContext context, ClassInfo classInfo)
     {
-        foreach (var classInfo in classInfos)
-        {
-            ReportCircularReferences(context, classInfo);
-            ReportEntityCircularReferences(context, classInfo);
-            ReportBsonRefMissingEntityErrors(context, classInfo);
-        }
+        ReportCircularReferences(context, classInfo);
+        ReportEntityCircularReferences(context, classInfo);
+        ReportBsonRefMissingEntityErrors(context, classInfo);
     }
 
     private static void ReportCircularReferences(SourceProductionContext context, ClassInfo classInfo)

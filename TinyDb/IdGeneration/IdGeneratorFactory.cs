@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using TinyDb.Attributes;
 
@@ -9,14 +10,15 @@ namespace TinyDb.IdGeneration;
 /// </summary>
 public static class IdGeneratorFactory
 {
-    private static readonly Dictionary<IdGenerationStrategy, IIdGenerator> _generators = new()
+    private static readonly ConcurrentDictionary<IdGenerationStrategy, IIdGenerator> _generators = new(
+        new KeyValuePair<IdGenerationStrategy, IIdGenerator>[]
     {
-        { IdGenerationStrategy.ObjectId, new ObjectIdGenerator() },
-        { IdGenerationStrategy.IdentityInt, new IdentityGenerator() },
-        { IdGenerationStrategy.IdentityLong, new IdentityGenerator() },
-        { IdGenerationStrategy.GuidV7, new GuidV7Generator() },
-        { IdGenerationStrategy.GuidV4, new GuidV4Generator() }
-    };
+        new(IdGenerationStrategy.ObjectId, new ObjectIdGenerator()),
+        new(IdGenerationStrategy.IdentityInt, new IdentityGenerator()),
+        new(IdGenerationStrategy.IdentityLong, new IdentityGenerator()),
+        new(IdGenerationStrategy.GuidV7, new GuidV7Generator()),
+        new(IdGenerationStrategy.GuidV4, new GuidV4Generator())
+    });
 
     /// <summary>
     /// 获取指定策略的ID生成器

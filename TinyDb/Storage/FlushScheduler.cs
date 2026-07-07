@@ -564,7 +564,10 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             {
                 try
                 {
-                    workerTask.Task.WaitAsync(WorkerStopTimeout).GetAwaiter().GetResult();
+                    if (!workerTask.Task.Wait(WorkerStopTimeout))
+                    {
+                        throw new TimeoutException();
+                    }
                 }
                 catch (TimeoutException ex)
                 {

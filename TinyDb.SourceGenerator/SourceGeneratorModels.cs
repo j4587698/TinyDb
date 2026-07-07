@@ -35,10 +35,9 @@ public class ClassInfo
                 {
                     // ContainingTypePath 使用下划线分隔（如 OuterClass_MiddleClass），
                     // 需要转换为点分隔（如 OuterClass.MiddleClass）以便在代码中引用嵌套类型
-                    var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
-                    return $"{dotSeparatedPath}.{Name}";
+                    return FullyQualifiedTypeReference;
                 }
-                return Name;
+                return FullyQualifiedTypeReference;
             }
         }
         public string FullName
@@ -55,6 +54,7 @@ public class ClassInfo
                 return $"{baseName}{Name}";
             }
         }
+        public string FullyQualifiedTypeReference { get; }
         public string RuntimeFullName { get; }
         public string UniqueFileName { get; }
         /// <summary>
@@ -102,7 +102,7 @@ public class ClassInfo
         public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
         public List<ConstructorParameterInfo> ConstructorParameters { get; }
 
-        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null)
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null)
         {
             Namespace = @namespace;
             Name = name;
@@ -113,6 +113,7 @@ public class ClassInfo
             DisplayName = string.IsNullOrEmpty(displayName) ? name : displayName!;
             Description = string.IsNullOrEmpty(description) ? null : description;
             ContainingTypePath = containingTypePath ?? string.Empty;
+            FullyQualifiedTypeReference = fullyQualifiedTypeReference ?? FullName;
             RuntimeFullName = runtimeFullName ?? FullName;
             UniqueFileName = CreateUniqueFileName(Namespace, ContainingTypePath, Name);
             Location = location;

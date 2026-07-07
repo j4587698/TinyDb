@@ -54,7 +54,7 @@ public sealed partial class TransactionManager
                 var failureReason = CreateTransactionTimeoutMessage(expiredTransaction.TransactionId, now);
                 if (!expiredTransaction.TryTransitionState(TransactionState.Active, TransactionState.Failed)) continue;
                 expiredTransaction.FailureReason = failureReason;
-                _activeTransactions.TryRemove(expiredTransaction.TransactionId, out _);
+                RemoveActiveTransaction(expiredTransaction.TransactionId);
                 _timedOutTransactions[expiredTransaction.TransactionId] = now;
             }
 

@@ -39,7 +39,7 @@ public partial class TinyDbSourceGenerator
                 ? classInfo.HelperClassName
                 : $"{classInfo.Namespace}.{classInfo.HelperClassName}";
 
-            sb.AppendLine($"        AotHelperRegistry.Register(new AotEntityAdapter<{classInfo.FullName}>(");
+            sb.AppendLine($"        AotHelperRegistry.Register(new AotEntityAdapter<{classInfo.FullyQualifiedTypeReference}>(");
             sb.AppendLine($"            entity => {helperFullName}.ToDocument(entity),");
             sb.AppendLine($"            document => {helperFullName}.FromDocument(document),");
             sb.AppendLine($"            entity => {helperFullName}.GetId(entity),");
@@ -65,7 +65,7 @@ public partial class TinyDbSourceGenerator
 
     private static void AppendMetadataRegistryRegistration(StringBuilder sb, ClassInfo classInfo)
     {
-        sb.AppendLine($"        global::TinyDb.Metadata.MetadataRegistry.Register(typeof({classInfo.FullName}), new global::TinyDb.Metadata.EntityMetadata");
+        sb.AppendLine($"        global::TinyDb.Metadata.MetadataRegistry.Register(typeof({classInfo.FullyQualifiedTypeReference}), new global::TinyDb.Metadata.EntityMetadata");
         sb.AppendLine("        {");
         sb.AppendLine($"            TypeName = {ToCSharpStringLiteral(classInfo.RuntimeFullName)},");
         sb.AppendLine($"            CollectionName = {ToCSharpStringLiteral(classInfo.CollectionName ?? classInfo.Name)},");

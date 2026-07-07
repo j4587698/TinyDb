@@ -47,7 +47,7 @@ public sealed partial class TransactionManager
             }
             finally
             {
-                _activeTransactions.TryRemove(transaction.TransactionId, out _);
+                RemoveActiveTransaction(transaction.TransactionId);
             }
         }
     }

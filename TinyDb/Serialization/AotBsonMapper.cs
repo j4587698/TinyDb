@@ -12,7 +12,7 @@ namespace TinyDb.Serialization;
 public static partial class AotBsonMapper
 {
     // 简单的循环引用检测，使用ThreadLocal来跟踪当前正在序列化的对象
-    private static readonly AsyncLocal<HashSet<object>?> SerializingObjects = new();
+    private static readonly ThreadLocal<HashSet<object>?> SerializingObjects = new();
 
     internal static Type SerializationContextType => SerializingObjects.GetType();
 

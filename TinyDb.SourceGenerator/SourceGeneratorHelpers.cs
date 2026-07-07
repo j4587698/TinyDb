@@ -20,6 +20,32 @@ public static partial class SourceGeneratorHelpers
                prop.Type.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private static string NormalizeTypeName(string type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return type;
+
+        var normalized = type.Trim();
+        if (normalized.StartsWith("global::", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring("global::".Length);
+        }
+
+        return normalized switch
+        {
+            "System.String" => "string",
+            "System.Int32" => "int",
+            "System.Int64" => "long",
+            "System.Double" => "double",
+            "System.Single" => "float",
+            "System.Decimal" => "decimal",
+            "System.Boolean" => "bool",
+            "System.DateTime" => "DateTime",
+            "System.Guid" => "Guid",
+            "TinyDb.Bson.ObjectId" => "ObjectId",
+            _ => normalized
+        };
+    }
+
     /// <summary>
     /// 生成属性序列化代码
     /// </summary>
@@ -27,7 +53,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var propertyType = prop.Type;
+        var propertyType = NormalizeTypeName(prop.Type);
 
         // 检查是否是ID属性，如果是则映射到_id字段，否则使用camelCase
         var bsonFieldName = IsIdProperty(prop) ? "_id" : SourceGeneratorFieldName.ToCamelCase(propertyName);
@@ -82,6 +108,7 @@ public static partial class SourceGeneratorHelpers
         var propertyAccess = prop.AccessName;
         var collectionName = prop.BsonRefCollectionName!;
         var isNullable = IsNullableProperty(prop);
+        var isElementValueType = prop.IsElementValueType;
 
         var sb = new StringBuilder();
 
@@ -98,8 +125,19 @@ public static partial class SourceGeneratorHelpers
 
             sb.AppendLine($@"var dbRefArray_{propertyName} = new BsonArray();
             foreach (var item in entity.{propertyAccess})
-            {{
-                if (item == null)
+            {{");
+
+            if (isElementValueType)
+            {
+                sb.AppendLine($@"                var itemId = global::TinyDb.References.DbRefSerializer.GetEntityId(item);
+                var itemRef = new BsonDocument()
+                    .Set(""$id"", itemId)
+                    .Set(""$ref"", {TinyDbSourceGenerator.ToCSharpStringLiteral(collectionName)});
+                dbRefArray_{propertyName} = dbRefArray_{propertyName}.AddValue(itemRef);");
+            }
+            else
+            {
+                sb.AppendLine($@"                if (item == null)
                     dbRefArray_{propertyName} = dbRefArray_{propertyName}.AddValue(BsonNull.Value);
                 else
                 {{
@@ -108,8 +146,10 @@ public static partial class SourceGeneratorHelpers
                         .Set(""$id"", itemId)
                         .Set(""$ref"", {TinyDbSourceGenerator.ToCSharpStringLiteral(collectionName)});
                     dbRefArray_{propertyName} = dbRefArray_{propertyName}.AddValue(itemRef);
-                }}
-            }}
+                }}");
+            }
+
+            sb.AppendLine($@"            }}
             document = document.Set(""{bsonFieldName}"", dbRefArray_{propertyName});");
 
             if (isNullable)
@@ -282,7 +322,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var propertyType = prop.Type;
+        var propertyType = NormalizeTypeName(prop.Type);
 
         // 检查是否是ID属性，如果是则从_id字段读取，否则使用camelCase
         var bsonFieldName = IsIdProperty(prop) ? "_id" : SourceGeneratorFieldName.ToCamelCase(propertyName);
@@ -366,7 +406,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var underlyingType = prop.NonNullableType;
+        var underlyingType = NormalizeTypeName(prop.NonNullableType);
 
         // 如果底层类型是复杂类型
         if (prop.IsEnum)

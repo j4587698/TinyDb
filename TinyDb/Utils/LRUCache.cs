@@ -307,7 +307,13 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     {
         lock (_lruList)
         {
-            return _cacheMap.Keys.ToList();
+            var keys = new List<TKey>(_cacheMap.Count);
+            foreach (var key in _cacheMap.Keys)
+            {
+                keys.Add(key);
+            }
+
+            return keys;
         }
     }
 
@@ -321,7 +327,11 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
 
         lock (_lruList)
         {
-            values = _lruList.Select(item => new KeyValuePair<TKey, CacheValue>(item.Key, item.Value)).ToList();
+            values = new List<KeyValuePair<TKey, CacheValue>>(_lruList.Count);
+            foreach (var item in _lruList)
+            {
+                values.Add(new KeyValuePair<TKey, CacheValue>(item.Key, item.Value));
+            }
         }
 
         var result = new List<TValue>(values.Count);
