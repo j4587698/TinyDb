@@ -41,7 +41,11 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine($"    /// <summary>");
         sb.AppendLine($"    /// {classInfo.FullyQualifiedTypeReference} 的AOT支持帮助器（源代码生成器生成）");
         sb.AppendLine($"    /// </summary>");
-        sb.AppendLine($"    internal static class {classInfo.HelperClassName}");
+        sb.AppendLine($"    internal static class {classInfo.HelperClassName}{classInfo.TypeParameterList}");
+        if (!string.IsNullOrEmpty(classInfo.TypeParameterConstraints))
+        {
+            sb.AppendLine($"        {classInfo.TypeParameterConstraints}");
+        }
         sb.AppendLine("    {");
 
         // 生成AOT兼容的ID访问方法

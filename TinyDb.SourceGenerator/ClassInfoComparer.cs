@@ -17,7 +17,11 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
 
         return StringEquals(x.Namespace, y.Namespace) &&
                StringEquals(x.Name, y.Name) &&
+               StringEquals(x.MetadataName, y.MetadataName) &&
                StringEquals(x.ContainingTypePath, y.ContainingTypePath) &&
+               x.IsGenericType == y.IsGenericType &&
+               StringEquals(x.TypeParameterList, y.TypeParameterList) &&
+               StringEquals(x.TypeParameterConstraints, y.TypeParameterConstraints) &&
                x.IsValueType == y.IsValueType &&
                StringEquals(x.RuntimeFullName, y.RuntimeFullName) &&
                StringEquals(x.CollectionName, y.CollectionName) &&
@@ -41,7 +45,11 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             var hash = 17;
             hash = Add(hash, obj.Namespace);
             hash = Add(hash, obj.Name);
+            hash = Add(hash, obj.MetadataName);
             hash = Add(hash, obj.ContainingTypePath);
+            hash = Add(hash, obj.IsGenericType);
+            hash = Add(hash, obj.TypeParameterList);
+            hash = Add(hash, obj.TypeParameterConstraints);
             hash = Add(hash, obj.IsValueType);
             hash = Add(hash, obj.RuntimeFullName);
             hash = Add(hash, obj.CollectionName);

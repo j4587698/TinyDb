@@ -69,7 +69,7 @@ internal static class QuerySortKeyReader
             {
                 BsonType.Int32 => new BsonInt32(BinaryPrimitives.ReadInt32LittleEndian(document.Slice(valueOffset, 4))),
                 BsonType.Int64 => new BsonInt64(BinaryPrimitives.ReadInt64LittleEndian(document.Slice(valueOffset, 8))),
-                BsonType.Double => new BsonDouble(BitConverter.ToDouble(document.Slice(valueOffset, 8))),
+                BsonType.Double => new BsonDouble(BinaryPrimitives.ReadDoubleLittleEndian(document.Slice(valueOffset, 8))),
                 BsonType.Boolean => new BsonBoolean(document[valueOffset] != 0),
                 BsonType.String => ReadString(document, valueOffset),
                 BsonType.ObjectId => new BsonObjectId(new ObjectId(document.Slice(valueOffset, 12))),

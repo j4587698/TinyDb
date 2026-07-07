@@ -34,6 +34,11 @@ public partial class TinyDbSourceGenerator
 
         foreach (var classInfo in classes)
         {
+            if (classInfo.IsGenericType)
+            {
+                continue;
+            }
+
             // 使用完整命名空间加帮助器类名
             var helperFullName = string.IsNullOrEmpty(classInfo.Namespace)
                 ? classInfo.HelperClassName

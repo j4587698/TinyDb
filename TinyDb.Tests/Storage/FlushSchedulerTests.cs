@@ -176,29 +176,29 @@ public class FlushSchedulerTests
     }
 
     [Test]
-    public async Task FlushScheduler_SyncedSyncFlush_ShouldNotJoinAsyncBatch()
+    public async Task FlushScheduler_SyncedSyncFlush_ShouldJoinAsyncBatch()
     {
-        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
-
-        var page = _pageManager.GetPage(1);
-        page.WriteData(0, new byte[] { 3 });
-        _pageManager.SavePage(page);
-        _wal.AppendPage(page);
-
-        UnsafeAccessors.FlushSchedulerAccessor.SyncedWorkerRunning(fs) = true;
-        UnsafeAccessors.FlushSchedulerAccessor.SyncedRequests(fs) = 1;
-
+        var isolatedDbFile = Path.Combine(Path.GetTempPath(), $"fs_sync_group_{Guid.NewGuid():N}.db");
+        var isolatedWalFile = Path.Combine(Path.GetDirectoryName(isolatedDbFile)!, $"{Path.GetFileNameWithoutExtension(isolatedDbFile)}-wal.db");
         try
         {
-            await Task.Run(() => fs.EnsureDurability(WriteConcern.Synced))
-                .WaitAsync(TimeSpan.FromSeconds(2));
+            using var trackingStream = new TrackingDiskStream(new DiskStream(isolatedDbFile));
+            using var pageManager = new PageManager(trackingStream);
+            using var walDisabled = new WriteAheadLog(isolatedDbFile, 8192, false);
+            using var fs = new FlushScheduler(pageManager, walDisabled, TimeSpan.Zero);
 
-            await Assert.That(_wal.HasPendingEntries).IsFalse();
+            var page = pageManager.GetPage(1);
+            page.WriteData(0, new byte[] { 3 });
+
+            await Task.Run(() => fs.EnsureDurability(WriteConcern.Synced)).WaitAsync(TimeSpan.FromSeconds(2));
+
+            await Assert.That(trackingStream.FlushCount).IsEqualTo(0);
+            await Assert.That(trackingStream.FlushAsyncCount).IsEqualTo(1);
         }
         finally
         {
-            UnsafeAccessors.FlushSchedulerAccessor.SyncedRequests(fs) = 0;
-            UnsafeAccessors.FlushSchedulerAccessor.SyncedWorkerRunning(fs) = false;
+            try { if (File.Exists(isolatedDbFile)) File.Delete(isolatedDbFile); } catch { }
+            try { if (File.Exists(isolatedWalFile)) File.Delete(isolatedWalFile); } catch { }
         }
     }
 

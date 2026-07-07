@@ -118,7 +118,8 @@ public sealed partial class TransactionManager
                 {
                     if (operation.IndexFields != null && !string.IsNullOrEmpty(operation.IndexName))
                     {
-                        _engine.EnsureIndex(operation.CollectionName, operation.IndexFields, operation.IndexName, operation.IndexUnique, operation.IndexSparse);
+                        var created = _engine.EnsureIndex(operation.CollectionName, operation.IndexFields, operation.IndexName, operation.IndexUnique, operation.IndexSparse);
+                        operation.MarkIndexCreated(created);
                     }
                 }
                 catch (Exception ex)
@@ -192,7 +193,7 @@ public sealed partial class TransactionManager
                     break;
 
                 case TransactionOperationType.CreateIndex:
-                    if (!string.IsNullOrEmpty(operation.IndexName))
+                    if (operation.WasIndexCreated && !string.IsNullOrEmpty(operation.IndexName))
                         _engine.GetIndexManager(operation.CollectionName).DropIndex(operation.IndexName);
                     break;
 

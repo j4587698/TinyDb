@@ -175,6 +175,11 @@ public sealed class TransactionOperation
     public bool IndexSparse { get; }
 
     /// <summary>
+    /// Whether this transaction operation physically created the index.
+    /// </summary>
+    public bool WasIndexCreated { get; private set; }
+
+    /// <summary>
     /// 操作时间
     /// </summary>
     public DateTime Timestamp { get; }
@@ -206,7 +211,8 @@ public sealed class TransactionOperation
         string? indexName = null,
         string[]? indexFields = null,
         bool indexUnique = false,
-        bool indexSparse = false)
+        bool indexSparse = false,
+        bool wasIndexCreated = false)
     {
         OperationId = Guid.NewGuid();
         OperationType = operationType;
@@ -220,6 +226,12 @@ public sealed class TransactionOperation
         IndexFields = indexFields;
         IndexUnique = indexUnique;
         IndexSparse = indexSparse;
+        WasIndexCreated = wasIndexCreated;
+    }
+
+    internal void MarkIndexCreated(bool wasIndexCreated)
+    {
+        WasIndexCreated = wasIndexCreated;
     }
 
     /// <summary>
@@ -238,7 +250,8 @@ public sealed class TransactionOperation
             IndexName,
             IndexFields,
             IndexUnique,
-            IndexSparse
+            IndexSparse,
+            WasIndexCreated
         );
     }
 

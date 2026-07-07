@@ -23,10 +23,14 @@ public partial class TinyDbSourceGenerator
         var namespaceDeclaration = classDeclaration.FirstAncestorOrSelf<NamespaceDeclarationSyntax>();
         var namespaceName = namespaceDeclaration?.Name.ToString() ?? string.Empty;
         var className = classDeclaration.Identifier.Text;
+        var typeParameterList = classDeclaration.TypeParameterList?.ToString() ?? string.Empty;
+        var typeParameterConstraints = string.Join(" ", classDeclaration.ConstraintClauses.Select(static clause => clause.ToString()));
 
         // 获取类符号信息
         var classSymbol = context.TargetSymbol as INamedTypeSymbol
             ?? semanticModel.GetDeclaredSymbol(classDeclaration);
+        var metadataName = classSymbol?.MetadataName ?? className;
+        var isGenericType = classSymbol?.IsGenericType ?? classDeclaration.TypeParameterList != null;
 
         // 如果没有找到命名空间声明，使用符号信息获取命名空间
         if (string.IsNullOrEmpty(namespaceName))
@@ -39,7 +43,7 @@ public partial class TinyDbSourceGenerator
         var containingType = classSymbol?.ContainingType;
         while (containingType != null)
         {
-            containingTypeNames.Insert(0, containingType.Name);
+            containingTypeNames.Insert(0, containingType.MetadataName.Replace('`', '_'));
             containingType = containingType.ContainingType;
         }
         var containingTypePath = string.Join("_", containingTypeNames);
@@ -123,7 +127,7 @@ public partial class TinyDbSourceGenerator
         // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
         var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
 
-        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, entityDisplayName, entityDescription, containingTypePath, DiagnosticLocationInfo.From(classDeclaration.GetLocation()), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors, constructorParameters, runtimeFullName, fullyQualifiedTypeReference);
+        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, entityDisplayName, entityDescription, containingTypePath, DiagnosticLocationInfo.From(classDeclaration.GetLocation()), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors, constructorParameters, runtimeFullName, fullyQualifiedTypeReference, metadataName, isGenericType, typeParameterList, typeParameterConstraints);
     }
 
 }

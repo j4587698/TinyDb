@@ -114,7 +114,7 @@ internal readonly ref struct SortKeyRef
                     key = new SortKeyRef(type, 0, BinaryPrimitives.ReadInt64LittleEndian(document.Slice(valueOffset, 8)), default, default);
                     return true;
                 case BsonType.Double:
-                    key = new SortKeyRef(type, BitConverter.ToDouble(document.Slice(valueOffset, 8)), 0, default, default);
+                    key = new SortKeyRef(type, BinaryPrimitives.ReadDoubleLittleEndian(document.Slice(valueOffset, 8)), 0, default, default);
                     return true;
                 case BsonType.Decimal128:
                 {
