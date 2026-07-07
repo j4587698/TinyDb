@@ -1,5 +1,7 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Storage;
@@ -208,5 +210,44 @@ public class DiskStreamRegionLockTests : IDisposable
         await Assert.That(handle2Acquired).IsTrue();
 
         diskStream.UnlockRegion(handle1);
+    }
+
+    [Test]
+    public async Task LockRegion_AfterUnlock_ShouldRemoveStaticEntryForPath()
+    {
+        using var diskStream = new DiskStream(_dbPath);
+
+        var handle = diskStream.LockRegion(0, 100);
+        await Assert.That(ContainsRegionLockEntry(_dbPath)).IsTrue();
+
+        diskStream.UnlockRegion(handle);
+
+        await Assert.That(ContainsRegionLockEntry(_dbPath)).IsFalse();
+    }
+
+    [Test]
+    public async Task Dispose_WithActiveRegionLock_ShouldRemoveStaticEntryForPath()
+    {
+        var diskStream = new DiskStream(_dbPath);
+
+        diskStream.LockRegion(0, 100);
+        await Assert.That(ContainsRegionLockEntry(_dbPath)).IsTrue();
+
+        diskStream.Dispose();
+
+        await Assert.That(ContainsRegionLockEntry(_dbPath)).IsFalse();
+    }
+
+    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "Test-only reflection over a private dictionary.")]
+    private static bool ContainsRegionLockEntry(string path)
+    {
+        var field = typeof(DiskStream).GetField("_regionLocks", BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("DiskStream._regionLocks was not found.");
+        var dictionary = field.GetValue(null)
+            ?? throw new InvalidOperationException("DiskStream._regionLocks was null.");
+        var containsKey = dictionary.GetType().GetMethod("ContainsKey", new[] { typeof(string) })
+            ?? throw new InvalidOperationException("DiskStream._regionLocks.ContainsKey was not found.");
+
+        return (bool)containsKey.Invoke(dictionary, new object[] { Path.GetFullPath(path) })!;
     }
 }

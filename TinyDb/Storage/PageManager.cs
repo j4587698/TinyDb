@@ -77,7 +77,30 @@ public sealed partial class PageManager : IDisposable
     /// <summary>
     /// 总页面数量
     /// </summary>
-    public uint TotalPages => (uint)(Volatile.Read(ref _fileSize) / _physicalPageSize);
+    public uint TotalPages => (uint)(ReadFileSize() / _physicalPageSize);
+
+    private long ReadFileSize() => Interlocked.Read(ref _fileSize);
+
+    private void SetFileSize(long fileSize) => Interlocked.Exchange(ref _fileSize, fileSize);
+
+    private bool IsBeyondFileSize(long pageOffset)
+    {
+        return pageOffset + _physicalPageSize > ReadFileSize();
+    }
+
+    private void EnsureRecordedFileSizeAtLeast(long fileSize)
+    {
+        while (true)
+        {
+            var current = ReadFileSize();
+            if (fileSize <= current) return;
+
+            if (Interlocked.CompareExchange(ref _fileSize, fileSize, current) == current)
+            {
+                return;
+            }
+        }
+    }
 
     /// <summary>
     /// 空闲页面数量

@@ -105,10 +105,10 @@ public sealed partial class PageManager
     {
         lock (_fileSizeLock)
         {
-            if (newFileSize > Volatile.Read(ref _fileSize))
+            if (newFileSize > ReadFileSize())
             {
                 _diskStream.SetLength(newFileSize);
-                Volatile.Write(ref _fileSize, newFileSize);
+                SetFileSize(newFileSize);
             }
         }
     }

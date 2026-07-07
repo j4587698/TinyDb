@@ -57,10 +57,12 @@ public static class BsonScanner
     public static bool TryGetValue(ReadOnlySpan<byte> document, string fieldName, out BsonValue? value)
     {
         value = null;
+        if (fieldName == null) return false;
         if (document.Length < 5) return false;
         var documentLength = BinaryPrimitives.ReadInt32LittleEndian(document.Slice(0, 4));
         if (documentLength < 5 || documentLength > document.Length) return false;
         document = document.Slice(0, documentLength);
+        var fieldNameBytes = Encoding.UTF8.GetBytes(fieldName);
 
         int offset = 4; // 跳过大小字段
 
@@ -77,11 +79,10 @@ public static class BsonScanner
 
             int nameLen = nameEnd - offset;
             var nameSpan = document.Slice(offset, nameLen);
-            string currentName = BsonFieldName.Decode(nameSpan);
             
             offset = nameEnd + 1;
 
-            if (string.Equals(currentName, fieldName, StringComparison.OrdinalIgnoreCase))
+            if (FieldNameEquals(nameSpan, fieldNameBytes, fieldName))
             {
                 return TryReadValue(type, document, ref offset, out value);
             }
@@ -96,6 +97,49 @@ public static class BsonScanner
         }
 
         return false;
+    }
+
+    private static bool FieldNameEquals(ReadOnlySpan<byte> nameSpan, ReadOnlySpan<byte> fieldNameBytes, string fieldName)
+    {
+        if (nameSpan.SequenceEqual(fieldNameBytes))
+        {
+            return true;
+        }
+
+        if (IsAscii(nameSpan) && IsAscii(fieldNameBytes))
+        {
+            return AsciiEqualsOrdinalIgnoreCase(nameSpan, fieldNameBytes);
+        }
+
+        return string.Equals(BsonFieldName.Decode(nameSpan), fieldName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAscii(ReadOnlySpan<byte> value)
+    {
+        foreach (var b in value)
+        {
+            if (b >= 0x80) return false;
+        }
+
+        return true;
+    }
+
+    private static bool AsciiEqualsOrdinalIgnoreCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        if (left.Length != right.Length) return false;
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            var a = left[i];
+            var b = right[i];
+            if (a == b) continue;
+
+            if ((uint)(a - 'A') <= 'Z' - 'A') a = (byte)(a + ('a' - 'A'));
+            if ((uint)(b - 'A') <= 'Z' - 'A') b = (byte)(b + ('a' - 'A'));
+            if (a != b) return false;
+        }
+
+        return true;
     }
 
     private static bool TryReadValue(BsonType type, ReadOnlySpan<byte> data, ref int offset, out BsonValue? value)

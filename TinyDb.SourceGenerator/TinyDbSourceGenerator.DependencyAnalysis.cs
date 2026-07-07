@@ -91,8 +91,7 @@ public partial class TinyDbSourceGenerator
                     propertySymbol.GetMethod != null)
                 {
                     // 检查是否有BsonIgnore
-                    var hasIgnore = propertySymbol.GetAttributes()
-                        .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute");
+                    var hasIgnore = HasAttribute(propertySymbol.GetAttributes(), "BsonIgnoreAttribute");
                     if (hasIgnore) continue;
 
                     var propType = GetActualType(propertySymbol.Type);
@@ -309,8 +308,7 @@ public partial class TinyDbSourceGenerator
                 propertySymbol.SetMethod != null)
             {
                 // 检查是否有 BsonIgnore 属性
-                var hasIgnore = propertySymbol.GetAttributes()
-                    .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute");
+                var hasIgnore = HasAttribute(propertySymbol.GetAttributes(), "BsonIgnoreAttribute");
                 if (hasIgnore) continue;
 
                 var propType = propertySymbol.Type;

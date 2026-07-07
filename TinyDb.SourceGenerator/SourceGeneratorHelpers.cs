@@ -13,6 +13,13 @@ public static partial class SourceGeneratorHelpers
         return prop.IsId;
     }
 
+    private static bool IsNullableProperty(PropertyInfo prop)
+    {
+        return prop.IsNullableValueType ||
+               prop.IsNullableReferenceType ||
+               prop.Type.EndsWith("?", StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// 生成属性序列化代码
     /// </summary>
@@ -61,7 +68,7 @@ public static partial class SourceGeneratorHelpers
             "DateTime" => $"document = document.Set(\"{bsonFieldName}\", new BsonDateTime(entity.{propertyAccess}));",
             "Guid" => $"document = document.Set(\"{bsonFieldName}\", new BsonBinary(entity.{propertyAccess}));",
             "ObjectId" => $"document = document.Set(\"{bsonFieldName}\", new BsonObjectId(entity.{propertyAccess}));",
-            _ when propertyType.EndsWith("?") => GenerateNullablePropertySerialization(prop, bsonFieldName),
+            _ when IsNullableProperty(prop) => GenerateNullablePropertySerialization(prop, bsonFieldName),
             _ => $"document = document.Set(\"{bsonFieldName}\", ConvertToBsonValue(entity.{propertyAccess}));"
         };
     }
@@ -74,7 +81,7 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
         var collectionName = prop.BsonRefCollectionName!;
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
 
         var sb = new StringBuilder();
 
@@ -159,7 +166,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
 
         if (isNullable)
         {
@@ -179,7 +186,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
         var isElementValueType = prop.IsElementValueType;
 
         var sb = new StringBuilder();
@@ -227,7 +234,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
         var isValueValueType = prop.IsDictionaryValueValueType;
 
         var sb = new StringBuilder();
@@ -305,7 +312,7 @@ public static partial class SourceGeneratorHelpers
             return GenerateDictionaryDeserialization(prop, bsonFieldName);
         }
 
-        if (prop.IsEnum && !prop.IsNullableValueType && !prop.Type.EndsWith("?", StringComparison.Ordinal))
+        if (prop.IsEnum && !IsNullableProperty(prop))
         {
             return $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyAccess} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});";
         }
@@ -322,7 +329,7 @@ public static partial class SourceGeneratorHelpers
             "DateTime" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonDateTime dt{propertyName}) entity.{propertyAccess} = dt{propertyName}.Value;",
             "Guid" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) {{ if (bson{propertyName} is BsonBinary guid{propertyName}) entity.{propertyAccess} = new Guid(guid{propertyName}.Bytes); else if (bson{propertyName} is BsonString guidString{propertyName} && Guid.TryParse(guidString{propertyName}.Value, out var parsedGuid{propertyName})) entity.{propertyAccess} = parsedGuid{propertyName}; }}",
             "ObjectId" => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName}) && bson{propertyName} is BsonObjectId oid{propertyName}) entity.{propertyAccess} = oid{propertyName}.Value;",
-            _ when propertyType.EndsWith("?") => GenerateNullablePropertyDeserialization(prop, bsonFieldName),
+            _ when IsNullableProperty(prop) => GenerateNullablePropertyDeserialization(prop, bsonFieldName),
             _ => $"if (document.TryGetValue(\"{bsonFieldName}\", out var bson{propertyName})) entity.{propertyAccess} = ConvertFromBsonValue<{prop.FullyQualifiedNonNullableType}>(bson{propertyName});"
         };
     }
@@ -388,7 +395,7 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
         var propertyType = prop.FullyQualifiedNonNullableType;
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
 
         var sb = new StringBuilder();
         sb.AppendLine($@"if (document.TryGetValue(""{bsonFieldName}"", out var bson{propertyName}))
@@ -420,7 +427,7 @@ public static partial class SourceGeneratorHelpers
         var propertyAccess = prop.AccessName;
         var elementType = prop.ElementType ?? "object";
         var isArray = prop.IsArray;
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
         var isElementComplex = prop.IsElementComplexType;
 
         var sb = new StringBuilder();
@@ -482,7 +489,7 @@ public static partial class SourceGeneratorHelpers
         var propertyAccess = prop.AccessName;
         var keyType = prop.DictionaryKeyType ?? "string";
         var valueType = prop.DictionaryValueType ?? "object";
-        var isNullable = prop.IsNullableReferenceType || prop.Type.EndsWith("?");
+        var isNullable = IsNullableProperty(prop);
         var isValueComplex = prop.IsDictionaryValueComplexType;
 
         var sb = new StringBuilder();

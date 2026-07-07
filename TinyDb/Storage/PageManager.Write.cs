@@ -277,7 +277,7 @@ public sealed partial class PageManager
     private byte[]? ReadPageSnapshotForWal(uint pageID)
     {
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+        if (IsBeyondFileSize(pageOffset))
         {
             return null;
         }
@@ -288,7 +288,7 @@ public sealed partial class PageManager
     private async Task<byte[]?> ReadPageSnapshotForWalAsync(uint pageID, CancellationToken cancellationToken)
     {
         var pageOffset = CalculatePageOffset(pageID);
-        if (pageOffset + _physicalPageSize > Volatile.Read(ref _fileSize))
+        if (IsBeyondFileSize(pageOffset))
         {
             return null;
         }

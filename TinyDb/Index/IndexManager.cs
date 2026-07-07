@@ -10,6 +10,7 @@ public sealed class IndexManager : IDisposable
     private readonly string _collectionName;
     private readonly PageManager _pm;
     private readonly Action<IReadOnlyList<PersistedIndexDefinition>, bool>? _persistDefinitions;
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly ReaderWriterLockSlim _rwLock = new();
     private readonly bool _ownsPageManager;
     private readonly string? _tempFilePath;
@@ -141,22 +142,30 @@ public sealed class IndexManager : IDisposable
     {
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
 
-        _rwLock.EnterWriteLock();
+        _mutationGate.Wait();
         try
         {
-            if (!_catalog.Remove(name, out var index))
+            _rwLock.EnterWriteLock();
+            try
             {
-                return false;
-            }
+                if (!_catalog.Remove(name, out var index))
+                {
+                    return false;
+                }
 
-            index.DropStorage();
-            index.Dispose();
-            PersistDefinitions(forceFlush: false);
-            return true;
+                index.DropStorage();
+                index.Dispose();
+                PersistDefinitions(forceFlush: false);
+                return true;
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
         finally
         {
-            _rwLock.ExitWriteLock();
+            _mutationGate.Release();
         }
     }
 
@@ -284,14 +293,22 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public void ClearAllIndexes()
     {
-        _rwLock.EnterWriteLock();
+        _mutationGate.Wait();
         try
         {
-            _catalog.ClearIndexes();
+            _rwLock.EnterWriteLock();
+            try
+            {
+                _catalog.ClearIndexes();
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
         finally
         {
-            _rwLock.ExitWriteLock();
+            _mutationGate.Release();
         }
     }
 
@@ -324,14 +341,53 @@ public sealed class IndexManager : IDisposable
     /// <param name="documentId">文档 ID。</param>
     public void InsertDocument(BsonDocument document, BsonValue documentId)
     {
-        _rwLock.EnterReadLock();
+        _mutationGate.Wait();
         try
         {
-            IndexMutationCoordinator.InsertDocument(_catalog.Indexes, document, documentId);
+            _rwLock.EnterReadLock();
+            try
+            {
+                IndexMutationCoordinator.InsertDocument(_catalog.Indexes, document, documentId);
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
         }
         finally
         {
-            _rwLock.ExitReadLock();
+            _mutationGate.Release();
+        }
+    }
+
+    internal async Task InsertDocumentAsync(
+        BsonDocument document,
+        BsonValue documentId,
+        CancellationToken cancellationToken = default)
+    {
+        BTreeIndex[] indexes;
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                indexes = _catalog.Indexes.ToArray();
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+
+            await IndexMutationCoordinator.InsertDocumentAsync(
+                indexes,
+                document,
+                documentId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
         }
     }
 
@@ -345,20 +401,28 @@ public sealed class IndexManager : IDisposable
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
         if (documents == null) throw new ArgumentNullException(nameof(documents));
 
-        _rwLock.EnterWriteLock();
+        _mutationGate.Wait();
         try
         {
-            if (!_catalog.TryGet(name, out var index))
+            _rwLock.EnterWriteLock();
+            try
             {
-                throw new InvalidOperationException($"Index '{name}' does not exist.");
-            }
+                if (!_catalog.TryGet(name, out var index))
+                {
+                    throw new InvalidOperationException($"Index '{name}' does not exist.");
+                }
 
-            index.Clear();
-            IndexMutationCoordinator.RebuildIndex(index, documents);
+                index.Clear();
+                IndexMutationCoordinator.RebuildIndex(index, documents);
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
         }
         finally
         {
-            _rwLock.ExitWriteLock();
+            _mutationGate.Release();
         }
     }
 
@@ -370,14 +434,55 @@ public sealed class IndexManager : IDisposable
     /// <param name="id">文档 ID。</param>
     public void UpdateDocument(BsonDocument oldDoc, BsonDocument newDoc, BsonValue id)
     {
-        _rwLock.EnterReadLock();
+        _mutationGate.Wait();
         try
         {
-            IndexMutationCoordinator.UpdateDocument(_catalog.Indexes, oldDoc, newDoc, id);
+            _rwLock.EnterReadLock();
+            try
+            {
+                IndexMutationCoordinator.UpdateDocument(_catalog.Indexes, oldDoc, newDoc, id);
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
         }
         finally
         {
-            _rwLock.ExitReadLock();
+            _mutationGate.Release();
+        }
+    }
+
+    internal async Task UpdateDocumentAsync(
+        BsonDocument oldDoc,
+        BsonDocument newDoc,
+        BsonValue id,
+        CancellationToken cancellationToken = default)
+    {
+        BTreeIndex[] indexes;
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                indexes = _catalog.Indexes.ToArray();
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+
+            await IndexMutationCoordinator.UpdateDocumentAsync(
+                indexes,
+                oldDoc,
+                newDoc,
+                id,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
         }
     }
 
@@ -388,14 +493,53 @@ public sealed class IndexManager : IDisposable
     /// <param name="id">文档 ID。</param>
     public void DeleteDocument(BsonDocument doc, BsonValue id)
     {
-        _rwLock.EnterReadLock();
+        _mutationGate.Wait();
         try
         {
-            IndexMutationCoordinator.DeleteDocument(_catalog.Indexes, doc, id);
+            _rwLock.EnterReadLock();
+            try
+            {
+                IndexMutationCoordinator.DeleteDocument(_catalog.Indexes, doc, id);
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
         }
         finally
         {
-            _rwLock.ExitReadLock();
+            _mutationGate.Release();
+        }
+    }
+
+    internal async Task DeleteDocumentAsync(
+        BsonDocument doc,
+        BsonValue id,
+        CancellationToken cancellationToken = default)
+    {
+        BTreeIndex[] indexes;
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _rwLock.EnterReadLock();
+            try
+            {
+                indexes = _catalog.Indexes.ToArray();
+            }
+            finally
+            {
+                _rwLock.ExitReadLock();
+            }
+
+            await IndexMutationCoordinator.DeleteDocumentAsync(
+                indexes,
+                doc,
+                id,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
         }
     }
 
@@ -406,19 +550,28 @@ public sealed class IndexManager : IDisposable
     {
         if (_disposed) return;
 
+        _mutationGate.Wait();
         _disposed = true;
-        _catalog.Dispose();
-
-        if (_ownsPageManager)
+        try
         {
-            _pm.Dispose();
-            if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
+            _catalog.Dispose();
+
+            if (_ownsPageManager)
             {
-                File.Delete(_tempFilePath);
+                _pm.Dispose();
+                if (!string.IsNullOrEmpty(_tempFilePath) && File.Exists(_tempFilePath))
+                {
+                    File.Delete(_tempFilePath);
+                }
             }
+        }
+        finally
+        {
+            _mutationGate.Release();
         }
 
         _rwLock.Dispose();
+        _mutationGate.Dispose();
     }
 
     private bool CreateIndexCore(string name, string[] fields, bool unique, bool sparse, bool persistImmediately)
@@ -426,29 +579,37 @@ public sealed class IndexManager : IDisposable
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
         if (fields == null || fields.Length == 0) throw new ArgumentException("Fields cannot be null or empty", nameof(fields));
 
-        _rwLock.EnterWriteLock();
+        _mutationGate.Wait();
         try
         {
-            var normalizedFields = fields.Select(BsonFieldName.ToCamelCase).ToArray();
-            if (_catalog.TryGet(name, out var existing))
+            _rwLock.EnterWriteLock();
+            try
             {
-                EnsureExistingIndexIsCompatible(name, existing, normalizedFields, unique, sparse);
-                return false;
+                var normalizedFields = fields.Select(BsonFieldName.ToCamelCase).ToArray();
+                if (_catalog.TryGet(name, out var existing))
+                {
+                    EnsureExistingIndexIsCompatible(name, existing, normalizedFields, unique, sparse);
+                    return false;
+                }
+
+                var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse);
+                AddNewIndex(index);
+
+                if (persistImmediately)
+                {
+                    PersistDefinitions(forceFlush: false);
+                }
+
+                return true;
             }
-
-            var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse);
-            AddNewIndex(index);
-
-            if (persistImmediately)
+            finally
             {
-                PersistDefinitions(forceFlush: false);
+                _rwLock.ExitWriteLock();
             }
-
-            return true;
         }
         finally
         {
-            _rwLock.ExitWriteLock();
+            _mutationGate.Release();
         }
     }
 

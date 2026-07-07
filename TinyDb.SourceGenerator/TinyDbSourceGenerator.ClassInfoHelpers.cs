@@ -159,6 +159,20 @@ public partial class TinyDbSourceGenerator
     }
 
 
+    private static bool HasModifier(SyntaxTokenList modifiers, SyntaxKind kind)
+    {
+        foreach (var modifier in modifiers)
+        {
+            if (modifier.IsKind(kind))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
     private static bool TryCreatePropertyInfoFromSymbol(
         IPropertySymbol propertySymbol,
         string containingTypeName,
@@ -179,17 +193,13 @@ public partial class TinyDbSourceGenerator
         }
 
         var attributes = propertySymbol.GetAttributes();
-        var hasIgnoreAttribute = attributes
-            .Any(attr => attr.AttributeClass?.Name == "BsonIgnoreAttribute" || attr.AttributeClass?.Name == "BsonIgnore");
+        var hasIgnoreAttribute = HasAttribute(attributes, "BsonIgnoreAttribute", "BsonIgnore");
 
-        var bsonRefAttribute = attributes
-            .FirstOrDefault(attr => attr.AttributeClass?.Name == "BsonRefAttribute");
-        var bsonRefCollectionName = bsonRefAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+        var bsonRefAttribute = FindAttribute(attributes, "BsonRefAttribute");
+        var bsonRefCollectionName = GetConstructorString(bsonRefAttribute, 0);
 
-        var foreignKeyAttribute = attributes
-            .FirstOrDefault(attr => attr.AttributeClass?.Name == "ForeignKeyAttribute" ||
-                                    attr.AttributeClass?.Name == "ForeignKey");
-        var foreignKeyCollectionName = foreignKeyAttribute?.ConstructorArguments.FirstOrDefault().Value?.ToString();
+        var foreignKeyAttribute = FindAttribute(attributes, "ForeignKeyAttribute", "ForeignKey");
+        var foreignKeyCollectionName = GetConstructorString(foreignKeyAttribute, 0);
         var propertyMetadataAttribute = GetPropertyMetadataAttribute(propertySymbol);
 
         var typeSymbol = propertySymbol.Type;
@@ -197,13 +207,13 @@ public partial class TinyDbSourceGenerator
         {
             var refTypeSymbol = GetBsonRefTargetType(typeSymbol);
             if (refTypeSymbol != null &&
-                !refTypeSymbol.GetAttributes().Any(attr => attr.AttributeClass?.Name == "EntityAttribute"))
+                !HasAttribute(refTypeSymbol.GetAttributes(), "EntityAttribute"))
             {
                 bsonRefMissingEntityErrors.Add(new BsonRefMissingEntityInfo(
                     propertySymbol.Name,
                     containingTypeName,
                     refTypeSymbol.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat),
-                    DiagnosticLocationInfo.From(propertySymbol.Locations.FirstOrDefault())));
+                    DiagnosticLocationInfo.From(propertySymbol.Locations.Length > 0 ? propertySymbol.Locations[0] : null)));
             }
         }
 
@@ -332,7 +342,7 @@ public partial class TinyDbSourceGenerator
         {
             foreach (var propertySymbol in typeSymbol.GetMembers().OfType<IPropertySymbol>())
             {
-                if (propertySymbol.GetAttributes().Any(attr => attr.AttributeClass?.Name == "IdAttribute"))
+                if (HasAttribute(propertySymbol.GetAttributes(), "IdAttribute"))
                 {
                     return propertySymbol.Name;
                 }
@@ -345,8 +355,9 @@ public partial class TinyDbSourceGenerator
 
     private static (int StrategyValue, string? SequenceName) GetIdGenerationInfo(ISymbol? symbol)
     {
-        var attribute = symbol?.GetAttributes()
-            .FirstOrDefault(attr => attr.AttributeClass?.Name == "IdGenerationAttribute");
+        var attribute = symbol == null
+            ? null
+            : FindAttribute(symbol.GetAttributes(), "IdGenerationAttribute");
         if (attribute == null)
         {
             return (0, null);
@@ -358,10 +369,10 @@ public partial class TinyDbSourceGenerator
             strategyValue = GetEnumConstantValue(attribute.ConstructorArguments[0]);
         }
 
-        var namedStrategy = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == "Strategy");
-        if (namedStrategy.Value.Value != null)
+        if (TryGetNamedArgument(attribute, "Strategy", out var namedStrategy) &&
+            namedStrategy.Value != null)
         {
-            strategyValue = GetEnumConstantValue(namedStrategy.Value);
+            strategyValue = GetEnumConstantValue(namedStrategy);
         }
 
         string? sequenceName = null;
@@ -370,10 +381,10 @@ public partial class TinyDbSourceGenerator
             sequenceName = attribute.ConstructorArguments[1].Value?.ToString();
         }
 
-        var namedSequence = attribute.NamedArguments.FirstOrDefault(arg => arg.Key == "SequenceName");
-        if (namedSequence.Value.Value != null)
+        if (TryGetNamedArgument(attribute, "SequenceName", out var namedSequence) &&
+            namedSequence.Value != null)
         {
-            sequenceName = namedSequence.Value.Value?.ToString();
+            sequenceName = namedSequence.Value?.ToString();
         }
 
         return (strategyValue, sequenceName);

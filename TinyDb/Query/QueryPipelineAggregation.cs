@@ -18,18 +18,16 @@ internal static class QueryPipelineAggregation
             selectorExpr = parser.ParseExpression(lambda.Body);
         }
 
-        Func<object, object> selector = selectorExpr != null
-            ? item => ExpressionEvaluator.EvaluateValue(selectorExpr, item)!
+        Func<object?, object?> selector = selectorExpr != null
+            ? item => ExpressionEvaluator.EvaluateValue(selectorExpr, item!)!
             : item => item;
-
-        var items = source.Cast<object>().ToList();
 
         return methodCall.Method.Name switch
         {
-            "Sum" => Sum(items, selector, methodCall.Method.ReturnType),
-            "Average" => Average(items, selector, methodCall.Method.ReturnType),
-            "Min" => Min(items, selector),
-            "Max" => Max(items, selector),
+            "Sum" => Sum(source, selector, methodCall.Method.ReturnType),
+            "Average" => Average(source, selector, methodCall.Method.ReturnType),
+            "Min" => Min(source, selector),
+            "Max" => Max(source, selector),
             _ => throw new NotSupportedException($"Aggregation {methodCall.Method.Name} is not supported")
         };
     }
@@ -72,7 +70,7 @@ internal static class QueryPipelineAggregation
         }
     }
 
-    private static object? Sum(IEnumerable<object> items, Func<object, object> selector, Type returnType)
+    private static object? Sum(IEnumerable items, Func<object?, object?> selector, Type returnType)
     {
         decimal sum = 0;
         foreach (var item in items)
@@ -83,20 +81,22 @@ internal static class QueryPipelineAggregation
         return ConvertValueToType(sum, returnType);
     }
 
-    private static object? Average(IReadOnlyCollection<object> items, Func<object, object> selector, Type returnType)
+    private static object? Average(IEnumerable items, Func<object?, object?> selector, Type returnType)
     {
-        if (items.Count == 0) return ConvertValueToType(0m, returnType);
-
         decimal sum = 0;
+        var count = 0;
         foreach (var item in items)
         {
             sum = AddAggregateValue(sum, selector(item));
+            count++;
         }
 
-        return ConvertValueToType(sum / items.Count, returnType);
+        return count == 0
+            ? ConvertValueToType(0m, returnType)
+            : ConvertValueToType(sum / count, returnType);
     }
 
-    private static object? Min(IEnumerable<object> items, Func<object, object> selector)
+    private static object? Min(IEnumerable items, Func<object?, object?> selector)
     {
         object? min = null;
         foreach (var item in items)
@@ -109,7 +109,7 @@ internal static class QueryPipelineAggregation
         return min;
     }
 
-    private static object? Max(IEnumerable<object> items, Func<object, object> selector)
+    private static object? Max(IEnumerable items, Func<object?, object?> selector)
     {
         object? max = null;
         foreach (var item in items)

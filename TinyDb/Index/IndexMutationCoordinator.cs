@@ -49,6 +49,55 @@ internal static class IndexMutationCoordinator
         }
     }
 
+    internal static async Task InsertDocumentAsync(
+        IReadOnlyCollection<BTreeIndex> indexes,
+        BsonDocument document,
+        BsonValue documentId,
+        CancellationToken cancellationToken = default)
+    {
+        (BTreeIndex Index, IndexKey Key)[]? inserted = null;
+        var insertedCount = 0;
+
+        try
+        {
+            foreach (var index in indexes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var key = ExtractIndexKey(index, document);
+                    if (key == null) continue;
+
+                    if (!await index.InsertAsync(key, documentId, cancellationToken).ConfigureAwait(false))
+                    {
+                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                    }
+
+                    inserted ??= ArrayPool<(BTreeIndex Index, IndexKey Key)>.Shared.Rent(indexes.Count);
+                    inserted[insertedCount++] = (index, key);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    ThrowWithRollbackErrors(ex, await RollbackInsertedIndexesAsync(inserted, insertedCount, documentId).ConfigureAwait(false));
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    var insertException = new InvalidOperationException($"Failed to insert into index '{index.Name}': {ex.Message}", ex);
+                    ThrowWithRollbackErrors(insertException, await RollbackInsertedIndexesAsync(inserted, insertedCount, documentId).ConfigureAwait(false));
+                    throw insertException;
+                }
+            }
+        }
+        finally
+        {
+            if (inserted != null)
+            {
+                ArrayPool<(BTreeIndex Index, IndexKey Key)>.Shared.Return(inserted, clearArray: true);
+            }
+        }
+    }
+
     internal static void RebuildIndex(BTreeIndex index, IEnumerable<BsonDocument> documents)
     {
         foreach (var document in documents)
@@ -142,12 +191,115 @@ internal static class IndexMutationCoordinator
         }
     }
 
+    internal static async Task UpdateDocumentAsync(
+        IReadOnlyCollection<BTreeIndex> indexes,
+        BsonDocument oldDoc,
+        BsonDocument newDoc,
+        BsonValue id,
+        CancellationToken cancellationToken = default)
+    {
+        var applied = new List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)>();
+        foreach (var index in indexes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var oldKey = ExtractIndexKey(index, oldDoc);
+            var newKey = ExtractIndexKey(index, newDoc);
+
+            if (oldKey != null && newKey != null && oldKey.Equals(newKey))
+            {
+                continue;
+            }
+
+            var oldDeleted = false;
+            var newInserted = false;
+            try
+            {
+                if (oldKey != null)
+                {
+                    oldDeleted = await index.DeleteAsync(oldKey, id, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (newKey != null)
+                {
+                    if (!await index.InsertAsync(newKey, id, cancellationToken).ConfigureAwait(false))
+                    {
+                        throw new InvalidOperationException($"Duplicate key detected in unique index '{index.Name}'");
+                    }
+
+                    newInserted = true;
+                }
+
+                applied.Add((index, oldKey, newKey));
+
+                oldDeleted = false;
+                newInserted = false;
+            }
+            catch (Exception ex)
+            {
+                var rollbackErrors = new List<Exception>();
+                if (newInserted && newKey != null)
+                {
+                    try
+                    {
+                        await index.DeleteAsync(newKey, id).ConfigureAwait(false);
+                    }
+                    catch (Exception rollbackEx)
+                    {
+                        rollbackErrors.Add(new InvalidOperationException(
+                            $"Failed to rollback inserted key in index '{index.Name}'.",
+                            rollbackEx));
+                    }
+                }
+
+                if (oldDeleted && oldKey != null)
+                {
+                    try
+                    {
+                        if (!await index.InsertAsync(oldKey, id).ConfigureAwait(false))
+                        {
+                            throw new InvalidOperationException($"Failed to restore old key in index '{index.Name}'.");
+                        }
+                    }
+                    catch (Exception rollbackEx)
+                    {
+                        rollbackErrors.Add(new InvalidOperationException(
+                            $"Failed to rollback deleted key in index '{index.Name}'.",
+                            rollbackEx));
+                    }
+                }
+
+                rollbackErrors.AddRange(await RollbackUpdatedIndexesAsync(applied, id).ConfigureAwait(false));
+                ThrowWithRollbackErrors(ex, rollbackErrors);
+                throw;
+            }
+        }
+    }
+
     internal static void DeleteDocument(IEnumerable<BTreeIndex> indexes, BsonDocument doc, BsonValue id)
     {
         foreach (var index in indexes)
         {
             var key = ExtractIndexKey(index, doc);
             if (key != null) index.Delete(key, id);
+        }
+    }
+
+    internal static async Task DeleteDocumentAsync(
+        IEnumerable<BTreeIndex> indexes,
+        BsonDocument doc,
+        BsonValue id,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var index in indexes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var key = ExtractIndexKey(index, doc);
+            if (key != null)
+            {
+                await index.DeleteAsync(key, id, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -204,6 +356,31 @@ internal static class IndexMutationCoordinator
         return errors;
     }
 
+    private static async Task<List<Exception>> RollbackInsertedIndexesAsync(
+        (BTreeIndex Index, IndexKey Key)[]? inserted,
+        int insertedCount,
+        BsonValue documentId)
+    {
+        var errors = new List<Exception>();
+        if (inserted == null) return errors;
+
+        for (var i = insertedCount - 1; i >= 0; i--)
+        {
+            try
+            {
+                await inserted[i].Index.DeleteAsync(inserted[i].Key, documentId).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                errors.Add(new InvalidOperationException(
+                    $"Failed to rollback inserted key in index '{inserted[i].Index.Name}'.",
+                    ex));
+            }
+        }
+
+        return errors;
+    }
+
     private static List<Exception> RollbackUpdatedIndexes(
         List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)> applied,
         BsonValue documentId)
@@ -216,6 +393,33 @@ internal static class IndexMutationCoordinator
             {
                 if (newKey != null) index.Delete(newKey, documentId);
                 if (oldKey != null && !index.Insert(oldKey, documentId))
+                {
+                    throw new InvalidOperationException($"Failed to rollback index '{index.Name}'");
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add(new InvalidOperationException(
+                    $"Failed to rollback update in index '{index.Name}'.",
+                    ex));
+            }
+        }
+
+        return errors;
+    }
+
+    private static async Task<List<Exception>> RollbackUpdatedIndexesAsync(
+        List<(BTreeIndex Index, IndexKey? OldKey, IndexKey? NewKey)> applied,
+        BsonValue documentId)
+    {
+        var errors = new List<Exception>();
+        for (var i = applied.Count - 1; i >= 0; i--)
+        {
+            var (index, oldKey, newKey) = applied[i];
+            try
+            {
+                if (newKey != null) await index.DeleteAsync(newKey, documentId).ConfigureAwait(false);
+                if (oldKey != null && !await index.InsertAsync(oldKey, documentId).ConfigureAwait(false))
                 {
                     throw new InvalidOperationException($"Failed to rollback index '{index.Name}'");
                 }
