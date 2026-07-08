@@ -39,10 +39,15 @@ internal static class EntityMetadata<[DynamicallyAccessedMembers(DynamicallyAcce
         var map = _propertyMap.Value;
 
         var entityAttribute = type.GetCustomAttribute<EntityAttribute>();
-        if (!string.IsNullOrWhiteSpace(entityAttribute?.IdProperty) &&
-            map.TryGetValue(entityAttribute.IdProperty!, out var specified))
+        if (!string.IsNullOrWhiteSpace(entityAttribute?.IdProperty))
         {
-            return specified;
+            if (map.TryGetValue(entityAttribute.IdProperty!, out var specified))
+            {
+                return specified;
+            }
+
+            throw new InvalidOperationException(
+                $"Entity type '{type.FullName}' specifies IdProperty '{entityAttribute.IdProperty}', but no public mapped property with that name exists.");
         }
 
         foreach (var property in map.Values)

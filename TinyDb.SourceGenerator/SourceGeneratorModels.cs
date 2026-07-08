@@ -104,9 +104,11 @@ public class ClassInfo
         /// BsonRef 引用类型缺少 Entity 特性的错误列表
         /// </summary>
         public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
+        public string? InvalidIdPropertyName { get; }
+        public DiagnosticLocationInfo? InvalidIdPropertyLocation { get; }
         public List<ConstructorParameterInfo> ConstructorParameters { get; }
 
-        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null, string? metadataName = null, bool isGenericType = false, string? typeParameterList = null, string? typeParameterConstraints = null)
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, string? invalidIdPropertyName = null, DiagnosticLocationInfo? invalidIdPropertyLocation = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null, string? metadataName = null, bool isGenericType = false, string? typeParameterList = null, string? typeParameterConstraints = null)
         {
             Namespace = @namespace;
             Name = name;
@@ -129,6 +131,8 @@ public class ClassInfo
             CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
             EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
             BsonRefMissingEntityErrors = bsonRefMissingEntityErrors ?? new List<BsonRefMissingEntityInfo>();
+            InvalidIdPropertyName = invalidIdPropertyName;
+            InvalidIdPropertyLocation = invalidIdPropertyLocation;
             ConstructorParameters = constructorParameters ?? new List<ConstructorParameterInfo>();
         }
 
@@ -178,6 +182,8 @@ public class DependentComplexType
     /// </summary>
     public bool IsValueType { get; }
 
+    public bool HasAccessibleParameterlessConstructor { get; }
+
     /// <summary>
     /// 类型的属性列表
     /// </summary>
@@ -194,11 +200,12 @@ public class DependentComplexType
         .Replace(",", "_")
         .Replace(" ", "");
 
-    public DependentComplexType(string fullyQualifiedName, string shortName, bool isValueType, List<DependentTypeProperty> properties)
+    public DependentComplexType(string fullyQualifiedName, string shortName, bool isValueType, bool hasAccessibleParameterlessConstructor, List<DependentTypeProperty> properties)
     {
         FullyQualifiedName = fullyQualifiedName;
         ShortName = shortName;
         IsValueType = isValueType;
+        HasAccessibleParameterlessConstructor = hasAccessibleParameterlessConstructor;
         Properties = properties;
     }
 }

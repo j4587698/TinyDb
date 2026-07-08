@@ -103,9 +103,9 @@ public static partial class SourceGeneratorHelpers
         }
 
         // 处理字典中包含复杂类型值的情况
-        if (prop.IsDictionary && prop.IsDictionaryValueComplexType)
+        if (prop.IsDictionary)
         {
-            return GenerateDictionaryWithComplexValueSerialization(prop, bsonFieldName);
+            return GenerateDictionarySerialization(prop, bsonFieldName);
         }
 
         return propertyType switch
@@ -296,12 +296,16 @@ public static partial class SourceGeneratorHelpers
     /// <summary>
     /// 生成包含复杂类型值的字典的序列化代码
     /// </summary>
-    private static string GenerateDictionaryWithComplexValueSerialization(PropertyInfo prop, string bsonFieldName)
+    private static string GenerateDictionarySerialization(PropertyInfo prop, string bsonFieldName)
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
         var isNullable = IsNullableProperty(prop);
         var isValueValueType = prop.IsDictionaryValueValueType;
+        var isValueComplex = prop.IsDictionaryValueComplexType;
+        var valueExpression = isValueComplex
+            ? "SerializeComplexObject(kvp.Value)"
+            : "ConvertToBsonValue(kvp.Value)";
 
         var sb = new StringBuilder();
 
@@ -318,16 +322,18 @@ public static partial class SourceGeneratorHelpers
             {{");
 
         // 值类型不能与 null 比较
+        sb.AppendLine($"                var key_{propertyName} = {CreateDictionaryFieldNameExpression("kvp.Key")};");
+
         if (isValueValueType)
         {
-            sb.AppendLine($@"                dict_{propertyName} = dict_{propertyName}.Set(kvp.Key.ToString(), SerializeComplexObject(kvp.Value));");
+            sb.AppendLine($@"                dict_{propertyName} = dict_{propertyName}.Set(key_{propertyName}, {valueExpression});");
         }
         else
         {
             sb.AppendLine($@"                if (kvp.Value == null)
-                    dict_{propertyName} = dict_{propertyName}.Set(kvp.Key.ToString(), BsonNull.Value);
+                    dict_{propertyName} = dict_{propertyName}.Set(key_{propertyName}, BsonNull.Value);
                 else
-                    dict_{propertyName} = dict_{propertyName}.Set(kvp.Key.ToString(), SerializeComplexObject(kvp.Value));");
+                    dict_{propertyName} = dict_{propertyName}.Set(key_{propertyName}, {valueExpression});");
         }
 
         sb.AppendLine($@"            }}
@@ -575,20 +581,21 @@ public static partial class SourceGeneratorHelpers
                     var result_{propertyName} = new System.Collections.Generic.Dictionary<{keyType}, {valueType}>();
                     foreach (var kvp in dict{propertyName})
                     {{
+                        var key_{propertyName} = {CreateDictionaryKeyExpression(keyType, "kvp.Key")};
                         if (kvp.Value.IsNull)
-                            result_{propertyName}[kvp.Key] = default!;");
+                            result_{propertyName}[key_{propertyName}] = default!;");
 
         if (isValueComplex)
         {
             sb.AppendLine($@"                        else if (kvp.Value is BsonDocument valueDoc)
-                            result_{propertyName}[kvp.Key] = DeserializeComplexObject<{valueType}>(valueDoc);
+                            result_{propertyName}[key_{propertyName}] = DeserializeComplexObject<{valueType}>(valueDoc);
                         else
-                            result_{propertyName}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                            result_{propertyName}[key_{propertyName}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
         }
         else
         {
             sb.AppendLine($@"                        else
-                            result_{propertyName}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                            result_{propertyName}[key_{propertyName}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
         }
 
         sb.AppendLine($@"                    }}
@@ -597,6 +604,25 @@ public static partial class SourceGeneratorHelpers
             }}");
 
         return sb.ToString();
+    }
+
+    internal static string CreateDictionaryKeyExpression(string keyType, string keyExpression)
+    {
+        return IsStringDictionaryKey(keyType)
+            ? keyExpression
+            : $"ConvertFromBsonValue<{keyType}>(new BsonString({keyExpression}))";
+    }
+
+    internal static string CreateDictionaryFieldNameExpression(string keyExpression)
+    {
+        return $"(global::System.Convert.ToString({keyExpression}, global::System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty)";
+    }
+
+    private static bool IsStringDictionaryKey(string keyType)
+    {
+        return keyType == "string" ||
+               keyType == "System.String" ||
+               keyType == "global::System.String";
     }
 
 }

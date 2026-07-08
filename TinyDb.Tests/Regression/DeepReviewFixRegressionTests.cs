@@ -247,6 +247,48 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task SourceGenerator_ShouldDeserializeDictionariesWithNonStringKeys()
+    {
+        var source = new IntKeyDictionaryRegressionEntity
+        {
+            Id = 1,
+            Scores = new Dictionary<int, string>
+            {
+                [10] = "ten",
+                [20] = "twenty"
+            }
+        };
+
+        var document = AotBsonMapper.ToDocument(source);
+        var restored = AotBsonMapper.FromDocument<IntKeyDictionaryRegressionEntity>(document);
+
+        await Assert.That(restored.Scores.Count).IsEqualTo(2);
+        await Assert.That(restored.Scores[10]).IsEqualTo("ten");
+        await Assert.That(restored.Scores[20]).IsEqualTo("twenty");
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldDeserializeNullableStructDependentTypesInline()
+    {
+        var source = new NullableStructDependencyRegressionEntity
+        {
+            Id = 1,
+            Detail = new InlineStructDetail
+            {
+                Code = 7,
+                Label = "seven"
+            }
+        };
+
+        var document = AotBsonMapper.ToDocument(source);
+        var restored = AotBsonMapper.FromDocument<NullableStructDependencyRegressionEntity>(document);
+
+        await Assert.That(restored.Detail.HasValue).IsTrue();
+        await Assert.That(restored.Detail!.Value.Code).IsEqualTo(7);
+        await Assert.That(restored.Detail.Value.Label).IsEqualTo("seven");
+    }
+
+    [Test]
     public async Task SourceGenerator_ShouldSetStructMembersByRef()
     {
         var entity = new StructSetterRegressionEntity { Name = "before" };
@@ -352,6 +394,26 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
         public int Id { get; set; }
         public HashSet<string> Tags { get; set; } = new(StringComparer.Ordinal);
         public ISet<int> Codes { get; set; } = new HashSet<int>();
+    }
+
+    [Entity("IntKeyDictionaryRegressionEntities")]
+    public partial class IntKeyDictionaryRegressionEntity
+    {
+        public int Id { get; set; }
+        public Dictionary<int, string> Scores { get; set; } = new();
+    }
+
+    [Entity("NullableStructDependencyRegressionEntities")]
+    public partial class NullableStructDependencyRegressionEntity
+    {
+        public int Id { get; set; }
+        public InlineStructDetail? Detail { get; set; }
+    }
+
+    public struct InlineStructDetail
+    {
+        public int Code { get; set; }
+        public string Label { get; set; }
     }
 
     [Entity("StructSetterRegressionEntities")]

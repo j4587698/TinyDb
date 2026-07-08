@@ -52,6 +52,15 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
         isEnabledByDefault: true,
         description: "A circular reference was detected between Entity types. The runtime will handle this by breaking the cycle during serialization (returning only the ID for circular references), but this may cause performance overhead due to circular reference tracking. Consider redesigning the data model to avoid circular dependencies between entities.");
 
+    private static readonly DiagnosticDescriptor InvalidIdPropertyErrorDescriptor = new(
+        id: "TINYDB004",
+        title: "Entity IdProperty does not exist",
+        messageFormat: "Entity type '{0}' specifies IdProperty '{1}', but no public mapped property or field with that name exists.",
+        category: "TinyDb.SourceGenerator",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "When EntityAttribute.IdProperty is specified, the name must match a mapped public property or field. TinyDb only applies automatic Id, _id, ID, or [Id] fallback when IdProperty is not specified.");
+
     /// <summary>
     /// 初始化生成器
     /// </summary>
@@ -73,7 +82,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
 
         var validClassDeclarations = comparableClassDeclarations
-            .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
+            .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo) && !HasBlockingDiagnostics(classInfo));
 
         context.RegisterSourceOutput(diagnosticClassDeclarations, static (spc, classInfo) =>
         {
@@ -124,9 +133,31 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
 
     private static void ReportDiagnostics(SourceProductionContext context, ClassInfo classInfo)
     {
+        ReportInvalidIdPropertyErrors(context, classInfo);
         ReportCircularReferences(context, classInfo);
         ReportEntityCircularReferences(context, classInfo);
         ReportBsonRefMissingEntityErrors(context, classInfo);
+    }
+
+    private static bool HasBlockingDiagnostics(ClassInfo classInfo)
+    {
+        return !string.IsNullOrWhiteSpace(classInfo.InvalidIdPropertyName) ||
+               classInfo.BsonRefMissingEntityErrors.Count > 0;
+    }
+
+    private static void ReportInvalidIdPropertyErrors(SourceProductionContext context, ClassInfo classInfo)
+    {
+        if (string.IsNullOrWhiteSpace(classInfo.InvalidIdPropertyName))
+        {
+            return;
+        }
+
+        var diagnostic = Diagnostic.Create(
+            InvalidIdPropertyErrorDescriptor,
+            classInfo.InvalidIdPropertyLocation.ToLocation() ?? classInfo.Location.ToLocation(),
+            classInfo.FullName,
+            classInfo.InvalidIdPropertyName);
+        context.ReportDiagnostic(diagnostic);
     }
 
     private static void ReportCircularReferences(SourceProductionContext context, ClassInfo classInfo)

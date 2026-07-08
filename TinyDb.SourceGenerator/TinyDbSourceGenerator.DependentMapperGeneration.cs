@@ -88,8 +88,12 @@ public partial class TinyDbSourceGenerator
                     sb.AppendLine($"            }}");
                 }
             }
-            else if (prop.IsDictionary && prop.IsDictionaryValueComplexType)
+            else if (prop.IsDictionary)
             {
+                var valueExpression = prop.IsDictionaryValueComplexType
+                    ? "SerializeComplexObject(kvp.Value)"
+                    : "ConvertToBsonValue(kvp.Value)";
+
                 if (prop.IsNullable)
                 {
                     sb.AppendLine($"            if (obj.{prop.Name} == null)");
@@ -101,17 +105,18 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine($"            var dict_{prop.Name} = new BsonDocument();");
                 sb.AppendLine($"            foreach (var kvp in obj.{prop.Name})");
                 sb.AppendLine($"            {{");
+                sb.AppendLine($"                var key_{prop.Name} = {SourceGeneratorHelpers.CreateDictionaryFieldNameExpression("kvp.Key")};");
 
                 if (prop.IsDictionaryValueValueType)
                 {
-                    sb.AppendLine($"                dict_{prop.Name} = dict_{prop.Name}.Set(kvp.Key.ToString(), SerializeComplexObject(kvp.Value));");
+                    sb.AppendLine($"                dict_{prop.Name} = dict_{prop.Name}.Set(key_{prop.Name}, {valueExpression});");
                 }
                 else
                 {
                     sb.AppendLine($"                if (kvp.Value == null)");
-                    sb.AppendLine($"                    dict_{prop.Name} = dict_{prop.Name}.Set(kvp.Key.ToString(), BsonNull.Value);");
+                    sb.AppendLine($"                    dict_{prop.Name} = dict_{prop.Name}.Set(key_{prop.Name}, BsonNull.Value);");
                     sb.AppendLine($"                else");
-                    sb.AppendLine($"                    dict_{prop.Name} = dict_{prop.Name}.Set(kvp.Key.ToString(), SerializeComplexObject(kvp.Value));");
+                    sb.AppendLine($"                    dict_{prop.Name} = dict_{prop.Name}.Set(key_{prop.Name}, {valueExpression});");
                 }
 
                 sb.AppendLine($"            }}");
@@ -149,11 +154,18 @@ public partial class TinyDbSourceGenerator
         // 对于 struct，需要使用 default 初始化
         if (depType.IsValueType)
         {
+            sb.AppendLine($"            var result = default({depType.FullyQualifiedName});");
+        }
+        else if (depType.HasAccessibleParameterlessConstructor)
+        {
             sb.AppendLine($"            var result = new {depType.FullyQualifiedName}();");
         }
         else
         {
-            sb.AppendLine($"            var result = new {depType.FullyQualifiedName}();");
+            sb.AppendLine($"            throw new global::System.NotSupportedException(\"Dependent type '{depType.FullyQualifiedName}' must have an accessible parameterless constructor for inline TinyDb deserialization.\");");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            return;
         }
         sb.AppendLine();
 
@@ -187,7 +199,7 @@ public partial class TinyDbSourceGenerator
                     sb.AppendLine("                }");
                     sb.AppendLine($"                else if (bson_{prop.Name} is BsonDocument nested_{prop.Name})");
                     sb.AppendLine("                {");
-                    sb.AppendLine($"                    result.{prop.AccessName} = DeserializeComplexObject<{prop.FullyQualifiedTypeName}>(nested_{prop.Name});");
+                    sb.AppendLine($"                    result.{prop.AccessName} = DeserializeComplexObject<{prop.ComplexTypeFullName}>(nested_{prop.Name});");
                     sb.AppendLine("                }");
                     sb.AppendLine("            }");
                 }
@@ -241,10 +253,7 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine("                }");
                 sb.AppendLine("            }");
             }
-            else if (prop.IsDictionary && (prop.DictionaryKeyType == null ||
-                                           prop.DictionaryKeyType == "string" ||
-                                           prop.DictionaryKeyType == "System.String" ||
-                                           prop.DictionaryKeyType == "global::System.String"))
+            else if (prop.IsDictionary)
             {
                 var keyType = prop.DictionaryKeyType ?? "string";
                 var valueType = prop.DictionaryValueType ?? "object";
@@ -263,20 +272,21 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine($"                    var result_{prop.Name} = new System.Collections.Generic.Dictionary<{keyType}, {valueType}>();");
                 sb.AppendLine($"                    foreach (var kvp in dict_{prop.Name})");
                 sb.AppendLine("                    {");
+                sb.AppendLine($"                        var key_{prop.Name} = {SourceGeneratorHelpers.CreateDictionaryKeyExpression(keyType, "kvp.Key")};");
                 sb.AppendLine("                        if (kvp.Value.IsNull)");
-                sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = default!;");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = default!;");
 
                 if (prop.IsDictionaryValueComplexType)
                 {
                     sb.AppendLine("                        else if (kvp.Value is BsonDocument valueDoc)");
-                    sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = DeserializeComplexObject<{valueType}>(valueDoc);");
+                    sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = DeserializeComplexObject<{valueType}>(valueDoc);");
                     sb.AppendLine("                        else");
-                    sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                    sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
                 }
                 else
                 {
                     sb.AppendLine("                        else");
-                    sb.AppendLine($"                            result_{prop.Name}[kvp.Key] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                    sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
                 }
 
                 sb.AppendLine("                    }");

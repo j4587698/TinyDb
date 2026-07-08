@@ -406,9 +406,7 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
 
         var deletedCount = 0;
-        var ids = _engine.FindAllIds(_name).ToList();
-
-        foreach (var id in ids)
+        foreach (var id in _engine.FindAllIds(_name))
         {
             cancellationToken.ThrowIfCancellationRequested();
             deletedCount += await DeleteAsync(id, cancellationToken).ConfigureAwait(false);
@@ -429,9 +427,7 @@ public sealed partial class DocumentCollection<T> where T : class
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
         var deletedCount = 0;
-        var documentsToDelete = await FindAsync(predicate, cancellationToken).ConfigureAwait(false);
-
-        foreach (var entity in documentsToDelete)
+        await foreach (var entity in _queryExecutor.ExecuteFullTableScanAsync<T>(_name, predicate, cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var id = GetEntityId(entity);

@@ -33,6 +33,8 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                ListEquals(x.CircularReferences, y.CircularReferences, CircularReferenceEquals) &&
                ListEquals(x.EntityCircularReferences, y.EntityCircularReferences, EntityCircularReferenceEquals) &&
                ListEquals(x.BsonRefMissingEntityErrors, y.BsonRefMissingEntityErrors, BsonRefMissingEntityEquals) &&
+               StringEquals(x.InvalidIdPropertyName, y.InvalidIdPropertyName) &&
+               LocationEquals(x.InvalidIdPropertyLocation, y.InvalidIdPropertyLocation) &&
                ListEquals(x.ConstructorParameters, y.ConstructorParameters, ConstructorParameterEquals);
     }
 
@@ -61,6 +63,8 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = AddList(hash, obj.CircularReferences, GetCircularReferenceHashCode);
             hash = AddList(hash, obj.EntityCircularReferences, GetEntityCircularReferenceHashCode);
             hash = AddList(hash, obj.BsonRefMissingEntityErrors, GetBsonRefMissingEntityHashCode);
+            hash = Add(hash, obj.InvalidIdPropertyName);
+            hash = Add(hash, obj.InvalidIdPropertyLocation);
             hash = AddList(hash, obj.ConstructorParameters, GetConstructorParameterHashCode);
             return hash;
         }
@@ -177,6 +181,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         return StringEquals(x.FullyQualifiedName, y.FullyQualifiedName) &&
                StringEquals(x.ShortName, y.ShortName) &&
                x.IsValueType == y.IsValueType &&
+               x.HasAccessibleParameterlessConstructor == y.HasAccessibleParameterlessConstructor &&
                ListEquals(x.Properties, y.Properties, DependentTypePropertyEquals);
     }
 
@@ -188,6 +193,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.FullyQualifiedName);
             hash = Add(hash, value.ShortName);
             hash = Add(hash, value.IsValueType);
+            hash = Add(hash, value.HasAccessibleParameterlessConstructor);
             hash = AddList(hash, value.Properties, GetDependentTypePropertyHashCode);
             return hash;
         }
