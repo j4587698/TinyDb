@@ -89,7 +89,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             .ForAttributeWithMetadataName(
                 EntityAttributeMetadataName,
                 predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax || s is RecordDeclarationSyntax,
-                transform: static (ctx, _) => GetClassInfo(ctx))
+                transform: static (ctx, cancellationToken) => GetClassInfo(ctx, cancellationToken))
             .Where(static m => m is not null);
 
         var comparableClassDeclarations = classDeclarations

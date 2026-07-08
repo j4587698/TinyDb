@@ -17,8 +17,7 @@ public sealed partial class DiskBTree : IDisposable
     private readonly int _maxKeys;
     private bool _disposed;
 
-    [ThreadStatic]
-    private static PageLease? _currentLease;
+    private static readonly AsyncLocal<PageLease?> _currentLease = new();
 
     internal sealed class IndexScanBatch
     {
@@ -143,24 +142,24 @@ public sealed partial class DiskBTree : IDisposable
 
     private static PageLease BeginPageLease()
     {
-        var lease = new PageLease(_currentLease);
-        _currentLease = lease;
+        var lease = new PageLease(_currentLease.Value);
+        _currentLease.Value = lease;
         return lease;
     }
 
     private Page GetPage(uint pageId)
     {
-        return _currentLease?.GetPage(_pm, pageId) ?? _pm.GetPage(pageId);
+        return _currentLease.Value?.GetPage(_pm, pageId) ?? _pm.GetPage(pageId);
     }
 
     private Page NewIndexPage()
     {
-        return _currentLease?.NewPage(_pm, PageType.Index) ?? _pm.NewPage(PageType.Index);
+        return _currentLease.Value?.NewPage(_pm, PageType.Index) ?? _pm.NewPage(PageType.Index);
     }
 
     private void FreePage(uint pageId)
     {
-        _currentLease?.ReleasePage(pageId);
+        _currentLease.Value?.ReleasePage(pageId);
         _pm.FreePage(pageId);
     }
 
@@ -184,6 +183,20 @@ public sealed partial class DiskBTree : IDisposable
             }
 
             page = pageManager.GetPagePinned(pageId);
+            return AddPinnedPage(page);
+        }
+
+        public async Task<Page> GetPageAsync(
+            PageManager pageManager,
+            uint pageId,
+            CancellationToken cancellationToken)
+        {
+            if (_pagesById.TryGetValue(pageId, out var page))
+            {
+                return page;
+            }
+
+            page = await pageManager.GetPagePinnedAsync(pageId, cancellationToken: cancellationToken).ConfigureAwait(false);
             return AddPinnedPage(page);
         }
 
@@ -247,14 +260,14 @@ public sealed partial class DiskBTree : IDisposable
 
         private static void RemoveFromCurrentChain(PageLease lease)
         {
-            if (_currentLease == lease)
+            if (_currentLease.Value == lease)
             {
-                _currentLease = lease._previous;
+                _currentLease.Value = lease._previous;
                 lease._previous = null;
                 return;
             }
 
-            var current = _currentLease;
+            var current = _currentLease.Value;
             while (current != null)
             {
                 if (current._previous == lease)
@@ -348,15 +361,29 @@ public sealed partial class DiskBTree : IDisposable
 
     internal async Task<DiskBTreeNode> LoadNodeAsync(uint id, CancellationToken cancellationToken = default)
     {
-        var page = await _pm.GetPageAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (page.CachedParsedData is DiskBTreeNode node)
+        var lease = _currentLease.Value;
+        var page = lease == null
+            ? await _pm.GetPagePinnedAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false)
+            : await lease.GetPageAsync(_pm, id, cancellationToken).ConfigureAwait(false);
+
+        try
         {
+            if (page.CachedParsedData is DiskBTreeNode node)
+            {
+                return node;
+            }
+
+            node = await DiskBTreeNode.LoadAsync(page, _pm, cancellationToken).ConfigureAwait(false);
+            page.CachedParsedData = node;
             return node;
         }
-
-        node = await DiskBTreeNode.LoadAsync(page, _pm, cancellationToken).ConfigureAwait(false);
-        page.CachedParsedData = node;
-        return node;
+        finally
+        {
+            if (lease == null)
+            {
+                page.Unpin();
+            }
+        }
     }
 
     /// <summary>

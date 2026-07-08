@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using System.Collections.Immutable;
 using System.Text;
+using System.Threading;
 
 namespace TinyDb.SourceGenerator;
 
@@ -16,7 +17,8 @@ public partial class TinyDbSourceGenerator
         string containingTypeName,
         List<PropertyInfo> properties,
         Dictionary<string, ITypeSymbol> typeSymbolMap,
-        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors)
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
+        CancellationToken cancellationToken)
     {
         if (classSymbol == null)
         {
@@ -24,10 +26,14 @@ public partial class TinyDbSourceGenerator
         }
 
         var existingNames = new HashSet<string>(properties.Select(static p => p.Name), StringComparer.Ordinal);
-        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol))
+        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol, cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             foreach (var member in typeSymbol.GetMembers())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (member is not IPropertySymbol propertySymbol ||
                     !existingNames.Add(propertySymbol.Name))
                 {
@@ -40,6 +46,7 @@ public partial class TinyDbSourceGenerator
                         typeSymbolMap,
                         bsonRefMissingEntityErrors,
                         requirePublicMutableSetter: true,
+                        cancellationToken,
                         out var propertyInfo))
                 {
                     properties.Add(propertyInfo!);
@@ -54,7 +61,8 @@ public partial class TinyDbSourceGenerator
         string containingTypeName,
         List<PropertyInfo> properties,
         Dictionary<string, ITypeSymbol> typeSymbolMap,
-        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors)
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
+        CancellationToken cancellationToken)
     {
         if (classSymbol == null)
         {
@@ -64,6 +72,8 @@ public partial class TinyDbSourceGenerator
         var existingNames = new HashSet<string>(properties.Select(static p => p.Name), StringComparer.Ordinal);
         foreach (var member in classSymbol.GetMembers())
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (member is not IFieldSymbol fieldSymbol ||
                 !existingNames.Add(fieldSymbol.Name))
             {
@@ -75,6 +85,7 @@ public partial class TinyDbSourceGenerator
                     containingTypeName,
                     typeSymbolMap,
                     bsonRefMissingEntityErrors,
+                    cancellationToken,
                     out var propertyInfo))
             {
                 properties.Add(propertyInfo!);
@@ -88,32 +99,49 @@ public partial class TinyDbSourceGenerator
         string containingTypeName,
         List<PropertyInfo> properties,
         Dictionary<string, ITypeSymbol> typeSymbolMap,
-        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors)
+        List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
+        CancellationToken cancellationToken)
     {
         if (classSymbol == null)
         {
             return new List<ConstructorParameterInfo>();
         }
 
-        var propertySymbols = EnumerateTypeAndBaseTypes(classSymbol)
-            .SelectMany(static type => type.GetMembers().OfType<IPropertySymbol>())
-            .Where(static property => property.DeclaredAccessibility == Accessibility.Public &&
-                                      !property.IsStatic &&
-                                      !property.IsIndexer &&
-                                      property.GetMethod != null)
-            .GroupBy(static property => property.Name, StringComparer.Ordinal)
-            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+        var propertySymbols = new Dictionary<string, IPropertySymbol>(StringComparer.Ordinal);
+        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol, cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            foreach (var member in typeSymbol.GetMembers())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (member is IPropertySymbol property &&
+                    property.DeclaredAccessibility == Accessibility.Public &&
+                    !property.IsStatic &&
+                    !property.IsIndexer &&
+                    property.GetMethod != null &&
+                    !propertySymbols.ContainsKey(property.Name))
+                {
+                    propertySymbols.Add(property.Name, property);
+                }
+            }
+        }
 
         foreach (var constructor in classSymbol.InstanceConstructors
                      .Where(static ctor => ctor.DeclaredAccessibility == Accessibility.Public && ctor.Parameters.Length > 0)
                      .OrderByDescending(static ctor => ctor.Parameters.Length))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var parameters = new List<ConstructorParameterInfo>(constructor.Parameters.Length);
             var matchedAll = true;
 
             foreach (var parameter in constructor.Parameters)
             {
-                if (!TryFindConstructorProperty(parameter, propertySymbols, out var propertySymbol))
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!TryFindConstructorProperty(parameter, propertySymbols, cancellationToken, out var propertySymbol))
                 {
                     matchedAll = false;
                     break;
@@ -128,6 +156,7 @@ public partial class TinyDbSourceGenerator
                             typeSymbolMap,
                             bsonRefMissingEntityErrors,
                             requirePublicMutableSetter: false,
+                            cancellationToken,
                             out propertyInfo))
                     {
                         matchedAll = false;
@@ -161,6 +190,7 @@ public partial class TinyDbSourceGenerator
     private static bool TryFindConstructorProperty(
         IParameterSymbol parameter,
         IReadOnlyDictionary<string, IPropertySymbol> propertySymbols,
+        CancellationToken cancellationToken,
         out IPropertySymbol propertySymbol)
     {
         if (propertySymbols.TryGetValue(parameter.Name, out propertySymbol!) &&
@@ -171,6 +201,8 @@ public partial class TinyDbSourceGenerator
 
         foreach (var candidate in propertySymbols.Values)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (string.Equals(candidate.Name, parameter.Name, StringComparison.OrdinalIgnoreCase) &&
                 SymbolEqualityComparer.Default.Equals(candidate.Type, parameter.Type))
             {
@@ -184,10 +216,14 @@ public partial class TinyDbSourceGenerator
     }
 
 
-    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndBaseTypes(INamedTypeSymbol typeSymbol)
+    private static IEnumerable<INamedTypeSymbol> EnumerateTypeAndBaseTypes(
+        INamedTypeSymbol typeSymbol,
+        CancellationToken cancellationToken)
     {
         for (var current = typeSymbol; current != null && current.SpecialType != SpecialType.System_Object; current = current.BaseType)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             yield return current;
         }
     }
@@ -212,8 +248,11 @@ public partial class TinyDbSourceGenerator
         string containingTypeName,
         Dictionary<string, ITypeSymbol> typeSymbolMap,
         List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
+        CancellationToken cancellationToken,
         out PropertyInfo? propertyInfo)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         propertyInfo = null;
         if (fieldSymbol.DeclaredAccessibility != Accessibility.Public ||
             fieldSymbol.IsStatic ||
@@ -271,10 +310,10 @@ public partial class TinyDbSourceGenerator
             fullyQualifiedNonNullableType = nonNullableType;
         }
 
-        var typeAnalysis = AnalyzePropertyType(typeSymbol);
-        AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis);
+        var typeAnalysis = AnalyzePropertyType(typeSymbol, cancellationToken);
+        AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis, cancellationToken);
 
-        var idGenerationInfo = GetIdGenerationInfo(fieldSymbol);
+        var idGenerationInfo = GetIdGenerationInfo(fieldSymbol, cancellationToken);
         var metadataTypeName = GetStableMetadataTypeName(typeSymbol);
         propertyInfo = new PropertyInfo(
             fieldSymbol.Name,
@@ -320,8 +359,11 @@ public partial class TinyDbSourceGenerator
         Dictionary<string, ITypeSymbol> typeSymbolMap,
         List<BsonRefMissingEntityInfo> bsonRefMissingEntityErrors,
         bool requirePublicMutableSetter,
+        CancellationToken cancellationToken,
         out PropertyInfo? propertyInfo)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         propertyInfo = null;
         var canSet = propertySymbol.SetMethod is { DeclaredAccessibility: Accessibility.Public, IsInitOnly: false };
         if (propertySymbol.DeclaredAccessibility != Accessibility.Public ||
@@ -382,10 +424,10 @@ public partial class TinyDbSourceGenerator
             fullyQualifiedNonNullableType = nonNullableType;
         }
 
-        var typeAnalysis = AnalyzePropertyType(typeSymbol);
-        AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis);
+        var typeAnalysis = AnalyzePropertyType(typeSymbol, cancellationToken);
+        AddTypeSymbols(typeSymbolMap, typeSymbol, isNullableValueType, fullyQualifiedNonNullableType, typeAnalysis, cancellationToken);
 
-        var idGenerationInfo = GetIdGenerationInfo(propertySymbol);
+        var idGenerationInfo = GetIdGenerationInfo(propertySymbol, cancellationToken);
         var metadataTypeName = GetStableMetadataTypeName(typeSymbol);
         propertyInfo = new PropertyInfo(
             propertySymbol.Name,
@@ -431,8 +473,11 @@ public partial class TinyDbSourceGenerator
         ITypeSymbol typeSymbol,
         bool isNullableValueType,
         string fullyQualifiedNonNullableType,
-        TypeAnalysisResult typeAnalysis)
+        TypeAnalysisResult typeAnalysis,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var actualTypeSymbol = typeSymbol;
         if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
         {
@@ -443,7 +488,7 @@ public partial class TinyDbSourceGenerator
 
         if (typeAnalysis.IsCollection && !string.IsNullOrEmpty(typeAnalysis.ElementType))
         {
-            var elementTypeSymbol = GetElementTypeSymbol(typeSymbol);
+            var elementTypeSymbol = GetElementTypeSymbol(typeSymbol, cancellationToken);
             if (elementTypeSymbol != null)
             {
                 AddTypeSymbolIfMissing(typeSymbolMap, typeAnalysis.ElementType!, elementTypeSymbol);
@@ -452,7 +497,7 @@ public partial class TinyDbSourceGenerator
 
         if (typeAnalysis.IsDictionary && !string.IsNullOrEmpty(typeAnalysis.DictionaryValueType))
         {
-            var valueTypeSymbol = GetDictionaryValueTypeSymbol(typeSymbol);
+            var valueTypeSymbol = GetDictionaryValueTypeSymbol(typeSymbol, cancellationToken);
             if (valueTypeSymbol != null)
             {
                 AddTypeSymbolIfMissing(typeSymbolMap, typeAnalysis.DictionaryValueType!, valueTypeSymbol);
@@ -473,17 +518,21 @@ public partial class TinyDbSourceGenerator
     }
 
 
-    private static string? FindIdPropertyName(INamedTypeSymbol? classSymbol)
+    private static string? FindIdPropertyName(INamedTypeSymbol? classSymbol, CancellationToken cancellationToken)
     {
         if (classSymbol == null)
         {
             return null;
         }
 
-        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol))
+        foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol, cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             foreach (var propertySymbol in typeSymbol.GetMembers().OfType<IPropertySymbol>())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (HasAttribute(propertySymbol.GetAttributes(), "IdAttribute"))
                 {
                     return propertySymbol.Name;
@@ -495,8 +544,12 @@ public partial class TinyDbSourceGenerator
     }
 
 
-    private static (int StrategyValue, string? SequenceName) GetIdGenerationInfo(ISymbol? symbol)
+    private static (int StrategyValue, string? SequenceName) GetIdGenerationInfo(
+        ISymbol? symbol,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var attribute = symbol == null
             ? null
             : FindAttribute(symbol.GetAttributes(), "IdGenerationAttribute");

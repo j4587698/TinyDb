@@ -94,7 +94,26 @@ public sealed class WriteAheadLogFlushToLsnCoverageTests
     }
 
     [Test]
-    public async Task SynchronizeAsync_ChildAppend_ShouldNotInheritWriteLock()
+    public async Task SynchronizeAsync_AmbientAppend_ShouldFlowAcrossAwait()
+    {
+        using var wal = new WriteAheadLog(_dbFile, PageSize, enabled: true);
+        var page = new Page(1, PageSize, PageType.Data);
+        page.WriteData(0, new byte[] { 1 });
+        var appendCompleted = 0;
+
+        await wal.SynchronizeAsync(async _ =>
+        {
+            await Task.Delay(10).ConfigureAwait(false);
+            await wal.AppendPageAsync(page).ConfigureAwait(false);
+            Volatile.Write(ref appendCompleted, 1);
+            await Assert.That(wal.HasPendingEntries).IsTrue();
+        }, CancellationToken.None);
+
+        await Assert.That(Volatile.Read(ref appendCompleted)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SynchronizeAsync_SuppressedFlowChildAppend_ShouldNotInheritWriteLock()
     {
         using var wal = new WriteAheadLog(_dbFile, PageSize, enabled: true);
         var page = new Page(1, PageSize, PageType.Data);
@@ -106,12 +125,15 @@ public sealed class WriteAheadLogFlushToLsnCoverageTests
 
         await wal.SynchronizeAsync(async _ =>
         {
-            appendTask = Task.Run(async () =>
+            using (ExecutionContext.SuppressFlow())
             {
-                appendStarted.SetResult();
-                await wal.AppendPageAsync(page).ConfigureAwait(false);
-                Volatile.Write(ref appendCompleted, 1);
-            });
+                appendTask = Task.Run(async () =>
+                {
+                    appendStarted.SetResult();
+                    await wal.AppendPageAsync(page).ConfigureAwait(false);
+                    Volatile.Write(ref appendCompleted, 1);
+                });
+            }
 
             await appendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
             await Task.Delay(100).ConfigureAwait(false);

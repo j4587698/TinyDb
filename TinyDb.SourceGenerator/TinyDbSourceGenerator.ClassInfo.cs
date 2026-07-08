@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using System.Collections.Immutable;
 using System.Text;
+using System.Threading;
 
 namespace TinyDb.SourceGenerator;
 
@@ -14,8 +15,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取类信息
     /// </summary>
-    private static ClassInfo? GetClassInfo(GeneratorAttributeSyntaxContext context)
+    private static ClassInfo? GetClassInfo(GeneratorAttributeSyntaxContext context, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var classDeclaration = (TypeDeclarationSyntax)context.TargetNode;
         var semanticModel = context.SemanticModel;
 
@@ -25,7 +28,7 @@ public partial class TinyDbSourceGenerator
 
         // 获取类符号信息
         var classSymbol = context.TargetSymbol as INamedTypeSymbol
-            ?? semanticModel.GetDeclaredSymbol(classDeclaration);
+            ?? semanticModel.GetDeclaredSymbol(classDeclaration, cancellationToken);
         var namespaceName = classSymbol?.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace
             ? containingNamespace.ToDisplayString()
             : string.Empty;
@@ -38,6 +41,8 @@ public partial class TinyDbSourceGenerator
         var containingType = classSymbol?.ContainingType;
         while (containingType != null)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             containingTypeNames.Insert(0, containingType.MetadataName.Replace('`', '_'));
             containingTypeDisplayNames.Insert(0, containingType.MetadataName.Replace('`', '_'));
             containingType = containingType.ContainingType;
@@ -77,9 +82,15 @@ public partial class TinyDbSourceGenerator
         // 收集 BsonRef 引用类型缺少 Entity 特性的错误
         var bsonRefMissingEntityErrors = new List<BsonRefMissingEntityInfo>();
 
-        AddMissingSymbolProperties(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors);
-        AddMissingSymbolFields(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors);
-        var constructorParameters = AddConstructorBoundProperties(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors);
+        AddMissingSymbolProperties(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors, cancellationToken);
+        AddMissingSymbolFields(classSymbol, className, properties, typeSymbolMap, bsonRefMissingEntityErrors, cancellationToken);
+        var constructorParameters = AddConstructorBoundProperties(
+            classSymbol,
+            className,
+            properties,
+            typeSymbolMap,
+            bsonRefMissingEntityErrors,
+            cancellationToken);
 
         // 智能ID识别逻辑
         if (!string.IsNullOrEmpty(specifiedIdProperty))
@@ -98,7 +109,7 @@ public partial class TinyDbSourceGenerator
         if (idProperty == null && invalidIdPropertyName == null)
         {
             // 2. 自动查找 [Id] 标记属性（包含继承链）
-            var idAttributePropertyName = FindIdPropertyName(classSymbol);
+            var idAttributePropertyName = FindIdPropertyName(classSymbol, cancellationToken);
             idProperty = idAttributePropertyName == null
                 ? null
                 : properties.FirstOrDefault(p => p.Name == idAttributePropertyName);
@@ -112,6 +123,8 @@ public partial class TinyDbSourceGenerator
                 var standardIdNames = new[] { "Id", "_id", "ID" };
                 foreach (var idName in standardIdNames)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     var foundIdProperty = properties.FirstOrDefault(p => p.Name == idName);
                     if (foundIdProperty != null)
                     {
@@ -125,10 +138,10 @@ public partial class TinyDbSourceGenerator
 
         // 3. 如果还是没有找到，检查是否有[Id]属性标记
         // 收集依赖的非Entity复杂类型
-        var (dependentComplexTypes, circularReferences) = CollectDependentComplexTypes(properties, typeSymbolMap);
+        var (dependentComplexTypes, circularReferences) = CollectDependentComplexTypes(properties, typeSymbolMap, cancellationToken);
 
         // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
-        var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
+        var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap, cancellationToken);
 
         return new ClassInfo(
             namespaceName,
