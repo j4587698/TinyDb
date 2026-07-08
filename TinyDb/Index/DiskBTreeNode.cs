@@ -421,13 +421,21 @@ public sealed class DiskBTreeNode : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var page = currentPageId == _page.PageID
-                ? _page
-                : await _pm.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (!TryReadChunkInfo(page, out var len, out var nextPageId)) break;
-            totalLength += len;
-            currentPageId = nextPageId;
-            if (currentPageId == 0) break;
+            Page? pinnedPage = null;
+            try
+            {
+                var page = currentPageId == _page.PageID
+                    ? _page
+                    : pinnedPage = await _pm.GetPagePinnedAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                if (!TryReadChunkInfo(page, out var len, out var nextPageId)) break;
+                totalLength += len;
+                currentPageId = nextPageId;
+                if (currentPageId == 0) break;
+            }
+            finally
+            {
+                pinnedPage?.Unpin();
+            }
         }
 
         if (totalLength <= 0) return;
@@ -442,14 +450,22 @@ public sealed class DiskBTreeNode : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var page = currentPageId == _page.PageID
-                    ? _page
-                    : await _pm.GetPageAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (!TryCopyChunk(page, rented, offset, out var len, out var nextPageId)) break;
-                offset += len;
+                Page? pinnedPage = null;
+                try
+                {
+                    var page = currentPageId == _page.PageID
+                        ? _page
+                        : pinnedPage = await _pm.GetPagePinnedAsync(currentPageId, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    if (!TryCopyChunk(page, rented, offset, out var len, out var nextPageId)) break;
+                    offset += len;
 
-                currentPageId = nextPageId;
-                if (currentPageId == 0) break;
+                    currentPageId = nextPageId;
+                    if (currentPageId == 0) break;
+                }
+                finally
+                {
+                    pinnedPage?.Unpin();
+                }
             }
 
             var data = rented.AsSpan(0, offset);

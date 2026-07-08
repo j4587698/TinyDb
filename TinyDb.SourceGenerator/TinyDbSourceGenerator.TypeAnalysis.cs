@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Microsoft.CodeAnalysis;
 
 namespace TinyDb.SourceGenerator;
@@ -96,8 +97,10 @@ public partial class TinyDbSourceGenerator
         return false;
     }
 
-    private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol)
+    private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (typeSymbol == null)
         {
             return new TypeAnalysisResult(false, false, false, false, 0, null, false, false, null, null, false, false);
@@ -111,7 +114,7 @@ public partial class TinyDbSourceGenerator
         }
 
         // 检查是否是基本类型
-        if (IsPrimitiveOrWellKnownType(typeSymbol))
+        if (IsPrimitiveOrWellKnownType(typeSymbol, cancellationToken))
         {
             return new TypeAnalysisResult(false, false, false, false, 0, null, false, false, null, null, false, false);
         }
@@ -120,19 +123,19 @@ public partial class TinyDbSourceGenerator
         if (typeSymbol is IArrayTypeSymbol arrayType)
         {
             var elementType = arrayType.ElementType;
-            var isElementComplex = IsComplexObjectType(elementType);
+            var isElementComplex = IsComplexObjectType(elementType, cancellationToken);
             var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
             var isElementValueType = elementType.IsValueType;
             return new TypeAnalysisResult(false, true, false, true, arrayType.Rank, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
         }
 
         // 检查是否是字典类型
-        if (typeSymbol is INamedTypeSymbol dictType && IsDictionaryType(dictType))
+        if (typeSymbol is INamedTypeSymbol dictType && IsDictionaryType(dictType, cancellationToken))
         {
-            var typeArgs = GetDictionaryTypeArguments(dictType);
+            var typeArgs = GetDictionaryTypeArguments(dictType, cancellationToken);
             if (typeArgs != null)
             {
-                var isValueComplex = IsComplexObjectType(typeArgs.Value.ValueType);
+                var isValueComplex = IsComplexObjectType(typeArgs.Value.ValueType, cancellationToken);
                 var keyTypeName = typeArgs.Value.KeyType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var valueTypeName = typeArgs.Value.ValueType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isValueValueType = typeArgs.Value.ValueType.IsValueType;
@@ -141,12 +144,12 @@ public partial class TinyDbSourceGenerator
         }
 
         // 检查是否是集合类型 (List<T>, ICollection<T>, IEnumerable<T> 等)
-        if (typeSymbol is INamedTypeSymbol collectionType && IsCollectionType(collectionType))
+        if (typeSymbol is INamedTypeSymbol collectionType && IsCollectionType(collectionType, cancellationToken))
         {
-            var elementType = GetCollectionElementType(collectionType);
+            var elementType = GetCollectionElementType(collectionType, cancellationToken);
             if (elementType != null)
             {
-                var isElementComplex = IsComplexObjectType(elementType);
+                var isElementComplex = IsComplexObjectType(elementType, cancellationToken);
                 var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isElementValueType = elementType.IsValueType;
                 return new TypeAnalysisResult(false, true, false, false, 0, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
@@ -154,7 +157,7 @@ public partial class TinyDbSourceGenerator
         }
 
         // 检查是否是复杂对象类型
-        if (IsComplexObjectType(typeSymbol))
+        if (IsComplexObjectType(typeSymbol, cancellationToken))
         {
             return new TypeAnalysisResult(true, false, false, false, 0, null, false, false, null, null, false, false);
         }
@@ -165,8 +168,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 检查是否是基本类型或已知的简单类型
     /// </summary>
-    private static bool IsPrimitiveOrWellKnownType(ITypeSymbol typeSymbol)
+    private static bool IsPrimitiveOrWellKnownType(ITypeSymbol typeSymbol, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 检查特殊类型
         switch (typeSymbol.SpecialType)
         {
@@ -212,7 +217,7 @@ public partial class TinyDbSourceGenerator
             return true;
         }
 
-        return IsBsonValueType(typeSymbol);
+        return IsBsonValueType(typeSymbol, cancellationToken);
     }
 
     private static bool IsTinyDbObjectIdType(ITypeSymbol typeSymbol)
@@ -228,10 +233,12 @@ public partial class TinyDbSourceGenerator
         return string.Equals(fullName, "global::TinyDb.Bson.ObjectId", StringComparison.Ordinal);
     }
 
-    private static bool IsBsonValueType(ITypeSymbol typeSymbol)
+    private static bool IsBsonValueType(ITypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
         for (var current = typeSymbol as INamedTypeSymbol; current != null; current = current.BaseType)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var fullName = current.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
             if (fullName is "global::TinyDb.Bson.BsonValue" or "TinyDb.Bson.BsonValue")
             {
@@ -245,8 +252,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 检查是否是字典类型
     /// </summary>
-    private static bool IsDictionaryType(INamedTypeSymbol typeSymbol)
+    private static bool IsDictionaryType(INamedTypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 检查是否直接是 Dictionary<,> 或 IDictionary<,>
         var typeName = typeSymbol.OriginalDefinition.ToDisplayString();
         if (typeName.StartsWith("System.Collections.Generic.Dictionary<", StringComparison.Ordinal) ||
@@ -258,6 +267,8 @@ public partial class TinyDbSourceGenerator
         // 检查是否实现了 IDictionary<,> 接口
         foreach (var iface in typeSymbol.AllInterfaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var ifaceName = iface.OriginalDefinition.ToDisplayString();
             if (ifaceName.StartsWith("System.Collections.Generic.IDictionary<", StringComparison.Ordinal))
             {
@@ -271,8 +282,12 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取字典的键值类型
     /// </summary>
-    private static (ITypeSymbol KeyType, ITypeSymbol ValueType)? GetDictionaryTypeArguments(INamedTypeSymbol typeSymbol)
+    private static (ITypeSymbol KeyType, ITypeSymbol ValueType)? GetDictionaryTypeArguments(
+        INamedTypeSymbol typeSymbol,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 如果是泛型字典类型，直接获取类型参数
         if (typeSymbol.IsGenericType && typeSymbol.TypeArguments.Length == 2)
         {
@@ -287,6 +302,8 @@ public partial class TinyDbSourceGenerator
         // 查找 IDictionary<,> 接口
         foreach (var iface in typeSymbol.AllInterfaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (iface.IsGenericType && iface.TypeArguments.Length == 2)
             {
                 var ifaceName = iface.OriginalDefinition.ToDisplayString();
@@ -303,8 +320,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 检查是否是集合类型（非字典）
     /// </summary>
-    private static bool IsCollectionType(INamedTypeSymbol typeSymbol)
+    private static bool IsCollectionType(INamedTypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 排除字符串
         if (typeSymbol.SpecialType == SpecialType.System_String)
         {
@@ -312,7 +331,7 @@ public partial class TinyDbSourceGenerator
         }
 
         // 排除字典类型
-        if (IsDictionaryType(typeSymbol))
+        if (IsDictionaryType(typeSymbol, cancellationToken))
         {
             return false;
         }
@@ -332,6 +351,8 @@ public partial class TinyDbSourceGenerator
         // 检查是否实现了 ICollection<T> 或 IEnumerable<T>
         foreach (var iface in typeSymbol.AllInterfaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var ifaceName = iface.OriginalDefinition.ToDisplayString();
             if (ifaceName.StartsWith("System.Collections.Generic.ICollection<", StringComparison.Ordinal) ||
                 ifaceName.StartsWith("System.Collections.Generic.IEnumerable<", StringComparison.Ordinal))
@@ -380,8 +401,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取集合类型的元素类型符号
     /// </summary>
-    private static ITypeSymbol? GetElementTypeSymbol(ITypeSymbol? typeSymbol)
+    private static ITypeSymbol? GetElementTypeSymbol(ITypeSymbol? typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (typeSymbol == null) return null;
 
         // 处理数组
@@ -393,7 +416,7 @@ public partial class TinyDbSourceGenerator
         // 处理泛型集合
         if (typeSymbol is INamedTypeSymbol namedType)
         {
-            return GetCollectionElementType(namedType);
+            return GetCollectionElementType(namedType, cancellationToken);
         }
 
         return null;
@@ -402,13 +425,15 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取字典类型的值类型符号
     /// </summary>
-    private static ITypeSymbol? GetDictionaryValueTypeSymbol(ITypeSymbol? typeSymbol)
+    private static ITypeSymbol? GetDictionaryValueTypeSymbol(ITypeSymbol? typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (typeSymbol == null) return null;
 
         if (typeSymbol is INamedTypeSymbol namedType)
         {
-            var typeArgs = GetDictionaryTypeArguments(namedType);
+            var typeArgs = GetDictionaryTypeArguments(namedType, cancellationToken);
             return typeArgs?.ValueType;
         }
 
@@ -418,8 +443,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取集合的元素类型
     /// </summary>
-    private static ITypeSymbol? GetCollectionElementType(INamedTypeSymbol typeSymbol)
+    private static ITypeSymbol? GetCollectionElementType(INamedTypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 如果是泛型集合类型，直接获取类型参数
         if (typeSymbol.IsGenericType && typeSymbol.TypeArguments.Length == 1)
         {
@@ -429,6 +456,8 @@ public partial class TinyDbSourceGenerator
         // 查找 IEnumerable<T> 接口
         foreach (var iface in typeSymbol.AllInterfaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (iface.IsGenericType && iface.TypeArguments.Length == 1)
             {
                 var ifaceName = iface.OriginalDefinition.ToDisplayString();
@@ -445,10 +474,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 检查是否是复杂对象类型（类或结构体，非基本类型、非集合、非字典）
     /// </summary>
-    private static bool IsComplexObjectType(ITypeSymbol typeSymbol)
+    private static bool IsComplexObjectType(ITypeSymbol typeSymbol, CancellationToken cancellationToken = default)
     {
         // 排除基本类型
-        if (IsPrimitiveOrWellKnownType(typeSymbol))
+        if (IsPrimitiveOrWellKnownType(typeSymbol, cancellationToken))
         {
             return false;
         }
@@ -462,7 +491,9 @@ public partial class TinyDbSourceGenerator
         // 排除集合和字典
         if (typeSymbol is INamedTypeSymbol namedType)
         {
-            if (IsDictionaryType(namedType) || IsCollectionType(namedType) || ImplementsNonGenericEnumerableOrDictionary(namedType))
+            if (IsDictionaryType(namedType, cancellationToken) ||
+                IsCollectionType(namedType, cancellationToken) ||
+                ImplementsNonGenericEnumerableOrDictionary(namedType, cancellationToken))
             {
                 return false;
             }
@@ -472,8 +503,10 @@ public partial class TinyDbSourceGenerator
         return typeSymbol.TypeKind == TypeKind.Class || typeSymbol.TypeKind == TypeKind.Struct;
     }
 
-    private static bool ImplementsNonGenericEnumerableOrDictionary(INamedTypeSymbol typeSymbol)
+    private static bool ImplementsNonGenericEnumerableOrDictionary(INamedTypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var selfName = typeSymbol.ToDisplayString();
         if (selfName is "System.Collections.IDictionary" or "System.Collections.IEnumerable")
         {
@@ -482,6 +515,8 @@ public partial class TinyDbSourceGenerator
 
         foreach (var iface in typeSymbol.AllInterfaces)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var ifaceName = iface.ToDisplayString();
             if (ifaceName is "System.Collections.IDictionary" or "System.Collections.IEnumerable")
             {
@@ -495,8 +530,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 检查类型是否有 [Entity] 属性
     /// </summary>
-    private static bool HasEntityAttribute(ITypeSymbol typeSymbol)
+    private static bool HasEntityAttribute(ITypeSymbol typeSymbol, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         return HasAttribute(typeSymbol.GetAttributes(), "EntityAttribute");
     }
 

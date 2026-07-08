@@ -31,8 +31,7 @@ public sealed partial class WriteAheadLog : IDisposable
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private readonly IWalCodec _walCodec;
     private readonly SemaphoreSlim _mutex = new(1, 1);
-    [ThreadStatic]
-    private static WriteLockContext? s_currentWriteContext;
+    private static readonly AsyncLocal<WriteLockContext?> s_currentWriteContext = new();
     private readonly AsyncLocal<TransactionContext?> _currentTransactionContext = new();
     private readonly int _maxRecordSize;
     private bool _disposed;

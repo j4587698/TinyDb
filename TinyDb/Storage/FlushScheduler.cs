@@ -221,7 +221,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             if (!_journalWorkerRunning)
             {
                 _journalWorkerRunning = true;
-                _journalWorkerTask = Task.Run(RunJournalWorkerAsync);
+                _journalWorkerTask = StartDedicatedWorker(RunJournalWorker, "TinyDb journal flush worker");
             }
 
             return batchTask;
@@ -255,7 +255,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             if (!_syncedWorkerRunning)
             {
                 _syncedWorkerRunning = true;
-                _syncedWorkerTask = Task.Run(RunSyncedWorkerAsync);
+                _syncedWorkerTask = StartDedicatedWorker(RunSyncedWorker, "TinyDb synced flush worker");
             }
 
             return batchTask;
@@ -267,18 +267,38 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         EnqueueSyncedFlush().GetAwaiter().GetResult();
     }
 
-    private async Task RunSyncedWorkerAsync()
+    private static Task StartDedicatedWorker(Action worker, string name)
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                worker();
+                completion.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.TrySetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = name
+        };
+
+        thread.Start();
+        return completion.Task;
+    }
+
+    private void RunSyncedWorker()
     {
         while (true)
         {
             TaskCompletionSource tcsToComplete;
             bool delayForBatch;
 
-            try
-            {
-                await Task.Yield();
-            }
-            catch (OperationCanceledException)
+            if (_cts.IsCancellationRequested)
             {
                 CancelSyncedBatch();
                 return;
@@ -291,11 +311,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
             if (delayForBatch)
             {
-                try
-                {
-                    await Task.Delay(GroupCommitDelay, _cts.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
+                if (_cts.Token.WaitHandle.WaitOne(GroupCommitDelay))
                 {
                     CancelSyncedBatch();
                     return;
@@ -317,10 +333,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
             try
             {
-                await _wal.SynchronizeAsync(
-                    (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
-                    truncateLog: false,
-                    _cts.Token).ConfigureAwait(false);
+                _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: false, _cts.Token);
                 tcsToComplete.TrySetResult();
             }
             catch (OperationCanceledException)
@@ -376,11 +389,17 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         pendingToFault?.TrySetException(exception);
     }
 
-    private async Task RunJournalWorkerAsync()
+    private void RunJournalWorker()
     {
         while (true)
         {
             TaskCompletionSource tcsToComplete;
+
+            if (_cts.IsCancellationRequested)
+            {
+                CancelJournalBatch();
+                return;
+            }
 
             lock (_flushLock)
             {
@@ -397,27 +416,13 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
             try
             {
-                await _wal.FlushLogAsync(_cts.Token).ConfigureAwait(false);
+                _wal.FlushLog(writeContext: null, _cts.Token);
                 tcsToComplete.TrySetResult();
             }
             catch (OperationCanceledException)
             {
                 tcsToComplete.TrySetCanceled();
-
-                TaskCompletionSource? pendingToCancel = null;
-                lock (_flushLock)
-                {
-                    if (_journalRequests > 0)
-                    {
-                        pendingToCancel = _journalBatchTcs;
-                        _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                        _journalRequests = 0;
-                    }
-
-                    _journalWorkerRunning = false;
-                }
-
-                pendingToCancel?.TrySetCanceled();
+                CancelJournalBatch();
                 return;
             }
             catch (Exception ex)
@@ -428,6 +433,24 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 return;
             }
         }
+    }
+
+    private void CancelJournalBatch()
+    {
+        TaskCompletionSource? pendingToCancel = null;
+        lock (_flushLock)
+        {
+            if (_journalRequests > 0)
+            {
+                pendingToCancel = _journalBatchTcs;
+                _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _journalRequests = 0;
+            }
+
+            _journalWorkerRunning = false;
+        }
+
+        pendingToCancel?.TrySetCanceled();
     }
 
     private void FaultPendingJournalBatch(Exception exception)

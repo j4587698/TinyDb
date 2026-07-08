@@ -192,8 +192,8 @@ public class FlushSchedulerTests
 
             await Task.Run(() => fs.EnsureDurability(WriteConcern.Synced)).WaitAsync(TimeSpan.FromSeconds(2));
 
-            await Assert.That(trackingStream.FlushCount).IsEqualTo(0);
-            await Assert.That(trackingStream.FlushAsyncCount).IsEqualTo(1);
+            await Assert.That(trackingStream.FlushCount).IsEqualTo(1);
+            await Assert.That(trackingStream.FlushAsyncCount).IsEqualTo(0);
         }
         finally
         {

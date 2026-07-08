@@ -153,10 +153,12 @@ public sealed class DiskBTreeFindRangeReverseCoverageTests
         var currentLeaseField = typeof(DiskBTree).GetField(
             "_currentLease",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        var currentLeaseAccessor = currentLeaseField!.GetValue(null)!;
+        var currentLeaseValueProperty = currentLeaseAccessor.GetType().GetProperty("Value")!;
 
         try
         {
-            currentLeaseField!.SetValue(null, null);
+            currentLeaseValueProperty.SetValue(currentLeaseAccessor, null);
 
             using var ds = new DiskStream(path);
             using var pm = new PageManager(ds, 4096);
@@ -175,7 +177,7 @@ public sealed class DiskBTreeFindRangeReverseCoverageTests
 
             first.Dispose();
             second.Dispose();
-            var currentLease = currentLeaseField!.GetValue(null);
+            var currentLease = currentLeaseValueProperty.GetValue(currentLeaseAccessor);
 
             await Assert.That(firstMoved).IsTrue();
             await Assert.That(secondMoved).IsTrue();
@@ -183,7 +185,7 @@ public sealed class DiskBTreeFindRangeReverseCoverageTests
         }
         finally
         {
-            currentLeaseField?.SetValue(null, null);
+            currentLeaseValueProperty.SetValue(currentLeaseAccessor, null);
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
     }

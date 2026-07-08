@@ -5,6 +5,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using System.Collections.Immutable;
 using System.Text;
+using System.Threading;
 
 namespace TinyDb.SourceGenerator;
 
@@ -21,8 +22,11 @@ public partial class TinyDbSourceGenerator
     private static List<EntityCircularReferenceInfo> DetectEntityCircularReferences(
         INamedTypeSymbol? currentClassSymbol,
         List<PropertyInfo> properties,
-        IReadOnlyDictionary<string, ITypeSymbol> typeSymbols)
+        IReadOnlyDictionary<string, ITypeSymbol> typeSymbols,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var result = new List<EntityCircularReferenceInfo>();
         if (currentClassSymbol == null) return result;
 
@@ -33,6 +37,8 @@ public partial class TinyDbSourceGenerator
         // 遍历当前类的所有属性，查找引用了Entity类型的属性
         foreach (var prop in properties)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (prop.HasIgnoreAttribute) continue;
 
             ITypeSymbol? propTypeSymbol = null;
@@ -53,7 +59,7 @@ public partial class TinyDbSourceGenerator
                 propTypeSymbol = valueType;
             }
 
-            if (propTypeSymbol != null && HasEntityAttribute(propTypeSymbol))
+            if (propTypeSymbol != null && HasEntityAttribute(propTypeSymbol, cancellationToken))
             {
                 var propTypeName = propTypeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
@@ -79,11 +85,15 @@ public partial class TinyDbSourceGenerator
         // BFS检测更深层的循环引用
         while (toProcess.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var (typeSymbol, originPropertyName, path) = toProcess.Dequeue();
 
             // 获取该Entity类型的所有公共属性
             foreach (var member in typeSymbol.GetMembers())
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 if (member is IPropertySymbol propertySymbol &&
                     propertySymbol.DeclaredAccessibility == Accessibility.Public &&
                     !propertySymbol.IsStatic &&
@@ -94,8 +104,8 @@ public partial class TinyDbSourceGenerator
                     var hasIgnore = HasAttribute(propertySymbol.GetAttributes(), "BsonIgnoreAttribute");
                     if (hasIgnore) continue;
 
-                    var propType = GetActualType(propertySymbol.Type);
-                    if (propType != null && HasEntityAttribute(propType))
+                    var propType = GetActualType(propertySymbol.Type, cancellationToken);
+                    if (propType != null && HasEntityAttribute(propType, cancellationToken))
                     {
                         var propTypeName = propType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
 
@@ -142,8 +152,10 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取实际的类型（处理可空类型和集合类型）
     /// </summary>
-    private static ITypeSymbol? GetActualType(ITypeSymbol typeSymbol)
+    private static ITypeSymbol? GetActualType(ITypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         // 处理可空值类型
         if (typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
             namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
@@ -188,7 +200,7 @@ public partial class TinyDbSourceGenerator
         }
 
         // 检查是否是复杂对象类型
-        if (IsComplexObjectType(typeSymbol))
+        if (IsComplexObjectType(typeSymbol, cancellationToken))
         {
             return typeSymbol;
         }
@@ -213,8 +225,11 @@ public partial class TinyDbSourceGenerator
     /// </summary>
     private static (List<DependentComplexType> Types, List<CircularReferenceInfo> CircularRefs) CollectDependentComplexTypes(
         List<PropertyInfo> properties,
-        IReadOnlyDictionary<string, ITypeSymbol> typeSymbols)
+        IReadOnlyDictionary<string, ITypeSymbol> typeSymbols,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var result = new List<DependentComplexType>();
         var circularRefs = new List<CircularReferenceInfo>();
         var visited = new HashSet<string>();
@@ -223,6 +238,8 @@ public partial class TinyDbSourceGenerator
         // 首先收集直接依赖的复杂类型
         foreach (var prop in properties)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             // 处理复杂类型属性
             if (prop.IsComplexType && !string.IsNullOrEmpty(prop.FullyQualifiedNonNullableType))
             {
@@ -257,7 +274,9 @@ public partial class TinyDbSourceGenerator
         // BFS处理所有依赖类型
         void QueueDirectDependency(ITypeSymbol typeSymbol)
         {
-            if (HasEntityAttribute(typeSymbol))
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (HasEntityAttribute(typeSymbol, cancellationToken))
             {
                 return;
             }
@@ -271,8 +290,16 @@ public partial class TinyDbSourceGenerator
 
         while (toProcess.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var (fullName, typeSymbol, path) = toProcess.Dequeue();
-            var (dependentType, detectedCircularRefs) = AnalyzeDependentType(fullName, typeSymbol, visited, toProcess, path);
+            var (dependentType, detectedCircularRefs) = AnalyzeDependentType(
+                fullName,
+                typeSymbol,
+                visited,
+                toProcess,
+                path,
+                cancellationToken);
             if (dependentType != null)
             {
                 result.Add(dependentType);
@@ -292,14 +319,19 @@ public partial class TinyDbSourceGenerator
         ITypeSymbol typeSymbol,
         HashSet<string> visited,
         Queue<(string FullName, ITypeSymbol Symbol, List<string> Path)> toProcess,
-        List<string> currentPath)
+        List<string> currentPath,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var properties = new List<DependentTypeProperty>();
         var circularRefs = new List<CircularReferenceInfo>();
 
         // 获取类型的所有公共属性
         foreach (var member in typeSymbol.GetMembers())
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (member is IPropertySymbol propertySymbol &&
                 propertySymbol.DeclaredAccessibility == Accessibility.Public &&
                 !propertySymbol.IsStatic &&
@@ -319,19 +351,21 @@ public partial class TinyDbSourceGenerator
                                  (propType is INamedTypeSymbol { IsGenericType: true } namedType &&
                                   namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T);
 
-                var typeAnalysis = AnalyzePropertyType(propType);
+                var typeAnalysis = AnalyzePropertyType(propType, cancellationToken);
                 var isComplex = typeAnalysis.IsComplexType;
                 string? complexFullName = null;
                 bool isCircularRef = false;
 
                 void TrackDependentType(ITypeSymbol? dependencyTypeSymbol)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+
                     if (dependencyTypeSymbol == null)
                     {
                         return;
                     }
 
-                    if (HasEntityAttribute(dependencyTypeSymbol))
+                    if (HasEntityAttribute(dependencyTypeSymbol, cancellationToken))
                     {
                         return;
                     }
@@ -360,24 +394,28 @@ public partial class TinyDbSourceGenerator
                     }
                 }
 
-                if (isComplex && !HasEntityAttribute(propType))
+                if (isComplex && !HasEntityAttribute(propType, cancellationToken))
                 {
-                    var actualPropType = GetActualType(propType) ?? propType;
+                    var actualPropType = GetActualType(propType, cancellationToken) ?? propType;
                     complexFullName = actualPropType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
                     TrackDependentType(actualPropType);
                 }
 
                 if (typeAnalysis.IsCollection && typeAnalysis.IsElementComplexType)
                 {
-                    var elementTypeSymbol = GetElementTypeSymbol(propType);
-                    var actualElementType = elementTypeSymbol != null ? (GetActualType(elementTypeSymbol) ?? elementTypeSymbol) : null;
+                    var elementTypeSymbol = GetElementTypeSymbol(propType, cancellationToken);
+                    var actualElementType = elementTypeSymbol != null
+                        ? (GetActualType(elementTypeSymbol, cancellationToken) ?? elementTypeSymbol)
+                        : null;
                     TrackDependentType(actualElementType);
                 }
 
                 if (typeAnalysis.IsDictionary && typeAnalysis.IsDictionaryValueComplexType)
                 {
-                    var valueTypeSymbol = GetDictionaryValueTypeSymbol(propType);
-                    var actualValueType = valueTypeSymbol != null ? (GetActualType(valueTypeSymbol) ?? valueTypeSymbol) : null;
+                    var valueTypeSymbol = GetDictionaryValueTypeSymbol(propType, cancellationToken);
+                    var actualValueType = valueTypeSymbol != null
+                        ? (GetActualType(valueTypeSymbol, cancellationToken) ?? valueTypeSymbol)
+                        : null;
                     TrackDependentType(actualValueType);
                 }
 
@@ -387,7 +425,7 @@ public partial class TinyDbSourceGenerator
                     propFullTypeName,
                     isValueType,
                     isNullable,
-                    isComplex && !HasEntityAttribute(propType),
+                    isComplex && !HasEntityAttribute(propType, cancellationToken),
                     complexFullName,
                     typeAnalysis.IsCollection,
                     typeAnalysis.IsDictionary,
@@ -413,12 +451,14 @@ public partial class TinyDbSourceGenerator
             fullName,
             typeSymbol.Name,
             typeSymbol.IsValueType,
-            HasAccessibleParameterlessConstructor(typeSymbol),
+            HasAccessibleParameterlessConstructor(typeSymbol, cancellationToken),
             properties), circularRefs);
     }
 
-    private static bool HasAccessibleParameterlessConstructor(ITypeSymbol typeSymbol)
+    private static bool HasAccessibleParameterlessConstructor(ITypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (typeSymbol.IsValueType)
         {
             return true;
@@ -429,8 +469,17 @@ public partial class TinyDbSourceGenerator
             return false;
         }
 
-        return namedType.InstanceConstructors.Any(static constructor =>
-            constructor.Parameters.Length == 0 &&
-            constructor.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal);
+        foreach (var constructor in namedType.InstanceConstructors)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (constructor.Parameters.Length == 0 &&
+                constructor.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

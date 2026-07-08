@@ -105,6 +105,7 @@ public sealed partial class DiskBTree
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
 
+        using var lease = BeginPageLease();
         var node = await FindFirstCandidateLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
 
         bool passed = false;

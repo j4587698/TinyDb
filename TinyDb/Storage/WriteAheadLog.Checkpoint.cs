@@ -111,7 +111,14 @@ public sealed partial class WriteAheadLog
 
     internal void FlushLog(WriteLockContext? writeContext)
     {
+        FlushLog(writeContext, CancellationToken.None);
+    }
+
+
+    internal void FlushLog(WriteLockContext? writeContext, CancellationToken cancellationToken)
+    {
         if (!IsEnabled || !HasPendingEntriesCore) return;
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (HasActiveWriteContext(writeContext))
         {
@@ -119,7 +126,7 @@ public sealed partial class WriteAheadLog
             return;
         }
 
-        RunWithWriteLock(_ => FlushLogCore());
+        RunWithWriteLock(_ => FlushLogCore(), cancellationToken);
     }
 
 
@@ -155,7 +162,14 @@ public sealed partial class WriteAheadLog
 
     internal void Synchronize(Action<WriteLockContext> flushData, bool truncateLog)
     {
+        Synchronize(flushData, truncateLog, CancellationToken.None);
+    }
+
+
+    internal void Synchronize(Action<WriteLockContext> flushData, bool truncateLog, CancellationToken cancellationToken)
+    {
         if (flushData == null) throw new ArgumentNullException(nameof(flushData));
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (!IsEnabled)
         {
@@ -171,7 +185,7 @@ public sealed partial class WriteAheadLog
             return;
         }
 
-        _mutex.Wait();
+        _mutex.Wait(cancellationToken);
         var context = new WriteLockContext(this);
         try
         {
