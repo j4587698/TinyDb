@@ -266,7 +266,7 @@ public class WriteAheadLogReplayEdgeCaseTests
         
         await wal.ReplayAsync((pageId, data) =>
         {
-            appliedPages.Add((pageId, data));
+            appliedPages.Add((pageId, data.ToArray()));
             return Task.CompletedTask;
         });
 

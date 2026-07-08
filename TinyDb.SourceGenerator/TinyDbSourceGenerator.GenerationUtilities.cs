@@ -40,6 +40,24 @@ public partial class TinyDbSourceGenerator
         };
     }
 
+    private static bool IsTinyDbObjectIdTypeName(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return false;
+
+        var normalized = type.Trim();
+        if (normalized.EndsWith("?", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring(0, normalized.Length - 1).TrimEnd();
+        }
+
+        if (normalized.StartsWith("global::", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring("global::".Length);
+        }
+
+        return string.Equals(normalized, "TinyDb.Bson.ObjectId", StringComparison.Ordinal);
+    }
+
     internal static string ToCSharpStringLiteral(string? value)
     {
         if (value == null) return "null";

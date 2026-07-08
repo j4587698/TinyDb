@@ -134,7 +134,7 @@ public sealed partial class WriteAheadLog
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
 
-                await _wal.RunWithWriteLockAsync(async _ =>
+                await _wal.RunWithWriteLockAsync(async writeContext =>
                 {
                     await _wal.WriteDeferredTransactionPagesAsync(_transactionId, cancellationToken).ConfigureAwait(false);
                     await _wal.WriteEntryAsync(
@@ -145,7 +145,7 @@ public sealed partial class WriteAheadLog
                     _wal.SetHasPendingEntries(true);
                     if (_flushOnCommit)
                     {
-                        _wal.FlushLogCore();
+                        await _wal.FlushLogAsync(writeContext, cancellationToken).ConfigureAwait(false);
                     }
                 }, cancellationToken).ConfigureAwait(false);
             }

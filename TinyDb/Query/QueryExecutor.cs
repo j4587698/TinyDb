@@ -127,6 +127,17 @@ public sealed partial class QueryExecutor
         return Count(collectionName, queryExpression);
     }
 
+    internal Task<long> CountAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+        string collectionName,
+        Expression<Func<T, bool>>? expression = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        var queryExpression = ParsePredicate(expression);
+
+        return CountAsync(collectionName, queryExpression, cancellationToken);
+    }
+
     internal long Count(string collectionName, QueryExpression? queryExpression)
     {
         var predicates = new List<ScanPredicate>();
@@ -187,6 +198,82 @@ public sealed partial class QueryExecutor
         {
             foreach (var txDoc in txOverlay.Values)
             {
+                if (txDoc == null) continue;
+                if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, txDoc)) count++;
+            }
+        }
+
+        return count;
+    }
+
+    internal async Task<long> CountAsync(
+        string collectionName,
+        QueryExpression? queryExpression,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var predicates = new List<ScanPredicate>();
+        bool fullyPushed = CollectPredicates(queryExpression, predicates);
+        var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
+
+        var collectionFieldNameBytes = Encoding.UTF8.GetBytes("_collection");
+        var collectionNameBytes = Encoding.UTF8.GetBytes(collectionName);
+        var isLargeDocumentFieldNameBytes = Encoding.UTF8.GetBytes("_isLargeDocument");
+
+        long count = 0;
+        var tx = _engine.GetCurrentTransaction();
+        var txOverlay = tx != null ? QueryTransactionOverlay.Build(tx, collectionName) : null;
+
+        await foreach (var result in _engine.FindAllRawWithPredicateInfoAsync(collectionName, pushDownPredicates, cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var slice = result.Slice;
+            var span = slice.Span;
+            if (!MatchesCollection(span, collectionFieldNameBytes, collectionNameBytes))
+            {
+                continue;
+            }
+
+            if (txOverlay != null && QuerySortKeyReader.TryReadBsonValue(span, SortFieldBytes.Id, out var idValue))
+            {
+                if (txOverlay.TryGetValue(idValue, out var txDoc))
+                {
+                    txOverlay.Remove(idValue);
+                    if (txDoc == null) continue;
+                    if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, txDoc)) count++;
+                    continue;
+                }
+            }
+
+            if (queryExpression == null)
+            {
+                count++;
+                continue;
+            }
+
+            if (fullyPushed &&
+                !result.RequiresPostFilter &&
+                !IsLargeDocumentStub(span, isLargeDocumentFieldNameBytes))
+            {
+                count++;
+                continue;
+            }
+
+            var doc = DeserializeDocumentOrThrow(slice);
+            doc = await _engine.ResolveLargeDocumentAsync(doc, cancellationToken).ConfigureAwait(false);
+            if (ExpressionEvaluator.Evaluate(queryExpression, doc))
+            {
+                count++;
+            }
+        }
+
+        if (txOverlay != null)
+        {
+            foreach (var txDoc in txOverlay.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (txDoc == null) continue;
                 if (queryExpression == null || ExpressionEvaluator.Evaluate(queryExpression, txDoc)) count++;
             }

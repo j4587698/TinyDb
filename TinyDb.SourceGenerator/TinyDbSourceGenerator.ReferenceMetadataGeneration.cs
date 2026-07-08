@@ -128,7 +128,7 @@ public partial class TinyDbSourceGenerator
         {
             sb.AppendLine($"                entity.{idAccess} = (string)generatedId;");
         }
-        else if (normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal))
+        else if (IsTinyDbObjectIdTypeName(idProperty.FullyQualifiedNonNullableType))
         {
             sb.AppendLine($"                entity.{idAccess} = (ObjectId)generatedId;");
         }
@@ -165,7 +165,7 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine($"            entity.{idAccess} = global::TinyDb.IdGeneration.AutoIdGenerator.CreateGuidV7().ToString();");
             sb.AppendLine("            return true;");
         }
-        else if (normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal))
+        else if (IsTinyDbObjectIdTypeName(idProperty.FullyQualifiedNonNullableType))
         {
             sb.AppendLine($"            entity.{idAccess} = ObjectId.NewObjectId();");
             sb.AppendLine("            return true;");
@@ -231,7 +231,7 @@ public partial class TinyDbSourceGenerator
                normalized is "string" or "decimal" or "double" or "float" or "bool" or "byte" or "sbyte" or
                    "short" or "ushort" or "int" or "uint" or "long" or "ulong" or "char" or "DateTime" or
                    "DateTimeOffset" or "TimeSpan" or "Guid" ||
-               normalized.EndsWith("ObjectId", StringComparison.Ordinal);
+               IsTinyDbObjectIdTypeName(property.FullyQualifiedNonNullableType);
     }
 
 }

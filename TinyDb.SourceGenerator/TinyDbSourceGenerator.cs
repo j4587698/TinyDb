@@ -193,13 +193,14 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             context.ReportDiagnostic(diagnostic);
         }
 
-        foreach (var property in GetUnsupportedDependentArrayRankProperties(classInfo))
+        foreach (var unsupported in GetUnsupportedDependentArrayRankProperties(classInfo))
         {
+            var property = unsupported.Property;
             var diagnostic = Diagnostic.Create(
                 UnsupportedArrayRankErrorDescriptor,
                 classInfo.Location.ToLocation(),
                 property.Name,
-                classInfo.FullName,
+                unsupported.ContainingTypeName,
                 property.ArrayRank);
             context.ReportDiagnostic(diagnostic);
         }
@@ -216,11 +217,11 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
         return classInfo.Properties.Where(static p => p.IsArray && p.ArrayRank != 1);
     }
 
-    private static IEnumerable<DependentTypeProperty> GetUnsupportedDependentArrayRankProperties(ClassInfo classInfo)
+    private static IEnumerable<(string ContainingTypeName, DependentTypeProperty Property)> GetUnsupportedDependentArrayRankProperties(ClassInfo classInfo)
     {
         return classInfo.DependentComplexTypes
-            .SelectMany(static t => t.Properties)
-            .Where(static p => p.IsArray && p.ArrayRank != 1);
+            .SelectMany(static t => t.Properties.Select(p => (ContainingTypeName: t.FullyQualifiedName, Property: p)))
+            .Where(static item => item.Property.IsArray && item.Property.ArrayRank != 1);
     }
 
     private static void ReportInvalidIdPropertyErrors(SourceProductionContext context, ClassInfo classInfo)
