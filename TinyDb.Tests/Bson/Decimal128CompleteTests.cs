@@ -75,15 +75,33 @@ public class Decimal128CompleteTests
     [Test]
     public async Task MaxValue_ShouldThrowOnConversion()
     {
-        // Decimal128.MaxValue is larger than decimal.MaxValue
+        // Decimal128.MaxValue is the largest finite value and is larger than decimal.MaxValue.
         await Assert.That(() => Decimal128.MaxValue.ToDecimal()).Throws<OverflowException>();
     }
 
     [Test]
     public async Task MinValue_ShouldThrowOnConversion()
     {
-        // Decimal128.MinValue is smaller than decimal.MinValue
+        // Decimal128.MinValue is the smallest finite value and is smaller than decimal.MinValue.
         await Assert.That(() => Decimal128.MinValue.ToDecimal()).Throws<OverflowException>();
+    }
+
+    [Test]
+    public async Task FiniteExtremes_ShouldNotUseInfinityEncoding()
+    {
+        await Assert.That(Decimal128.MaxValue.HighBits).IsEqualTo(0x77ffffffffffffffUL);
+        await Assert.That(Decimal128.MinValue.HighBits).IsEqualTo(0xf7ffffffffffffffUL);
+        await Assert.That(Decimal128.MaxValue.ToString() == "Infinity").IsFalse();
+        await Assert.That(Decimal128.MinValue.ToString() == "-Infinity").IsFalse();
+    }
+
+    [Test]
+    public async Task InfinityConstants_ShouldUseInfinityEncoding()
+    {
+        await Assert.That(Decimal128.PositiveInfinity.ToString()).IsEqualTo("Infinity");
+        await Assert.That(Decimal128.NegativeInfinity.ToString()).IsEqualTo("-Infinity");
+        await Assert.That(Decimal128.PositiveInfinity.ToDouble(null)).IsEqualTo(double.PositiveInfinity);
+        await Assert.That(Decimal128.NegativeInfinity.ToDouble(null)).IsEqualTo(double.NegativeInfinity);
     }
 
     #endregion
@@ -139,14 +157,10 @@ public class Decimal128CompleteTests
         // 0x6000 in binary is 0110 0000 0000 0000 (bits 13 and 14)
         // combination = (hi >> 49) & 0x7FFF
         // So bit 13 of combo corresponds to bit 62 of hi, bit 14 to bit 63 (but that's sign)
-        // The infinity encoding for Decimal128 is when bits 62-60 are 111 or 110
-        // Let's try the actual IEEE 754-2008 infinity pattern
-        ulong infinityHi = 0x7C00000000000000UL; // Standard IEEE infinity pattern for Decimal128
+        // Use the IEEE 754-2008 positive infinity encoding.
+        ulong infinityHi = 0x7800000000000000UL;
         var d = new Decimal128(0UL, infinityHi);
-        // This might not trigger the specific branch, let's verify MaxValue does
-        // MaxValue already throws, so this test is covered by that
-        // Let's change this to test a large scale that overflows
-        await Assert.That(() => Decimal128.MaxValue.ToDecimal()).Throws<OverflowException>();
+        await Assert.That(() => d.ToDecimal()).Throws<OverflowException>();
     }
 
     #endregion
@@ -163,7 +177,7 @@ public class Decimal128CompleteTests
     [Test]
     public async Task ToString_WithInfinity_ShouldReturnInfinity()
     {
-        var d = Decimal128.MaxValue;
+        var d = Decimal128.PositiveInfinity;
         await Assert.That(d.ToString()).IsEqualTo("Infinity");
     }
 

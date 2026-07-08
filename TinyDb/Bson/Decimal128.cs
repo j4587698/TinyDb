@@ -11,6 +11,14 @@ namespace TinyDb.Bson;
 [StructLayout(LayoutKind.Explicit)]
 public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, IConvertible
 {
+    private enum Decimal128Kind
+    {
+        Finite,
+        NegativeInfinity,
+        PositiveInfinity,
+        NaN
+    }
+
     private const int ExponentBias = 6176;
     private const ulong SignMask = 0x8000000000000000UL;
     private const ulong SpecialMask = 0x7800000000000000UL;
@@ -24,8 +32,10 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     private readonly ulong _hi;
 
     public static readonly Decimal128 Zero = new Decimal128(0, 0);
-    public static readonly Decimal128 MinValue = new Decimal128(0x0000000000000000, 0xf800000000000000);
-    public static readonly Decimal128 MaxValue = new Decimal128(0xffffffffffffffff, 0x7800000000000000);
+    public static readonly Decimal128 NegativeInfinity = new Decimal128(0x0000000000000000, 0xf800000000000000);
+    public static readonly Decimal128 PositiveInfinity = new Decimal128(0x0000000000000000, 0x7800000000000000);
+    public static readonly Decimal128 MinValue = new Decimal128(0xffffffffffffffff, 0xf7ffffffffffffff);
+    public static readonly Decimal128 MaxValue = new Decimal128(0xffffffffffffffff, 0x77ffffffffffffff);
 
     public Decimal128(ulong lo, ulong hi)
     {
@@ -194,10 +204,21 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
     public int CompareTo(Decimal128 other)
     {
-        if (TryDecodeFinite(out var leftSign, out var leftExponent, out var leftSignificand) &&
-            other.TryDecodeFinite(out var rightSign, out var rightExponent, out var rightSignificand))
+        var leftFinite = TryDecodeFinite(out var leftSign, out var leftExponent, out var leftSignificand);
+        var rightFinite = other.TryDecodeFinite(out var rightSign, out var rightExponent, out var rightSignificand);
+
+        if (leftFinite && rightFinite)
         {
             return CompareFinite(leftSign, leftExponent, leftSignificand, rightSign, rightExponent, rightSignificand);
+        }
+
+        if (!leftFinite || !rightFinite)
+        {
+            var specialComparison = CompareSpecial(other, leftFinite, rightFinite);
+            if (specialComparison.HasValue)
+            {
+                return specialComparison.Value;
+            }
         }
 
         var highComparison = _hi.CompareTo(other._hi);
@@ -257,6 +278,44 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
 
         var comparison = leftSignificand.CompareTo(rightSignificand);
         return leftSign ? -comparison : comparison;
+    }
+
+    private int? CompareSpecial(Decimal128 other, bool leftFinite, bool rightFinite)
+    {
+        var leftKind = leftFinite ? Decimal128Kind.Finite : GetNonFiniteKind();
+        var rightKind = rightFinite ? Decimal128Kind.Finite : other.GetNonFiniteKind();
+
+        if (leftKind == Decimal128Kind.NaN || rightKind == Decimal128Kind.NaN)
+        {
+            return null;
+        }
+
+        if (leftKind == rightKind)
+        {
+            return 0;
+        }
+
+        if (leftKind == Decimal128Kind.NegativeInfinity || rightKind == Decimal128Kind.PositiveInfinity)
+        {
+            return -1;
+        }
+
+        if (leftKind == Decimal128Kind.PositiveInfinity || rightKind == Decimal128Kind.NegativeInfinity)
+        {
+            return 1;
+        }
+
+        return null;
+    }
+
+    private Decimal128Kind GetNonFiniteKind()
+    {
+        if ((_hi & NaNMask) == NaNMask)
+        {
+            return Decimal128Kind.NaN;
+        }
+
+        return (_hi & SignMask) != 0 ? Decimal128Kind.NegativeInfinity : Decimal128Kind.PositiveInfinity;
     }
     
     public byte[] ToBytes()

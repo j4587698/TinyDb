@@ -43,6 +43,41 @@ internal sealed class EncryptionContext : IDisposable
 
     public IWalCodec WalCodec { get; }
 
+    internal EncryptionMetadata ProtectRecoveredMetadata(EncryptionMetadata recoveredMetadata, out bool metadataChanged)
+    {
+        if (recoveredMetadata == null) throw new ArgumentNullException(nameof(recoveredMetadata));
+
+        if (!CryptographicOperations.FixedTimeEquals(recoveredMetadata.DatabaseId, Metadata.DatabaseId))
+        {
+            throw new SecurityCorruptedException("Recovered encryption metadata belongs to a different database.");
+        }
+
+        if (recoveredMetadata.LogicalPageSize != Metadata.LogicalPageSize ||
+            recoveredMetadata.PhysicalPageSize != Metadata.PhysicalPageSize)
+        {
+            throw new SecurityCorruptedException("Recovered encryption metadata page size does not match the active database.");
+        }
+
+        VerifyMetadataMac(recoveredMetadata, _dek);
+
+        if (recoveredMetadata.NonceEpoch > Metadata.NonceEpoch)
+        {
+            throw new SecurityCorruptedException("Recovered encryption metadata nonce epoch is ahead of the active session.");
+        }
+
+        metadataChanged = false;
+        if (recoveredMetadata.NonceEpoch < Metadata.NonceEpoch)
+        {
+            recoveredMetadata.NonceEpoch = Metadata.NonceEpoch;
+            recoveredMetadata.UseCurrentFormat();
+            UpdateMetadataMac(recoveredMetadata, _dek);
+            metadataChanged = true;
+        }
+
+        CopyMetadata(Metadata, recoveredMetadata);
+        return recoveredMetadata;
+    }
+
     public static EncryptionContext CreateNew(TinyDbOptions options)
     {
         if (options == null) throw new ArgumentNullException(nameof(options));
@@ -307,6 +342,26 @@ internal sealed class EncryptionContext : IDisposable
         {
             CryptographicOperations.ZeroMemory(key);
         }
+    }
+
+    private static void CopyMetadata(EncryptionMetadata target, EncryptionMetadata source)
+    {
+        target.Version = source.Version;
+        target.CredentialKind = source.CredentialKind;
+        target.Algorithm = source.Algorithm;
+        target.Kdf = source.Kdf;
+        target.LogicalPageSize = source.LogicalPageSize;
+        target.PhysicalPageSize = source.PhysicalPageSize;
+        target.StoredFrameOverhead = source.StoredFrameOverhead;
+        target.Iterations = source.Iterations;
+        target.DatabaseId = source.DatabaseId.ToArray();
+        target.KdfSalt = source.KdfSalt.ToArray();
+        target.WrappedDekNonce = source.WrappedDekNonce.ToArray();
+        target.WrappedDekCiphertext = source.WrappedDekCiphertext.ToArray();
+        target.WrappedDekTag = source.WrappedDekTag.ToArray();
+        target.NonceEpoch = source.NonceEpoch;
+        target.MetadataMac = source.MetadataMac.ToArray();
+        target.UseCurrentFormat();
     }
 
     public void Dispose()

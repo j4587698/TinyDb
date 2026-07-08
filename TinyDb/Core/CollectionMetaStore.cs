@@ -168,7 +168,7 @@ internal sealed class CollectionMetaStore
             const int dataOffset = 247;
         
             // 检查溢出
-            if (collectionData.Length > collectionPage.PageSize - dataOffset)
+            if (collectionData.Length > collectionPage.DataSize - dataOffset)
             {
                 throw new InvalidOperationException($"Collection metadata size ({collectionData.Length} bytes) exceeds page capacity. Multi-page metadata storage is not yet implemented.");
             }

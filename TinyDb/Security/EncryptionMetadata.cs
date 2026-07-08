@@ -253,9 +253,7 @@ internal static class EncryptionMetadataStore
         if (metadata == null) throw new ArgumentNullException(nameof(metadata));
 
         var logicalPage = diskStream.ReadPage(0, checked((int)logicalPageSize));
-        var clear = new byte[EncryptionMetadata.MaxSerializedLength];
-        clear.CopyTo(logicalPage.AsSpan(FileOffset));
-        metadata.ToBytes().CopyTo(logicalPage.AsSpan(FileOffset));
+        WriteToLogicalPage(logicalPage, metadata);
 
         var header = PageHeader.FromByteArray(logicalPage);
         header.UpdateModification();
@@ -277,5 +275,17 @@ internal static class EncryptionMetadataStore
         var clear = new byte[EncryptionMetadata.MaxSerializedLength];
         page.WriteData(PageDataOffset, clear);
         page.WriteData(PageDataOffset, metadata.ToBytes());
+    }
+
+    public static void WriteToLogicalPage(Span<byte> logicalPage, EncryptionMetadata metadata)
+    {
+        if (metadata == null) throw new ArgumentNullException(nameof(metadata));
+        if (logicalPage.Length < FileOffset + EncryptionMetadata.MaxSerializedLength)
+        {
+            throw new ArgumentException("Logical page is too small for encryption metadata.", nameof(logicalPage));
+        }
+
+        logicalPage.Slice(FileOffset, EncryptionMetadata.MaxSerializedLength).Clear();
+        metadata.ToBytes().CopyTo(logicalPage.Slice(FileOffset));
     }
 }

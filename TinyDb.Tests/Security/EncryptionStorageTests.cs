@@ -26,6 +26,7 @@ public sealed class EncryptionStorageTests : IDisposable
         TryDelete(_dbPath);
         TryDelete(_walPath);
         TryDelete(_walPath + ".bak");
+        TryDelete(_dbPath + ".before-replay");
         TryDelete(_dbPath + ".compact");
     }
 
@@ -359,6 +360,58 @@ public sealed class EncryptionStorageTests : IDisposable
         }
 
         await Assert.That(new FileInfo(_walPath).Length).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EncryptedWalReplay_ShouldNotRollbackPersistedNonceEpoch()
+    {
+        using (var engine = CreatePasswordEngine(writeConcern: WriteConcern.Synced))
+        {
+            engine.GetBsonCollection("wal_epoch_seed").Insert(new BsonDocument()
+                .Set("_id", 1)
+                .Set("value", "seed"));
+        }
+
+        var epochBeforeWalSession = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+        var dbBeforeReplayPath = _dbPath + ".before-replay";
+
+        using (var engine = new TinyDbEngine(_dbPath, new TinyDbOptions
+        {
+            Password = "password123",
+            EnableJournaling = true,
+            WriteConcern = WriteConcern.Journaled,
+            BackgroundFlushInterval = Timeout.InfiniteTimeSpan
+        }))
+        {
+            var epochCapturedInWal = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+            await Assert.That(epochCapturedInWal).IsGreaterThan(epochBeforeWalSession);
+
+            File.Copy(_dbPath, dbBeforeReplayPath, overwrite: true);
+
+            var headerPage = engine.PageManager.GetPage(1);
+            engine.WriteAheadLog.AppendPage(headerPage);
+            engine.WriteAheadLog.AppendPage(headerPage);
+            engine.WriteAheadLog.FlushLog();
+
+            await Assert.That(File.Exists(_walPath)).IsTrue();
+            await Assert.That(new FileInfo(_walPath).Length).IsGreaterThan(0);
+            File.Copy(_walPath, _walPath + ".bak", overwrite: true);
+        }
+
+        File.Copy(dbBeforeReplayPath, _dbPath, overwrite: true);
+        File.Copy(_walPath + ".bak", _walPath, overwrite: true);
+
+        var epochBeforeRecovery = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+        using (new TinyDbEngine(_dbPath, new TinyDbOptions
+        {
+            Password = "password123",
+            EnableJournaling = true,
+            BackgroundFlushInterval = Timeout.InfiniteTimeSpan
+        }))
+        {
+            var epochAfterRecovery = ReadEncryptionMetadata(_dbPath).NonceEpoch;
+            await Assert.That(epochAfterRecovery).IsGreaterThan(epochBeforeRecovery);
+        }
     }
 
     [Test]
