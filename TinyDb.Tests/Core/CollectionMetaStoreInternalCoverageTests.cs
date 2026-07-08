@@ -121,6 +121,37 @@ public sealed class CollectionMetaStoreInternalCoverageTests
             .ThrowsExactly<InvalidOperationException>();
     }
 
+    [Test]
+    public async Task SaveCollections_WhenMetadataOnlyFitsOldPageSizeCheck_ShouldThrowFriendlyException()
+    {
+        using var ctx = new MetaStoreTestContext(pageSize: 4096);
+
+        const int dataOffset = 247;
+        var actualLimit = (int)ctx.PageManager.PageSize - Page.DataStartOffset - dataOffset;
+        var oldLimit = (int)ctx.PageManager.PageSize - dataOffset;
+
+        BsonDocument? selectedMetadata = null;
+        for (var payloadLength = 1; payloadLength < 4096; payloadLength++)
+        {
+            var metadata = new BsonDocument().Set("payload", new BsonString(new string('x', payloadLength)));
+            var collectionInfo = new BsonDocument().Set("big", metadata);
+            var serializedLength = BsonSerializer.SerializeDocument(collectionInfo).Length;
+            if (serializedLength > actualLimit && serializedLength <= oldLimit)
+            {
+                selectedMetadata = metadata;
+                break;
+            }
+        }
+
+        if (selectedMetadata == null)
+        {
+            throw new InvalidOperationException("Failed to construct metadata in the overflow boundary window.");
+        }
+
+        await Assert.That(() => ctx.MetaStore.UpdateMetadata("big", selectedMetadata, forceFlush: true))
+            .ThrowsExactly<InvalidOperationException>();
+    }
+
     private sealed class MetaStoreTestContext : IDisposable
     {
         private readonly string _dbFile;
@@ -130,11 +161,11 @@ public sealed class CollectionMetaStoreInternalCoverageTests
         public PageManager PageManager { get; }
         public CollectionMetaStore MetaStore { get; }
 
-        public MetaStoreTestContext()
+        public MetaStoreTestContext(uint pageSize = 8192)
         {
             _dbFile = Path.Combine(Path.GetTempPath(), $"meta_store_internal_{Guid.NewGuid():N}.db");
             _diskStream = new DiskStream(_dbFile);
-            PageManager = new PageManager(_diskStream);
+            PageManager = new PageManager(_diskStream, pageSize);
             MetaStore = new CollectionMetaStore(PageManager, () => CollectionPageId, v => CollectionPageId = v);
         }
 

@@ -21,13 +21,8 @@ public class Decimal128ExtendedTests
         await Assert.That(convertible.ToInt32(null)).IsEqualTo(123);
         await Assert.That(convertible.ToString(null)).IsEqualTo("123.45");
         
-        // Overflow
+        // Finite overflow
         var max = Decimal128.MaxValue;
-        // MaxValue might not fit in decimal? 
-        // Decimal128 range is larger than decimal.
-        // But ToDecimal() throws OverflowException if it doesn't fit.
-        // Let's try ToDecimal() on MaxValue.
-        // Decimal max is ~7.9e28. Decimal128 max is ~1e6145.
         await Assert.That(() => max.ToDecimal()).Throws<OverflowException>();
     }
 
@@ -50,9 +45,13 @@ public class Decimal128ExtendedTests
     public async Task Decimal128_Constants_ShouldBeValid()
     {
         await Assert.That(Decimal128.Zero.ToDecimal()).IsEqualTo(0m);
+        await Assert.That(Decimal128.PositiveInfinity.ToString()).IsEqualTo("Infinity");
+        await Assert.That(Decimal128.NegativeInfinity.ToString()).IsEqualTo("-Infinity");
         
         // Compare
         await Assert.That(Decimal128.Zero.CompareTo(new Decimal128(1))).IsLessThan(0);
         await Assert.That(Decimal128.Zero.CompareTo(new Decimal128(-1))).IsGreaterThan(0);
+        await Assert.That(Decimal128.NegativeInfinity.CompareTo(Decimal128.MinValue)).IsLessThan(0);
+        await Assert.That(Decimal128.PositiveInfinity.CompareTo(Decimal128.MaxValue)).IsGreaterThan(0);
     }
 }

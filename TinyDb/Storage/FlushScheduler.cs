@@ -126,7 +126,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     public async Task EnsureDurabilityAsync(WriteConcern concern, CancellationToken cancellationToken = default)
     {
-        ThrowIfBackgroundFailed();
+        AllowForegroundRetryAfterBackgroundFailure();
 
         switch (concern)
         {
@@ -145,7 +145,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     public void EnsureDurability(WriteConcern concern)
     {
-        ThrowIfBackgroundFailed();
+        AllowForegroundRetryAfterBackgroundFailure();
 
         switch (concern)
         {
@@ -164,7 +164,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfBackgroundFailed();
+        AllowForegroundRetryAfterBackgroundFailure();
         return _wal.SynchronizeAsync(
             (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
             truncateLog: true,
@@ -173,7 +173,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     public void Flush()
     {
-        ThrowIfBackgroundFailed();
+        AllowForegroundRetryAfterBackgroundFailure();
         _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: true);
     }
 
@@ -208,7 +208,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 throw new ObjectDisposedException(nameof(FlushScheduler));
             }
 
-            ThrowIfBackgroundFailed();
+            AllowForegroundRetryAfterBackgroundFailure();
 
             if (_journalBatchTcs.Task.IsCompleted)
             {
@@ -242,7 +242,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 throw new ObjectDisposedException(nameof(FlushScheduler));
             }
 
-            ThrowIfBackgroundFailed();
+            AllowForegroundRetryAfterBackgroundFailure();
 
             if (_syncedBatchTcs.Task.IsCompleted)
             {
@@ -473,7 +473,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     public async Task FlushPendingAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfBackgroundFailed();
+        AllowForegroundRetryAfterBackgroundFailure();
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         await _wal.SynchronizeAsync(
             (ctx, ct) => _pageManager.FlushDirtyPagesAsync(ctx, ct),
@@ -483,7 +483,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
     public void FlushPending()
     {
-        ThrowIfBackgroundFailed();
+        AllowForegroundRetryAfterBackgroundFailure();
         if (!_wal.HasPendingEntries && !_pageManager.HasDirtyPages()) return;
         _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: true);
     }
@@ -677,7 +677,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             CancellationToken.None).ConfigureAwait(false);
     }
 
-    private void ThrowIfBackgroundFailed()
+    private void AllowForegroundRetryAfterBackgroundFailure()
     {
         // Background failures are retained for Dispose/DisposeAsync. Runtime flush
         // requests must be able to retry instead of being permanently poisoned by

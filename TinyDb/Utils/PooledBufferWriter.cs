@@ -28,12 +28,12 @@ internal sealed class PooledBufferWriter : IPatchableBufferWriter, IDisposable
 
     public void WriteInt32LittleEndianAt(int offset, int value)
     {
-        if ((uint)offset > (uint)(_index - 4))
+        if (_index < sizeof(int) || (uint)offset > (uint)(_index - sizeof(int)))
         {
             throw new ArgumentOutOfRangeException(nameof(offset));
         }
 
-        BinaryPrimitives.WriteInt32LittleEndian(_buffer.AsSpan(offset, 4), value);
+        BinaryPrimitives.WriteInt32LittleEndian(_buffer.AsSpan(offset, sizeof(int)), value);
     }
 
     public void Advance(int count)

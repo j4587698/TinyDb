@@ -203,8 +203,9 @@ public sealed partial class TinyDbEngine
                                 }
                             }
 
-                            _pageManager.RestorePage(id, data);
-                        }, (id, data) => _pageManager.RestorePage(id, data));
+                            var replayData = ProtectEncryptionMetadataForWalReplay(id, data);
+                            _pageManager.RestorePage(id, replayData);
+                        }, (id, data) => _pageManager.RestorePage(id, ProtectEncryptionMetadataForWalReplay(id, data)));
                     }
                 }
 
@@ -266,6 +267,31 @@ public sealed partial class TinyDbEngine
                 throw;
             }
         }
+    }
+
+
+    private ReadOnlyMemory<byte> ProtectEncryptionMetadataForWalReplay(uint pageId, ReadOnlyMemory<byte> pageData)
+    {
+        if (_encryptionContext == null || pageId != 1)
+        {
+            return pageData;
+        }
+
+        if (!EncryptionMetadataStore.TryReadFromLogicalPage(pageData.Span, out var recoveredMetadata) ||
+            recoveredMetadata == null)
+        {
+            return pageData;
+        }
+
+        var protectedMetadata = _encryptionContext.ProtectRecoveredMetadata(recoveredMetadata, out var metadataChanged);
+        if (!metadataChanged)
+        {
+            return pageData;
+        }
+
+        var patchedPage = pageData.ToArray();
+        EncryptionMetadataStore.WriteToLogicalPage(patchedPage, protectedMetadata);
+        return patchedPage;
     }
 
 

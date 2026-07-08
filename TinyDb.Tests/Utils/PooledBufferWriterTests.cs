@@ -31,6 +31,9 @@ public class PooledBufferWriterTests
     {
         using var writer = new PooledBufferWriter(64);
 
+        await Assert.That(() => writer.WriteInt32LittleEndianAt(0, 0))
+            .Throws<ArgumentOutOfRangeException>();
+
         writer.GetSpan(4);
         writer.Advance(4);
 
@@ -73,4 +76,3 @@ public class PooledBufferWriterTests
         await Assert.That(() => writer.Dispose()).ThrowsNothing();
     }
 }
-
