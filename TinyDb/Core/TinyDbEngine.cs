@@ -61,7 +61,7 @@ public sealed partial class TinyDbEngine : IDisposable
     private LargeDocumentStorage _largeDocumentStorage = null!;
     private DataPageAccess _dataPageAccess = null!;
     private readonly object _lock = new();
-    private readonly AsyncLocal<ITransaction?> _currentTransaction = new();
+    private readonly AsyncLocal<CurrentTransactionHolder?> _currentTransaction = new();
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
     private DatabaseHeader _header;
     private EncryptionContext? _encryptionContext;

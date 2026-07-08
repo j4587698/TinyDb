@@ -15,8 +15,10 @@ namespace TinyDb.Serialization;
 public sealed class BsonReader : IDisposable
 {
     private readonly Stream _stream;
+    private readonly CountingReadStream? _countingStream;
     private readonly BinaryReader _reader;
     private readonly bool _leaveOpen;
+    private readonly Stack<long> _containerLimits = new();
     private int _depth;
     private bool _disposed;
     private const int MaxBsonDepth = 128;
@@ -31,7 +33,8 @@ public sealed class BsonReader : IDisposable
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _leaveOpen = leaveOpen;
-        _reader = new BinaryReader(stream, Encoding.UTF8, true); // BinaryReader always leaves open as we manage disposal
+        var readerStream = stream.CanSeek ? stream : _countingStream = new CountingReadStream(stream);
+        _reader = new BinaryReader(readerStream, Encoding.UTF8, true); // BinaryReader always leaves open as we manage disposal
     }
 
     /// <summary>
@@ -76,7 +79,7 @@ public sealed class BsonReader : IDisposable
     public BsonValue ReadValue()
     {
         ThrowIfDisposed();
-        var type = (BsonType)_reader.ReadByte();
+        var type = (BsonType)ReadByteCore();
         return ReadValue(type);
     }
 
@@ -88,19 +91,25 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
         EnterContainer();
+        var containerPushed = false;
 
         try
         {
             var documentSize = ReadContainerLength("document");
             var startPosition = _stream.CanSeek ? _stream.Position : 0;
+            PushContainerLimit(documentSize, "document");
+            containerPushed = true;
             var builder = new BsonDocumentBuilder();
 
             while (true)
             {
-                var type = (BsonType)_reader.ReadByte();
+                var type = (BsonType)ReadByteCore();
 
                 if (type == BsonType.End)
+                {
+                    ValidateContainerEnd("Document");
                     break;
+                }
 
                 var key = ReadCString();
                 var value = ReadTypedValue(type);
@@ -124,6 +133,11 @@ public sealed class BsonReader : IDisposable
         }
         finally
         {
+            if (containerPushed)
+            {
+                PopContainerLimit();
+            }
+
             ExitContainer();
         }
     }
@@ -137,19 +151,25 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
         EnterContainer();
+        var containerPushed = false;
 
         try
         {
             var documentSize = ReadContainerLength("document");
             var startPosition = _stream.CanSeek ? _stream.Position : 0;
+            PushContainerLimit(documentSize, "document");
+            containerPushed = true;
             var builder = new BsonDocumentBuilder();
 
             while (true)
             {
-                var type = (BsonType)_reader.ReadByte();
+                var type = (BsonType)ReadByteCore();
 
                 if (type == BsonType.End)
+                {
+                    ValidateContainerEnd("Document");
                     break;
+                }
 
                 var key = ReadCString();
 
@@ -182,6 +202,11 @@ public sealed class BsonReader : IDisposable
         }
         finally
         {
+            if (containerPushed)
+            {
+                PopContainerLimit();
+            }
+
             ExitContainer();
         }
     }
@@ -216,7 +241,7 @@ public sealed class BsonReader : IDisposable
             case BsonType.String:
             case BsonType.JavaScript:
             case BsonType.Symbol:
-                var strLen = _reader.ReadInt32();
+                var strLen = ReadInt32Core();
                 ValidateLength(strLen, 1, "string");
                 SkipBytes(strLen); // strLen includes null terminator
                 break;
@@ -226,12 +251,12 @@ public sealed class BsonReader : IDisposable
             case BsonType.Document:
             case BsonType.Array:
             case BsonType.JavaScriptWithScope:
-                var docLen = _reader.ReadInt32();
+                var docLen = ReadInt32Core();
                 ValidateLength(docLen, 5, "document");
                 SkipBytes(docLen - 4); // docLen includes the int32 size itself
                 break;
             case BsonType.Binary:
-                var binLen = _reader.ReadInt32();
+                var binLen = ReadInt32Core();
                 ValidateLength(binLen, 0, "binary");
                 SkipBytes(1 + binLen); // subtype (1) + data
                 break;
@@ -248,6 +273,7 @@ public sealed class BsonReader : IDisposable
     {
         if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
         if (count == 0) return;
+        EnsureCanRead(count);
 
         if (_stream.CanSeek)
         {
@@ -287,7 +313,7 @@ public sealed class BsonReader : IDisposable
 
     private int ReadContainerLength(string containerName)
     {
-        var length = _reader.ReadInt32();
+        var length = ReadInt32Core();
         ValidateLength(length, 5, containerName);
         return length;
     }
@@ -299,6 +325,92 @@ public sealed class BsonReader : IDisposable
             throw new InvalidDataException($"Invalid BSON {valueName} length: {length}.");
         }
 
+    }
+
+    private long CurrentPosition => _stream.CanSeek ? _stream.Position : _countingStream?.BytesRead ?? 0;
+
+    private void PushContainerLimit(int containerSize, string containerName)
+    {
+        var limit = checked(CurrentPosition + containerSize - 4);
+        if (_containerLimits.Count > 0 && limit > _containerLimits.Peek())
+        {
+            throw new InvalidOperationException($"{containerName} size exceeds parent container boundary.");
+        }
+
+        _containerLimits.Push(limit);
+    }
+
+    private void PopContainerLimit()
+    {
+        _containerLimits.Pop();
+    }
+
+    private void ValidateContainerEnd(string containerName)
+    {
+        if (_containerLimits.Count == 0)
+        {
+            return;
+        }
+
+        var expectedPosition = _containerLimits.Peek();
+        if (CurrentPosition != expectedPosition)
+        {
+            throw new InvalidOperationException($"{containerName} size mismatch: expected end at {expectedPosition}, actual {CurrentPosition}.");
+        }
+    }
+
+    private void EnsureCanRead(int count)
+    {
+        if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        if (_containerLimits.Count == 0) return;
+
+        var limit = _containerLimits.Peek();
+        if (checked(CurrentPosition + count) > limit)
+        {
+            throw new InvalidOperationException("BSON value exceeds declared container boundary.");
+        }
+    }
+
+    private byte ReadByteCore()
+    {
+        EnsureCanRead(1);
+        return _reader.ReadByte();
+    }
+
+    private int ReadInt32Core()
+    {
+        EnsureCanRead(4);
+        return _reader.ReadInt32();
+    }
+
+    private long ReadInt64Core()
+    {
+        EnsureCanRead(8);
+        return _reader.ReadInt64();
+    }
+
+    private ulong ReadUInt64Core()
+    {
+        EnsureCanRead(8);
+        return _reader.ReadUInt64();
+    }
+
+    private double ReadDoubleCore()
+    {
+        EnsureCanRead(8);
+        return _reader.ReadDouble();
+    }
+
+    private byte[] ReadBytesCore(int count)
+    {
+        EnsureCanRead(count);
+        var bytes = _reader.ReadBytes(count);
+        if (bytes.Length != count)
+        {
+            throw new EndOfStreamException("Unexpected end of stream while reading BSON data.");
+        }
+
+        return bytes;
     }
 
     private void EnterContainer()
@@ -323,19 +435,25 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
         EnterContainer();
+        var containerPushed = false;
 
         try
         {
             var arraySize = ReadContainerLength("array");
             var startPosition = _stream.CanSeek ? _stream.Position : 0;
+            PushContainerLimit(arraySize, "array");
+            containerPushed = true;
             var values = new List<BsonValue>();
 
             while (true)
             {
-                var type = (BsonType)_reader.ReadByte();
+                var type = (BsonType)ReadByteCore();
 
                 if (type == BsonType.End)
+                {
+                    ValidateContainerEnd("Array");
                     break;
+                }
 
                 var key = ReadCString(); // 数组索引
                 var value = ReadTypedValue(type);
@@ -359,6 +477,11 @@ public sealed class BsonReader : IDisposable
         }
         finally
         {
+            if (containerPushed)
+            {
+                PopContainerLimit();
+            }
+
             ExitContainer();
         }
     }
@@ -386,7 +509,7 @@ public sealed class BsonReader : IDisposable
         try
         {
             byte b;
-            while ((b = _reader.ReadByte()) != 0)
+            while ((b = ReadByteCore()) != 0)
             {
                 if (count >= MaxBsonValueLength)
                 {
@@ -420,12 +543,12 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
 
-        var length = _reader.ReadInt32();
+        var length = ReadInt32Core();
         ValidateLength(length, 1, "string");
-        var bytes = _reader.ReadBytes(length - 1); // 不包含 null 终止符
+        var bytes = ReadBytesCore(length - 1); // 不包含 null 终止符
         if (bytes.Length != length - 1)
             throw new EndOfStreamException("Unexpected end of stream while reading BSON string.");
-        var nullTerminator = _reader.ReadByte();
+        var nullTerminator = ReadByteCore();
 
         if (nullTerminator != 0)
         {
@@ -443,7 +566,7 @@ public sealed class BsonReader : IDisposable
     public BsonInt32 ReadInt32()
     {
         ThrowIfDisposed();
-        return new BsonInt32(_reader.ReadInt32());
+        return new BsonInt32(ReadInt32Core());
     }
 
     /// <summary>
@@ -453,7 +576,7 @@ public sealed class BsonReader : IDisposable
     public BsonInt64 ReadInt64()
     {
         ThrowIfDisposed();
-        return new BsonInt64(_reader.ReadInt64());
+        return new BsonInt64(ReadInt64Core());
     }
 
     /// <summary>
@@ -463,7 +586,7 @@ public sealed class BsonReader : IDisposable
     public BsonDouble ReadDouble()
     {
         ThrowIfDisposed();
-        return new BsonDouble(_reader.ReadDouble());
+        return new BsonDouble(ReadDoubleCore());
     }
 
     /// <summary>
@@ -473,7 +596,7 @@ public sealed class BsonReader : IDisposable
     public BsonBoolean ReadBoolean()
     {
         ThrowIfDisposed();
-        var value = _reader.ReadByte();
+        var value = ReadByteCore();
         return new BsonBoolean(value != 0);
     }
 
@@ -484,7 +607,7 @@ public sealed class BsonReader : IDisposable
     public BsonObjectId ReadObjectId()
     {
         ThrowIfDisposed();
-        var bytes = _reader.ReadBytes(12);
+        var bytes = ReadBytesCore(12);
         return new BsonObjectId(new ObjectId(bytes));
     }
 
@@ -495,7 +618,7 @@ public sealed class BsonReader : IDisposable
     public BsonDateTime ReadDateTime()
     {
         ThrowIfDisposed();
-        return new BsonDateTime(BsonDateTime.DecodeStoredValue(_reader.ReadInt64()));
+        return new BsonDateTime(BsonDateTime.DecodeStoredValue(ReadInt64Core()));
     }
 
     /// <summary>
@@ -505,8 +628,8 @@ public sealed class BsonReader : IDisposable
     public BsonDecimal128 ReadDecimal128()
     {
         ThrowIfDisposed();
-        var lo = _reader.ReadUInt64();
-        var hi = _reader.ReadUInt64();
+        var lo = ReadUInt64Core();
+        var hi = ReadUInt64Core();
         return new BsonDecimal128(new Decimal128(lo, hi));
     }
 
@@ -517,10 +640,10 @@ public sealed class BsonReader : IDisposable
     public BsonBinary ReadBinary()
     {
         ThrowIfDisposed();
-        var length = _reader.ReadInt32();
+        var length = ReadInt32Core();
         ValidateLength(length, 0, "binary");
-        var subType = (BsonBinary.BinarySubType)_reader.ReadByte();
-        var bytes = _reader.ReadBytes(length);
+        var subType = (BsonBinary.BinarySubType)ReadByteCore();
+        var bytes = ReadBytesCore(length);
         if (bytes.Length != length)
             throw new EndOfStreamException("Unexpected end of stream while reading BSON binary data.");
         return new BsonBinary(bytes, subType);
@@ -545,7 +668,7 @@ public sealed class BsonReader : IDisposable
     public BsonTimestamp ReadTimestamp()
     {
         ThrowIfDisposed();
-        var value = _reader.ReadInt64();
+        var value = ReadInt64Core();
         return new BsonTimestamp(value);
     }
 
@@ -566,18 +689,15 @@ public sealed class BsonReader : IDisposable
     public BsonJavaScriptWithScope ReadJavaScriptWithScope()
     {
         ThrowIfDisposed();
-        var startPosition = _stream.CanSeek ? _stream.Position : 0;
-        var totalSize = _reader.ReadInt32();
+        var startPosition = CurrentPosition;
+        var totalSize = ReadInt32Core();
         ValidateLength(totalSize, 5, "JavaScriptWithScope");
         var code = ReadString().Value;
         var scope = ReadDocument();
-        if (_stream.CanSeek)
+        var actualSize = checked((int)(CurrentPosition - startPosition));
+        if (actualSize != totalSize)
         {
-            var actualSize = (int)(_stream.Position - startPosition);
-            if (actualSize != totalSize)
-            {
-                throw new InvalidOperationException($"JavaScriptWithScope size mismatch: expected {totalSize}, actual {actualSize}.");
-            }
+            throw new InvalidOperationException($"JavaScriptWithScope size mismatch: expected {totalSize}, actual {actualSize}.");
         }
 
         return new BsonJavaScriptWithScope(code, scope);
@@ -591,6 +711,54 @@ public sealed class BsonReader : IDisposable
     {
         ThrowIfDisposed();
         return new BsonSymbol(ReadString().Value);
+    }
+
+    private sealed class CountingReadStream : Stream
+    {
+        private readonly Stream _inner;
+
+        public CountingReadStream(Stream inner)
+        {
+            _inner = inner;
+        }
+
+        public long BytesRead { get; private set; }
+        public override bool CanRead => _inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => BytesRead;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var read = _inner.Read(buffer, offset, count);
+            BytesRead += read;
+            return read;
+        }
+
+        public override int ReadByte()
+        {
+            var value = _inner.ReadByte();
+            if (value >= 0)
+            {
+                BytesRead++;
+            }
+
+            return value;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>

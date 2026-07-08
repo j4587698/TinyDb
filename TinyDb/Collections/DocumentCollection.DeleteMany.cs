@@ -16,15 +16,11 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
 
         var deletedCount = 0;
-        var allDocuments = FindAll().ToList();
+        var ids = _engine.FindAllIds(_name).ToList();
 
-        foreach (var entity in allDocuments)
+        foreach (var id in ids)
         {
-            var id = GetEntityId(entity);
-            if (id != null && !id.IsNull)
-            {
-                deletedCount += Delete(id);
-            }
+            deletedCount += Delete(id);
         }
 
         return deletedCount;

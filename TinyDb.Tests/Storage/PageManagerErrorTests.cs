@@ -37,7 +37,7 @@ public class PageManagerErrorTests
             mockStream.ShouldThrowOnWrite = true;
 
             await Assert.That(() => engine.InsertDocument("col", new BsonDocument().Set("_id", 2)))
-                .Throws<IOException>();
+                .Throws<AggregateException>();
         }
         finally
         {

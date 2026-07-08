@@ -67,28 +67,48 @@ public sealed partial class PageManager
 
     private void FlushDirtyPagesCore(WriteAheadLog.WriteLockContext? walContext)
     {
+        var exceptions = new List<Exception>();
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
         {
-            if (!TryGetDirtyCachedPage(pageId, out var page))
+            try
             {
-                continue;
-            }
+                if (!TryGetDirtyCachedPage(pageId, out var page))
+                {
+                    continue;
+                }
 
-            if (TryWriteDeferredWalPage(page))
+                if (TryWriteDeferredWalPage(page))
+                {
+                    continue;
+                }
+
+                if (IsDeferredWalPagePending(page))
+                {
+                    continue;
+                }
+
+                SavePage(page, forceFlush: false, walContext);
+            }
+            catch (Exception ex)
             {
-                continue;
+                exceptions.Add(new IOException($"Failed to flush dirty page {pageId}.", ex));
             }
-
-            if (IsDeferredWalPagePending(page))
-            {
-                continue;
-            }
-
-            SavePage(page, forceFlush: false, walContext);
         }
 
-        _diskStream.Flush();
+        try
+        {
+            _diskStream.Flush();
+        }
+        catch (Exception ex)
+        {
+            exceptions.Add(new IOException("Failed to flush disk stream after dirty pages were written.", ex));
+        }
+
+        if (exceptions.Count > 0)
+        {
+            throw new AggregateException("One or more errors occurred while flushing dirty pages.", exceptions);
+        }
     }
 
     private bool IsDeferredWalPagePending(Page page)
@@ -124,29 +144,49 @@ public sealed partial class PageManager
         WriteAheadLog.WriteLockContext? walContext,
         CancellationToken cancellationToken)
     {
+        var exceptions = new List<Exception>();
         var dirtyPageIds = _dirtyPageIds.Keys.ToArray();
         foreach (var pageId in dirtyPageIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryGetDirtyCachedPage(pageId, out var page))
+            try
             {
-                continue;
-            }
+                if (!TryGetDirtyCachedPage(pageId, out var page))
+                {
+                    continue;
+                }
 
-            if (await TryWriteDeferredWalPageAsync(page, cancellationToken).ConfigureAwait(false))
+                if (await TryWriteDeferredWalPageAsync(page, cancellationToken).ConfigureAwait(false))
+                {
+                    continue;
+                }
+
+                if (IsDeferredWalPagePending(page))
+                {
+                    continue;
+                }
+
+                await SavePageAsync(page, forceFlush: false, walContext, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                continue;
+                exceptions.Add(new IOException($"Failed to flush dirty page {pageId}.", ex));
             }
-
-            if (IsDeferredWalPagePending(page))
-            {
-                continue;
-            }
-
-            await SavePageAsync(page, forceFlush: false, walContext, cancellationToken).ConfigureAwait(false);
         }
 
-        await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _diskStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            exceptions.Add(new IOException("Failed to flush disk stream after dirty pages were written.", ex));
+        }
+
+        if (exceptions.Count > 0)
+        {
+            throw new AggregateException("One or more errors occurred while flushing dirty pages.", exceptions);
+        }
     }
 
     /// <summary>

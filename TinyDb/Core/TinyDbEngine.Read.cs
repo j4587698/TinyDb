@@ -37,6 +37,47 @@ public sealed partial class TinyDbEngine
         return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
     }
 
+    internal IEnumerable<BsonValue> FindAllIds(string col)
+    {
+        var st = GetCollectionState(col);
+        var tx = GetCurrentTransaction();
+        if (tx != null)
+        {
+            return ReadIdsFromDocuments(MergeTransactionOperations(col, ReadAllDocumentsSnapshotFromPageSnapshots(col, st), tx));
+        }
+
+        return ReadIdsFromRawDocuments(col, st);
+    }
+
+    private IEnumerable<BsonValue> ReadIdsFromRawDocuments(string col, CollectionState st)
+    {
+        foreach (var result in StreamRawScanResultPages(col, st, null))
+        {
+            var document = result.Slice.Span;
+            if (BsonScanner.TryGetValue(document, "_collection", out var collectionValue) &&
+                collectionValue?.ToString() != col)
+            {
+                continue;
+            }
+
+            if (BsonScanner.TryGetValue(document, "_id", out var id) && id != null && !id.IsNull)
+            {
+                yield return id;
+            }
+        }
+    }
+
+    private static IEnumerable<BsonValue> ReadIdsFromDocuments(IEnumerable<BsonDocument> documents)
+    {
+        foreach (var document in documents)
+        {
+            if (document.TryGetValue("_id", out var id) && id != null && !id.IsNull)
+            {
+                yield return id;
+            }
+        }
+    }
+
     internal async Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -391,25 +432,21 @@ public sealed partial class TinyDbEngine
         return null;
     }
 
-    private List<BsonDocument> ReadAllDocumentsSnapshot(string col, CollectionState st, CancellationToken cancellationToken = default)
+    private IEnumerable<BsonDocument> ReadAllDocumentsSnapshot(string col, CollectionState st, CancellationToken cancellationToken = default)
     {
         return ReadAllDocumentsSnapshotFromPageSnapshots(col, st, cancellationToken);
     }
 
-    private List<BsonDocument> ReadAllDocumentsSnapshotFromPageSnapshots(string col, CollectionState st, CancellationToken cancellationToken = default)
+    private IEnumerable<BsonDocument> ReadAllDocumentsSnapshotFromPageSnapshots(string col, CollectionState st, CancellationToken cancellationToken = default)
     {
-        var ds = new List<BsonDocument>();
-
         foreach (var result in StreamRawScanResultPages(col, st, null))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var doc = DeserializeDocumentOrThrow(result.Slice);
             if (doc.TryGetValue("_collection", out var c) && c.ToString() != col) continue;
-            ds.Add(ResolveLargeDocument(doc));
+            yield return ResolveLargeDocument(doc);
         }
-
-        return ds;
     }
 
     private async Task<List<BsonDocument>> ReadAllDocumentsSnapshotAsync(string col, CollectionState st, CancellationToken cancellationToken = default)

@@ -33,8 +33,7 @@ public sealed partial class WriteAheadLog : IDisposable
     private readonly SemaphoreSlim _mutex = new(1, 1);
     [ThreadStatic]
     private static WriteLockContext? s_currentWriteContext;
-    private readonly AsyncLocal<Guid?> _currentTransactionId = new();
-    private readonly AsyncLocal<TransactionPageBuffer?> _currentTransactionPages = new();
+    private readonly AsyncLocal<TransactionContext?> _currentTransactionContext = new();
     private readonly int _maxRecordSize;
     private bool _disposed;
     private int _hasPendingEntries;

@@ -83,11 +83,42 @@ public sealed partial class WriteAheadLog
         }
     }
 
-    internal bool RequiresBeforeImage => IsEnabled && _currentTransactionId.Value.HasValue;
+    internal bool RequiresBeforeImage => IsEnabled && TryGetCurrentTransactionContext(out _);
 
-    internal bool IsInTransactionScope => IsEnabled && _currentTransactionId.Value.HasValue;
+    internal bool IsInTransactionScope => IsEnabled && TryGetCurrentTransactionContext(out _);
 
     internal Action<uint, long>? DeferredTransactionPageLogged { get; set; }
+
+    private bool TryGetCurrentTransactionContext(out TransactionContext context)
+    {
+        context = _currentTransactionContext.Value!;
+        return context is { IsActive: true };
+    }
+
+    internal sealed class TransactionContext
+    {
+        private int _isActive = 1;
+
+        public TransactionContext(Guid transactionId)
+        {
+            TransactionId = transactionId;
+            Pages = new TransactionPageBuffer(transactionId);
+        }
+
+        public Guid TransactionId { get; }
+        public TransactionPageBuffer Pages { get; }
+        public bool IsActive => Volatile.Read(ref _isActive) != 0;
+
+        public void Clear()
+        {
+            if (Interlocked.Exchange(ref _isActive, 0) == 0)
+            {
+                return;
+            }
+
+            Pages.Clear();
+        }
+    }
 
     private sealed class PendingTransactionPage
     {
@@ -105,7 +136,7 @@ public sealed partial class WriteAheadLog
         public bool NeedsWalWrite { get; set; }
     }
 
-    private sealed class TransactionPageBuffer
+    internal sealed class TransactionPageBuffer
     {
         private readonly Dictionary<uint, PendingTransactionPage> _pages = new();
         private readonly List<uint> _order = new();
@@ -128,6 +159,12 @@ public sealed partial class WriteAheadLog
 
             pending.AfterImage = afterImage;
             pending.NeedsWalWrite = needsWalWrite;
+        }
+
+        public void Clear()
+        {
+            _pages.Clear();
+            _order.Clear();
         }
 
         public IEnumerable<(uint PageId, byte[] AfterImage, byte[]? BeforeImage)> GetPagesPendingWalWriteInFirstTouchOrder()

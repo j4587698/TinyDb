@@ -497,6 +497,7 @@ public sealed partial class TinyDbEngine
                         catch (Exception ex)
                         {
                             exceptions.Add(ex);
+                            break;
                         }
                     }
 
@@ -614,6 +615,7 @@ public sealed partial class TinyDbEngine
                         catch (Exception ex)
                         {
                             exceptions.Add(ex);
+                            break;
                         }
                     }
 

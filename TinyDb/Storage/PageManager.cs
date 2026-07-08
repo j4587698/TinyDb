@@ -218,18 +218,24 @@ public sealed partial class PageManager : IDisposable
                         }
 
                         // 清理缓存
-                        ClearCacheCore();
-
-                        foreach (var gate in _pageLoadStripes)
+                        if (flushException == null)
                         {
-                            gate.Dispose();
-                        }
+                            ClearCacheCore();
 
-                        _diskStream.Dispose();
+                            foreach (var gate in _pageLoadStripes)
+                            {
+                                gate.Dispose();
+                            }
+
+                            _diskStream.Dispose();
+                        }
                     }
                     finally
                     {
-                        _disposed = true;
+                        if (flushException == null)
+                        {
+                            _disposed = true;
+                        }
                     }
                 }
                 finally
@@ -237,7 +243,10 @@ public sealed partial class PageManager : IDisposable
                     _backgroundWritebackGate.Release();
                 }
 
-                _backgroundWritebackIdle.Wait();
+                if (flushException == null)
+                {
+                    _backgroundWritebackIdle.Wait();
+                }
             }
             catch (Exception ex)
             {
