@@ -25,42 +25,7 @@ public sealed partial class DiskBTree
         var root = LoadNode(_rootPageId);
         if (root.IsFull((int)_pm.PageSize) || root.KeyCount >= _maxKeys)
         {
-            var newChildPage = NewIndexPage();
-            var newChild = new DiskBTreeNode(newChildPage, _pm);
-            // Ensure garbage from recycled page is cleared
-            newChild.Keys.Clear(); newChild.ChildrenIds.Clear(); newChild.Values.Clear();
-
-            newChild.SetLeaf(root.IsLeaf);
-            newChild.Keys.AddRange(root.Keys);
-            newChild.ChildrenIds.AddRange(root.ChildrenIds);
-            newChild.Values.AddRange(root.Values);
-            newChild.SetNext(root.NextSiblingId);
-            newChild.Save(_pm);
-
-            root = new DiskBTreeNode(GetPage(_rootPageId), _pm);
-            long currentCount = root.TreeEntryCount;
-
-            root.InitAsRoot();
-            root.SetLeaf(false);
-            root.SetTreeEntryCount(currentCount);
-
-            root.ChildrenIds.Add(newChild.PageId);
-            root.Save(_pm);
-
-            newChild.SetParent(root.PageId);
-            newChild.Save(_pm);
-
-            if (!newChild.IsLeaf)
-            {
-                foreach (var childId in newChild.ChildrenIds)
-                {
-                    var c = LoadNode(childId);
-                    c.SetParent(newChild.PageId);
-                    c.Save(_pm);
-                }
-            }
-
-            SplitChild(root, 0, newChild);
+            SplitRoot(root);
             InsertNonFull(root, key, value);
         }
         else

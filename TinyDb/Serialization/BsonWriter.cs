@@ -106,6 +106,20 @@ public sealed class BsonWriter : IDisposable
         }
     }
 
+    private void InternalWrite(ulong value)
+    {
+        if (_stream != null)
+        {
+            _writer!.Write(value);
+        }
+        else
+        {
+            var span = _bufferWriter!.GetSpan(8);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(span, value);
+            _bufferWriter.Advance(8);
+        }
+    }
+
     private void InternalWrite(double value)
     {
         if (_stream != null)
@@ -565,8 +579,8 @@ public sealed class BsonWriter : IDisposable
     /// </summary>
     public void WriteDecimal128(Decimal128 value)
     {
-        InternalWrite((long)value.LowBits); // 这需要更严谨的处理，但目前先保持兼容
-        InternalWrite((long)value.HighBits);
+        InternalWrite(value.LowBits);
+        InternalWrite(value.HighBits);
     }
 
     /// <summary>

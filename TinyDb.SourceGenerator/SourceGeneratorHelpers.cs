@@ -20,6 +20,32 @@ public static partial class SourceGeneratorHelpers
                prop.Type.EndsWith("?", StringComparison.Ordinal);
     }
 
+    internal static string CreateCollectionInstanceExpression(string collectionTypeName, string elementType)
+    {
+        return IsSetCollectionType(collectionTypeName)
+            ? $"new System.Collections.Generic.HashSet<{elementType}>()"
+            : $"new System.Collections.Generic.List<{elementType}>()";
+    }
+
+    private static bool IsSetCollectionType(string collectionTypeName)
+    {
+        if (string.IsNullOrWhiteSpace(collectionTypeName)) return false;
+
+        var normalized = collectionTypeName.Trim();
+        if (normalized.EndsWith("?", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring(0, normalized.Length - 1).TrimEnd();
+        }
+
+        if (normalized.StartsWith("global::", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring("global::".Length);
+        }
+
+        return normalized.StartsWith("System.Collections.Generic.HashSet<", StringComparison.Ordinal) ||
+               normalized.StartsWith("System.Collections.Generic.ISet<", StringComparison.Ordinal);
+    }
+
     private static string NormalizeTypeName(string type)
     {
         if (string.IsNullOrWhiteSpace(type)) return type;
@@ -484,7 +510,7 @@ public static partial class SourceGeneratorHelpers
         sb.AppendLine($@"                }}
                 else if (bson{propertyName} is BsonArray array{propertyName})
                 {{
-                    var list_{propertyName} = new System.Collections.Generic.List<{elementType}>();
+                    var list_{propertyName} = {CreateCollectionInstanceExpression(prop.FullyQualifiedType, elementType)};
                     foreach (var item in array{propertyName})
                     {{
                         if (item.IsNull)

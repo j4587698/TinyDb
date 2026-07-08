@@ -107,7 +107,10 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <param name=\"id\">ID值</param>");
-            sb.AppendLine($"        public static void SetId({classInfo.FullyQualifiedTypeReference} entity, BsonValue id)");
+            var setIdEntityParameter = classInfo.IsValueType
+                ? $"ref {classInfo.FullyQualifiedTypeReference} entity"
+                : $"{classInfo.FullyQualifiedTypeReference} entity";
+            sb.AppendLine($"        public static void SetId({setIdEntityParameter}, BsonValue id)");
             sb.AppendLine("        {");
             if (!classInfo.IsValueType)
             {
@@ -227,7 +230,10 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        /// </summary>");
             sb.AppendLine("        /// <param name=\"entity\">实体实例</param>");
             sb.AppendLine("        /// <param name=\"id\">ID值</param>");
-            sb.AppendLine($"        public static void SetId({classInfo.FullyQualifiedTypeReference} entity, BsonValue id)");
+            var setIdEntityParameter = classInfo.IsValueType
+                ? $"ref {classInfo.FullyQualifiedTypeReference} entity"
+                : $"{classInfo.FullyQualifiedTypeReference} entity";
+            sb.AppendLine($"        public static void SetId({setIdEntityParameter}, BsonValue id)");
             sb.AppendLine("        {");
             sb.AppendLine("            // 没有找到ID属性，忽略设置");
             sb.AppendLine("        }");
@@ -357,7 +363,10 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("        }");
         sb.AppendLine();
 
-        sb.AppendLine("        public static bool TrySetPropertyValue(" + classInfo.FullyQualifiedTypeReference + " entity, string propertyName, object? value)");
+        var trySetEntityParameter = classInfo.IsValueType
+            ? $"ref {classInfo.FullyQualifiedTypeReference} entity"
+            : $"{classInfo.FullyQualifiedTypeReference} entity";
+        sb.AppendLine("        public static bool TrySetPropertyValue(" + trySetEntityParameter + ", string propertyName, object? value)");
         sb.AppendLine("        {");
         if (!classInfo.IsValueType)
         {

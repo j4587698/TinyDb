@@ -27,6 +27,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                StringEquals(x.CollectionName, y.CollectionName) &&
                StringEquals(x.DisplayName, y.DisplayName) &&
                StringEquals(x.Description, y.Description) &&
+               LocationEquals(x.Location, y.Location) &&
                StringEquals(x.IdProperty?.Name, y.IdProperty?.Name) &&
                ListEquals(x.Properties, y.Properties, PropertyEquals) &&
                ListEquals(x.DependentComplexTypes, y.DependentComplexTypes, DependentComplexTypeEquals) &&
@@ -55,6 +56,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, obj.CollectionName);
             hash = Add(hash, obj.DisplayName);
             hash = Add(hash, obj.Description);
+            hash = Add(hash, obj.Location);
             hash = Add(hash, obj.IdProperty?.Name);
             hash = AddList(hash, obj.Properties, GetPropertyHashCode);
             hash = AddList(hash, obj.DependentComplexTypes, GetDependentComplexTypeHashCode);
@@ -325,6 +327,12 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         return string.Equals(x, y, StringComparison.Ordinal);
     }
 
+    private static bool LocationEquals(DiagnosticLocationInfo? x, DiagnosticLocationInfo? y)
+    {
+        if (x.HasValue != y.HasValue) return false;
+        return !x.HasValue || x.GetValueOrDefault().Equals(y.GetValueOrDefault());
+    }
+
     private static int Add(int hash, string? value)
     {
         unchecked
@@ -346,6 +354,14 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         unchecked
         {
             return hash * 31 + value;
+        }
+    }
+
+    private static int Add(int hash, DiagnosticLocationInfo? value)
+    {
+        unchecked
+        {
+            return hash * 31 + (value.HasValue ? value.Value.GetHashCode() : 0);
         }
     }
 
