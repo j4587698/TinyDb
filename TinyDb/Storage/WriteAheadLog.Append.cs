@@ -47,10 +47,11 @@ public sealed partial class WriteAheadLog
 
     private async Task AppendPageCoreAsync(Page page, byte[]? beforeImage, CancellationToken cancellationToken)
     {
-        if (_currentTransactionId.Value is Guid transactionId)
+        if (TryGetCurrentTransactionContext(out var transactionContext))
         {
+            var transactionId = transactionContext.TransactionId;
             var afterImage = PreparePageRecord(page);
-            TrackTransactionPage(transactionId, page.PageID, beforeImage, afterImage, needsWalWrite: false);
+            TrackTransactionPage(transactionContext, page.PageID, beforeImage, afterImage, needsWalWrite: false);
             var transactionData = CreateTransactionPageRecord(transactionId, beforeImage, afterImage);
             await WriteEntryAsync(EntryTypeTransactionPage, page.PageID, transactionData, cancellationToken).ConfigureAwait(false);
         }
@@ -75,9 +76,9 @@ public sealed partial class WriteAheadLog
         if (!IsEnabled) return;
         if (page == null) throw new ArgumentNullException(nameof(page));
 
-        if (_currentTransactionId.Value is Guid transactionId)
+        if (TryGetCurrentTransactionContext(out var transactionContext))
         {
-            BufferDeferredTransactionPage(transactionId, page, beforeImage);
+            BufferDeferredTransactionPage(transactionContext, page, beforeImage);
             SetHasPendingEntries(true);
             return;
         }
@@ -109,10 +110,11 @@ public sealed partial class WriteAheadLog
 
     private void AppendPageCore(Page page, byte[]? beforeImage)
     {
-        if (_currentTransactionId.Value is Guid transactionId)
+        if (TryGetCurrentTransactionContext(out var transactionContext))
         {
+            var transactionId = transactionContext.TransactionId;
             var afterImage = PreparePageRecord(page);
-            TrackTransactionPage(transactionId, page.PageID, beforeImage, afterImage, needsWalWrite: false);
+            TrackTransactionPage(transactionContext, page.PageID, beforeImage, afterImage, needsWalWrite: false);
             var data = CreateTransactionPageRecord(transactionId, beforeImage, afterImage);
             WriteEntry(EntryTypeTransactionPage, page.PageID, data);
         }
@@ -126,28 +128,31 @@ public sealed partial class WriteAheadLog
     }
 
 
-    private void BufferDeferredTransactionPage(Guid transactionId, Page page, byte[]? beforeImage)
+    private static void BufferDeferredTransactionPage(TransactionContext transactionContext, Page page, byte[]? beforeImage)
     {
-        var transactionPages = _currentTransactionPages.Value;
-        if (transactionPages == null || transactionPages.TransactionId != transactionId)
+        if (!transactionContext.IsActive)
         {
             throw new InvalidOperationException("WAL transaction page buffer mismatch.");
         }
 
         page.UpdateLsnForWal(PendingDeferredTransactionLsn);
-        transactionPages.AddOrReplace(page.PageID, beforeImage, page.Snapshot(includeUnusedTail: true), needsWalWrite: true);
+        transactionContext.Pages.AddOrReplace(page.PageID, beforeImage, page.Snapshot(includeUnusedTail: true), needsWalWrite: true);
     }
 
 
-    private void TrackTransactionPage(Guid transactionId, uint pageId, byte[]? beforeImage, byte[] afterImage, bool needsWalWrite)
+    private static void TrackTransactionPage(
+        TransactionContext transactionContext,
+        uint pageId,
+        byte[]? beforeImage,
+        byte[] afterImage,
+        bool needsWalWrite)
     {
-        var transactionPages = _currentTransactionPages.Value;
-        if (transactionPages == null || transactionPages.TransactionId != transactionId)
+        if (!transactionContext.IsActive)
         {
             throw new InvalidOperationException("WAL transaction page buffer mismatch.");
         }
 
-        transactionPages.AddOrReplace(pageId, beforeImage, afterImage, needsWalWrite);
+        transactionContext.Pages.AddOrReplace(pageId, beforeImage, afterImage, needsWalWrite);
     }
 
 }

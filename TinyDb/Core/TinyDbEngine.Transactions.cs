@@ -37,7 +37,7 @@ public sealed partial class TinyDbEngine
         ThrowIfDisposed();
         EnsureInitialized();
         var t = _transactionManager.BeginTransaction();
-        _currentTransaction.Value = t;
+        _currentTransaction.Value = new CurrentTransactionHolder(t);
         return t;
     }
 
@@ -171,7 +171,9 @@ public sealed partial class TinyDbEngine
 
     internal Transaction? GetCurrentTransaction()
     {
-        if (_currentTransaction.Value is not Transaction transaction)
+        var holder = _currentTransaction.Value;
+        if (holder is not { IsActive: true } ||
+            holder.Transaction is not Transaction transaction)
         {
             return null;
         }
@@ -198,10 +200,10 @@ public sealed partial class TinyDbEngine
     private sealed class CurrentTransactionScope : IDisposable
     {
         private readonly TinyDbEngine _engine;
-        private readonly ITransaction? _previous;
+        private readonly CurrentTransactionHolder? _previous;
         private bool _disposed;
 
-        public CurrentTransactionScope(TinyDbEngine engine, ITransaction? previous)
+        public CurrentTransactionScope(TinyDbEngine engine, CurrentTransactionHolder? previous)
         {
             _engine = engine;
             _previous = previous;
@@ -214,7 +216,7 @@ public sealed partial class TinyDbEngine
                 return;
             }
 
-            _engine._currentTransaction.Value = _previous;
+            _engine._currentTransaction.Value = _previous is { IsActive: true } ? _previous : null;
             _disposed = true;
         }
     }
@@ -235,7 +237,34 @@ public sealed partial class TinyDbEngine
     }
 
 
-    internal void ClearCurrentTransaction() => _currentTransaction.Value = null;
+    internal void ClearCurrentTransaction()
+    {
+        _currentTransaction.Value?.Clear();
+        _currentTransaction.Value = null;
+    }
+
+    private sealed class CurrentTransactionHolder
+    {
+        private int _isActive = 1;
+
+        public CurrentTransactionHolder(ITransaction transaction)
+        {
+            Transaction = transaction;
+        }
+
+        public ITransaction Transaction { get; private set; }
+        public bool IsActive => Volatile.Read(ref _isActive) != 0;
+
+        public void Clear()
+        {
+            if (Interlocked.Exchange(ref _isActive, 0) == 0)
+            {
+                return;
+            }
+
+            Transaction = null!;
+        }
+    }
 
     private void EnsureWriteDurability()
     {
@@ -251,31 +280,60 @@ public sealed partial class TinyDbEngine
 
     private IEnumerable<BsonDocument> MergeTransactionOperations(string col, IEnumerable<BsonDocument> ds, Transaction tx)
     {
-        var dict = new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
-
-        foreach (var document in ds)
-        {
-            if (document.TryGetValue("_id", out var id) && id != null && !id.IsNull)
-            {
-                dict[id] = document;
-            }
-        }
-
+        var overlay = new Dictionary<BsonValue, BsonDocument?>(BsonValueComparer.EqualityComparer);
         foreach (var op in tx.GetOperationsSnapshot().Where(o => o.CollectionName == col))
         {
             if (op.DocumentId == null || op.DocumentId.IsNull) continue;
 
             if (op.OperationType == TransactionOperationType.Delete)
             {
-                dict[op.DocumentId] = null;
+                overlay[op.DocumentId] = null;
             }
             else if (op.NewDocument != null)
             {
-                dict[op.DocumentId] = op.NewDocument;
+                overlay[op.DocumentId] = op.NewDocument;
             }
         }
 
-        return dict.Values.Where(document => document != null).Select(document => document!);
+        if (overlay.Count == 0)
+        {
+            foreach (var document in ds)
+            {
+                yield return document;
+            }
+
+            yield break;
+        }
+
+        var seen = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer);
+        foreach (var document in ds)
+        {
+            if (!document.TryGetValue("_id", out var id) || id == null || id.IsNull)
+            {
+                continue;
+            }
+
+            if (overlay.TryGetValue(id, out var transactionDocument))
+            {
+                seen.Add(id);
+                if (transactionDocument != null)
+                {
+                    yield return transactionDocument;
+                }
+
+                continue;
+            }
+
+            yield return document;
+        }
+
+        foreach (var pair in overlay)
+        {
+            if (pair.Value != null && !seen.Contains(pair.Key))
+            {
+                yield return pair.Value;
+            }
+        }
     }
 
     private static bool TryGetTransactionDocument(Transaction tx, string collectionName, BsonValue id, out BsonDocument? document)

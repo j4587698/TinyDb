@@ -260,9 +260,13 @@ public sealed class BsonWriter : IDisposable
                 return;
             }
 
-            InternalWrite(BsonSerializer.CalculateDocumentSize(document));
-            foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
-            InternalWrite((byte)BsonType.End);
+            using var buffer = new PooledBufferWriter();
+            using (var bufferedWriter = new BsonWriter(buffer))
+            {
+                bufferedWriter.WriteDocument(document);
+            }
+
+            InternalWrite(buffer.WrittenSpan);
         }
         else
         {
@@ -279,11 +283,14 @@ public sealed class BsonWriter : IDisposable
                 return;
             }
 
-            // 通用 IBufferWriter：先计算大小，再写入（避免依赖随机访问能力）
-            var size = BsonSerializer.CalculateDocumentSize(document);
-            InternalWrite(size);
-            foreach (var kvp in document.Entries) WriteElement(kvp.Key, kvp.Value);
-            InternalWrite((byte)BsonType.End);
+            // 通用 IBufferWriter：先写入可回填缓冲区，再一次性写出。
+            using var buffer = new PooledBufferWriter();
+            using (var bufferedWriter = new BsonWriter(buffer))
+            {
+                bufferedWriter.WriteDocument(document);
+            }
+
+            InternalWrite(buffer.WrittenSpan);
         }
         }
         finally
@@ -318,9 +325,13 @@ public sealed class BsonWriter : IDisposable
                 return;
             }
 
-            InternalWrite(BsonSerializer.CalculateArraySize(array));
-            for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
-            InternalWrite((byte)BsonType.End);
+            using var buffer = new PooledBufferWriter();
+            using (var bufferedWriter = new BsonWriter(buffer))
+            {
+                bufferedWriter.WriteArray(array);
+            }
+
+            InternalWrite(buffer.WrittenSpan);
         }
         else
         {
@@ -337,10 +348,13 @@ public sealed class BsonWriter : IDisposable
                 return;
             }
 
-            var size = BsonSerializer.CalculateArraySize(array);
-            InternalWrite(size);
-            for (int i = 0; i < array.Count; i++) WriteArrayElement(i, array[i]);
-            InternalWrite((byte)BsonType.End);
+            using var buffer = new PooledBufferWriter();
+            using (var bufferedWriter = new BsonWriter(buffer))
+            {
+                bufferedWriter.WriteArray(array);
+            }
+
+            InternalWrite(buffer.WrittenSpan);
         }
         }
         finally
@@ -553,20 +567,35 @@ public sealed class BsonWriter : IDisposable
     public void WriteJavaScriptWithScope(string code, BsonDocument scope)
     {
         ThrowIfDisposed();
-        if (_stream != null)
+        if (_stream != null && _stream.CanSeek)
         {
-            var size = 4 + BsonSerializer.CalculateSize(new BsonString(code)) + BsonSerializer.CalculateDocumentSize(scope);
-            InternalWrite(size);
+            var sizePosition = _stream.Position;
+            InternalWrite(0);
             WriteString(code);
             WriteDocument(scope);
+            var endPosition = _stream.Position;
+            PatchStreamInt32LittleEndian(sizePosition, checked((int)(endPosition - sizePosition)));
+            return;
         }
-        else
+
+        if (_bufferWriter is IPatchableBufferWriter patchable)
         {
-            var size = 4 + BsonSerializer.CalculateSize(new BsonString(code)) + BsonSerializer.CalculateDocumentSize(scope);
-            InternalWrite(size);
+            int sizePosition = patchable.WrittenCount;
+            InternalWrite(0);
             WriteString(code);
             WriteDocument(scope);
+            int endPosition = patchable.WrittenCount;
+            patchable.WriteInt32LittleEndianAt(sizePosition, endPosition - sizePosition);
+            return;
         }
+
+        using var buffer = new PooledBufferWriter();
+        using (var bufferedWriter = new BsonWriter(buffer))
+        {
+            bufferedWriter.WriteJavaScriptWithScope(code, scope);
+        }
+
+        InternalWrite(buffer.WrittenSpan);
     }
 
     /// <summary>

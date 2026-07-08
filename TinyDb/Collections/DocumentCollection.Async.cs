@@ -406,16 +406,12 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
 
         var deletedCount = 0;
-        var allDocuments = await FindAllAsync(cancellationToken).ConfigureAwait(false);
+        var ids = _engine.FindAllIds(_name).ToList();
 
-        foreach (var entity in allDocuments)
+        foreach (var id in ids)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var id = GetEntityId(entity);
-            if (id != null && !id.IsNull)
-            {
-                deletedCount += await DeleteAsync(id, cancellationToken).ConfigureAwait(false);
-            }
+            deletedCount += await DeleteAsync(id, cancellationToken).ConfigureAwait(false);
         }
 
         return deletedCount;

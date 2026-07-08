@@ -19,24 +19,24 @@ public sealed partial class WriteAheadLog
     {
         if (!IsEnabled)
         {
-            return new WalTransactionScope(this, transactionId, ownsContext: false, flushOnCommit);
+            return new WalTransactionScope(this, transactionId, transactionContext: null, ownsContext: false, flushOnCommit);
         }
 
         try
         {
-            _currentTransactionId.Value = transactionId;
-            _currentTransactionPages.Value = new TransactionPageBuffer(transactionId);
+            var transactionContext = new TransactionContext(transactionId);
+            _currentTransactionContext.Value = transactionContext;
             RunWithWriteLock(_ =>
             {
                 WriteEntry(EntryTypeTransactionBegin, 0, CreateTransactionControlData(transactionId));
                 SetHasPendingEntries(true);
             });
-            return new WalTransactionScope(this, transactionId, ownsContext: true, flushOnCommit);
+            return new WalTransactionScope(this, transactionId, transactionContext, ownsContext: true, flushOnCommit);
         }
         catch
         {
-            _currentTransactionPages.Value = null;
-            _currentTransactionId.Value = null;
+            _currentTransactionContext.Value?.Clear();
+            _currentTransactionContext.Value = null;
             throw;
         }
     }
@@ -65,27 +65,34 @@ public sealed partial class WriteAheadLog
     {
         if (!IsEnabled)
         {
-            return new WalTransactionScope(this, transactionId, ownsContext: false, flushOnCommit);
+            return new WalTransactionScope(this, transactionId, transactionContext: null, ownsContext: false, flushOnCommit);
         }
 
-        _currentTransactionId.Value = transactionId;
-        _currentTransactionPages.Value = new TransactionPageBuffer(transactionId);
-        return new WalTransactionScope(this, transactionId, ownsContext: true, flushOnCommit);
+        var transactionContext = new TransactionContext(transactionId);
+        _currentTransactionContext.Value = transactionContext;
+        return new WalTransactionScope(this, transactionId, transactionContext, ownsContext: true, flushOnCommit);
     }
 
     internal sealed class WalTransactionScope : IDisposable
     {
         private readonly WriteAheadLog _wal;
         private readonly Guid _transactionId;
+        private readonly TransactionContext? _transactionContext;
         private readonly bool _ownsContext;
         private readonly bool _flushOnCommit;
         private bool _completed;
         private bool _disposed;
 
-        internal WalTransactionScope(WriteAheadLog wal, Guid transactionId, bool ownsContext, bool flushOnCommit)
+        internal WalTransactionScope(
+            WriteAheadLog wal,
+            Guid transactionId,
+            TransactionContext? transactionContext,
+            bool ownsContext,
+            bool flushOnCommit)
         {
             _wal = wal;
             _transactionId = transactionId;
+            _transactionContext = transactionContext;
             _ownsContext = ownsContext;
             _flushOnCommit = flushOnCommit;
         }
@@ -95,7 +102,8 @@ public sealed partial class WriteAheadLog
             if (_completed) return;
             if (_wal.IsEnabled)
             {
-                if (_wal._currentTransactionId.Value != _transactionId)
+                if (!_wal.TryGetCurrentTransactionContext(out var transactionContext) ||
+                    transactionContext.TransactionId != _transactionId)
                 {
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
@@ -120,7 +128,8 @@ public sealed partial class WriteAheadLog
             if (_completed) return;
             if (_wal.IsEnabled)
             {
-                if (_wal._currentTransactionId.Value != _transactionId)
+                if (!_wal.TryGetCurrentTransactionContext(out var transactionContext) ||
+                    transactionContext.TransactionId != _transactionId)
                 {
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
@@ -151,7 +160,8 @@ public sealed partial class WriteAheadLog
 
             if (_wal.IsEnabled)
             {
-                if (_wal._currentTransactionId.Value != _transactionId)
+                if (!_wal.TryGetCurrentTransactionContext(out var transactionContext) ||
+                    transactionContext.TransactionId != _transactionId)
                 {
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
@@ -169,25 +179,27 @@ public sealed partial class WriteAheadLog
 
             if (!_ownsContext) return;
 
-            _wal._currentTransactionPages.Value = null;
-            _wal._currentTransactionId.Value = null;
+            _transactionContext?.Clear();
+            if (ReferenceEquals(_wal._currentTransactionContext.Value, _transactionContext))
+            {
+                _wal._currentTransactionContext.Value = null;
+            }
         }
     }
 
     private void WriteDeferredTransactionPages(Guid transactionId)
     {
-        var transactionPages = _currentTransactionPages.Value;
-        if (transactionPages == null)
+        if (!TryGetCurrentTransactionContext(out var transactionContext))
         {
             return;
         }
 
-        if (transactionPages.TransactionId != transactionId)
+        if (transactionContext.TransactionId != transactionId)
         {
             throw new InvalidOperationException("WAL transaction page buffer mismatch.");
         }
 
-        foreach (var record in transactionPages.GetPagesPendingWalWriteInFirstTouchOrder())
+        foreach (var record in transactionContext.Pages.GetPagesPendingWalWriteInFirstTouchOrder())
         {
             var data = PrepareTransactionPageRecord(transactionId, record.AfterImage, record.BeforeImage, out var lsn);
             WriteEntry(EntryTypeTransactionPage, record.PageId, data);
@@ -198,18 +210,17 @@ public sealed partial class WriteAheadLog
 
     private async Task WriteDeferredTransactionPagesAsync(Guid transactionId, CancellationToken cancellationToken)
     {
-        var transactionPages = _currentTransactionPages.Value;
-        if (transactionPages == null)
+        if (!TryGetCurrentTransactionContext(out var transactionContext))
         {
             return;
         }
 
-        if (transactionPages.TransactionId != transactionId)
+        if (transactionContext.TransactionId != transactionId)
         {
             throw new InvalidOperationException("WAL transaction page buffer mismatch.");
         }
 
-        foreach (var record in transactionPages.GetPagesPendingWalWriteInFirstTouchOrder())
+        foreach (var record in transactionContext.Pages.GetPagesPendingWalWriteInFirstTouchOrder())
         {
             var data = PrepareTransactionPageRecord(transactionId, record.AfterImage, record.BeforeImage, out var lsn);
             await WriteEntryAsync(EntryTypeTransactionPage, record.PageId, data, cancellationToken).ConfigureAwait(false);
@@ -220,18 +231,17 @@ public sealed partial class WriteAheadLog
 
     private void RestoreTransactionBeforeImages(Guid transactionId, Action<uint, byte[]> restore)
     {
-        var transactionPages = _currentTransactionPages.Value;
-        if (transactionPages == null)
+        if (!TryGetCurrentTransactionContext(out var transactionContext))
         {
             return;
         }
 
-        if (transactionPages.TransactionId != transactionId)
+        if (transactionContext.TransactionId != transactionId)
         {
             throw new InvalidOperationException("WAL transaction page buffer mismatch.");
         }
 
-        foreach (var record in transactionPages.GetPagesInReverseFirstTouchOrder())
+        foreach (var record in transactionContext.Pages.GetPagesInReverseFirstTouchOrder())
         {
             if (record.BeforeImage != null)
             {

@@ -63,18 +63,29 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
                 EntityAttributeMetadataName,
                 predicate: static (s, _) => s is ClassDeclarationSyntax || s is StructDeclarationSyntax || s is RecordDeclarationSyntax,
                 transform: static (ctx, _) => GetClassInfo(ctx))
-            .Where(static m => m is not null)
+            .Where(static m => m is not null);
+
+        var comparableClassDeclarations = classDeclarations
             .WithComparer(ClassInfoComparer.Instance);
 
         // 注册源代码生成
-        var validClassDeclarations = classDeclarations
+        var diagnosticClassDeclarations = classDeclarations
             .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
+
+        var validClassDeclarations = comparableClassDeclarations
+            .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
+
+        context.RegisterSourceOutput(diagnosticClassDeclarations, static (spc, classInfo) =>
+        {
+            if (classInfo == null) return;
+
+            ReportDiagnostics(spc, classInfo);
+        });
 
         context.RegisterSourceOutput(validClassDeclarations, static (spc, classInfo) =>
         {
             if (classInfo == null) return;
 
-            ReportDiagnostics(spc, classInfo);
             var partialClassCode = GeneratePartialClass(classInfo);
             var partialFileName = $"{classInfo.UniqueFileName}_AotHelper.g.cs";
             spc.AddSource(partialFileName, SourceText.From(partialClassCode, Encoding.UTF8));
@@ -107,6 +118,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             }
         }
 
+        validClasses.Sort(static (x, y) => string.CompareOrdinal(x.FullName, y.FullName));
         return validClasses;
     }
 

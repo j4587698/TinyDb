@@ -357,7 +357,7 @@ public sealed class DiskStream : IDiskStream
         /// </summary>
         internal sealed class ActiveRegionLock
         {
-            private readonly TaskCompletionSource _releaseSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private readonly ManualResetEventSlim _releaseSignal = new(false);
 
             public long Start { get; }
             public long End { get; }
@@ -370,12 +370,12 @@ public sealed class DiskStream : IDiskStream
 
             public void WaitForRelease()
             {
-                _releaseSignal.Task.GetAwaiter().GetResult();
+                _releaseSignal.Wait();
             }
 
             public void SignalRelease()
             {
-                _releaseSignal.TrySetResult();
+                _releaseSignal.Set();
             }
         }
     }
