@@ -73,6 +73,8 @@ public partial class TinyDbSourceGenerator
 
         var properties = new List<PropertyInfo>();
         PropertyInfo? idProperty = null;
+        string? invalidIdPropertyName = null;
+        var invalidIdPropertyLocation = DiagnosticLocationInfo.From(classDeclaration.GetLocation());
         // 收集所有属性的类型符号，用于后续分析依赖类型
         var typeSymbolMap = new Dictionary<string, ITypeSymbol>();
         // 收集 BsonRef 引用类型缺少 Entity 特性的错误
@@ -91,8 +93,12 @@ public partial class TinyDbSourceGenerator
             {
                 idProperty.IsId = true;
             }
+            else
+            {
+                invalidIdPropertyName = specifiedIdProperty;
+            }
         }
-        if (idProperty == null)
+        if (idProperty == null && invalidIdPropertyName == null)
         {
             // 2. 自动查找 [Id] 标记属性（包含继承链）
             var idAttributePropertyName = FindIdPropertyName(classSymbol);
@@ -127,7 +133,30 @@ public partial class TinyDbSourceGenerator
         // 收集Entity类型间的循环引用（检测属性类型中引用了有[Entity]特性的类型）
         var entityCircularReferences = DetectEntityCircularReferences(classSymbol, properties, typeSymbolMap);
 
-        return new ClassInfo(namespaceName, className, isValueType, properties, idProperty, collectionName, entityDisplayName, entityDescription, containingTypePath, DiagnosticLocationInfo.From(classDeclaration.GetLocation()), dependentComplexTypes, circularReferences, entityCircularReferences, bsonRefMissingEntityErrors, constructorParameters, runtimeFullName, fullyQualifiedTypeReference, metadataName, isGenericType, typeParameterList, typeParameterConstraints);
+        return new ClassInfo(
+            namespaceName,
+            className,
+            isValueType,
+            properties,
+            idProperty,
+            collectionName,
+            entityDisplayName,
+            entityDescription,
+            containingTypePath,
+            DiagnosticLocationInfo.From(classDeclaration.GetLocation()),
+            dependentComplexTypes,
+            circularReferences,
+            entityCircularReferences,
+            bsonRefMissingEntityErrors,
+            invalidIdPropertyName,
+            invalidIdPropertyLocation,
+            constructorParameters,
+            runtimeFullName,
+            fullyQualifiedTypeReference,
+            metadataName,
+            isGenericType,
+            typeParameterList,
+            typeParameterConstraints);
     }
 
 }

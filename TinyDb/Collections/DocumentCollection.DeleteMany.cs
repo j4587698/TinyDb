@@ -16,9 +16,7 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
 
         var deletedCount = 0;
-        var ids = _engine.FindAllIds(_name).ToList();
-
-        foreach (var id in ids)
+        foreach (var id in _engine.FindAllIds(_name))
         {
             deletedCount += Delete(id);
         }
@@ -37,9 +35,7 @@ public sealed partial class DocumentCollection<T> where T : class
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
         var deletedCount = 0;
-        var documentsToDelete = Find(predicate).ToList();
-
-        foreach (var entity in documentsToDelete)
+        foreach (var entity in _queryExecutor.ExecuteFullTableScan<T>(_name, predicate))
         {
             var id = GetEntityId(entity);
             if (id != null && !id.IsNull)

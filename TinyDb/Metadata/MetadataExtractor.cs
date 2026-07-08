@@ -126,10 +126,15 @@ public static class MetadataExtractor
         var list = properties?.ToList() ?? new List<PropertyInfo>();
 
         var specified = entityAttr?.IdProperty;
-        if (!string.IsNullOrWhiteSpace(specified) &&
-            list.Any(p => string.Equals(p.Name, specified, StringComparison.Ordinal)))
+        if (!string.IsNullOrWhiteSpace(specified))
         {
-            return specified;
+            if (list.Any(p => string.Equals(p.Name, specified, StringComparison.Ordinal)))
+            {
+                return specified;
+            }
+
+            throw new InvalidOperationException(
+                $"Entity specifies IdProperty '{specified}', but no public mapped property with that name exists.");
         }
 
         foreach (var prop in list)

@@ -114,7 +114,7 @@ public sealed partial class QueryExecutor
         }
     }
 
-    private async IAsyncEnumerable<T> ExecuteFullTableScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
+    internal async IAsyncEnumerable<T> ExecuteFullTableScanAsync<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.PublicMethods)] T>(
         string collectionName,
         Expression<Func<T, bool>>? expression = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)

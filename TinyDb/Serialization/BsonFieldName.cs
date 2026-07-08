@@ -60,10 +60,20 @@ internal static class BsonFieldName
     private static bool IsIdProperty(PropertyInfo property, Type? entityType)
     {
         var attribute = entityType?.GetCustomAttribute<EntityAttribute>();
-        if (!string.IsNullOrWhiteSpace(attribute?.IdProperty) &&
-            string.Equals(attribute.IdProperty, property.Name, StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(attribute?.IdProperty))
         {
-            return true;
+            if (string.Equals(attribute.IdProperty, property.Name, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (entityType?.GetProperty(attribute.IdProperty!) == null)
+            {
+                throw new InvalidOperationException(
+                    $"Entity type '{entityType.FullName}' specifies IdProperty '{attribute.IdProperty}', but no public mapped property with that name exists.");
+            }
+
+            return false;
         }
 
         if (property.GetCustomAttribute<IdAttribute>() != null)

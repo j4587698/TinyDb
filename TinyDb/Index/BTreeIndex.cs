@@ -31,6 +31,7 @@ public sealed class BTreeIndex : IDisposable
     private const int MaxConcurrentAsyncReaders = 64;
     private readonly SemaphoreSlim _asyncReadGate = new(MaxConcurrentAsyncReaders, MaxConcurrentAsyncReaders);
     private readonly SemaphoreSlim _asyncWriteGate = new(1, 1);
+    private readonly CancellationTokenSource _disposeCts = new();
     private const int DefaultScanBatchSize = 1024;
 
     public string Name => _name;
@@ -280,7 +281,9 @@ public sealed class BTreeIndex : IDisposable
         if (key == null) throw new ArgumentNullException(nameof(key));
 
         ThrowIfDisposed();
-        await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var disposeLinkedCts = CreateDisposeLinkedTokenSource(cancellationToken);
+        var waitToken = disposeLinkedCts?.Token ?? _disposeCts.Token;
+        await _asyncReadGate.WaitAsync(waitToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
@@ -357,7 +360,9 @@ public sealed class BTreeIndex : IDisposable
             ThrowIfDisposed();
 
             DiskBTree.IndexScanBatch batch;
-            await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            using var disposeLinkedCts = CreateDisposeLinkedTokenSource(cancellationToken);
+            var waitToken = disposeLinkedCts?.Token ?? _disposeCts.Token;
+            await _asyncReadGate.WaitAsync(waitToken).ConfigureAwait(false);
             try
             {
                 ThrowIfDisposed();
@@ -591,13 +596,15 @@ public sealed class BTreeIndex : IDisposable
     private async Task<IDisposable> EnterAsyncWriteGateAsync(CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await _asyncWriteGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var disposeLinkedCts = CreateDisposeLinkedTokenSource(cancellationToken);
+        var waitToken = disposeLinkedCts?.Token ?? _disposeCts.Token;
+        await _asyncWriteGate.WaitAsync(waitToken).ConfigureAwait(false);
         var acquired = 0;
         try
         {
             for (; acquired < MaxConcurrentAsyncReaders; acquired++)
             {
-                await _asyncReadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await _asyncReadGate.WaitAsync(waitToken).ConfigureAwait(false);
             }
 
             ThrowIfDisposed();
@@ -619,6 +626,13 @@ public sealed class BTreeIndex : IDisposable
     {
         _asyncReadGate.Release(MaxConcurrentAsyncReaders);
         _asyncWriteGate.Release();
+    }
+
+    private CancellationTokenSource? CreateDisposeLinkedTokenSource(CancellationToken cancellationToken)
+    {
+        return cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposeCts.Token)
+            : null;
     }
 
     private sealed class AsyncWriteGateScope : IDisposable
@@ -650,6 +664,7 @@ public sealed class BTreeIndex : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _disposeCts.Cancel();
 
         IDisposable? gate = null;
         try
@@ -678,8 +693,6 @@ public sealed class BTreeIndex : IDisposable
         {
             gate?.Dispose();
             _lock.Dispose();
-            _asyncReadGate.Dispose();
-            _asyncWriteGate.Dispose();
         }
     }
 

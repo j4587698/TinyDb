@@ -412,6 +412,24 @@ public partial class TinyDbSourceGenerator
             fullName,
             typeSymbol.Name,
             typeSymbol.IsValueType,
+            HasAccessibleParameterlessConstructor(typeSymbol),
             properties), circularRefs);
+    }
+
+    private static bool HasAccessibleParameterlessConstructor(ITypeSymbol typeSymbol)
+    {
+        if (typeSymbol.IsValueType)
+        {
+            return true;
+        }
+
+        if (typeSymbol is not INamedTypeSymbol namedType)
+        {
+            return false;
+        }
+
+        return namedType.InstanceConstructors.Any(static constructor =>
+            constructor.Parameters.Length == 0 &&
+            constructor.DeclaredAccessibility is Accessibility.Public or Accessibility.Internal or Accessibility.ProtectedOrInternal);
     }
 }

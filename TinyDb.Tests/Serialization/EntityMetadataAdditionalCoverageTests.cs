@@ -30,8 +30,8 @@ public class EntityMetadataAdditionalCoverageTests
         public int Other { get; set; }
     }
 
-    [Entity(IdProperty = "Missing")]
-    internal sealed class EntityWithMissingIdProperty
+    [Entity]
+    internal sealed class EntityWithConventionalIdProperty
     {
         public int Id { get; set; }
     }
@@ -57,11 +57,11 @@ public class EntityMetadataAdditionalCoverageTests
     }
 
     [Test]
-    public async Task EntityMetadata_IdProperty_WhenSpecifiedPropertyMissing_ShouldFallbackToNamedId()
+    public async Task EntityMetadata_IdProperty_WhenNotSpecified_ShouldFallbackToNamedId()
     {
-        var idProperty = EntityMetadata<EntityWithMissingIdProperty>.IdProperty;
+        var idProperty = EntityMetadata<EntityWithConventionalIdProperty>.IdProperty;
 
         await Assert.That(idProperty).IsNotNull();
-        await Assert.That(idProperty!.Name).IsEqualTo(nameof(EntityWithMissingIdProperty.Id));
+        await Assert.That(idProperty!.Name).IsEqualTo(nameof(EntityWithConventionalIdProperty.Id));
     }
 }
