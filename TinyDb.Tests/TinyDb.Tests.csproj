@@ -11,7 +11,7 @@
     <IlcGenerateCompleteTypeMetadata>true</IlcGenerateCompleteTypeMetadata>
     <IlcGenerateStackTraceData>true</IlcGenerateStackTraceData>
     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
-    <NoWarn>$(NoWarn);TINYDB002;TINYDB003</NoWarn>
+    <NoWarn>$(NoWarn);TINYDB002;TINYDB003;TINYDB005</NoWarn>
   </PropertyGroup>
 
   <!-- Only enable AOT publish on .NET 10+ due to ILCompiler bug in .NET 9 -->

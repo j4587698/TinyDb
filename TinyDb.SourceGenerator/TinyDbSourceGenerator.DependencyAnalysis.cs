@@ -392,6 +392,7 @@ public partial class TinyDbSourceGenerator
                     typeAnalysis.IsCollection,
                     typeAnalysis.IsDictionary,
                     typeAnalysis.IsArray,
+                    typeAnalysis.ArrayRank,
                     typeAnalysis.ElementType,
                     typeAnalysis.IsElementComplexType,
                     typeAnalysis.IsElementValueType,

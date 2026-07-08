@@ -68,7 +68,9 @@ public sealed partial class TinyDbEngine
     {
         if (durabilityScope == null) throw new ArgumentNullException(nameof(durabilityScope));
 
-        durabilityScope.Rollback((pageId, beforeImage) => _pageManager.RestorePage(pageId, beforeImage));
+        durabilityScope.Rollback(
+            (pageId, beforeImage) => _pageManager.RestorePage(pageId, beforeImage),
+            pageId => _pageManager.DiscardCachedPage(pageId));
         ResetRuntimeStateAfterDurabilityRollback();
     }
 
@@ -76,7 +78,7 @@ public sealed partial class TinyDbEngine
     {
         lock (_lock)
         {
-            _pageManager.ClearCache();
+            _pageManager.ClearCache(flushDirtyPages: false);
             ReadHeader();
             _pageManager.Initialize(
                 _header.TotalPages,

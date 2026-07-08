@@ -99,6 +99,8 @@ public sealed class Page : IDisposable
         private set => Volatile.Write(ref _isDirty, value);
     }
 
+    internal bool IsDisposed => Volatile.Read(ref _disposed);
+
     /// <summary>
     /// 获取有效数据的只读跨度（Span）。
     /// </summary>

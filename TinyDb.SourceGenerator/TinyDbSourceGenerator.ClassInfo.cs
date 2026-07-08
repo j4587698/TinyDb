@@ -19,9 +19,6 @@ public partial class TinyDbSourceGenerator
         var classDeclaration = (TypeDeclarationSyntax)context.TargetNode;
         var semanticModel = context.SemanticModel;
 
-        // 获取类的完整名称
-        var namespaceDeclaration = classDeclaration.FirstAncestorOrSelf<NamespaceDeclarationSyntax>();
-        var namespaceName = namespaceDeclaration?.Name.ToString() ?? string.Empty;
         var className = classDeclaration.Identifier.Text;
         var typeParameterList = classDeclaration.TypeParameterList?.ToString() ?? string.Empty;
         var typeParameterConstraints = string.Join(" ", classDeclaration.ConstraintClauses.Select(static clause => clause.ToString()));
@@ -29,24 +26,24 @@ public partial class TinyDbSourceGenerator
         // 获取类符号信息
         var classSymbol = context.TargetSymbol as INamedTypeSymbol
             ?? semanticModel.GetDeclaredSymbol(classDeclaration);
+        var namespaceName = classSymbol?.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace
+            ? containingNamespace.ToDisplayString()
+            : string.Empty;
         var metadataName = classSymbol?.MetadataName ?? className;
         var isGenericType = classSymbol?.IsGenericType ?? classDeclaration.TypeParameterList != null;
 
-        // 如果没有找到命名空间声明，使用符号信息获取命名空间
-        if (string.IsNullOrEmpty(namespaceName))
-        {
-            namespaceName = classSymbol?.ContainingNamespace?.ToString() ?? string.Empty;
-        }
-
         // 获取包含类的全名（用于生成唯一的文件名）
         var containingTypeNames = new List<string>();
+        var containingTypeDisplayNames = new List<string>();
         var containingType = classSymbol?.ContainingType;
         while (containingType != null)
         {
             containingTypeNames.Insert(0, containingType.MetadataName.Replace('`', '_'));
+            containingTypeDisplayNames.Insert(0, containingType.MetadataName.Replace('`', '_'));
             containingType = containingType.ContainingType;
         }
         var containingTypePath = string.Join("_", containingTypeNames);
+        var containingTypeDisplayPath = string.Join(".", containingTypeDisplayNames);
 
         // 检查是否是值类型
         var isValueType = classSymbol?.IsValueType ?? false;
@@ -156,7 +153,8 @@ public partial class TinyDbSourceGenerator
             metadataName,
             isGenericType,
             typeParameterList,
-            typeParameterConstraints);
+            typeParameterConstraints,
+            containingTypeDisplayPath);
     }
 
 }

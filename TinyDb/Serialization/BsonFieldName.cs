@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using System.Diagnostics.CodeAnalysis;
 using TinyDb.Attributes;
 
 namespace TinyDb.Serialization;
@@ -12,7 +13,9 @@ internal static class BsonFieldName
     private static readonly byte[] LargeDocumentIndexBytes = Encoding.UTF8.GetBytes("_largeDocumentIndex");
     private static readonly byte[] LargeDocumentSizeBytes = Encoding.UTF8.GetBytes("_largeDocumentSize");
 
-    public static string ForProperty(PropertyInfo property, Type? entityType = null)
+    public static string ForProperty(
+        PropertyInfo property,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type? entityType = null)
     {
         if (property == null) throw new ArgumentNullException(nameof(property));
         return IsIdProperty(property, entityType) ? "_id" : ToCamelCase(property.Name);
@@ -57,7 +60,9 @@ internal static class BsonFieldName
         return new string(chars);
     }
 
-    private static bool IsIdProperty(PropertyInfo property, Type? entityType)
+    private static bool IsIdProperty(
+        PropertyInfo property,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] Type? entityType)
     {
         var attribute = entityType?.GetCustomAttribute<EntityAttribute>();
         if (!string.IsNullOrWhiteSpace(attribute?.IdProperty))

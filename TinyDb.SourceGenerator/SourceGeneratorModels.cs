@@ -24,6 +24,7 @@ public class ClassInfo
         public string Name { get; }
         public string MetadataName { get; }
         public string ContainingTypePath { get; }
+        public string ContainingTypeDisplayPath { get; }
         public bool IsGenericType { get; }
         public string TypeParameterList { get; }
         public string TypeParameterConstraints { get; }
@@ -35,7 +36,7 @@ public class ClassInfo
         {
             get
             {
-                if (!string.IsNullOrEmpty(ContainingTypePath))
+                if (!string.IsNullOrEmpty(ContainingTypeDisplayPath))
                 {
                     // ContainingTypePath 使用下划线分隔（如 OuterClass_MiddleClass），
                     // 需要转换为点分隔（如 OuterClass.MiddleClass）以便在代码中引用嵌套类型
@@ -49,11 +50,13 @@ public class ClassInfo
             get
             {
                 var baseName = string.IsNullOrEmpty(Namespace) ? "" : $"{Namespace}.";
-                if (!string.IsNullOrEmpty(ContainingTypePath))
+                var containingTypeName = !string.IsNullOrEmpty(ContainingTypeDisplayPath)
+                    ? ContainingTypeDisplayPath
+                    : ContainingTypePath.Replace("_", ".");
+                if (!string.IsNullOrEmpty(containingTypeName))
                 {
                     // ContainingTypePath 使用下划线分隔，需要转换为点分隔
-                    var dotSeparatedPath = ContainingTypePath.Replace("_", ".");
-                    return $"{baseName}{dotSeparatedPath}.{Name}";
+                    return $"{baseName}{containingTypeName}.{Name}";
                 }
                 return $"{baseName}{Name}";
             }
@@ -108,7 +111,7 @@ public class ClassInfo
         public DiagnosticLocationInfo? InvalidIdPropertyLocation { get; }
         public List<ConstructorParameterInfo> ConstructorParameters { get; }
 
-        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, string? invalidIdPropertyName = null, DiagnosticLocationInfo? invalidIdPropertyLocation = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null, string? metadataName = null, bool isGenericType = false, string? typeParameterList = null, string? typeParameterConstraints = null)
+        public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, string? invalidIdPropertyName = null, DiagnosticLocationInfo? invalidIdPropertyLocation = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null, string? metadataName = null, bool isGenericType = false, string? typeParameterList = null, string? typeParameterConstraints = null, string? containingTypeDisplayPath = null)
         {
             Namespace = @namespace;
             Name = name;
@@ -123,6 +126,7 @@ public class ClassInfo
             DisplayName = string.IsNullOrEmpty(displayName) ? name : displayName!;
             Description = string.IsNullOrEmpty(description) ? null : description;
             ContainingTypePath = containingTypePath ?? string.Empty;
+            ContainingTypeDisplayPath = containingTypeDisplayPath ?? string.Empty;
             FullyQualifiedTypeReference = fullyQualifiedTypeReference ?? FullName;
             RuntimeFullName = runtimeFullName ?? FullName;
             UniqueFileName = CreateUniqueFileName(Namespace, ContainingTypePath, MetadataName);
@@ -229,6 +233,7 @@ public class DependentTypeProperty
     public bool IsCollection { get; }
     public bool IsDictionary { get; }
     public bool IsArray { get; }
+    public int ArrayRank { get; }
     public string? ElementType { get; }
     public bool IsElementComplexType { get; }
     public bool IsElementValueType { get; }
@@ -252,6 +257,7 @@ public class DependentTypeProperty
         bool isCollection = false,
         bool isDictionary = false,
         bool isArray = false,
+        int arrayRank = 0,
         string? elementType = null,
         bool isElementComplexType = false,
         bool isElementValueType = false,
@@ -271,6 +277,7 @@ public class DependentTypeProperty
         IsCollection = isCollection;
         IsDictionary = isDictionary;
         IsArray = isArray;
+        ArrayRank = arrayRank;
         ElementType = elementType;
         IsElementComplexType = isElementComplexType;
         IsElementValueType = isElementValueType;
@@ -328,6 +335,7 @@ public class PropertyInfo
     /// 是否是数组类型
     /// </summary>
     public bool IsArray { get; }
+    public int ArrayRank { get; }
 
     /// <summary>
     /// 集合/数组的元素类型（完全限定名）
@@ -397,6 +405,7 @@ public class PropertyInfo
         bool isCollection = false,
         bool isDictionary = false,
         bool isArray = false,
+        int arrayRank = 0,
         string? elementType = null,
         bool isElementComplexType = false,
         bool isElementValueType = false,
@@ -435,6 +444,7 @@ public class PropertyInfo
         IsCollection = isCollection;
         IsDictionary = isDictionary;
         IsArray = isArray;
+        ArrayRank = arrayRank;
         ElementType = elementType;
         IsElementComplexType = isElementComplexType;
         IsElementValueType = isElementValueType;

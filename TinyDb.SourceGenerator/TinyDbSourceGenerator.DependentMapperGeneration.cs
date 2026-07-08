@@ -28,6 +28,7 @@ public partial class TinyDbSourceGenerator
         foreach (var prop in depType.Properties)
         {
             var bsonFieldName = SourceGeneratorFieldName.ToCamelCase(prop.Name);
+            var propertyAccess = prop.AccessName;
 
             if (prop.IsComplexType && !string.IsNullOrEmpty(prop.ComplexTypeFullName))
             {
@@ -43,14 +44,14 @@ public partial class TinyDbSourceGenerator
                     // 复杂类型使用递归调用
                     if (prop.IsNullable || !prop.IsValueType)
                     {
-                        sb.AppendLine($"            if (obj.{prop.Name} == null)");
+                        sb.AppendLine($"            if (obj.{propertyAccess} == null)");
                         sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                         sb.AppendLine($"            else");
-                        sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{prop.Name}));");
+                        sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{propertyAccess}));");
                     }
                     else
                     {
-                        sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{prop.Name}));");
+                        sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", SerializeComplexObject(obj.{propertyAccess}));");
                     }
                 }
             }
@@ -58,14 +59,14 @@ public partial class TinyDbSourceGenerator
             {
                 if (prop.IsNullable)
                 {
-                    sb.AppendLine($"            if (obj.{prop.Name} == null)");
+                    sb.AppendLine($"            if (obj.{propertyAccess} == null)");
                     sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                     sb.AppendLine($"            else");
                     sb.AppendLine($"            {{");
                 }
 
                 sb.AppendLine($"            var array_{prop.Name} = new BsonArray();");
-                sb.AppendLine($"            foreach (var item in obj.{prop.Name})");
+                sb.AppendLine($"            foreach (var item in obj.{propertyAccess})");
                 sb.AppendLine($"            {{");
 
                 if (prop.IsElementValueType)
@@ -96,14 +97,14 @@ public partial class TinyDbSourceGenerator
 
                 if (prop.IsNullable)
                 {
-                    sb.AppendLine($"            if (obj.{prop.Name} == null)");
+                    sb.AppendLine($"            if (obj.{propertyAccess} == null)");
                     sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
                     sb.AppendLine($"            else");
                     sb.AppendLine($"            {{");
                 }
 
                 sb.AppendLine($"            var dict_{prop.Name} = new BsonDocument();");
-                sb.AppendLine($"            foreach (var kvp in obj.{prop.Name})");
+                sb.AppendLine($"            foreach (var kvp in obj.{propertyAccess})");
                 sb.AppendLine($"            {{");
                 sb.AppendLine($"                var key_{prop.Name} = {SourceGeneratorHelpers.CreateDictionaryFieldNameExpression("kvp.Key")};");
 
@@ -130,7 +131,7 @@ public partial class TinyDbSourceGenerator
             else
             {
                 // 简单类型使用 ConvertToBsonValue
-                sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", ConvertToBsonValue(obj.{prop.Name}));");
+                sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", ConvertToBsonValue(obj.{propertyAccess}));");
             }
         }
 

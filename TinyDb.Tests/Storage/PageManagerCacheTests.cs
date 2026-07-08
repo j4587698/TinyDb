@@ -53,6 +53,41 @@ public class PageManagerCacheTests : IDisposable
     }
 
     [Test]
+    public async Task ClearCache_ShouldFlushDirtyPagesBeforeRemoving()
+    {
+        using var ds = new DiskStream(_testDbPath);
+        using var pm = new PageManager(ds, 4096, 10);
+
+        var page = pm.NewPage(PageType.Data);
+        var pageId = page.PageID;
+        page.WriteData(0, new byte[] { 42, 43 });
+
+        pm.ClearCache();
+
+        await Assert.That(pm.CachedPages).IsEqualTo(0);
+
+        var reloaded = pm.GetPage(pageId);
+        await Assert.That(reloaded.ReadData(0, 2).SequenceEqual(new byte[] { 42, 43 })).IsTrue();
+        await Assert.That(reloaded.IsDirty).IsFalse();
+    }
+
+    [Test]
+    public async Task ClearCache_WhenFlushDirtyPagesIsFalse_ShouldKeepDirtyPages()
+    {
+        using var ds = new DiskStream(_testDbPath);
+        using var pm = new PageManager(ds, 4096, 10);
+
+        var page = pm.NewPage(PageType.Data);
+        page.WriteData(0, new byte[] { 42 });
+
+        pm.ClearCache(flushDirtyPages: false);
+
+        await Assert.That(pm.CachedPages).IsEqualTo(1);
+        await Assert.That(page.IsDirty).IsTrue();
+        await Assert.That(() => page.WriteData(1, new byte[] { 43 })).ThrowsNothing();
+    }
+
+    [Test]
     public async Task CacheHit_ShouldNotWaitForCacheLock()
     {
         using var ds = new DiskStream(_testDbPath);

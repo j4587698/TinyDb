@@ -55,11 +55,29 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor InvalidIdPropertyErrorDescriptor = new(
         id: "TINYDB004",
         title: "Entity IdProperty does not exist",
-        messageFormat: "Entity type '{0}' specifies IdProperty '{1}', but no public mapped property or field with that name exists.",
+        messageFormat: "Entity type '{0}' specifies IdProperty '{1}', but no public mapped property or field with that name exists",
         category: "TinyDb.SourceGenerator",
         DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "When EntityAttribute.IdProperty is specified, the name must match a mapped public property or field. TinyDb only applies automatic Id, _id, ID, or [Id] fallback when IdProperty is not specified.");
+
+    private static readonly DiagnosticDescriptor GenericEntityRegistryWarningDescriptor = new(
+        id: "TINYDB005",
+        title: "Generic Entity is not registered for AOT lookup",
+        messageFormat: "Generic Entity type '{0}' cannot be registered in the TinyDb AOT registry. Runtime lookups for closed generic instances may fall back to reflection.",
+        category: "TinyDb.SourceGenerator",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "TinyDb generates helpers for generic Entity definitions, but the runtime registry is keyed by concrete closed types. Add a non-generic Entity wrapper if registry-based AOT lookup is required.");
+
+    private static readonly DiagnosticDescriptor UnsupportedArrayRankErrorDescriptor = new(
+        id: "TINYDB006",
+        title: "Multidimensional arrays are not supported by TinyDb AOT generation",
+        messageFormat: "Property '{0}' in type '{1}' uses array rank {2}. TinyDb AOT generation only supports single-dimensional arrays.",
+        category: "TinyDb.SourceGenerator",
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true,
+        description: "TinyDb AOT collection generation materializes arrays from BSON arrays and supports only single-dimensional CLR arrays.");
 
     /// <summary>
     /// 初始化生成器
@@ -78,7 +96,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             .WithComparer(ClassInfoComparer.Instance);
 
         // 注册源代码生成
-        var diagnosticClassDeclarations = classDeclarations
+        var diagnosticClassDeclarations = comparableClassDeclarations
             .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
 
         var validClassDeclarations = comparableClassDeclarations
@@ -137,12 +155,72 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
         ReportCircularReferences(context, classInfo);
         ReportEntityCircularReferences(context, classInfo);
         ReportBsonRefMissingEntityErrors(context, classInfo);
+        ReportGenericEntityRegistryWarnings(context, classInfo);
+        ReportUnsupportedArrayRankErrors(context, classInfo);
     }
 
     private static bool HasBlockingDiagnostics(ClassInfo classInfo)
     {
         return !string.IsNullOrWhiteSpace(classInfo.InvalidIdPropertyName) ||
-               classInfo.BsonRefMissingEntityErrors.Count > 0;
+               classInfo.BsonRefMissingEntityErrors.Count > 0 ||
+               HasUnsupportedArrayRank(classInfo);
+    }
+
+    private static void ReportGenericEntityRegistryWarnings(SourceProductionContext context, ClassInfo classInfo)
+    {
+        if (!classInfo.IsGenericType)
+        {
+            return;
+        }
+
+        var diagnostic = Diagnostic.Create(
+            GenericEntityRegistryWarningDescriptor,
+            classInfo.Location.ToLocation(),
+            classInfo.FullName);
+        context.ReportDiagnostic(diagnostic);
+    }
+
+    private static void ReportUnsupportedArrayRankErrors(SourceProductionContext context, ClassInfo classInfo)
+    {
+        foreach (var property in GetUnsupportedArrayRankProperties(classInfo))
+        {
+            var diagnostic = Diagnostic.Create(
+                UnsupportedArrayRankErrorDescriptor,
+                classInfo.Location.ToLocation(),
+                property.Name,
+                classInfo.FullName,
+                property.ArrayRank);
+            context.ReportDiagnostic(diagnostic);
+        }
+
+        foreach (var property in GetUnsupportedDependentArrayRankProperties(classInfo))
+        {
+            var diagnostic = Diagnostic.Create(
+                UnsupportedArrayRankErrorDescriptor,
+                classInfo.Location.ToLocation(),
+                property.Name,
+                classInfo.FullName,
+                property.ArrayRank);
+            context.ReportDiagnostic(diagnostic);
+        }
+    }
+
+    private static bool HasUnsupportedArrayRank(ClassInfo classInfo)
+    {
+        return GetUnsupportedArrayRankProperties(classInfo).Any() ||
+               GetUnsupportedDependentArrayRankProperties(classInfo).Any();
+    }
+
+    private static IEnumerable<PropertyInfo> GetUnsupportedArrayRankProperties(ClassInfo classInfo)
+    {
+        return classInfo.Properties.Where(static p => p.IsArray && p.ArrayRank != 1);
+    }
+
+    private static IEnumerable<DependentTypeProperty> GetUnsupportedDependentArrayRankProperties(ClassInfo classInfo)
+    {
+        return classInfo.DependentComplexTypes
+            .SelectMany(static t => t.Properties)
+            .Where(static p => p.IsArray && p.ArrayRank != 1);
     }
 
     private static void ReportInvalidIdPropertyErrors(SourceProductionContext context, ClassInfo classInfo)

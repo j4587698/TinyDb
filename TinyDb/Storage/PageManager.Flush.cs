@@ -252,6 +252,13 @@ public sealed partial class PageManager
     {
         if (_pageCache.TryGetValue(pageId, out page!))
         {
+            if (page.IsDisposed)
+            {
+                RemoveFromCache(pageId);
+                page = null!;
+                return false;
+            }
+
             if (page.IsDirty)
             {
                 return true;
