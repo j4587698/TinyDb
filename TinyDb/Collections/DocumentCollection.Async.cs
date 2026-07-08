@@ -377,14 +377,7 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
         cancellationToken.ThrowIfCancellationRequested();
-        long count = 0;
-        await foreach (var _ in _queryExecutor.ExecuteAsync(_name, predicate, cancellationToken).ConfigureAwait(false))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            count++;
-        }
-
-        return count;
+        return await _queryExecutor.CountAsync(_name, predicate, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default)

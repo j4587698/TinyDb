@@ -194,7 +194,7 @@ public sealed partial class TinyDbEngine
                             if (_pageManager.TryReadLogicalPageSnapshot(id, out var diskData))
                             {
                                 var diskHeader = PageHeader.FromByteArray(diskData);
-                                var walHeader = PageHeader.FromByteArray(data);
+                                var walHeader = PageHeader.FromSpan(data.Span);
 
                                 if (walHeader.LSN <= diskHeader.LSN && diskHeader.IsValid() && diskHeader.PageID == id && diskHeader.VerifyChecksum(diskData))
                                 {

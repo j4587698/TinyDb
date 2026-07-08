@@ -39,7 +39,7 @@ public class WriteAheadLogTests : IDisposable
         var replayedPages = new Dictionary<uint, byte[]>();
         await wal.ReplayAsync((id, data) =>
         {
-            replayedPages[id] = data;
+            replayedPages[id] = data.ToArray();
             return Task.CompletedTask;
         });
 
@@ -83,7 +83,7 @@ public class WriteAheadLogTests : IDisposable
         var replayedPages = new List<byte[]>();
         await wal.ReplayAsync((_, data) =>
         {
-            replayedPages.Add(data);
+            replayedPages.Add(data.ToArray());
             return Task.CompletedTask;
         });
 
@@ -114,7 +114,7 @@ public class WriteAheadLogTests : IDisposable
         var replayedPages = new List<byte[]>();
         await wal.ReplayAsync((_, data) =>
         {
-            replayedPages.Add(data);
+            replayedPages.Add(data.ToArray());
             return Task.CompletedTask;
         });
 

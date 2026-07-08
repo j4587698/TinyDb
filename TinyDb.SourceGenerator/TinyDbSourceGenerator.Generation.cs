@@ -54,7 +54,7 @@ public partial class TinyDbSourceGenerator
             var idProp = classInfo.IdProperty;
             var idAccess = idProp.AccessName;
             var normalizedIdType = NormalizeTypeName(idProp.NonNullableType);
-            var isObjectId = normalizedIdType.EndsWith("ObjectId", StringComparison.Ordinal);
+            var isObjectId = IsTinyDbObjectIdTypeName(idProp.FullyQualifiedNonNullableType);
 
             sb.AppendLine();
             sb.AppendLine("        /// <summary>");

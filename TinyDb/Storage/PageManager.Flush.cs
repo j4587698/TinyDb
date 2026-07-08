@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
 using TinyDb.Core;
@@ -196,20 +197,29 @@ public sealed partial class PageManager
     /// <param name="pageData">页面数据</param>
     internal void RestorePage(uint pageID, byte[] pageData)
     {
+        if (pageData == null) throw new ArgumentNullException(nameof(pageData));
+        RestorePage(pageID, new ReadOnlyMemory<byte>(pageData));
+    }
+
+    internal void RestorePage(uint pageID, ReadOnlyMemory<byte> pageData)
+    {
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
-        if (pageData == null) throw new ArgumentNullException(nameof(pageData));
         lock (_stateLock)
         {
             byte[] buffer;
-            if (pageData.Length == _pageSize)
+            if (pageData.Length == (int)_pageSize &&
+                MemoryMarshal.TryGetArray(pageData, out var segment) &&
+                segment.Array != null &&
+                segment.Offset == 0 &&
+                segment.Count == (int)_pageSize)
             {
-                buffer = pageData;
+                buffer = segment.Array;
             }
-            else if (pageData.Length < _pageSize)
+            else if (pageData.Length < (int)_pageSize)
             {
                 buffer = new byte[_pageSize];
-                Array.Copy(pageData, buffer, pageData.Length);
+                pageData.Span.CopyTo(buffer);
             }
             else
             {

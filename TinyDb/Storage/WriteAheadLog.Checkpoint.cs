@@ -27,14 +27,13 @@ public sealed partial class WriteAheadLog
 
         if (HasActiveWriteContext(writeContext))
         {
-            FlushToLSNCore(targetLSN);
+            await FlushToLSNCoreAsync(targetLSN, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        await RunWithWriteLockAsync(_ =>
+        await RunWithWriteLockAsync(async _ =>
         {
-            FlushToLSNCore(targetLSN);
-            return Task.CompletedTask;
+            await FlushToLSNCoreAsync(targetLSN, cancellationToken).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -69,6 +68,16 @@ public sealed partial class WriteAheadLog
     }
 
 
+    private async Task FlushToLSNCoreAsync(long targetLSN, CancellationToken cancellationToken)
+    {
+        if (targetLSN >= ReadFlushedLSN())
+        {
+            await _stream!.FlushAsync(cancellationToken).ConfigureAwait(false);
+            SetFlushedLSN(_stream.Position);
+        }
+    }
+
+
     public async Task FlushLogAsync(CancellationToken cancellationToken = default)
     {
         await FlushLogAsync(writeContext: null, cancellationToken).ConfigureAwait(false);
@@ -83,14 +92,13 @@ public sealed partial class WriteAheadLog
 
         if (HasActiveWriteContext(writeContext))
         {
-            FlushLogCore();
+            await FlushLogCoreAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        await RunWithWriteLockAsync(_ =>
+        await RunWithWriteLockAsync(async _ =>
         {
-            FlushLogCore();
-            return Task.CompletedTask;
+            await FlushLogCoreAsync(cancellationToken).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -120,6 +128,16 @@ public sealed partial class WriteAheadLog
         if (HasPendingEntriesCore)
         {
             _stream!.Flush(true);
+            SetFlushedLSN(_stream.Position);
+        }
+    }
+
+
+    private async Task FlushLogCoreAsync(CancellationToken cancellationToken)
+    {
+        if (HasPendingEntriesCore)
+        {
+            await _stream!.FlushAsync(cancellationToken).ConfigureAwait(false);
             SetFlushedLSN(_stream.Position);
         }
     }

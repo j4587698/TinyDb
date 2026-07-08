@@ -12,7 +12,7 @@ namespace TinyDb.Storage;
 public sealed partial class WriteAheadLog
 {
 
-    private static bool TryReadTransactionId(byte[] data, out Guid transactionId)
+    private static bool TryReadTransactionId(ReadOnlySpan<byte> data, out Guid transactionId)
     {
         transactionId = default;
         if (data.Length != TransactionIdSize) return false;
@@ -23,7 +23,7 @@ public sealed partial class WriteAheadLog
 
 
     private static bool TryReadTransactionPage(
-        byte[] data,
+        ReadOnlySpan<byte> data,
         out Guid transactionId,
         out byte[]? beforeImage,
         out byte[] afterImage)
@@ -34,32 +34,32 @@ public sealed partial class WriteAheadLog
 
         if (data.Length < TransactionIdSize + BeforeLengthSize) return false;
 
-        transactionId = new Guid(data.AsSpan(0, TransactionIdSize));
-        var beforeLength = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(TransactionIdSize, BeforeLengthSize));
+        transactionId = new Guid(data.Slice(0, TransactionIdSize));
+        var beforeLength = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(TransactionIdSize, BeforeLengthSize));
         if (beforeLength < -1) return false;
 
         var offset = TransactionIdSize + BeforeLengthSize;
         if (beforeLength >= 0)
         {
             if (beforeLength > data.Length - offset) return false;
-            beforeImage = data.AsSpan(offset, beforeLength).ToArray();
+            beforeImage = data.Slice(offset, beforeLength).ToArray();
             offset += beforeLength;
         }
 
         if (offset >= data.Length) return false;
 
-        afterImage = data.AsSpan(offset).ToArray();
+        afterImage = data.Slice(offset).ToArray();
         return true;
     }
 
 
-    public void Replay(Action<uint, byte[]> apply)
+    public void Replay(Action<uint, ReadOnlyMemory<byte>> apply)
     {
         Replay(apply, restore: null);
     }
 
 
-    public void Replay(Action<uint, byte[]> apply, Action<uint, byte[]>? restore)
+    public void Replay(Action<uint, ReadOnlyMemory<byte>> apply, Action<uint, ReadOnlyMemory<byte>>? restore)
     {
         if (!IsEnabled) return;
         if (apply == null) throw new ArgumentNullException(nameof(apply));
@@ -163,19 +163,17 @@ public sealed partial class WriteAheadLog
                         break;
                     }
 
-                    if (ReferenceEquals(decodedBuffer, rentedBuffer))
-                    {
-                        decodedBuffer = rentedBuffer.AsSpan(0, length).ToArray();
-                    }
-
-                    var buffer = decodedBuffer;
+                    var buffer = new ReadOnlyMemory<byte>(
+                        decodedBuffer!,
+                        0,
+                        ReferenceEquals(decodedBuffer, rentedBuffer) ? length : decodedBuffer!.Length);
                     if (entryType == EntryTypePage)
                     {
                         apply(pageId, buffer);
                     }
                     else if (entryType == EntryTypeTransactionBegin)
                     {
-                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        if (!TryReadTransactionId(buffer.Span, out var transactionId))
                         {
                             Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
                             replayStoppedAtInvalidRecord = true;
@@ -186,7 +184,7 @@ public sealed partial class WriteAheadLog
                     }
                     else if (entryType == EntryTypeTransactionPage)
                     {
-                        if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
+                        if (!TryReadTransactionPage(buffer.Span, out var transactionId, out var beforeImage, out var afterImage))
                         {
                             Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
                             replayStoppedAtInvalidRecord = true;
@@ -203,7 +201,7 @@ public sealed partial class WriteAheadLog
                     }
                     else if (entryType == EntryTypeTransactionCommit)
                     {
-                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        if (!TryReadTransactionId(buffer.Span, out var transactionId))
                         {
                             Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
                             replayStoppedAtInvalidRecord = true;
@@ -283,15 +281,15 @@ public sealed partial class WriteAheadLog
     }
 
 
-    public Task ReplayAsync(Func<uint, byte[], Task> applyAsync, CancellationToken cancellationToken = default)
+    public Task ReplayAsync(Func<uint, ReadOnlyMemory<byte>, Task> applyAsync, CancellationToken cancellationToken = default)
     {
         return ReplayAsync(applyAsync, restoreAsync: null, cancellationToken);
     }
 
 
     public async Task ReplayAsync(
-        Func<uint, byte[], Task> applyAsync,
-        Func<uint, byte[], Task>? restoreAsync,
+        Func<uint, ReadOnlyMemory<byte>, Task> applyAsync,
+        Func<uint, ReadOnlyMemory<byte>, Task>? restoreAsync,
         CancellationToken cancellationToken = default)
     {
         if (!IsEnabled) return;
@@ -401,19 +399,17 @@ public sealed partial class WriteAheadLog
                         break;
                     }
 
-                    if (ReferenceEquals(decodedBuffer, rentedBuffer))
-                    {
-                        decodedBuffer = rentedBuffer.AsSpan(0, length).ToArray();
-                    }
-
-                    var buffer = decodedBuffer;
+                    var buffer = new ReadOnlyMemory<byte>(
+                        decodedBuffer!,
+                        0,
+                        ReferenceEquals(decodedBuffer, rentedBuffer) ? length : decodedBuffer!.Length);
                     if (entryType == EntryTypePage)
                     {
                         await applyAsync(pageId, buffer).ConfigureAwait(false);
                     }
                     else if (entryType == EntryTypeTransactionBegin)
                     {
-                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        if (!TryReadTransactionId(buffer.Span, out var transactionId))
                         {
                             Log(TinyDbLogLevel.Warning, $"Invalid transaction begin record at {currentEntryStart}.");
                             replayStoppedAtInvalidRecord = true;
@@ -424,7 +420,7 @@ public sealed partial class WriteAheadLog
                     }
                     else if (entryType == EntryTypeTransactionPage)
                     {
-                        if (!TryReadTransactionPage(buffer, out var transactionId, out var beforeImage, out var afterImage))
+                        if (!TryReadTransactionPage(buffer.Span, out var transactionId, out var beforeImage, out var afterImage))
                         {
                             Log(TinyDbLogLevel.Warning, $"Invalid transaction page record at {currentEntryStart}.");
                             replayStoppedAtInvalidRecord = true;
@@ -441,7 +437,7 @@ public sealed partial class WriteAheadLog
                     }
                     else if (entryType == EntryTypeTransactionCommit)
                     {
-                        if (!TryReadTransactionId(buffer, out var transactionId))
+                        if (!TryReadTransactionId(buffer.Span, out var transactionId))
                         {
                             Log(TinyDbLogLevel.Warning, $"Invalid transaction commit record at {currentEntryStart}.");
                             replayStoppedAtInvalidRecord = true;

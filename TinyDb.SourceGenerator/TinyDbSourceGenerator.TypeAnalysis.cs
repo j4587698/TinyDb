@@ -190,6 +190,11 @@ public partial class TinyDbSourceGenerator
         }
 
         // 检查已知类型名称
+        if (IsTinyDbObjectIdType(typeSymbol))
+        {
+            return true;
+        }
+
         var typeName = typeSymbol.ToDisplayString();
         var isWellKnown = typeName switch
         {
@@ -197,9 +202,7 @@ public partial class TinyDbSourceGenerator
             "System.Guid" or "Guid" => true,
             "System.TimeSpan" or "TimeSpan" => true,
             "System.DateTimeOffset" or "DateTimeOffset" => true,
-            "TinyDb.Bson.ObjectId" or "ObjectId" => true,
             "byte[]" or "System.Byte[]" => true,
-            _ when typeName.EndsWith("ObjectId", StringComparison.Ordinal) => true,
             _ when typeSymbol.TypeKind == TypeKind.Enum => true,
             _ => false
         };
@@ -210,6 +213,19 @@ public partial class TinyDbSourceGenerator
         }
 
         return IsBsonValueType(typeSymbol);
+    }
+
+    private static bool IsTinyDbObjectIdType(ITypeSymbol typeSymbol)
+    {
+        if (typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            typeSymbol = namedType.TypeArguments[0];
+        }
+
+        var fullName = typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        return string.Equals(fullName, "global::TinyDb.Bson.ObjectId", StringComparison.Ordinal);
     }
 
     private static bool IsBsonValueType(ITypeSymbol typeSymbol)
