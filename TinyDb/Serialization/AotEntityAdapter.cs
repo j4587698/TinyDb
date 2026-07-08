@@ -68,6 +68,12 @@ internal interface IAotEntityPropertyAccessor
     object? GetPropertyValueUntyped(object entity, string propertyName);
 }
 
+public delegate void AotSetId<T>(ref T entity, BsonValue id);
+
+public delegate bool AotTrySetPropertyValue<T>(ref T entity, string propertyName, object? value);
+
+public delegate bool AotGenerateIdIfNeeded<T>(ref T entity);
+
 /// <summary>
 /// 表示针对特定实体类型由源生成器生成的AOT辅助适配器
 /// </summary>
@@ -77,10 +83,13 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
     public Func<BsonDocument, T> FromDocument { get; }
     public Func<T, BsonValue> GetId { get; }
     public Action<T, BsonValue> SetId { get; }
+    public AotSetId<T> SetIdByRef { get; }
     public Func<T, bool> HasValidId { get; }
     public Func<T, string, object?> GetPropertyValue { get; }
     public Func<T, string, object?, bool> TrySetPropertyValue { get; }
+    public AotTrySetPropertyValue<T> TrySetPropertyValueByRef { get; }
     public Func<T, bool> GenerateIdIfNeeded { get; }
+    public AotGenerateIdIfNeeded<T> GenerateIdIfNeededByRef { get; }
     public IReadOnlyList<AotForeignKeyReference> ForeignKeyReferences { get; }
     public string? IdPropertyName { get; }
     public Type? IdPropertyType { get; }
@@ -124,7 +133,10 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
         Type? idPropertyType = null,
         IdGenerationStrategy idGenerationStrategy = IdGenerationStrategy.None,
         string? idGenerationSequenceName = null,
-        Func<T, bool>? generateIdIfNeeded = null)
+        Func<T, bool>? generateIdIfNeeded = null,
+        AotSetId<T>? setIdByRef = null,
+        AotTrySetPropertyValue<T>? trySetPropertyValueByRef = null,
+        AotGenerateIdIfNeeded<T>? generateIdIfNeededByRef = null)
     {
         ToDocument = toDocument ?? throw new ArgumentNullException(nameof(toDocument));
         FromDocument = fromDocument ?? throw new ArgumentNullException(nameof(fromDocument));
@@ -133,12 +145,15 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
         HasValidId = hasValidId ?? throw new ArgumentNullException(nameof(hasValidId));
         GetPropertyValue = getPropertyValue ?? throw new ArgumentNullException(nameof(getPropertyValue));
         TrySetPropertyValue = trySetPropertyValue ?? throw new ArgumentNullException(nameof(trySetPropertyValue));
+        SetIdByRef = setIdByRef ?? ((ref T entity, BsonValue id) => SetId(entity, id));
+        TrySetPropertyValueByRef = trySetPropertyValueByRef ?? ((ref T entity, string propertyName, object? value) => TrySetPropertyValue(entity, propertyName, value));
         ForeignKeyReferences = foreignKeyReferences ?? Array.Empty<AotForeignKeyReference>();
         IdPropertyName = idPropertyName;
         IdPropertyType = idPropertyType;
         IdGenerationStrategy = idGenerationStrategy;
         IdGenerationSequenceName = idGenerationSequenceName;
         GenerateIdIfNeeded = generateIdIfNeeded ?? (static _ => false);
+        GenerateIdIfNeededByRef = generateIdIfNeededByRef ?? ((ref T entity) => GenerateIdIfNeeded(entity));
     }
 
     // 实现非泛型接口

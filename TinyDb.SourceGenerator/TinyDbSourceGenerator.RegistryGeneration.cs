@@ -43,21 +43,42 @@ public partial class TinyDbSourceGenerator
             var helperFullName = string.IsNullOrEmpty(classInfo.Namespace)
                 ? classInfo.HelperClassName
                 : $"{classInfo.Namespace}.{classInfo.HelperClassName}";
+            var setIdAction = classInfo.IsValueType
+                ? "            static (_, _) => { },"
+                : $"            (entity, id) => {helperFullName}.SetId(entity, id),";
+            var trySetPropertyAction = classInfo.IsValueType
+                ? "            static (_, _, _) => false,"
+                : $"            (entity, propertyName, value) => {helperFullName}.TrySetPropertyValue(entity, propertyName, value),";
+            var generateIdAction = classInfo.IsValueType
+                ? "            static _ => false,"
+                : $"            entity => {helperFullName}.GenerateIdIfNeeded(entity),";
+            var setIdByRefAction = classInfo.IsValueType
+                ? $"            (ref {classInfo.FullyQualifiedTypeReference} entity, global::TinyDb.Bson.BsonValue id) => {helperFullName}.SetId(ref entity, id),"
+                : $"            (ref {classInfo.FullyQualifiedTypeReference} entity, global::TinyDb.Bson.BsonValue id) => {helperFullName}.SetId(entity, id),";
+            var trySetPropertyByRefAction = classInfo.IsValueType
+                ? $"            (ref {classInfo.FullyQualifiedTypeReference} entity, string propertyName, object? value) => {helperFullName}.TrySetPropertyValue(ref entity, propertyName, value),"
+                : $"            (ref {classInfo.FullyQualifiedTypeReference} entity, string propertyName, object? value) => {helperFullName}.TrySetPropertyValue(entity, propertyName, value),";
+            var generateIdByRefAction = classInfo.IsValueType
+                ? $"            (ref {classInfo.FullyQualifiedTypeReference} entity) => {helperFullName}.GenerateIdIfNeeded(ref entity))"
+                : $"            (ref {classInfo.FullyQualifiedTypeReference} entity) => {helperFullName}.GenerateIdIfNeeded(entity))";
 
             sb.AppendLine($"        AotHelperRegistry.Register(new AotEntityAdapter<{classInfo.FullyQualifiedTypeReference}>(");
             sb.AppendLine($"            entity => {helperFullName}.ToDocument(entity),");
             sb.AppendLine($"            document => {helperFullName}.FromDocument(document),");
             sb.AppendLine($"            entity => {helperFullName}.GetId(entity),");
-            sb.AppendLine($"            (entity, id) => {helperFullName}.SetId(entity, id),");
+            sb.AppendLine(setIdAction);
             sb.AppendLine($"            entity => {helperFullName}.HasValidId(entity),");
             sb.AppendLine($"            (entity, propertyName) => {helperFullName}.GetPropertyValue(entity, propertyName),");
-            sb.AppendLine($"            (entity, propertyName, value) => {helperFullName}.TrySetPropertyValue(entity, propertyName, value),");
+            sb.AppendLine(trySetPropertyAction);
             sb.AppendLine($"            {helperFullName}.ForeignKeyReferences,");
             sb.AppendLine($"            {helperFullName}.IdPropertyName,");
             sb.AppendLine($"            {helperFullName}.IdPropertyType,");
             sb.AppendLine($"            {helperFullName}.IdGenerationStrategy,");
             sb.AppendLine($"            {helperFullName}.IdGenerationSequenceName,");
-            sb.AppendLine($"            entity => {helperFullName}.GenerateIdIfNeeded(entity)));");
+            sb.AppendLine(generateIdAction);
+            sb.AppendLine(setIdByRefAction);
+            sb.AppendLine(trySetPropertyByRefAction);
+            sb.AppendLine(generateIdByRefAction + ");");
             AppendMetadataRegistryRegistration(sb, classInfo);
         }
 

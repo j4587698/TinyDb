@@ -15,37 +15,40 @@ public sealed partial class WriteAheadLog
     private bool HasActiveWriteContext(WriteLockContext? context)
     {
         return context?.IsActiveFor(this) == true ||
-               s_currentWriteContext.Value?.IsActiveFor(this) == true;
+               s_currentWriteContext?.IsActiveFor(this) == true;
     }
 
 
     private static void RunWithCurrentThreadWriteContext(WriteLockContext context, Action action)
     {
-        var previousContext = s_currentWriteContext.Value;
-        s_currentWriteContext.Value = context;
+        var previousContext = s_currentWriteContext;
+        s_currentWriteContext = context;
         try
         {
             action();
         }
         finally
         {
-            s_currentWriteContext.Value = previousContext;
+            s_currentWriteContext = previousContext;
         }
     }
 
 
     private static async Task RunWithCurrentThreadWriteContextAsync(WriteLockContext context, Func<Task> action)
     {
-        var previousContext = s_currentWriteContext.Value;
-        s_currentWriteContext.Value = context;
+        var previousContext = s_currentWriteContext;
+        s_currentWriteContext = context;
+        Task task;
         try
         {
-            await action().ConfigureAwait(false);
+            task = action();
         }
         finally
         {
-            s_currentWriteContext.Value = previousContext;
+            s_currentWriteContext = previousContext;
         }
+
+        await task.ConfigureAwait(false);
     }
 
 

@@ -58,6 +58,25 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         adapter.SetId(entity, id);
     }
 
+    public static void SetId(ref T entity, BsonValue id)
+    {
+        if (entity is null) throw new ArgumentNullException(nameof(entity));
+
+        if (entity is BsonDocument)
+        {
+            throw new NotSupportedException("BsonDocument is immutable. Use document.Set(\"_id\", id) to create a new document with the requested ID.");
+        }
+
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
+        }
+
+        adapter.SetIdByRef(ref entity, id);
+    }
+
     /// <summary>
     /// 检查实体是否具有有效的 ID。
     /// </summary>
@@ -112,6 +131,31 @@ public static class AotIdAccessor<[DynamicallyAccessedMembers(DynamicallyAccesse
         }
 
         return adapter.GenerateIdIfNeeded(entity);
+    }
+
+    public static bool GenerateIdIfNeeded(ref T entity)
+    {
+        if (entity is null) return false;
+
+        if (entity is BsonDocument)
+        {
+            return false;
+        }
+
+        if (!AotHelperRegistry.TryGetAdapter<T>(out var adapter))
+        {
+            throw new InvalidOperationException(
+                $"Type '{typeof(T).FullName}' must have [Entity] attribute for AOT serialization. " +
+                $"Add [Entity] attribute to the type to enable source generator support.");
+        }
+
+        if ((adapter.IdPropertyType == typeof(int) || adapter.IdPropertyType == typeof(long)) &&
+            !adapter.HasValidId(entity))
+        {
+            return false;
+        }
+
+        return adapter.GenerateIdIfNeededByRef(ref entity);
     }
 
     internal static bool TryGetIdInfo(

@@ -13,20 +13,24 @@ namespace TinyDb.Index;
 public sealed partial class DiskBTree
 {
 
-    private DiskBTreeNode FindLeafNode(IndexKey key)
+    private DiskBTreeNode FindLeafNode(IndexKey key, bool rightmost)
     {
         var node = LoadNode(_rootPageId);
         while (!node.IsLeaf)
         {
-            int childIdx = UpperBound(node.Keys, key);
+            int childIdx = rightmost ? UpperBound(node.Keys, key) : LowerBound(node.Keys, key);
             node = LoadNode(node.ChildrenIds[childIdx]);
         }
         return node;
     }
 
+    private DiskBTreeNode FindLeftmostLeafNode(IndexKey key) => FindLeafNode(key, rightmost: false);
+
+    private DiskBTreeNode FindRightmostLeafNode(IndexKey key) => FindLeafNode(key, rightmost: true);
+
     private DiskBTreeNode FindFirstCandidateLeafNode(IndexKey key)
     {
-        var node = FindLeafNode(key);
+        var node = FindLeftmostLeafNode(key);
 
         while (node.PrevSiblingId != 0)
         {
@@ -44,7 +48,7 @@ public sealed partial class DiskBTree
 
     private DiskBTreeNode FindLastCandidateLeafNode(IndexKey key)
     {
-        var node = FindLeafNode(key);
+        var node = FindRightmostLeafNode(key);
 
         while (node.NextSiblingId != 0)
         {
@@ -60,22 +64,32 @@ public sealed partial class DiskBTree
         return node;
     }
 
-    private async Task<DiskBTreeNode> FindLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
+    private async Task<DiskBTreeNode> FindLeafNodeAsync(IndexKey key, bool rightmost, CancellationToken cancellationToken)
     {
         var node = await LoadNodeAsync(_rootPageId, cancellationToken).ConfigureAwait(false);
         while (!node.IsLeaf)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            int childIdx = UpperBound(node.Keys, key);
+            int childIdx = rightmost ? UpperBound(node.Keys, key) : LowerBound(node.Keys, key);
             node = await LoadNodeAsync(node.ChildrenIds[childIdx], cancellationToken).ConfigureAwait(false);
         }
         return node;
     }
 
+    private Task<DiskBTreeNode> FindLeftmostLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
+    {
+        return FindLeafNodeAsync(key, false, cancellationToken);
+    }
+
+    private Task<DiskBTreeNode> FindRightmostLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
+    {
+        return FindLeafNodeAsync(key, true, cancellationToken);
+    }
+
     private async Task<DiskBTreeNode> FindFirstCandidateLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
     {
-        var node = await FindLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
+        var node = await FindLeftmostLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
 
         while (node.PrevSiblingId != 0)
         {
@@ -95,7 +109,7 @@ public sealed partial class DiskBTree
 
     private async Task<DiskBTreeNode> FindLastCandidateLeafNodeAsync(IndexKey key, CancellationToken cancellationToken)
     {
-        var node = await FindLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
+        var node = await FindRightmostLeafNodeAsync(key, cancellationToken).ConfigureAwait(false);
 
         while (node.NextSiblingId != 0)
         {

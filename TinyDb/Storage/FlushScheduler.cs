@@ -286,7 +286,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
 
             lock (_flushLock)
             {
-                delayForBatch = _syncedRequests > 1;
+                delayForBatch = _syncedRequests == 1;
             }
 
             if (delayForBatch)

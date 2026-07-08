@@ -215,7 +215,9 @@ public sealed partial class WriteAheadLog
             var disabledContext = new WriteLockContext(this);
             try
             {
-                await flushDataAsync(disabledContext, cancellationToken).ConfigureAwait(false);
+                await RunWithCurrentThreadWriteContextAsync(
+                    disabledContext,
+                    () => flushDataAsync(disabledContext, cancellationToken)).ConfigureAwait(false);
             }
             finally
             {
@@ -236,7 +238,9 @@ public sealed partial class WriteAheadLog
                 SetFlushedLSN(stream.Position);
             }
 
-            await flushDataAsync(context, cancellationToken).ConfigureAwait(false);
+            await RunWithCurrentThreadWriteContextAsync(
+                context,
+                () => flushDataAsync(context, cancellationToken)).ConfigureAwait(false);
 
             if (HasPendingEntriesCore)
             {

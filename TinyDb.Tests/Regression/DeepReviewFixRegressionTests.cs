@@ -3,6 +3,7 @@ using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.IdGeneration;
+using TinyDb.Index;
 using TinyDb.Serialization;
 using TinyDb.Storage;
 using TinyDb.Tests.Regression.Systematic.Models;
@@ -210,6 +211,86 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task WalSynchronizeAsync_ShouldAllowNestedAsyncWalWrites()
+    {
+        var dbFile = Path.Combine(_directory, "wal-nested-async.db");
+        using var wal = new WriteAheadLog(dbFile, pageSize: 4096, enabled: true);
+        using var page = new Page(1, 4096, PageType.Data);
+
+        page.WriteData(0, new byte[] { 1, 2, 3 });
+
+        await wal.SynchronizeAsync(
+                ct => wal.AppendPageAsync(page, ct),
+                CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(wal.HasPendingEntries).IsFalse();
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldDeserializeSetCollections()
+    {
+        var source = new SetCollectionRegressionEntity
+        {
+            Id = 1,
+            Tags = new HashSet<string>(StringComparer.Ordinal) { "red", "blue" },
+            Codes = new HashSet<int> { 10, 20 }
+        };
+
+        var document = AotBsonMapper.ToDocument(source);
+        var restored = AotBsonMapper.FromDocument<SetCollectionRegressionEntity>(document);
+
+        await Assert.That(restored.Tags.GetType()).IsEqualTo(typeof(HashSet<string>));
+        await Assert.That(restored.Codes.GetType()).IsEqualTo(typeof(HashSet<int>));
+        await Assert.That(restored.Tags.SetEquals(source.Tags)).IsTrue();
+        await Assert.That(restored.Codes.SetEquals(source.Codes)).IsTrue();
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldSetStructMembersByRef()
+    {
+        var entity = new StructSetterRegressionEntity { Name = "before" };
+
+        AotIdAccessor<StructSetterRegressionEntity>.SetId(ref entity, new BsonInt32(42));
+        await Assert.That(entity.Id).IsEqualTo(42);
+
+        var found = AotHelperRegistry.TryGetAdapter<StructSetterRegressionEntity>(out var adapter);
+        await Assert.That(found).IsTrue();
+
+        adapter!.TrySetPropertyValueByRef(ref entity, nameof(StructSetterRegressionEntity.Name), "after");
+        await Assert.That(entity.Name).IsEqualTo("after");
+    }
+
+    [Test]
+    public async Task DiskBTree_ShouldFindDuplicateKeysAfterMultipleSplits()
+    {
+        using var disk = new MemoryDiskStream();
+        using var pageManager = new PageManager(disk, pageSize: 4096, maxCacheSize: 64);
+        using var tree = DiskBTree.Create(pageManager, maxKeys: 3);
+
+        var duplicateKey = new IndexKey(new BsonInt32(1));
+        tree.Insert(new IndexKey(new BsonInt32(0)), new BsonInt32(-1));
+        for (var i = 0; i < 40; i++)
+        {
+            tree.Insert(duplicateKey, new BsonInt32(i));
+        }
+        tree.Insert(new IndexKey(new BsonInt32(2)), new BsonInt32(100));
+
+        var allMatches = tree.Find(duplicateKey)
+            .Cast<BsonInt32>()
+            .Select(static value => value.Value)
+            .Order()
+            .ToArray();
+        var forwardRange = tree.FindRange(duplicateKey, duplicateKey, includeStart: true, includeEnd: true).ToList();
+        var reverseRange = tree.FindRangeReverse(duplicateKey, duplicateKey, includeStart: true, includeEnd: true).ToList();
+
+        await Assert.That(tree.FindExact(duplicateKey)).IsNotNull();
+        await Assert.That(allMatches.SequenceEqual(Enumerable.Range(0, 40))).IsTrue();
+        await Assert.That(forwardRange.Count).IsEqualTo(40);
+        await Assert.That(reverseRange.Count).IsEqualTo(40);
+    }
+
+    [Test]
     public async Task Decimal128_Bytes_ShouldUseLittleEndianLayout()
     {
         var value = new Decimal128(0x0102030405060708UL, 0x1112131415161718UL);
@@ -263,6 +344,21 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
             public int Id { get; set; }
             public string Name { get; set; } = string.Empty;
         }
+    }
+
+    [Entity("SetCollectionRegressionEntities")]
+    public partial class SetCollectionRegressionEntity
+    {
+        public int Id { get; set; }
+        public HashSet<string> Tags { get; set; } = new(StringComparer.Ordinal);
+        public ISet<int> Codes { get; set; } = new HashSet<int>();
+    }
+
+    [Entity("StructSetterRegressionEntities")]
+    public partial struct StructSetterRegressionEntity
+    {
+        public int Id { get; set; }
+        public string Name { get; set; }
     }
 
     private sealed class MemoryDiskStream : IDiskStream

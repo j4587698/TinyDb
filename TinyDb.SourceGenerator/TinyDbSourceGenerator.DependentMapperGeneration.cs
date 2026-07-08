@@ -195,6 +195,9 @@ public partial class TinyDbSourceGenerator
             else if (prop.IsCollection)
             {
                 var elementType = prop.ElementType ?? "object";
+                var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(
+                    prop.FullyQualifiedTypeName,
+                    elementType);
 
                 sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
                 sb.AppendLine("            {");
@@ -207,7 +210,7 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine("                }");
                 sb.AppendLine($"                else if (bson_{prop.Name} is BsonArray array_{prop.Name})");
                 sb.AppendLine("                {");
-                sb.AppendLine($"                    var list_{prop.Name} = new System.Collections.Generic.List<{elementType}>();");
+                sb.AppendLine($"                    var list_{prop.Name} = {collectionInstance};");
                 sb.AppendLine($"                    foreach (var item in array_{prop.Name})");
                 sb.AppendLine("                    {");
                 sb.AppendLine($"                        if (item.IsNull)");

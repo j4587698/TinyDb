@@ -48,7 +48,10 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("        public static Type? IdPropertyType => null;");
             sb.AppendLine("        public static global::TinyDb.Attributes.IdGenerationStrategy IdGenerationStrategy => global::TinyDb.Attributes.IdGenerationStrategy.None;");
             sb.AppendLine("        public static string? IdGenerationSequenceName => null;");
-            sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.FullyQualifiedTypeReference} entity) => false;");
+            var noIdEntityParameter = classInfo.IsValueType
+                ? $"ref {classInfo.FullyQualifiedTypeReference} entity"
+                : $"{classInfo.FullyQualifiedTypeReference} entity";
+            sb.AppendLine($"        public static bool GenerateIdIfNeeded({noIdEntityParameter}) => false;");
             return;
         }
 
@@ -64,7 +67,10 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine($"        public static global::TinyDb.Attributes.IdGenerationStrategy IdGenerationStrategy => {strategy};");
         sb.AppendLine($"        public static string? IdGenerationSequenceName => {sequenceName};");
         sb.AppendLine();
-        sb.AppendLine($"        public static bool GenerateIdIfNeeded({classInfo.FullyQualifiedTypeReference} entity)");
+        var entityParameter = classInfo.IsValueType
+            ? $"ref {classInfo.FullyQualifiedTypeReference} entity"
+            : $"{classInfo.FullyQualifiedTypeReference} entity";
+        sb.AppendLine($"        public static bool GenerateIdIfNeeded({entityParameter})");
         sb.AppendLine("        {");
         if (!classInfo.IsValueType)
         {
