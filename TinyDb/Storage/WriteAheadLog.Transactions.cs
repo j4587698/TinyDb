@@ -155,6 +155,11 @@ public sealed partial class WriteAheadLog
 
         public void Rollback(Action<uint, byte[]> restore)
         {
+            Rollback(restore, discardNewPage: null);
+        }
+
+        internal void Rollback(Action<uint, byte[]> restore, Action<uint>? discardNewPage)
+        {
             if (_completed) return;
             if (restore == null) throw new ArgumentNullException(nameof(restore));
 
@@ -166,7 +171,7 @@ public sealed partial class WriteAheadLog
                     throw new InvalidOperationException("WAL transaction scope mismatch.");
                 }
 
-                _wal.RestoreTransactionBeforeImages(_transactionId, restore);
+                _wal.RestoreTransactionBeforeImages(_transactionId, restore, discardNewPage);
             }
 
             _completed = true;
@@ -229,7 +234,7 @@ public sealed partial class WriteAheadLog
     }
 
 
-    private void RestoreTransactionBeforeImages(Guid transactionId, Action<uint, byte[]> restore)
+    private void RestoreTransactionBeforeImages(Guid transactionId, Action<uint, byte[]> restore, Action<uint>? discardNewPage)
     {
         if (!TryGetCurrentTransactionContext(out var transactionContext))
         {
@@ -246,6 +251,10 @@ public sealed partial class WriteAheadLog
             if (record.BeforeImage != null)
             {
                 restore(record.PageId, record.BeforeImage);
+            }
+            else
+            {
+                discardNewPage?.Invoke(record.PageId);
             }
         }
     }

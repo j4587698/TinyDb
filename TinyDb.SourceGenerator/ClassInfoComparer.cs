@@ -19,6 +19,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                StringEquals(x.Name, y.Name) &&
                StringEquals(x.MetadataName, y.MetadataName) &&
                StringEquals(x.ContainingTypePath, y.ContainingTypePath) &&
+               StringEquals(x.ContainingTypeDisplayPath, y.ContainingTypeDisplayPath) &&
                x.IsGenericType == y.IsGenericType &&
                StringEquals(x.TypeParameterList, y.TypeParameterList) &&
                StringEquals(x.TypeParameterConstraints, y.TypeParameterConstraints) &&
@@ -49,6 +50,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, obj.Name);
             hash = Add(hash, obj.MetadataName);
             hash = Add(hash, obj.ContainingTypePath);
+            hash = Add(hash, obj.ContainingTypeDisplayPath);
             hash = Add(hash, obj.IsGenericType);
             hash = Add(hash, obj.TypeParameterList);
             hash = Add(hash, obj.TypeParameterConstraints);
@@ -120,6 +122,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                x.IsCollection == y.IsCollection &&
                x.IsDictionary == y.IsDictionary &&
                x.IsArray == y.IsArray &&
+               x.ArrayRank == y.ArrayRank &&
                StringEquals(x.ElementType, y.ElementType) &&
                x.IsElementComplexType == y.IsElementComplexType &&
                x.IsElementValueType == y.IsElementValueType &&
@@ -160,6 +163,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.IsCollection);
             hash = Add(hash, value.IsDictionary);
             hash = Add(hash, value.IsArray);
+            hash = Add(hash, value.ArrayRank);
             hash = Add(hash, value.ElementType);
             hash = Add(hash, value.IsElementComplexType);
             hash = Add(hash, value.IsElementValueType);
@@ -211,6 +215,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                x.IsCollection == y.IsCollection &&
                x.IsDictionary == y.IsDictionary &&
                x.IsArray == y.IsArray &&
+               x.ArrayRank == y.ArrayRank &&
                StringEquals(x.ElementType, y.ElementType) &&
                x.IsElementComplexType == y.IsElementComplexType &&
                x.IsElementValueType == y.IsElementValueType &&
@@ -236,6 +241,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.IsCollection);
             hash = Add(hash, value.IsDictionary);
             hash = Add(hash, value.IsArray);
+            hash = Add(hash, value.ArrayRank);
             hash = Add(hash, value.ElementType);
             hash = Add(hash, value.IsElementComplexType);
             hash = Add(hash, value.IsElementValueType);

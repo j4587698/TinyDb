@@ -16,6 +16,7 @@ public partial class TinyDbSourceGenerator
         public bool IsCollection { get; }
         public bool IsDictionary { get; }
         public bool IsArray { get; }
+        public int ArrayRank { get; }
         public string? ElementType { get; }
         public bool IsElementComplexType { get; }
         public bool IsElementValueType { get; }
@@ -29,6 +30,7 @@ public partial class TinyDbSourceGenerator
             bool isCollection,
             bool isDictionary,
             bool isArray,
+            int arrayRank,
             string? elementType,
             bool isElementComplexType,
             bool isElementValueType,
@@ -41,6 +43,7 @@ public partial class TinyDbSourceGenerator
             IsCollection = isCollection;
             IsDictionary = isDictionary;
             IsArray = isArray;
+            ArrayRank = arrayRank;
             ElementType = elementType;
             IsElementComplexType = isElementComplexType;
             IsElementValueType = isElementValueType;
@@ -97,7 +100,7 @@ public partial class TinyDbSourceGenerator
     {
         if (typeSymbol == null)
         {
-            return new TypeAnalysisResult(false, false, false, false, null, false, false, null, null, false, false);
+            return new TypeAnalysisResult(false, false, false, false, 0, null, false, false, null, null, false, false);
         }
 
         // 处理可空类型
@@ -110,7 +113,7 @@ public partial class TinyDbSourceGenerator
         // 检查是否是基本类型
         if (IsPrimitiveOrWellKnownType(typeSymbol))
         {
-            return new TypeAnalysisResult(false, false, false, false, null, false, false, null, null, false, false);
+            return new TypeAnalysisResult(false, false, false, false, 0, null, false, false, null, null, false, false);
         }
 
         // 检查是否是数组
@@ -120,7 +123,7 @@ public partial class TinyDbSourceGenerator
             var isElementComplex = IsComplexObjectType(elementType);
             var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
             var isElementValueType = elementType.IsValueType;
-            return new TypeAnalysisResult(false, true, false, true, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
+            return new TypeAnalysisResult(false, true, false, true, arrayType.Rank, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
         }
 
         // 检查是否是字典类型
@@ -133,7 +136,7 @@ public partial class TinyDbSourceGenerator
                 var keyTypeName = typeArgs.Value.KeyType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var valueTypeName = typeArgs.Value.ValueType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isValueValueType = typeArgs.Value.ValueType.IsValueType;
-                return new TypeAnalysisResult(false, false, true, false, null, false, false, keyTypeName, valueTypeName, isValueComplex, isValueValueType);
+                return new TypeAnalysisResult(false, false, true, false, 0, null, false, false, keyTypeName, valueTypeName, isValueComplex, isValueValueType);
             }
         }
 
@@ -146,17 +149,17 @@ public partial class TinyDbSourceGenerator
                 var isElementComplex = IsComplexObjectType(elementType);
                 var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isElementValueType = elementType.IsValueType;
-                return new TypeAnalysisResult(false, true, false, false, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
+                return new TypeAnalysisResult(false, true, false, false, 0, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
             }
         }
 
         // 检查是否是复杂对象类型
         if (IsComplexObjectType(typeSymbol))
         {
-            return new TypeAnalysisResult(true, false, false, false, null, false, false, null, null, false, false);
+            return new TypeAnalysisResult(true, false, false, false, 0, null, false, false, null, null, false, false);
         }
 
-        return new TypeAnalysisResult(false, false, false, false, null, false, false, null, null, false, false);
+        return new TypeAnalysisResult(false, false, false, false, 0, null, false, false, null, null, false, false);
     }
 
     /// <summary>

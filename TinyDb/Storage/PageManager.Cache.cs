@@ -9,9 +9,15 @@ namespace TinyDb.Storage;
 
 public sealed partial class PageManager
 {
-    public void ClearCache(int maxPagesToKeep = 0)
+    public void ClearCache(int maxPagesToKeep = 0, bool flushDirtyPages = true)
     {
         ThrowIfDisposed();
+
+        if (flushDirtyPages)
+        {
+            FlushDirtyPages();
+        }
+
         ClearCacheCore(maxPagesToKeep);
     }
 
@@ -50,20 +56,57 @@ public sealed partial class PageManager
             return false;
         }
 
-        if (page.PinCount > 0)
+        if (page.IsDisposed)
+        {
+            if (!_pageCache.TryRemove(pageID, out var removedPage))
+            {
+                return false;
+            }
+
+            RemoveDirtyTracking(removedPage);
+            _lruCache.Remove(pageID);
+            return true;
+        }
+
+        if (page.PinCount > 0 || page.IsDirty)
         {
             return false;
         }
 
-        if (!_pageCache.TryRemove(pageID, out var removedPage))
-        {
-            return false;
-        }
+        Page? pageToDispose = null;
+        page.Pin();
 
-        RemoveDirtyTracking(removedPage);
-        _lruCache.Remove(pageID);
-        removedPage.Dispose();
-        return true;
+        try
+        {
+            if (!_pageCache.TryGetValue(pageID, out var currentPage) ||
+                !ReferenceEquals(currentPage, page) ||
+                currentPage.PinCount != 1 ||
+                currentPage.IsDirty)
+            {
+                return false;
+            }
+
+            if (!_pageCache.TryRemove(pageID, out var removedPage))
+            {
+                return false;
+            }
+
+            RemoveDirtyTracking(removedPage);
+            _lruCache.Remove(pageID);
+            pageToDispose = removedPage;
+            return true;
+        }
+        finally
+        {
+            page.Unpin();
+            pageToDispose?.Dispose();
+        }
+    }
+
+    internal void DiscardCachedPage(uint pageID)
+    {
+        ThrowIfDisposed();
+        RemoveFromCache(pageID);
     }
 
     /// <summary>

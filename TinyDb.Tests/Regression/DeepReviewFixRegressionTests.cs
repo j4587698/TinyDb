@@ -289,6 +289,26 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task SourceGenerator_ShouldSerializeDependentKeywordPropertiesInline()
+    {
+        var source = new KeywordDependentRegressionEntity
+        {
+            Id = 1,
+            Detail = new KeywordDependentDetail
+            {
+                @class = "alpha",
+                @event = 9
+            }
+        };
+
+        var document = AotBsonMapper.ToDocument(source);
+        var restored = AotBsonMapper.FromDocument<KeywordDependentRegressionEntity>(document);
+
+        await Assert.That(restored.Detail.@class).IsEqualTo("alpha");
+        await Assert.That(restored.Detail.@event).IsEqualTo(9);
+    }
+
+    [Test]
     public async Task SourceGenerator_ShouldSetStructMembersByRef()
     {
         var entity = new StructSetterRegressionEntity { Name = "before" };
@@ -414,6 +434,19 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     {
         public int Code { get; set; }
         public string Label { get; set; }
+    }
+
+    [Entity("KeywordDependentRegressionEntities")]
+    public partial class KeywordDependentRegressionEntity
+    {
+        public int Id { get; set; }
+        public KeywordDependentDetail Detail { get; set; } = new();
+    }
+
+    public sealed class KeywordDependentDetail
+    {
+        public string @class { get; set; } = string.Empty;
+        public int @event { get; set; }
     }
 
     [Entity("StructSetterRegressionEntities")]
