@@ -15,20 +15,37 @@ public sealed partial class TransactionManager
     /// <param name="transaction">事务</param>
     private void ApplyOperationsToDatabase(IReadOnlyList<TransactionOperation> operations)
     {
-        int appliedCount = 0;
+        var appliedCount = 0;
         try
         {
-            for (int i = 0; i < operations.Count; i++)
+            using (_engine.SuppressCurrentTransaction())
             {
-                ApplySingleOperation(operations[i]);
-                appliedCount++;
+                for (int i = 0; i < operations.Count; i++)
+                {
+                    ApplySingleOperation(operations[i]);
+                    appliedCount++;
+                }
             }
         }
         catch (Exception ex)
         {
-            var compensationErrors = new List<Exception>();
+            if (!_engine.GetWalEnabled())
+            {
+                RollbackAppliedOperationsWithoutWal(operations, appliedCount, ex);
+            }
 
-            // 如果应用过程中出错，回滚已经成功的操作
+            throw new InvalidOperationException("Transaction apply failed.", ex);
+        }
+    }
+
+    private void RollbackAppliedOperationsWithoutWal(
+        IReadOnlyList<TransactionOperation> operations,
+        int appliedCount,
+        Exception applyException)
+    {
+        var compensationErrors = new List<Exception>();
+        using (_engine.SuppressCurrentTransaction())
+        {
             for (int i = appliedCount - 1; i >= 0; i--)
             {
                 try
@@ -42,21 +59,21 @@ public sealed partial class TransactionManager
                         rollbackEx));
                 }
             }
-
-            if (compensationErrors.Count == 0)
-            {
-                throw new InvalidOperationException("Transaction apply failed.", ex);
-            }
-
-            var allErrors = new List<Exception>
-            {
-                new InvalidOperationException("Transaction apply failed.", ex)
-            };
-            allErrors.AddRange(compensationErrors);
-            var aggregate = new AggregateException("Transaction apply failed and compensation rollback encountered errors.", allErrors);
-            _engine.MarkCorrupted(aggregate);
-            throw aggregate;
         }
+
+        if (compensationErrors.Count == 0)
+        {
+            return;
+        }
+
+        var allErrors = new List<Exception>
+        {
+            new InvalidOperationException("Transaction apply failed.", applyException)
+        };
+        allErrors.AddRange(compensationErrors);
+        var aggregate = new AggregateException("Transaction apply failed and compensation rollback encountered errors.", allErrors);
+        _engine.MarkCorrupted(aggregate);
+        throw aggregate;
     }
 
 
@@ -157,7 +174,7 @@ public sealed partial class TransactionManager
     private void RollbackOperations(Transaction transaction)
     {
         // 事务采用延迟提交模型：显式回滚仅需丢弃挂起操作。
-        // 真正的补偿回滚仅在 Commit 过程中部分应用失败时发生（见 ApplyOperationsToDatabase）。
+        // Commit 过程中部分应用失败时，由 WAL durability scope 恢复物理页状态。
         lock (transaction.SyncRoot)
         {
             transaction.ClearOperations();

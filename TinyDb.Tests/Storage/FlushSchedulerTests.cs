@@ -60,6 +60,30 @@ public class FlushSchedulerTests
     }
 
     [Test]
+    public async Task FlushScheduler_SyncedWorker_ShouldStayAliveBetweenRequests()
+    {
+        using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+
+        var page = _pageManager.GetPage(1);
+        page.WriteData(0, new byte[] { 1 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        await fs.EnsureDurabilityAsync(WriteConcern.Synced).WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(SpinWait.SpinUntil(
+            () => UnsafeAccessors.FlushSchedulerAccessor.SyncedWorkerRunning(fs),
+            TimeSpan.FromSeconds(2))).IsTrue();
+
+        page.WriteData(0, new byte[] { 2 });
+        _pageManager.SavePage(page);
+        _wal.AppendPage(page);
+
+        await fs.EnsureDurabilityAsync(WriteConcern.Synced).WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.That(UnsafeAccessors.FlushSchedulerAccessor.SyncedWorkerRunning(fs)).IsTrue();
+    }
+
+    [Test]
     public async Task FlushScheduler_Ctor_WithNullArgs_ShouldThrow()
     {
         await Assert.That(() => new FlushScheduler(null!, _wal, TimeSpan.Zero)).Throws<ArgumentNullException>();

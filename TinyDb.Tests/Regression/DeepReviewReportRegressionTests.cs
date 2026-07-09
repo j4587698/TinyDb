@@ -79,6 +79,21 @@ public sealed class DeepReviewReportRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task SourceGenerator_ShouldDeserializeInitOnlyPropertiesOnDependentTypes()
+    {
+        var document = AotBsonMapper.ToDocument(new NestedInitOnlyRegressionEntity
+        {
+            Id = 1,
+            Details = new NestedInitOnlyRegressionValue { Code = "nested-init" }
+        });
+
+        var restored = AotBsonMapper.FromDocument<NestedInitOnlyRegressionEntity>(document);
+
+        await Assert.That(restored).IsNotNull();
+        await Assert.That(restored!.Details.Code).IsEqualTo("nested-init");
+    }
+
+    [Test]
     public async Task SourceGenerator_ShouldCompileNestedEntityInsideGenericType()
     {
         await Assert.That(typeof(GenericOuterRegression<int>.InnerEntity).Name).IsEqualTo(nameof(GenericOuterRegression<int>.InnerEntity));
@@ -145,6 +160,32 @@ public sealed class DeepReviewReportRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task FindAll_ShouldWaitForCollectionCommitGate()
+    {
+        const string collectionName = "deep_review_read_gate_items";
+        using var engine = new TinyDbEngine(Path.Combine(_directory, "read-commit-gate.db"));
+        var collection = engine.GetCollection<CommitGateRegressionItem>(collectionName);
+        collection.Insert(new CommitGateRegressionItem { Id = 1, Name = "existing" });
+
+        using var gate = EnterCollectionCommitGate(engine, collectionName);
+        using var started = new ManualResetEventSlim();
+        var readTask = Task.Run(() =>
+        {
+            started.Set();
+            return collection.FindAll().ToList();
+        });
+
+        await Task.Run(() => started.Wait()).WaitAsync(TimeSpan.FromSeconds(2));
+        var completedWhileGateHeld = await Task.WhenAny(readTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        await Assert.That(completedWhileGateHeld == readTask).IsFalse();
+
+        gate.Dispose();
+        var results = await readTask.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.That(results.Count).IsEqualTo(1);
+        await Assert.That(results[0].Name).IsEqualTo("existing");
+    }
+
+    [Test]
     public async Task SingleDocumentInsert_ShouldNotWaitForSharedCollectionWriteGate()
     {
         const string collectionName = "deep_review_shared_gate_items";
@@ -197,6 +238,18 @@ public sealed class DeepReviewReportRegressionTests : IDisposable
     public sealed class InitOnlyRegressionEntity
     {
         public int Id { get; set; }
+        public string Code { get; init; } = string.Empty;
+    }
+
+    [Entity("deep_review_nested_init_only_items")]
+    public sealed class NestedInitOnlyRegressionEntity
+    {
+        public int Id { get; set; }
+        public NestedInitOnlyRegressionValue Details { get; set; } = new();
+    }
+
+    public sealed class NestedInitOnlyRegressionValue
+    {
         public string Code { get; init; } = string.Empty;
     }
 

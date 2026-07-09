@@ -63,6 +63,37 @@ public class ForeignKeyTests
     }
 
     [Test]
+    public async Task ForeignKey_Validation_ShouldFail_ForNonTransactionalInsert_WhenReferencedDocumentDoesNotExist()
+    {
+        var testDbPath = $"test_fk_non_transaction_fail_{Guid.NewGuid():N}.db";
+        try
+        {
+            using var engine = new TinyDbEngine(testDbPath);
+            var metadataManager = new MetadataManager(engine);
+
+            metadataManager.SaveEntityMetadata(typeof(ForeignKeyUser));
+            metadataManager.SaveEntityMetadata(typeof(ForeignKeyOrder));
+
+            var orders = engine.GetCollection<ForeignKeyOrder>("Orders");
+            var order = new ForeignKeyOrder { UserId = "non-existent-user-id" };
+
+            try
+            {
+                orders.Insert(order);
+                Assert.Fail("Should have thrown InvalidOperationException");
+            }
+            catch (InvalidOperationException ex)
+            {
+                await Assert.That(ex.Message).Contains("Foreign key constraint violation");
+            }
+        }
+        finally
+        {
+            CleanupDb(testDbPath);
+        }
+    }
+
+    [Test]
     public async Task ForeignKey_Validation_ShouldSucceed_WhenReferencedDocumentExists()
     {
          // Arrange

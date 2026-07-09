@@ -232,8 +232,79 @@ public partial class TinyDbSourceGenerator
 
         var result = new List<DependentComplexType>();
         var circularRefs = new List<CircularReferenceInfo>();
-        var visited = new HashSet<string>();
-        var toProcess = new Queue<(string FullName, ITypeSymbol Symbol, List<string> Path)>();
+        var processed = new HashSet<string>();
+        var visiting = new HashSet<string>();
+        var emittedCircularRefs = new HashSet<string>(StringComparer.Ordinal);
+
+        void AddCircularRefs(IEnumerable<CircularReferenceInfo> refs)
+        {
+            foreach (var circularRef in refs)
+            {
+                var key = $"{circularRef.ContainingTypeName}|{circularRef.TargetTypeName}|{circularRef.PropertyName}|{circularRef.CycleChain}";
+                if (emittedCircularRefs.Add(key))
+                {
+                    circularRefs.Add(circularRef);
+                }
+            }
+        }
+
+        void VisitDependency(ITypeSymbol typeSymbol, List<string> path)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (HasEntityAttribute(typeSymbol, cancellationToken))
+            {
+                return;
+            }
+
+            var typeName = ToFullyQualifiedNonNullableTypeName(typeSymbol);
+            if (processed.Contains(typeName) || visiting.Contains(typeName))
+            {
+                return;
+            }
+
+            var currentPath = path.Count > 0 && string.Equals(path[path.Count - 1], typeName, StringComparison.Ordinal)
+                ? path
+                : new List<string>(path) { typeName };
+
+            visiting.Add(typeName);
+            try
+            {
+                var (dependentType, detectedCircularRefs) = AnalyzeDependentType(
+                    typeName,
+                    typeSymbol,
+                    visiting,
+                    processed,
+                    VisitDependency,
+                    currentPath,
+                    cancellationToken);
+
+                if (dependentType != null)
+                {
+                    result.Add(dependentType);
+                }
+
+                AddCircularRefs(detectedCircularRefs);
+                processed.Add(typeName);
+            }
+            finally
+            {
+                visiting.Remove(typeName);
+            }
+        }
+
+        void VisitRootDependency(ITypeSymbol typeSymbol)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (HasEntityAttribute(typeSymbol, cancellationToken))
+            {
+                return;
+            }
+
+            var typeName = ToFullyQualifiedNonNullableTypeName(typeSymbol);
+            VisitDependency(typeSymbol, new List<string> { typeName });
+        }
 
         // 首先收集直接依赖的复杂类型
         foreach (var prop in properties)
@@ -246,7 +317,7 @@ public partial class TinyDbSourceGenerator
                 var typeName = prop.FullyQualifiedNonNullableType;
                 if (TryGetTypeSymbol(typeSymbols, typeName, out var typeSymbol))
                 {
-                    QueueDirectDependency(typeSymbol);
+                    VisitRootDependency(typeSymbol);
                 }
             }
 
@@ -256,7 +327,7 @@ public partial class TinyDbSourceGenerator
                 var typeName = prop.ElementType!;
                 if (TryGetTypeSymbol(typeSymbols, typeName, out var typeSymbol))
                 {
-                    QueueDirectDependency(typeSymbol);
+                    VisitRootDependency(typeSymbol);
                 }
             }
 
@@ -266,47 +337,12 @@ public partial class TinyDbSourceGenerator
                 var typeName = prop.DictionaryValueType!;
                 if (TryGetTypeSymbol(typeSymbols, typeName, out var typeSymbol))
                 {
-                    QueueDirectDependency(typeSymbol);
+                    VisitRootDependency(typeSymbol);
                 }
             }
         }
 
-        // BFS处理所有依赖类型
-        void QueueDirectDependency(ITypeSymbol typeSymbol)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (HasEntityAttribute(typeSymbol, cancellationToken))
-            {
-                return;
-            }
-
-            var typeName = ToFullyQualifiedNonNullableTypeName(typeSymbol);
-            if (visited.Add(typeName))
-            {
-                toProcess.Enqueue((typeName, typeSymbol, new List<string> { typeName }));
-            }
-        }
-
-        while (toProcess.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var (fullName, typeSymbol, path) = toProcess.Dequeue();
-            var (dependentType, detectedCircularRefs) = AnalyzeDependentType(
-                fullName,
-                typeSymbol,
-                visited,
-                toProcess,
-                path,
-                cancellationToken);
-            if (dependentType != null)
-            {
-                result.Add(dependentType);
-            }
-            circularRefs.AddRange(detectedCircularRefs);
-        }
-
+        // Dependencies are processed recursively above so each active path can detect cycles.
         return (result, circularRefs);
     }
 
@@ -317,8 +353,9 @@ public partial class TinyDbSourceGenerator
     private static (DependentComplexType? Type, List<CircularReferenceInfo> CircularRefs) AnalyzeDependentType(
         string fullName,
         ITypeSymbol typeSymbol,
-        HashSet<string> visited,
-        Queue<(string FullName, ITypeSymbol Symbol, List<string> Path)> toProcess,
+        HashSet<string> visiting,
+        HashSet<string> processed,
+        Action<ITypeSymbol, List<string>> visitDependency,
         List<string> currentPath,
         CancellationToken cancellationToken)
     {
@@ -337,7 +374,7 @@ public partial class TinyDbSourceGenerator
                 !propertySymbol.IsStatic &&
                 !propertySymbol.IsIndexer &&
                 propertySymbol.GetMethod != null &&
-                propertySymbol.SetMethod != null)
+                propertySymbol.SetMethod is { DeclaredAccessibility: Accessibility.Public } setter)
             {
                 // 检查是否有 BsonIgnore 属性
                 var hasIgnore = HasAttribute(propertySymbol.GetAttributes(), "BsonIgnoreAttribute");
@@ -355,6 +392,7 @@ public partial class TinyDbSourceGenerator
                 var isComplex = typeAnalysis.IsComplexType;
                 string? complexFullName = null;
                 bool isCircularRef = false;
+                var isInitOnly = setter.IsInitOnly;
 
                 void TrackDependentType(ITypeSymbol? dependencyTypeSymbol)
                 {
@@ -372,11 +410,15 @@ public partial class TinyDbSourceGenerator
 
                     var dependencyFullName = ToFullyQualifiedNonNullableTypeName(dependencyTypeSymbol);
 
-                    if (currentPath.Contains(dependencyFullName))
+                    if (visiting.Contains(dependencyFullName))
                     {
                         isCircularRef = true;
                         var cyclePath = new List<string>(currentPath) { dependencyFullName };
                         var cycleStartIndex = currentPath.IndexOf(dependencyFullName);
+                        if (cycleStartIndex < 0)
+                        {
+                            cycleStartIndex = 0;
+                        }
                         var cycleChain = string.Join(" -> ", cyclePath.Skip(cycleStartIndex));
                         circularRefs.Add(new CircularReferenceInfo(
                             fullName,
@@ -386,11 +428,10 @@ public partial class TinyDbSourceGenerator
                         return;
                     }
 
-                    if (!visited.Contains(dependencyFullName))
+                    if (!processed.Contains(dependencyFullName))
                     {
-                        visited.Add(dependencyFullName);
                         var newPath = new List<string>(currentPath) { dependencyFullName };
-                        toProcess.Enqueue((dependencyFullName, dependencyTypeSymbol, newPath));
+                        visitDependency(dependencyTypeSymbol, newPath);
                     }
                 }
 
@@ -438,6 +479,7 @@ public partial class TinyDbSourceGenerator
                     typeAnalysis.DictionaryValueType,
                     typeAnalysis.IsDictionaryValueComplexType,
                     typeAnalysis.IsDictionaryValueValueType,
+                    isInitOnly,
                     isCircularRef));
             }
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -146,6 +147,12 @@ public partial class TinyDbSourceGenerator
     /// </summary>
     private static void GenerateInlineDeserializerForDependentType(StringBuilder sb, DependentComplexType depType)
     {
+        if (HasInitOnlyDependentProperties(depType))
+        {
+            GenerateInlineDeserializerForDependentTypeWithInitOnly(sb, depType);
+            return;
+        }
+
         sb.AppendLine($"        /// <summary>");
         sb.AppendLine($"        /// {depType.ShortName} 的内联反序列化方法（AOT兼容）");
         sb.AppendLine($"        /// </summary>");
@@ -308,6 +315,223 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("            return result;");
         sb.AppendLine("        }");
         sb.AppendLine();
+    }
+
+    private static bool HasInitOnlyDependentProperties(DependentComplexType depType)
+    {
+        foreach (var prop in depType.Properties)
+        {
+            if (prop.IsInitOnly)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void GenerateInlineDeserializerForDependentTypeWithInitOnly(StringBuilder sb, DependentComplexType depType)
+    {
+        sb.AppendLine($"        /// <summary>");
+        sb.AppendLine($"        /// {depType.ShortName} çš„å†…è”ååºåˆ—åŒ–æ–¹æ³•ï¼ˆAOTå…¼å®¹ï¼‰");
+        sb.AppendLine($"        /// </summary>");
+        sb.AppendLine($"        private static {depType.FullyQualifiedName} Deserialize_{depType.SafeMethodName}(BsonDocument document)");
+        sb.AppendLine("        {");
+
+        if (!depType.IsValueType && !depType.HasAccessibleParameterlessConstructor)
+        {
+            sb.AppendLine($"            throw new global::System.NotSupportedException(\"Dependent type '{depType.FullyQualifiedName}' must have an accessible parameterless constructor for inline TinyDb deserialization.\");");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            return;
+        }
+
+        var initOnlyProperties = new List<DependentTypeProperty>();
+        var mutableProperties = new List<DependentTypeProperty>();
+        foreach (var prop in depType.Properties)
+        {
+            if (prop.IsInitOnly)
+            {
+                initOnlyProperties.Add(prop);
+            }
+            else
+            {
+                mutableProperties.Add(prop);
+            }
+        }
+
+        var defaultInstanceName = $"default_{depType.SafeMethodName}";
+        if (depType.IsValueType)
+        {
+            sb.AppendLine($"            var {defaultInstanceName} = default({depType.FullyQualifiedName});");
+        }
+        else
+        {
+            sb.AppendLine($"            var {defaultInstanceName} = new {depType.FullyQualifiedName}();");
+        }
+
+        foreach (var prop in initOnlyProperties)
+        {
+            sb.AppendLine($"            {prop.FullyQualifiedTypeName} value_{prop.Name} = {defaultInstanceName}.{prop.AccessName};");
+        }
+        sb.AppendLine();
+
+        foreach (var prop in initOnlyProperties)
+        {
+            AppendDependentPropertyDeserializationToTarget(sb, prop, $"value_{prop.Name}");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine($"            var result = new {depType.FullyQualifiedName}");
+        sb.AppendLine("            {");
+        foreach (var prop in initOnlyProperties)
+        {
+            sb.AppendLine($"                {prop.AccessName} = value_{prop.Name},");
+        }
+        sb.AppendLine("            };");
+        sb.AppendLine();
+
+        foreach (var prop in mutableProperties)
+        {
+            AppendDependentPropertyDeserializationToTarget(sb, prop, $"result.{prop.AccessName}");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("            return result;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+    }
+
+    private static void AppendDependentPropertyDeserializationToTarget(
+        StringBuilder sb,
+        DependentTypeProperty prop,
+        string assignmentTarget)
+    {
+        var bsonFieldName = SourceGeneratorFieldName.ToCamelCase(prop.Name);
+
+        if (prop.IsComplexType && !string.IsNullOrEmpty(prop.ComplexTypeFullName))
+        {
+            if (prop.IsCircularReference)
+            {
+                sb.AppendLine($"            // æ³¨æ„ï¼šå±žæ€§ {prop.Name} æ¶‰åŠå¾ªçŽ¯å¼•ç”¨ï¼Œè·³è¿‡é€’å½’ååºåˆ—åŒ–ä»¥é¿å…æ ˆæº¢å‡º");
+                return;
+            }
+
+            sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
+            sb.AppendLine("            {");
+            sb.AppendLine($"                if (bson_{prop.Name}.IsNull)");
+            sb.AppendLine("                {");
+            if (prop.IsNullable)
+            {
+                sb.AppendLine($"                    {assignmentTarget} = default;");
+            }
+            sb.AppendLine("                }");
+            sb.AppendLine($"                else if (bson_{prop.Name} is BsonDocument nested_{prop.Name})");
+            sb.AppendLine("                {");
+            sb.AppendLine($"                    {assignmentTarget} = DeserializeComplexObject<{prop.ComplexTypeFullName}>(nested_{prop.Name});");
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+            return;
+        }
+
+        if (prop.IsCollection)
+        {
+            var elementType = prop.ElementType ?? "object";
+            var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(
+                prop.FullyQualifiedTypeName,
+                elementType);
+
+            sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
+            sb.AppendLine("            {");
+            sb.AppendLine($"                if (bson_{prop.Name}.IsNull)");
+            sb.AppendLine("                {");
+            if (prop.IsNullable)
+            {
+                sb.AppendLine($"                    {assignmentTarget} = default!;");
+            }
+            sb.AppendLine("                }");
+            sb.AppendLine($"                else if (bson_{prop.Name} is BsonArray array_{prop.Name})");
+            sb.AppendLine("                {");
+            sb.AppendLine($"                    var list_{prop.Name} = {collectionInstance};");
+            sb.AppendLine($"                    foreach (var item in array_{prop.Name})");
+            sb.AppendLine("                    {");
+            sb.AppendLine($"                        if (item.IsNull)");
+            sb.AppendLine($"                            list_{prop.Name}.Add(default!);");
+
+            if (prop.IsElementComplexType)
+            {
+                sb.AppendLine($"                        else if (item is BsonDocument itemDoc)");
+                sb.AppendLine($"                            list_{prop.Name}.Add(DeserializeComplexObject<{elementType}>(itemDoc));");
+                sb.AppendLine("                        else");
+                sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+            }
+            else
+            {
+                sb.AppendLine("                        else");
+                sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+            }
+
+            sb.AppendLine("                    }");
+            if (prop.IsArray)
+            {
+                sb.AppendLine($"                    {assignmentTarget} = list_{prop.Name}.ToArray();");
+            }
+            else
+            {
+                sb.AppendLine($"                    {assignmentTarget} = list_{prop.Name};");
+            }
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+            return;
+        }
+
+        if (prop.IsDictionary)
+        {
+            var keyType = prop.DictionaryKeyType ?? "string";
+            var valueType = prop.DictionaryValueType ?? "object";
+
+            sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
+            sb.AppendLine("            {");
+            sb.AppendLine($"                if (bson_{prop.Name}.IsNull)");
+            sb.AppendLine("                {");
+            if (prop.IsNullable)
+            {
+                sb.AppendLine($"                    {assignmentTarget} = default!;");
+            }
+            sb.AppendLine("                }");
+            sb.AppendLine($"                else if (bson_{prop.Name} is BsonDocument dict_{prop.Name})");
+            sb.AppendLine("                {");
+            sb.AppendLine($"                    var result_{prop.Name} = new System.Collections.Generic.Dictionary<{keyType}, {valueType}>();");
+            sb.AppendLine($"                    foreach (var kvp in dict_{prop.Name})");
+            sb.AppendLine("                    {");
+            sb.AppendLine($"                        var key_{prop.Name} = {SourceGeneratorHelpers.CreateDictionaryKeyExpression(keyType, "kvp.Key")};");
+            sb.AppendLine("                        if (kvp.Value.IsNull)");
+            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = default!;");
+
+            if (prop.IsDictionaryValueComplexType)
+            {
+                sb.AppendLine("                        else if (kvp.Value is BsonDocument valueDoc)");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = DeserializeComplexObject<{valueType}>(valueDoc);");
+                sb.AppendLine("                        else");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+            }
+            else
+            {
+                sb.AppendLine("                        else");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+            }
+
+            sb.AppendLine("                    }");
+            sb.AppendLine($"                    {assignmentTarget} = result_{prop.Name};");
+            sb.AppendLine("                }");
+            sb.AppendLine("            }");
+            return;
+        }
+
+        sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}) && !bson_{prop.Name}.IsNull)");
+        sb.AppendLine("            {");
+        sb.AppendLine($"                {assignmentTarget} = ConvertFromBsonValue<{prop.FullyQualifiedTypeName}>(bson_{prop.Name});");
+        sb.AppendLine("            }");
     }
 
 }

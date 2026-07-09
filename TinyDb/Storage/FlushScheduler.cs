@@ -17,6 +17,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Task? _backgroundTask;
     private readonly object _flushLock = new();
+    private readonly SemaphoreSlim _journalSignal = new(0);
+    private readonly SemaphoreSlim _syncedSignal = new(0);
     private static readonly TimeSpan GroupCommitDelay = TimeSpan.FromMilliseconds(1);
     private static readonly TimeSpan WorkerStopTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan BackgroundFailureInitialDelay = TimeSpan.FromMilliseconds(100);
@@ -201,6 +203,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             return Task.CompletedTask;
         }
 
+        Task batchTask;
+        bool shouldSignal;
         lock (_flushLock)
         {
             if (Volatile.Read(ref _disposed) != 0)
@@ -215,17 +219,23 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             }
 
+            shouldSignal = _journalRequests == 0;
             _journalRequests++;
-            var batchTask = _journalBatchTcs.Task;
+            batchTask = _journalBatchTcs.Task;
 
             if (!_journalWorkerRunning)
             {
                 _journalWorkerRunning = true;
                 _journalWorkerTask = StartDedicatedWorker(RunJournalWorker, "TinyDb journal flush worker");
             }
-
-            return batchTask;
         }
+
+        if (shouldSignal)
+        {
+            _journalSignal.Release();
+        }
+
+        return batchTask;
     }
 
     private Task EnqueueSyncedFlush()
@@ -235,6 +245,8 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
             return Task.CompletedTask;
         }
 
+        Task batchTask;
+        bool shouldSignal;
         lock (_flushLock)
         {
             if (Volatile.Read(ref _disposed) != 0)
@@ -249,17 +261,23 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
                 _syncedBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             }
 
+            shouldSignal = _syncedRequests == 0;
             _syncedRequests++;
-            var batchTask = _syncedBatchTcs.Task;
+            batchTask = _syncedBatchTcs.Task;
 
             if (!_syncedWorkerRunning)
             {
                 _syncedWorkerRunning = true;
                 _syncedWorkerTask = StartDedicatedWorker(RunSyncedWorker, "TinyDb synced flush worker");
             }
-
-            return batchTask;
         }
+
+        if (shouldSignal)
+        {
+            _syncedSignal.Release();
+        }
+
+        return batchTask;
     }
 
     private void EnsureSyncedFlush()
@@ -295,60 +313,72 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         while (true)
         {
-            TaskCompletionSource tcsToComplete;
-            bool delayForBatch;
-
-            if (_cts.IsCancellationRequested)
+            try
+            {
+                _syncedSignal.Wait(_cts.Token);
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
                 CancelSyncedBatch();
                 return;
             }
 
-            lock (_flushLock)
+            while (true)
             {
-                delayForBatch = _syncedRequests == 1;
-            }
+                TaskCompletionSource tcsToComplete;
+                bool delayForBatch;
 
-            if (delayForBatch)
-            {
-                if (_cts.Token.WaitHandle.WaitOne(GroupCommitDelay))
+                if (_cts.IsCancellationRequested)
                 {
                     CancelSyncedBatch();
                     return;
                 }
-            }
 
-            lock (_flushLock)
-            {
-                if (_syncedRequests <= 0)
+                lock (_flushLock)
                 {
-                    _syncedWorkerRunning = false;
-                    return;
+                    delayForBatch = _syncedRequests == 1;
                 }
 
-                tcsToComplete = _syncedBatchTcs;
-                _syncedBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _syncedRequests = 0;
-            }
+                if (delayForBatch)
+                {
+                    if (_cts.Token.WaitHandle.WaitOne(GroupCommitDelay))
+                    {
+                        CancelSyncedBatch();
+                        return;
+                    }
+                }
 
-            try
-            {
-                _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: false, _cts.Token);
-                tcsToComplete.TrySetResult();
-            }
-            catch (OperationCanceledException)
-            {
-                tcsToComplete.TrySetCanceled();
-                CancelSyncedBatch();
-                return;
-            }
-            catch (Exception ex)
-            {
-                Volatile.Write(ref _foregroundFlushFailureObserved, 1);
-                RecordBackgroundFailure(ex);
-                tcsToComplete.TrySetException(ex);
-                FaultPendingSyncedBatch(ex);
-                return;
+                lock (_flushLock)
+                {
+                    if (_syncedRequests <= 0)
+                    {
+                        break;
+                    }
+
+                    tcsToComplete = _syncedBatchTcs;
+                    _syncedBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _syncedRequests = 0;
+                }
+
+                try
+                {
+                    _wal.Synchronize(ctx => _pageManager.FlushDirtyPages(ctx), truncateLog: false, _cts.Token);
+                    tcsToComplete.TrySetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    tcsToComplete.TrySetCanceled();
+                    CancelSyncedBatch();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Volatile.Write(ref _foregroundFlushFailureObserved, 1);
+                    RecordBackgroundFailure(ex);
+                    tcsToComplete.TrySetException(ex);
+                    FaultPendingSyncedBatch(ex);
+                    return;
+                }
             }
         }
     }
@@ -393,44 +423,56 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     {
         while (true)
         {
-            TaskCompletionSource tcsToComplete;
-
-            if (_cts.IsCancellationRequested)
+            try
+            {
+                _journalSignal.Wait(_cts.Token);
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
                 CancelJournalBatch();
                 return;
             }
 
-            lock (_flushLock)
+            while (true)
             {
-                if (_journalRequests <= 0)
+                TaskCompletionSource tcsToComplete;
+
+                if (_cts.IsCancellationRequested)
                 {
-                    _journalWorkerRunning = false;
+                    CancelJournalBatch();
                     return;
                 }
 
-                tcsToComplete = _journalBatchTcs;
-                _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                _journalRequests = 0;
-            }
+                lock (_flushLock)
+                {
+                    if (_journalRequests <= 0)
+                    {
+                        break;
+                    }
 
-            try
-            {
-                _wal.FlushLog(writeContext: null, _cts.Token);
-                tcsToComplete.TrySetResult();
-            }
-            catch (OperationCanceledException)
-            {
-                tcsToComplete.TrySetCanceled();
-                CancelJournalBatch();
-                return;
-            }
-            catch (Exception ex)
-            {
-                RecordBackgroundFailure(ex);
-                tcsToComplete.TrySetException(ex);
-                FaultPendingJournalBatch(ex);
-                return;
+                    tcsToComplete = _journalBatchTcs;
+                    _journalBatchTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _journalRequests = 0;
+                }
+
+                try
+                {
+                    _wal.FlushLog(writeContext: null, _cts.Token);
+                    tcsToComplete.TrySetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    tcsToComplete.TrySetCanceled();
+                    CancelJournalBatch();
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    RecordBackgroundFailure(ex);
+                    tcsToComplete.TrySetException(ex);
+                    FaultPendingJournalBatch(ex);
+                    return;
+                }
             }
         }
     }

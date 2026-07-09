@@ -86,7 +86,7 @@ public class DbRefSerializerTests
             var orders = engine.GetCollection<RefOrder>("Orders");
 
             users.Insert(new RefUser { Id = 1, Name = "Alice" });
-            orders.Insert(new RefOrder { Id = 10, UserId = "1" });
+            orders.Insert(new RefOrder { Id = 10, UserId = 1 });
 
             var builder = new IncludeQueryBuilder<RefOrder>(engine, "Orders")
                 .Include(o => o.UserId)
@@ -98,7 +98,7 @@ public class DbRefSerializerTests
             var byId = builder.FindById(new BsonInt32(10));
             await Assert.That(byId).IsNotNull();
 
-            var filtered = builder.Find(o => o.UserId == "1").ToList();
+            var filtered = builder.Find(o => o.UserId == 1).ToList();
             await Assert.That(filtered.Count).IsEqualTo(1);
         }
         finally
@@ -134,9 +134,11 @@ public class DbRefSerializerTests
         try
         {
             using var engine = new TinyDbEngine(dbPath);
+            var users = engine.GetCollection<RefUser>("Users");
             var orders = engine.GetCollection<RefOrder>("Orders");
 
-            orders.Insert(new RefOrder { Id = 10, UserId = "1" });
+            users.Insert(new RefUser { Id = 1, Name = "Alice" });
+            orders.Insert(new RefOrder { Id = 10, UserId = 1 });
 
             var builder = new IncludeQueryBuilder<RefOrder>(engine, "Orders");
 
@@ -292,7 +294,7 @@ public class DbRefSerializerTests
         public int Id { get; set; }
 
         [ForeignKey("Users")]
-        public string UserId { get; set; } = string.Empty;
+        public int UserId { get; set; }
     }
 
     [Entity("OrdersWithUsers")]

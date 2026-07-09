@@ -241,6 +241,7 @@ public class DependentTypeProperty
     public string? DictionaryValueType { get; }
     public bool IsDictionaryValueComplexType { get; }
     public bool IsDictionaryValueValueType { get; }
+    public bool IsInitOnly { get; }
     /// <summary>
     /// 是否是循环引用（属性类型在依赖链中形成循环）
     /// </summary>
@@ -265,6 +266,7 @@ public class DependentTypeProperty
         string? dictionaryValueType = null,
         bool isDictionaryValueComplexType = false,
         bool isDictionaryValueValueType = false,
+        bool isInitOnly = false,
         bool isCircularReference = false)
     {
         Name = name;
@@ -285,6 +287,7 @@ public class DependentTypeProperty
         DictionaryValueType = dictionaryValueType;
         IsDictionaryValueComplexType = isDictionaryValueComplexType;
         IsDictionaryValueValueType = isDictionaryValueValueType;
+        IsInitOnly = isInitOnly;
         IsCircularReference = isCircularReference;
     }
 }
