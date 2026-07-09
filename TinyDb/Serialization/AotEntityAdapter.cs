@@ -190,6 +190,11 @@ public sealed class AotEntityAdapter<T> : IAotEntityAdapter, IAotEntityPropertyA
             {
                 list.Add(default!);
             }
+            else
+            {
+                throw new InvalidCastException(
+                    $"Cannot add item of type '{item.GetType().FullName}' to list of '{typeof(T).FullName}'.");
+            }
         }
         return list;
     }

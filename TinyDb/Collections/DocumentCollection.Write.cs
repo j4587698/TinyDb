@@ -306,13 +306,33 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
         if (ids == null) throw new ArgumentNullException(nameof(ids));
 
-        var deletedCount = 0;
-        foreach (var id in ids)
+        var idList = ids
+            .Where(static id => id != null && !id.IsNull)
+            .Distinct(BsonValueComparer.EqualityComparer)
+            .ToArray();
+        if (idList.Length == 0)
         {
-            if (id != null && !id.IsNull)
+            return 0;
+        }
+
+        var currentTransaction = _engine.GetCurrentTransaction();
+        if (currentTransaction == null)
+        {
+            return _engine.DeleteDocuments(_name, idList);
+        }
+
+        var documents = _engine.FindByIds(_name, idList);
+        var deletedCount = 0;
+        for (var i = 0; i < documents.Count; i++)
+        {
+            var documentToDelete = documents[i];
+            if (documentToDelete == null)
             {
-                deletedCount += Delete(id);
+                continue;
             }
+
+            ((Transaction)currentTransaction).RecordDelete(_name, documentToDelete);
+            deletedCount++;
         }
 
         return deletedCount;

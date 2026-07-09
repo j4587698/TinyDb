@@ -203,6 +203,18 @@ public sealed class PageManagerCoverageEdgeCasesTests
     }
 
     [Test]
+    public async Task Dispose_WhenFlushFails_ShouldStillDisposeDiskStream()
+    {
+        var stream = new ThrowOnFlushDiskStream();
+        var manager = new PageManager(stream, 4096);
+
+        await Assert.That(() => manager.Dispose()).Throws<AggregateException>();
+
+        await Assert.That(stream.Disposed).IsTrue();
+        await Assert.That(() => manager.GetPage(1)).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
     public async Task GetPageAsync_WhenDiskPageIsZeroFilled_ShouldReturnEmptyPage()
     {
         using var stream = new FakeDiskStreamBase(size: 4096);
@@ -351,6 +363,21 @@ public sealed class PageManagerCoverageEdgeCasesTests
         public override void Dispose()
         {
             throw new IOException("Simulated dispose failure.");
+        }
+    }
+
+    private sealed class ThrowOnFlushDiskStream : FakeDiskStreamBase
+    {
+        public bool Disposed { get; private set; }
+
+        public override void Flush()
+        {
+            throw new IOException("Simulated flush failure.");
+        }
+
+        public override void Dispose()
+        {
+            Disposed = true;
         }
     }
 

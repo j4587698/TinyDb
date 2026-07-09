@@ -259,6 +259,32 @@ public class IdGenerationFullTests
     }
 
     [Test]
+    public async Task AutoIdGenerator_NullableGuidId_EmptyValue_ShouldGenerate()
+    {
+        var entity = new NullableGuidIdEntity { Id = null };
+        var prop = typeof(NullableGuidIdEntity).GetProperty(nameof(NullableGuidIdEntity.Id))!;
+
+        var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(entity.Id).IsNotNull();
+        await Assert.That(entity.Id).IsNotEqualTo(Guid.Empty);
+    }
+
+    [Test]
+    public async Task AutoIdGenerator_NullableObjectId_EmptyValue_ShouldGenerate()
+    {
+        var entity = new NullableObjectIdEntity { Id = null };
+        var prop = typeof(NullableObjectIdEntity).GetProperty(nameof(NullableObjectIdEntity.Id))!;
+
+        var result = AutoIdGenerator.GenerateIdIfNeeded(entity, prop);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(entity.Id).IsNotNull();
+        await Assert.That(entity.Id).IsNotEqualTo(ObjectId.Empty);
+    }
+
+    [Test]
     public async Task AutoIdGenerator_UnsupportedType_ShouldReturnFalse()
     {
         var entity = new DecimalIdEntity { Id = null };
@@ -307,6 +333,16 @@ public class IdGenerationFullTests
     private class ObjectIdEntity
     {
         public ObjectId Id { get; set; }
+    }
+
+    private class NullableGuidIdEntity
+    {
+        public Guid? Id { get; set; }
+    }
+
+    private class NullableObjectIdEntity
+    {
+        public ObjectId? Id { get; set; }
     }
 
     private class DecimalIdEntity

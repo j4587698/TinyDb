@@ -89,6 +89,18 @@ public class PasswordManagerTests : IDisposable
     }
 
     [Test]
+    public async Task SetPassword_WhenDatabaseIsOpen_ShouldThrowInvalidOperationException()
+    {
+        using var engine = new TinyDbEngine(_testDbPath);
+        var collection = engine.GetBsonCollection("items");
+        collection.Insert(new BsonDocument().Set("_id", 1).Set("name", "open"));
+        engine.Flush();
+
+        await Assert.That(() => PasswordManager.SetPassword(_testDbPath, "password123"))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
     public async Task RemovePassword_OnEncryptedDatabase_ShouldThrow()
     {
         PasswordManager.CreateSecureDatabase(_testDbPath, "password").Dispose();

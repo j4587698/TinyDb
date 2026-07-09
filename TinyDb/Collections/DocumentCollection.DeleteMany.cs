@@ -15,13 +15,7 @@ public sealed partial class DocumentCollection<T> where T : class
     {
         ThrowIfDisposed();
 
-        var deletedCount = 0;
-        foreach (var id in _engine.FindAllIds(_name))
-        {
-            deletedCount += Delete(id);
-        }
-
-        return deletedCount;
+        return Delete(_engine.FindAllIds(_name).ToArray());
     }
 
     /// <summary>
@@ -34,17 +28,17 @@ public sealed partial class DocumentCollection<T> where T : class
         ThrowIfDisposed();
         if (predicate == null) throw new ArgumentNullException(nameof(predicate));
 
-        var deletedCount = 0;
+        var ids = new List<BsonValue>();
         foreach (var entity in _queryExecutor.ExecuteFullTableScan<T>(_name, predicate))
         {
             var id = GetEntityId(entity);
             if (id != null && !id.IsNull)
             {
-                deletedCount += Delete(id);
+                ids.Add(id);
             }
         }
 
-        return deletedCount;
+        return Delete(ids);
     }
 
 }

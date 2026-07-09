@@ -97,7 +97,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
 
         // 注册源代码生成
         var diagnosticClassDeclarations = classDeclarations
-            .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
+            .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo) && HasDiagnostics(classInfo));
 
         var validClassDeclarations = comparableClassDeclarations
             .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo) && !HasBlockingDiagnostics(classInfo));
@@ -166,6 +166,14 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
         return !string.IsNullOrWhiteSpace(classInfo.InvalidIdPropertyName) ||
                classInfo.BsonRefMissingEntityErrors.Count > 0 ||
                HasUnsupportedArrayRank(classInfo);
+    }
+
+    private static bool HasDiagnostics(ClassInfo classInfo)
+    {
+        return HasBlockingDiagnostics(classInfo) ||
+               classInfo.CircularReferences.Count > 0 ||
+               classInfo.EntityCircularReferences.Count > 0 ||
+               classInfo.IsGenericType;
     }
 
     private static void ReportGenericEntityRegistryWarnings(SourceProductionContext context, ClassInfo classInfo)

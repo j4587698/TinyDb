@@ -31,6 +31,8 @@ public static class PasswordManager
             return;
         }
 
+        EnsureDatabaseFilesAvailableForMigration(filePath);
+
         if (IsPasswordProtected(filePath))
         {
             throw new DatabaseAlreadyProtectedException();
@@ -209,6 +211,8 @@ public static class PasswordManager
 
     private static void EncryptExistingDatabase(string filePath, string password)
     {
+        EnsureDatabaseFilesAvailableForMigration(filePath);
+
         var tempFile = filePath + ".encrypting";
         var walFile = GetWalPath(filePath);
         var tempWalFile = GetWalPath(tempFile);
@@ -233,6 +237,31 @@ public static class PasswordManager
             if (System.IO.File.Exists(tempFile)) System.IO.File.Delete(tempFile);
             if (System.IO.File.Exists(tempWalFile)) System.IO.File.Delete(tempWalFile);
             throw;
+        }
+    }
+
+    private static void EnsureDatabaseFilesAvailableForMigration(string filePath)
+    {
+        EnsureFileAvailableForMigration(filePath, "database");
+
+        var walFile = GetWalPath(filePath);
+        if (System.IO.File.Exists(walFile))
+        {
+            EnsureFileAvailableForMigration(walFile, "WAL");
+        }
+    }
+
+    private static void EnsureFileAvailableForMigration(string path, string fileDescription)
+    {
+        try
+        {
+            using var _ = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException(
+                $"Cannot migrate {fileDescription} file '{path}' while it is open. Dispose active TinyDbEngine instances before calling PasswordManager.SetPassword.",
+                ex);
         }
     }
 

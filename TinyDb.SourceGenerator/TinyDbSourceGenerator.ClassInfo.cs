@@ -190,12 +190,13 @@ public partial class TinyDbSourceGenerator
         }
 
         TypeDeclarationSyntax? firstDeclaration = null;
-        foreach (var syntaxReference in classSymbol.DeclaringSyntaxReferences)
+        foreach (var attribute in classSymbol.GetAttributes())
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (syntaxReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax declaration ||
-                !HasEntityAttributeDeclaration(declaration, compilation, entityAttributeType, cancellationToken))
+            if (!SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, entityAttributeType) ||
+                attribute.ApplicationSyntaxReference?.GetSyntax(cancellationToken) is not AttributeSyntax attributeSyntax ||
+                attributeSyntax.Parent?.Parent is not TypeDeclarationSyntax declaration)
             {
                 continue;
             }
@@ -207,31 +208,6 @@ public partial class TinyDbSourceGenerator
         }
 
         return firstDeclaration == null || SameDeclaration(firstDeclaration, currentDeclaration);
-    }
-
-    private static bool HasEntityAttributeDeclaration(
-        TypeDeclarationSyntax declaration,
-        Compilation compilation,
-        INamedTypeSymbol entityAttributeType,
-        CancellationToken cancellationToken)
-    {
-        foreach (var attributeList in declaration.AttributeLists)
-        {
-            foreach (var attribute in attributeList.Attributes)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var semanticModel = compilation.GetSemanticModel(attribute.SyntaxTree);
-                var symbol = semanticModel.GetSymbolInfo(attribute, cancellationToken).Symbol;
-                var attributeType = (symbol as IMethodSymbol)?.ContainingType;
-                if (SymbolEqualityComparer.Default.Equals(attributeType, entityAttributeType))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private static int CompareDeclarationOrder(TypeDeclarationSyntax left, TypeDeclarationSyntax right)

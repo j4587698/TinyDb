@@ -45,15 +45,16 @@ public static class AutoIdGenerator
         if (idType == null) throw new ArgumentNullException(nameof(idType));
         if (string.IsNullOrWhiteSpace(defaultSequenceName)) throw new ArgumentNullException(nameof(defaultSequenceName));
 
+        var generationType = Nullable.GetUnderlyingType(idType) ?? idType;
         return strategy switch
         {
-            IdGenerationStrategy.ObjectId when idType == typeof(ObjectId) => ObjectId.NewObjectId(),
-            IdGenerationStrategy.IdentityInt when idType == typeof(int) => null,
-            IdGenerationStrategy.IdentityLong when idType == typeof(long) => null,
-            IdGenerationStrategy.GuidV7 when idType == typeof(Guid) => CreateGuidV7(),
-            IdGenerationStrategy.GuidV7 when idType == typeof(string) => CreateGuidV7().ToString(),
-            IdGenerationStrategy.GuidV4 when idType == typeof(Guid) => Guid.NewGuid(),
-            IdGenerationStrategy.GuidV4 when idType == typeof(string) => Guid.NewGuid().ToString(),
+            IdGenerationStrategy.ObjectId when generationType == typeof(ObjectId) => ObjectId.NewObjectId(),
+            IdGenerationStrategy.IdentityInt when generationType == typeof(int) => null,
+            IdGenerationStrategy.IdentityLong when generationType == typeof(long) => null,
+            IdGenerationStrategy.GuidV7 when generationType == typeof(Guid) => CreateGuidV7(),
+            IdGenerationStrategy.GuidV7 when generationType == typeof(string) => CreateGuidV7().ToString(),
+            IdGenerationStrategy.GuidV4 when generationType == typeof(Guid) => Guid.NewGuid(),
+            IdGenerationStrategy.GuidV4 when generationType == typeof(string) => Guid.NewGuid().ToString(),
             _ => null
         };
     }
@@ -75,7 +76,7 @@ public static class AutoIdGenerator
             return false; // ID已有值，不需要生成
         }
 
-        var idType = idProperty.PropertyType;
+        var idType = Nullable.GetUnderlyingType(idProperty.PropertyType) ?? idProperty.PropertyType;
 
         // 根据类型自动生成ID
         return idType switch

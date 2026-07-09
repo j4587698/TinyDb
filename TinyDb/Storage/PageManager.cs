@@ -218,9 +218,12 @@ public sealed partial class PageManager : IDisposable
                         }
 
                         // 清理缓存
-                        if (flushException == null)
+                        try
                         {
-                            ClearCacheCore();
+                            if (flushException == null)
+                            {
+                                ClearCacheCore();
+                            }
 
                             foreach (var gate in _pageLoadStripes)
                             {
@@ -229,13 +232,14 @@ public sealed partial class PageManager : IDisposable
 
                             _diskStream.Dispose();
                         }
+                        catch (Exception ex)
+                        {
+                            cleanupException = new InvalidOperationException("PageManager dispose cleanup failed.", ex);
+                        }
                     }
                     finally
                     {
-                        if (flushException == null)
-                        {
-                            _disposed = true;
-                        }
+                        _disposed = true;
                     }
                 }
                 finally
@@ -243,9 +247,9 @@ public sealed partial class PageManager : IDisposable
                     _backgroundWritebackGate.Release();
                 }
 
-                if (flushException == null)
+                if (!_backgroundWritebackIdle.Wait(TimeSpan.FromSeconds(5)))
                 {
-                    _backgroundWritebackIdle.Wait();
+                    Log(TinyDbLogLevel.Warning, "Background page writeback did not stop before PageManager dispose timeout.");
                 }
             }
             catch (Exception ex)

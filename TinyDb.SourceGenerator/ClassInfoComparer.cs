@@ -35,7 +35,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                ListEquals(x.EntityCircularReferences, y.EntityCircularReferences, EntityCircularReferenceEquals) &&
                ListEquals(x.BsonRefMissingEntityErrors, y.BsonRefMissingEntityErrors, BsonRefMissingEntityEquals) &&
                StringEquals(x.InvalidIdPropertyName, y.InvalidIdPropertyName) &&
-               LocationEquals(x.InvalidIdPropertyLocation, y.InvalidIdPropertyLocation) &&
                ListEquals(x.ConstructorParameters, y.ConstructorParameters, ConstructorParameterEquals);
     }
 
@@ -66,7 +65,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = AddList(hash, obj.EntityCircularReferences, GetEntityCircularReferenceHashCode);
             hash = AddList(hash, obj.BsonRefMissingEntityErrors, GetBsonRefMissingEntityHashCode);
             hash = Add(hash, obj.InvalidIdPropertyName);
-            hash = Add(hash, obj.InvalidIdPropertyLocation);
             hash = AddList(hash, obj.ConstructorParameters, GetConstructorParameterHashCode);
             return hash;
         }
@@ -337,12 +335,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         return string.Equals(x, y, StringComparison.Ordinal);
     }
 
-    private static bool LocationEquals(DiagnosticLocationInfo? x, DiagnosticLocationInfo? y)
-    {
-        if (x.HasValue != y.HasValue) return false;
-        return !x.HasValue || x.GetValueOrDefault().Equals(y.GetValueOrDefault());
-    }
-
     private static int Add(int hash, string? value)
     {
         unchecked
@@ -364,14 +356,6 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         unchecked
         {
             return hash * 31 + value;
-        }
-    }
-
-    private static int Add(int hash, DiagnosticLocationInfo? value)
-    {
-        unchecked
-        {
-            return hash * 31 + (value.HasValue ? value.Value.GetHashCode() : 0);
         }
     }
 

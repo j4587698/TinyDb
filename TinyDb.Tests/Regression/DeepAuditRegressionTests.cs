@@ -81,7 +81,7 @@ public sealed class DeepAuditRegressionTests : IDisposable
     }
 
     [Test]
-    public async Task PageManager_DisposeFlushFailure_ShouldKeepDirtyPagesForRetry()
+    public async Task PageManager_DisposeFlushFailure_ShouldDisposeAndRejectRetry()
     {
         var disk = new MockDiskStream();
         var pageManager = new PageManager(disk, pageSize: 4096, maxCacheSize: 8);
@@ -94,11 +94,8 @@ public sealed class DeepAuditRegressionTests : IDisposable
         await Assert.That(page.IsDirty).IsTrue();
 
         disk.ShouldThrowOnWrite = false;
-        pageManager.FlushDirtyPages();
-        var persisted = disk.ReadPage(0, 4096);
-        await Assert.That(persisted[PageHeader.Size]).IsEqualTo((byte)42);
-
-        pageManager.Dispose();
+        await Assert.That(() => pageManager.FlushDirtyPages()).Throws<ObjectDisposedException>();
+        await Assert.That(() => disk.ReadPage(0, 4096)).Throws<ObjectDisposedException>();
     }
 
     [Test]

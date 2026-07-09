@@ -51,11 +51,30 @@ public class BsonDocumentAdditionalCoverageTests
     }
 
     [Test]
+    public async Task FromDictionary_ShouldSupport_CommonPrimitiveGaps()
+    {
+        var guid = Guid.NewGuid();
+        var bytes = new byte[] { 1, 2, 3 };
+        var dict = new Dictionary<string, object?>
+        {
+            ["bytes"] = bytes,
+            ["amount"] = 12.34m,
+            ["guid"] = guid
+        };
+
+        var doc = BsonDocument.FromDictionary(dict);
+
+        await Assert.That(doc["bytes"]).IsTypeOf<BsonBinary>();
+        await Assert.That(doc["amount"]).IsTypeOf<BsonDecimal128>();
+        await Assert.That(doc["guid"]).IsTypeOf<BsonBinary>();
+    }
+
+    [Test]
     public async Task FromDictionary_UnsupportedType_ShouldThrow()
     {
         var dict = new Dictionary<string, object?>
         {
-            ["x"] = Guid.NewGuid()
+            ["x"] = new object()
         };
 
         await Assert.That(() => BsonDocument.FromDictionary(dict)).Throws<NotSupportedException>();
@@ -86,4 +105,3 @@ public class BsonDocumentAdditionalCoverageTests
         await Assert.That(() => doc.ToType(typeof(object), null)).Throws<InvalidCastException>();
     }
 }
-
