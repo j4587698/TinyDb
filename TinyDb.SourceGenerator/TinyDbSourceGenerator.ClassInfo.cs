@@ -29,6 +29,12 @@ public partial class TinyDbSourceGenerator
         // 获取类符号信息
         var classSymbol = context.TargetSymbol as INamedTypeSymbol
             ?? semanticModel.GetDeclaredSymbol(classDeclaration, cancellationToken);
+        if (classSymbol != null &&
+            !IsFirstEntityAttributeDeclaration(classSymbol, classDeclaration, semanticModel.Compilation, cancellationToken))
+        {
+            return null;
+        }
+
         var namespaceName = classSymbol?.ContainingNamespace is { IsGlobalNamespace: false } containingNamespace
             ? containingNamespace.ToDisplayString()
             : string.Empty;
@@ -76,7 +82,7 @@ public partial class TinyDbSourceGenerator
         var properties = new List<PropertyInfo>();
         PropertyInfo? idProperty = null;
         string? invalidIdPropertyName = null;
-        var invalidIdPropertyLocation = DiagnosticLocationInfo.From(classDeclaration.GetLocation());
+        DiagnosticLocationInfo? invalidIdPropertyLocation = null;
         // 收集所有属性的类型符号，用于后续分析依赖类型
         var typeSymbolMap = new Dictionary<string, ITypeSymbol>();
         // 收集 BsonRef 引用类型缺少 Entity 特性的错误
@@ -104,6 +110,7 @@ public partial class TinyDbSourceGenerator
             else
             {
                 invalidIdPropertyName = specifiedIdProperty;
+                invalidIdPropertyLocation = DiagnosticLocationInfo.From(classDeclaration.GetLocation());
             }
         }
         if (idProperty == null && invalidIdPropertyName == null)
@@ -168,6 +175,76 @@ public partial class TinyDbSourceGenerator
             typeParameterList,
             typeParameterConstraints,
             containingTypeDisplayPath);
+    }
+
+    private static bool IsFirstEntityAttributeDeclaration(
+        INamedTypeSymbol classSymbol,
+        TypeDeclarationSyntax currentDeclaration,
+        Compilation compilation,
+        CancellationToken cancellationToken)
+    {
+        var entityAttributeType = compilation.GetTypeByMetadataName(EntityAttributeMetadataName);
+        if (entityAttributeType == null)
+        {
+            return true;
+        }
+
+        TypeDeclarationSyntax? firstDeclaration = null;
+        foreach (var syntaxReference in classSymbol.DeclaringSyntaxReferences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (syntaxReference.GetSyntax(cancellationToken) is not TypeDeclarationSyntax declaration ||
+                !HasEntityAttributeDeclaration(declaration, compilation, entityAttributeType, cancellationToken))
+            {
+                continue;
+            }
+
+            if (firstDeclaration == null || CompareDeclarationOrder(declaration, firstDeclaration) < 0)
+            {
+                firstDeclaration = declaration;
+            }
+        }
+
+        return firstDeclaration == null || SameDeclaration(firstDeclaration, currentDeclaration);
+    }
+
+    private static bool HasEntityAttributeDeclaration(
+        TypeDeclarationSyntax declaration,
+        Compilation compilation,
+        INamedTypeSymbol entityAttributeType,
+        CancellationToken cancellationToken)
+    {
+        foreach (var attributeList in declaration.AttributeLists)
+        {
+            foreach (var attribute in attributeList.Attributes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var semanticModel = compilation.GetSemanticModel(attribute.SyntaxTree);
+                var symbol = semanticModel.GetSymbolInfo(attribute, cancellationToken).Symbol;
+                var attributeType = (symbol as IMethodSymbol)?.ContainingType;
+                if (SymbolEqualityComparer.Default.Equals(attributeType, entityAttributeType))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static int CompareDeclarationOrder(TypeDeclarationSyntax left, TypeDeclarationSyntax right)
+    {
+        var fileComparison = string.CompareOrdinal(left.SyntaxTree.FilePath, right.SyntaxTree.FilePath);
+        return fileComparison != 0
+            ? fileComparison
+            : left.SpanStart.CompareTo(right.SpanStart);
+    }
+
+    private static bool SameDeclaration(TypeDeclarationSyntax left, TypeDeclarationSyntax right)
+    {
+        return left.SyntaxTree == right.SyntaxTree && left.SpanStart == right.SpanStart;
     }
 
     private static string BuildHelperTypeParameterList(TypeDeclarationSyntax classDeclaration)
