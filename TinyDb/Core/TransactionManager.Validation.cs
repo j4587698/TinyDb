@@ -113,7 +113,7 @@ public sealed partial class TransactionManager
     }
 
 
-    private static bool TryGetForeignKeyValue(BsonDocument document, string fieldName, out BsonValue value)
+    internal static bool TryGetForeignKeyValue(BsonDocument document, string fieldName, out BsonValue value)
     {
         if (document.TryGetValue(fieldName, out var directValue) && directValue != null && !directValue.IsNull)
         {

@@ -854,7 +854,7 @@ public sealed partial class TinyDbEngine
             try
             {
                 payload = PrepareSerializedInsertPayload(col, d, out _);
-                _metadataManager.ValidateDocumentForWrite(col, payload.Document, _options.SchemaValidationMode);
+                ValidateDocumentForWrite(col, payload.Document);
                 prepared.Add(payload);
                 payload = null;
             }

@@ -30,23 +30,47 @@ public sealed partial class TinyDbEngine
 {
     internal IEnumerable<BsonDocument> FindAll(string col)
     {
+        return FindAllWithCommitGate(col);
+    }
+
+    private IEnumerable<BsonDocument> FindAllWithCommitGate(string col)
+    {
+        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
         var st = GetCollectionState(col);
         var ds = ReadAllDocumentsSnapshotFromPageSnapshots(col, st);
         var tx = GetCurrentTransaction();
         // 即使 ds 为空，也需要合并事务挂起操作
-        return tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
+        var documents = tx != null ? MergeTransactionOperations(col, ds, tx) : ds;
+        foreach (var document in documents)
+        {
+            yield return document;
+        }
     }
 
     internal IEnumerable<BsonValue> FindAllIds(string col)
     {
+        return FindAllIdsWithCommitGate(col);
+    }
+
+    private IEnumerable<BsonValue> FindAllIdsWithCommitGate(string col)
+    {
+        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
         var st = GetCollectionState(col);
         var tx = GetCurrentTransaction();
+        IEnumerable<BsonValue> ids;
         if (tx != null)
         {
-            return ReadIdsFromDocuments(MergeTransactionOperations(col, ReadAllDocumentsSnapshotFromPageSnapshots(col, st), tx));
+            ids = ReadIdsFromDocuments(MergeTransactionOperations(col, ReadAllDocumentsSnapshotFromPageSnapshots(col, st), tx));
+        }
+        else
+        {
+            ids = ReadIdsFromRawDocuments(col, st);
         }
 
-        return ReadIdsFromRawDocuments(col, st);
+        foreach (var id in ids)
+        {
+            yield return id;
+        }
     }
 
     private IEnumerable<BsonValue> ReadIdsFromRawDocuments(string col, CollectionState st)
@@ -81,6 +105,7 @@ public sealed partial class TinyDbEngine
     internal async Task<List<BsonDocument>> FindAllAsync(string col, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false);
 
         var st = GetCollectionState(col);
         var ds = await ReadAllDocumentsSnapshotAsync(col, st, cancellationToken).ConfigureAwait(false);
@@ -97,14 +122,32 @@ public sealed partial class TinyDbEngine
     /// <returns>文档原始数据的枚举</returns>
     internal IEnumerable<ReadOnlyMemory<byte>> FindAllRaw(string col, ScanPredicate[]? predicates = null)
     {
+        return FindAllRawWithCommitGate(col, predicates);
+    }
+
+    private IEnumerable<ReadOnlyMemory<byte>> FindAllRawWithCommitGate(string col, ScanPredicate[]? predicates)
+    {
+        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
         var st = GetCollectionState(col);
-        return ReadRawDocumentSnapshot(col, st, predicates);
+        foreach (var slice in ReadRawDocumentSnapshot(col, st, predicates))
+        {
+            yield return slice;
+        }
     }
 
     internal IEnumerable<RawScanResult> FindAllRawWithPredicateInfo(string col, ScanPredicate[]? predicates = null)
     {
+        return FindAllRawWithPredicateInfoWithCommitGate(col, predicates);
+    }
+
+    private IEnumerable<RawScanResult> FindAllRawWithPredicateInfoWithCommitGate(string col, ScanPredicate[]? predicates)
+    {
+        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
         var st = GetCollectionState(col);
-        return ReadRawScanResultSnapshot(col, st, predicates);
+        foreach (var result in ReadRawScanResultSnapshot(col, st, predicates))
+        {
+            yield return result;
+        }
     }
 
     internal async IAsyncEnumerable<ReadOnlyMemory<byte>> FindAllRawAsync(
@@ -119,6 +162,19 @@ public sealed partial class TinyDbEngine
     }
 
     internal async IAsyncEnumerable<RawScanResult> FindAllRawWithPredicateInfoAsync(
+        string col,
+        ScanPredicate[]? predicates = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false);
+        await foreach (var result in FindAllRawWithPredicateInfoNoGateAsync(col, predicates, cancellationToken).ConfigureAwait(false))
+        {
+            yield return result;
+        }
+    }
+
+    private async IAsyncEnumerable<RawScanResult> FindAllRawWithPredicateInfoNoGateAsync(
         string col,
         ScanPredicate[]? predicates = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -138,6 +194,7 @@ public sealed partial class TinyDbEngine
             return transactionDocument;
         }
 
+        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
         return FindCommittedById(col, id);
     }
 
@@ -149,6 +206,7 @@ public sealed partial class TinyDbEngine
         var tx = GetCurrentTransaction();
         if (tx == null)
         {
+            using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
             return FindCommittedByIds(col, ids);
         }
 
@@ -171,7 +229,12 @@ public sealed partial class TinyDbEngine
 
         if (committedIds.Count > 0)
         {
-            var committedDocuments = FindCommittedByIds(col, committedIds);
+            List<BsonDocument?> committedDocuments;
+            using (EnterCollectionWriteGates(new[] { col }))
+            {
+                committedDocuments = FindCommittedByIds(col, committedIds);
+            }
+
             for (int i = 0; i < committedDocuments.Count; i++)
             {
                 results[committedOrdinals[i]] = committedDocuments[i];
@@ -278,6 +341,7 @@ public sealed partial class TinyDbEngine
             return transactionDocument;
         }
 
+        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false);
         var st = GetCollectionState(col);
         DocumentLocation? indexedLocation = null;
         if (st.Index.TryGet(id, out var loc))
@@ -307,6 +371,7 @@ public sealed partial class TinyDbEngine
         var tx = GetCurrentTransaction();
         if (tx == null)
         {
+            using var collectionCommitGate = await EnterCollectionWriteGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false);
             return await FindCommittedByIdsAsync(col, ids, cancellationToken).ConfigureAwait(false);
         }
 
@@ -330,7 +395,12 @@ public sealed partial class TinyDbEngine
 
         if (committedIds.Count > 0)
         {
-            var committedDocuments = await FindCommittedByIdsAsync(col, committedIds, cancellationToken).ConfigureAwait(false);
+            List<BsonDocument?> committedDocuments;
+            using (await EnterCollectionWriteGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false))
+            {
+                committedDocuments = await FindCommittedByIdsAsync(col, committedIds, cancellationToken).ConfigureAwait(false);
+            }
+
             for (int i = 0; i < committedDocuments.Count; i++)
             {
                 results[committedOrdinals[i]] = committedDocuments[i];
@@ -411,7 +481,7 @@ public sealed partial class TinyDbEngine
                 ExpressionType.Equal)
         };
 
-        await foreach (var result in FindAllRawWithPredicateInfoAsync(col, idPredicate, cancellationToken).ConfigureAwait(false))
+        await foreach (var result in FindAllRawWithPredicateInfoNoGateAsync(col, idPredicate, cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

@@ -221,6 +221,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                StringEquals(x.DictionaryValueType, y.DictionaryValueType) &&
                x.IsDictionaryValueComplexType == y.IsDictionaryValueComplexType &&
                x.IsDictionaryValueValueType == y.IsDictionaryValueValueType &&
+               x.IsInitOnly == y.IsInitOnly &&
                x.IsCircularReference == y.IsCircularReference;
     }
 
@@ -247,6 +248,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.DictionaryValueType);
             hash = Add(hash, value.IsDictionaryValueComplexType);
             hash = Add(hash, value.IsDictionaryValueValueType);
+            hash = Add(hash, value.IsInitOnly);
             hash = Add(hash, value.IsCircularReference);
             return hash;
         }

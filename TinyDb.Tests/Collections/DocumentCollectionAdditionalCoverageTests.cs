@@ -41,7 +41,7 @@ public class DocumentCollectionAdditionalCoverageTests
             var orders = (DocumentCollection<Order>)engine.GetCollection<Order>("Orders");
 
             users.Insert(new User { Id = 1, Name = "Alice" });
-            orders.Insert(new Order { Id = 10, UserId = "1" });
+            orders.Insert(new Order { Id = 10, UserId = 1 });
 
             var includeByExpression = orders.Include(o => o.UserId).FindAll().ToList();
             await Assert.That(includeByExpression.Count).IsEqualTo(1);
@@ -49,7 +49,7 @@ public class DocumentCollectionAdditionalCoverageTests
             var includeByPath = orders.Include("UserId").FindAll().ToList();
             await Assert.That(includeByPath.Count).IsEqualTo(1);
 
-            await Assert.That(orders.Count(o => o.UserId == "1")).IsEqualTo(1);
+            await Assert.That(orders.Count(o => o.UserId == 1)).IsEqualTo(1);
         }
         finally
         {
@@ -221,7 +221,7 @@ public class DocumentCollectionAdditionalCoverageTests
         public int Id { get; set; }
 
         [ForeignKey("Users")]
-        public string UserId { get; set; } = string.Empty;
+        public int UserId { get; set; }
     }
 
     [Entity("batch")]
