@@ -224,6 +224,18 @@ public class LRUCacheTests
     }
 
     [Test]
+    public async Task LRUCache_Put_WhenAutoEvictionDisabled_ShouldRejectOverflowWithoutDroppingTrackedItem()
+    {
+        var cache = new LRUCache<int, string>(1, evictOnCapacity: false);
+        cache.Put(1, "A");
+
+        await Assert.That(() => cache.Put(2, "B")).Throws<InvalidOperationException>();
+        await Assert.That(cache.Count).IsEqualTo(1);
+        await Assert.That(cache.ContainsKey(1)).IsTrue();
+        await Assert.That(cache.ContainsKey(2)).IsFalse();
+    }
+
+    [Test]
     public async Task LRUCache_TryRemove_Should_Work()
     {
         var cache = new LRUCache<int, string>(10);

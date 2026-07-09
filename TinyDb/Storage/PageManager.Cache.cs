@@ -160,16 +160,48 @@ public sealed partial class PageManager
 
             lock (_cacheLock)
             {
+                if (_pageCache.TryGetValue(page.PageID, out var cachedPage))
+                {
+                    if (pinned)
+                    {
+                        cachedPage.Pin();
+                    }
+
+                    _lruCache.TryTouch(page.PageID);
+                    return cachedPage;
+                }
+
+                if (_pageCache.Count >= CacheOverflowLimit)
+                {
+                    continue;
+                }
+
                 if (_pageCache.TryAdd(page.PageID, page))
                 {
                     AttachDirtyTracking(page);
+                    var pinnedForCache = false;
                     if (pinned)
                     {
                         page.Pin();
+                        pinnedForCache = true;
                     }
 
-                    _lruCache.Put(page.PageID, page);
-                    return page;
+                    try
+                    {
+                        _lruCache.Put(page.PageID, page);
+                        return page;
+                    }
+                    catch
+                    {
+                        _pageCache.TryRemove(page.PageID, out _);
+                        RemoveDirtyTracking(page);
+                        if (pinnedForCache)
+                        {
+                            page.Unpin();
+                        }
+
+                        throw;
+                    }
                 }
             }
         }

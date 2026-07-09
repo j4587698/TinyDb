@@ -25,6 +25,7 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     private static readonly TimeSpan BackgroundFailureMaxDelay = TimeSpan.FromSeconds(5);
     private int _disposed;
     private int _ctsDisposed;
+    private int _signalsDisposed;
     private Exception? _backgroundFailure;
     private Exception? _corruptionException;
     private int _foregroundFlushFailureObserved;
@@ -533,37 +534,44 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _cts.Cancel();
-
-        var workerTasks = CancelPendingBatchesForDisposeAndGetWorkerTasks();
-
-        Exception? flushException = null;
-        var workerWaitErrors = new List<Exception>();
-
         try
         {
-            WaitForWorkersAndDisposeCancellationTokenSource(workerTasks, workerWaitErrors);
-            FlushForDispose();
-        }
-        catch (Exception ex)
-        {
-            flushException = ex;
-        }
+            _cts.Cancel();
 
-        if (flushException == null &&
-            !IsCorrupted &&
-            Volatile.Read(ref _backgroundFailure) is { } backgroundFailure &&
-            Volatile.Read(ref _foregroundFlushFailureObserved) == 0)
-        {
-            flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
-        }
+            var workerTasks = CancelPendingBatchesForDisposeAndGetWorkerTasks();
 
-        if (flushException != null || workerWaitErrors.Count > 0)
+            Exception? flushException = null;
+            var workerWaitErrors = new List<Exception>();
+
+            try
+            {
+                WaitForWorkersAndDisposeCancellationTokenSource(workerTasks, workerWaitErrors);
+                FlushForDispose();
+            }
+            catch (Exception ex)
+            {
+                flushException = ex;
+            }
+
+            if (flushException == null &&
+                !IsCorrupted &&
+                Volatile.Read(ref _backgroundFailure) is { } backgroundFailure &&
+                Volatile.Read(ref _foregroundFlushFailureObserved) == 0)
+            {
+                flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
+            }
+
+            if (flushException != null || workerWaitErrors.Count > 0)
+            {
+                var exceptions = new List<Exception>();
+                if (flushException != null) exceptions.Add(flushException);
+                exceptions.AddRange(workerWaitErrors);
+                throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+            }
+        }
+        finally
         {
-            var exceptions = new List<Exception>();
-            if (flushException != null) exceptions.Add(flushException);
-            exceptions.AddRange(workerWaitErrors);
-            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+            DisposeSignals();
         }
     }
 
@@ -646,54 +654,70 @@ public sealed class FlushScheduler : IDisposable, IAsyncDisposable
         }
     }
 
+    private void DisposeSignals()
+    {
+        if (Interlocked.Exchange(ref _signalsDisposed, 1) == 0)
+        {
+            _journalSignal.Dispose();
+            _syncedSignal.Dispose();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _cts.Cancel();
-        var workerTasks = CancelPendingBatchesForDisposeAndGetWorkerTasks();
-
-        var workerWaitExceptions = new List<Exception>();
-        Exception? flushException = null;
-
-        foreach (var workerTask in workerTasks)
+        try
         {
+            _cts.Cancel();
+            var workerTasks = CancelPendingBatchesForDisposeAndGetWorkerTasks();
+
+            var workerWaitExceptions = new List<Exception>();
+            Exception? flushException = null;
+
+            foreach (var workerTask in workerTasks)
+            {
+                try
+                {
+                    await workerTask.Task.ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    workerWaitExceptions.Add(new InvalidOperationException(workerTask.FailureMessage, ex));
+                }
+            }
+
             try
             {
-                await workerTask.Task.ConfigureAwait(false);
+                await FlushForDisposeAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                workerWaitExceptions.Add(new InvalidOperationException(workerTask.FailureMessage, ex));
+                flushException = ex;
             }
-        }
+            finally
+            {
+                DisposeCancellationTokenSource();
+            }
 
-        try
-        {
-            await FlushForDisposeAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            flushException = ex;
+            if (flushException == null &&
+                !IsCorrupted &&
+                Volatile.Read(ref _backgroundFailure) is { } backgroundFailure &&
+                Volatile.Read(ref _foregroundFlushFailureObserved) == 0)
+            {
+                flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
+            }
+
+            if (workerWaitExceptions.Count > 0 || flushException != null)
+            {
+                var exceptions = new List<Exception>();
+                exceptions.AddRange(workerWaitExceptions);
+                if (flushException != null) exceptions.Add(flushException);
+                throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+            }
         }
         finally
         {
-            DisposeCancellationTokenSource();
-        }
-
-        if (flushException == null &&
-            !IsCorrupted &&
-            Volatile.Read(ref _backgroundFailure) is { } backgroundFailure &&
-            Volatile.Read(ref _foregroundFlushFailureObserved) == 0)
-        {
-            flushException = new InvalidOperationException("A background flush operation failed.", backgroundFailure);
-        }
-
-        if (workerWaitExceptions.Count > 0 || flushException != null)
-        {
-            var exceptions = new List<Exception>();
-            exceptions.AddRange(workerWaitExceptions);
-            if (flushException != null) exceptions.Add(flushException);
-            throw new AggregateException("One or more errors occurred during FlushScheduler dispose.", exceptions);
+            DisposeSignals();
         }
     }
 

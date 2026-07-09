@@ -20,6 +20,9 @@ public sealed class ConstructorParameterInfo
 /// </summary>
 public class ClassInfo
 {
+        private readonly string _fullName;
+        private readonly string _helperClassName;
+
         public string Namespace { get; }
         public string Name { get; }
         public string MetadataName { get; }
@@ -32,53 +35,16 @@ public class ClassInfo
         /// <summary>
         /// 用于在代码中引用类型的名称（对于嵌套类，使用 OuterClass.InnerClass 格式）
         /// </summary>
-        public string TypeReference
-        {
-            get
-            {
-                if (!string.IsNullOrEmpty(ContainingTypeDisplayPath))
-                {
-                    // ContainingTypePath 使用下划线分隔（如 OuterClass_MiddleClass），
-                    // 需要转换为点分隔（如 OuterClass.MiddleClass）以便在代码中引用嵌套类型
-                    return FullyQualifiedTypeReference;
-                }
-                return FullyQualifiedTypeReference;
-            }
-        }
-        public string FullName
-        {
-            get
-            {
-                var baseName = string.IsNullOrEmpty(Namespace) ? "" : $"{Namespace}.";
-                var containingTypeName = !string.IsNullOrEmpty(ContainingTypeDisplayPath)
-                    ? ContainingTypeDisplayPath
-                    : ContainingTypePath.Replace("_", ".");
-                if (!string.IsNullOrEmpty(containingTypeName))
-                {
-                    // ContainingTypePath 使用下划线分隔，需要转换为点分隔
-                    return $"{baseName}{containingTypeName}.{Name}";
-                }
-                return $"{baseName}{Name}";
-            }
-        }
+        public string TypeReference => FullyQualifiedTypeReference;
+        public string FullName => _fullName;
         public string FullyQualifiedTypeReference { get; }
         public string RuntimeFullName { get; }
         public string UniqueFileName { get; }
         /// <summary>
         /// 用于生成帮助器类名的唯一标识（例如 CoverageSprintFinal_MathEntity）
         /// </summary>
-        public string HelperClassName
-        {
-            get
-            {
-                if (!string.IsNullOrEmpty(ContainingTypePath))
-                {
-                    return $"{ContainingTypePath}_{Name}AotHelper";
-                }
-                return $"{Name}AotHelper";
-            }
-        }
-        public List<PropertyInfo> Properties { get; }
+        public string HelperClassName => _helperClassName;
+        public IReadOnlyList<PropertyInfo> Properties { get; }
         public PropertyInfo? IdProperty { get; }
         public string? CollectionName { get; }
         public string DisplayName { get; }
@@ -91,25 +57,25 @@ public class ClassInfo
         /// <summary>
         /// 依赖的非Entity复杂类型（需要生成内联序列化代码）
         /// </summary>
-        public List<DependentComplexType> DependentComplexTypes { get; }
+        public IReadOnlyList<DependentComplexType> DependentComplexTypes { get; }
 
         /// <summary>
         /// 检测到的循环引用信息（非Entity类型）
         /// </summary>
-        public List<CircularReferenceInfo> CircularReferences { get; }
+        public IReadOnlyList<CircularReferenceInfo> CircularReferences { get; }
 
         /// <summary>
         /// 检测到的Entity类型间循环引用信息
         /// </summary>
-        public List<EntityCircularReferenceInfo> EntityCircularReferences { get; }
+        public IReadOnlyList<EntityCircularReferenceInfo> EntityCircularReferences { get; }
 
         /// <summary>
         /// BsonRef 引用类型缺少 Entity 特性的错误列表
         /// </summary>
-        public List<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
+        public IReadOnlyList<BsonRefMissingEntityInfo> BsonRefMissingEntityErrors { get; }
         public string? InvalidIdPropertyName { get; }
         public DiagnosticLocationInfo? InvalidIdPropertyLocation { get; }
-        public List<ConstructorParameterInfo> ConstructorParameters { get; }
+        public IReadOnlyList<ConstructorParameterInfo> ConstructorParameters { get; }
 
         public ClassInfo(string @namespace, string name, bool isValueType, List<PropertyInfo> properties, PropertyInfo? idProperty, string? collectionName = null, string? displayName = null, string? description = null, string? containingTypePath = null, DiagnosticLocationInfo? location = null, List<DependentComplexType>? dependentComplexTypes = null, List<CircularReferenceInfo>? circularReferences = null, List<EntityCircularReferenceInfo>? entityCircularReferences = null, List<BsonRefMissingEntityInfo>? bsonRefMissingEntityErrors = null, string? invalidIdPropertyName = null, DiagnosticLocationInfo? invalidIdPropertyLocation = null, List<ConstructorParameterInfo>? constructorParameters = null, string? runtimeFullName = null, string? fullyQualifiedTypeReference = null, string? metadataName = null, bool isGenericType = false, string? typeParameterList = null, string? typeParameterConstraints = null, string? containingTypeDisplayPath = null)
         {
@@ -120,24 +86,44 @@ public class ClassInfo
             IsGenericType = isGenericType;
             TypeParameterList = typeParameterList ?? string.Empty;
             TypeParameterConstraints = typeParameterConstraints ?? string.Empty;
-            Properties = properties;
             IdProperty = idProperty;
             CollectionName = collectionName;
             DisplayName = string.IsNullOrEmpty(displayName) ? name : displayName!;
             Description = string.IsNullOrEmpty(description) ? null : description;
             ContainingTypePath = containingTypePath ?? string.Empty;
             ContainingTypeDisplayPath = containingTypeDisplayPath ?? string.Empty;
-            FullyQualifiedTypeReference = fullyQualifiedTypeReference ?? FullName;
-            RuntimeFullName = runtimeFullName ?? FullName;
+            _fullName = CreateFullName(Namespace, Name, ContainingTypePath, ContainingTypeDisplayPath);
+            FullyQualifiedTypeReference = fullyQualifiedTypeReference ?? _fullName;
+            RuntimeFullName = runtimeFullName ?? _fullName;
+            _helperClassName = CreateHelperClassName(ContainingTypePath, Name);
             UniqueFileName = CreateUniqueFileName(Namespace, ContainingTypePath, MetadataName);
             Location = location;
-            DependentComplexTypes = dependentComplexTypes ?? new List<DependentComplexType>();
-            CircularReferences = circularReferences ?? new List<CircularReferenceInfo>();
-            EntityCircularReferences = entityCircularReferences ?? new List<EntityCircularReferenceInfo>();
-            BsonRefMissingEntityErrors = bsonRefMissingEntityErrors ?? new List<BsonRefMissingEntityInfo>();
+            Properties = properties.ToArray();
+            DependentComplexTypes = dependentComplexTypes?.ToArray() ?? Array.Empty<DependentComplexType>();
+            CircularReferences = circularReferences?.ToArray() ?? Array.Empty<CircularReferenceInfo>();
+            EntityCircularReferences = entityCircularReferences?.ToArray() ?? Array.Empty<EntityCircularReferenceInfo>();
+            BsonRefMissingEntityErrors = bsonRefMissingEntityErrors?.ToArray() ?? Array.Empty<BsonRefMissingEntityInfo>();
             InvalidIdPropertyName = invalidIdPropertyName;
             InvalidIdPropertyLocation = invalidIdPropertyLocation;
-            ConstructorParameters = constructorParameters ?? new List<ConstructorParameterInfo>();
+            ConstructorParameters = constructorParameters?.ToArray() ?? Array.Empty<ConstructorParameterInfo>();
+        }
+
+        private static string CreateFullName(string @namespace, string name, string containingTypePath, string containingTypeDisplayPath)
+        {
+            var baseName = string.IsNullOrEmpty(@namespace) ? string.Empty : $"{@namespace}.";
+            var containingTypeName = !string.IsNullOrEmpty(containingTypeDisplayPath)
+                ? containingTypeDisplayPath
+                : containingTypePath.Replace("_", ".");
+            return string.IsNullOrEmpty(containingTypeName)
+                ? $"{baseName}{name}"
+                : $"{baseName}{containingTypeName}.{name}";
+        }
+
+        private static string CreateHelperClassName(string containingTypePath, string name)
+        {
+            return string.IsNullOrEmpty(containingTypePath)
+                ? $"{name}AotHelper"
+                : $"{containingTypePath}_{name}AotHelper";
         }
 
         private static string CreateUniqueFileName(string @namespace, string containingTypePath, string name)
@@ -171,6 +157,8 @@ public class ClassInfo
 /// </summary>
 public class DependentComplexType
 {
+    private readonly string _safeMethodName;
+
     /// <summary>
     /// 类型的完全限定名（用于生成代码中的类型引用）
     /// </summary>
@@ -191,18 +179,12 @@ public class DependentComplexType
     /// <summary>
     /// 类型的属性列表
     /// </summary>
-    public List<DependentTypeProperty> Properties { get; }
+    public IReadOnlyList<DependentTypeProperty> Properties { get; }
 
     /// <summary>
     /// 用于生成唯一方法名的安全名称
     /// </summary>
-    public string SafeMethodName => FullyQualifiedName
-        .Replace("global::", "")
-        .Replace(".", "_")
-        .Replace("<", "_")
-        .Replace(">", "_")
-        .Replace(",", "_")
-        .Replace(" ", "");
+    public string SafeMethodName => _safeMethodName;
 
     public DependentComplexType(string fullyQualifiedName, string shortName, bool isValueType, bool hasAccessibleParameterlessConstructor, List<DependentTypeProperty> properties)
     {
@@ -210,7 +192,19 @@ public class DependentComplexType
         ShortName = shortName;
         IsValueType = isValueType;
         HasAccessibleParameterlessConstructor = hasAccessibleParameterlessConstructor;
-        Properties = properties;
+        Properties = properties.ToArray();
+        _safeMethodName = CreateSafeMethodName(fullyQualifiedName);
+    }
+
+    private static string CreateSafeMethodName(string fullyQualifiedName)
+    {
+        return fullyQualifiedName
+            .Replace("global::", "")
+            .Replace(".", "_")
+            .Replace("<", "_")
+            .Replace(">", "_")
+            .Replace(",", "_")
+            .Replace(" ", "");
     }
 }
 
@@ -303,9 +297,9 @@ public class PropertyInfo
         ? "@" + Name
         : Name;
     public string Type { get; }
-    public bool IsId { get; set; }
+    public bool IsId { get; }
     public bool IsIgnored { get; }
-    public bool HasIgnoreAttribute { get; set; }
+    public bool HasIgnoreAttribute { get; }
     public string DisplayName { get; }
     public string? Description { get; }
     public int Order { get; }
@@ -460,6 +454,50 @@ public class PropertyInfo
         IdGenerationStrategyValue = idGenerationStrategyValue;
         IdGenerationSequenceName = idGenerationSequenceName;
         CanSet = canSet;
+    }
+
+    public PropertyInfo WithIsId(bool isId)
+    {
+        if (IsId == isId)
+        {
+            return this;
+        }
+
+        return new PropertyInfo(
+            Name,
+            Type,
+            isId,
+            IsIgnored,
+            HasIgnoreAttribute,
+            IsValueType,
+            IsNullableValueType,
+            IsNullableReferenceType,
+            IsEnum,
+            NonNullableType,
+            FullyQualifiedType,
+            FullyQualifiedNonNullableType,
+            MetadataTypeName,
+            IsComplexType,
+            IsCollection,
+            IsDictionary,
+            IsArray,
+            ArrayRank,
+            ElementType,
+            IsElementComplexType,
+            IsElementValueType,
+            DictionaryKeyType,
+            DictionaryValueType,
+            IsDictionaryValueComplexType,
+            IsDictionaryValueValueType,
+            BsonRefCollectionName,
+            ForeignKeyCollectionName,
+            IdGenerationStrategyValue,
+            IdGenerationSequenceName,
+            CanSet,
+            DisplayName,
+            Description,
+            Order,
+            Required);
     }
 }
 

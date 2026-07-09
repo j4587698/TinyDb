@@ -65,9 +65,13 @@ public sealed partial class TransactionManager
         if (transaction == null) throw new ArgumentNullException(nameof(transaction));
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Savepoint name cannot be null or empty", nameof(name));
 
-        lock (_lock)
+        lock (transaction.SyncRoot)
         {
             EnsureTransactionActive(transaction);
+            if (transaction.State != TransactionState.Active)
+            {
+                throw new InvalidOperationException($"Cannot create savepoint in transaction state {transaction.State}");
+            }
 
             var savepoint = new TransactionSavepoint(name, transaction.OperationCount);
             transaction.Savepoints[savepoint.SavepointId] = savepoint;
@@ -86,9 +90,13 @@ public sealed partial class TransactionManager
         ThrowIfDisposed();
         if (transaction == null) throw new ArgumentNullException(nameof(transaction));
 
-        lock (_lock)
+        lock (transaction.SyncRoot)
         {
             EnsureTransactionActive(transaction);
+            if (transaction.State != TransactionState.Active)
+            {
+                throw new InvalidOperationException($"Cannot rollback to savepoint in transaction state {transaction.State}");
+            }
 
             if (!transaction.Savepoints.TryGetValue(savepointId, out var savepoint))
             {
@@ -123,9 +131,13 @@ public sealed partial class TransactionManager
         ThrowIfDisposed();
         if (transaction == null) throw new ArgumentNullException(nameof(transaction));
 
-        lock (_lock)
+        lock (transaction.SyncRoot)
         {
             EnsureTransactionActive(transaction);
+            if (transaction.State != TransactionState.Active)
+            {
+                throw new InvalidOperationException($"Cannot release savepoint in transaction state {transaction.State}");
+            }
 
             transaction.Savepoints.Remove(savepointId);
         }

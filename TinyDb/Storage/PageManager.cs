@@ -160,7 +160,7 @@ public sealed partial class PageManager : IDisposable
         MaxCacheSize = maxCacheSize;
         _pageCache = new ConcurrentDictionary<uint, Page>();
         _dirtyPageIds = new ConcurrentDictionary<uint, byte>();
-        _lruCache = new LRUCache<uint, Page>(GetCacheOverflowLimit(maxCacheSize));
+        _lruCache = new LRUCache<uint, Page>(GetCacheOverflowLimit(maxCacheSize), evictOnCapacity: false);
         _pageLoadStripes = new SemaphoreSlim[PageLoadStripeCount];
         for (var i = 0; i < _pageLoadStripes.Length; i++)
         {

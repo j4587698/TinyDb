@@ -453,18 +453,27 @@ internal sealed class Transaction : ITransaction
         ThrowIfDisposed();
 
         var duration = DateTime.UtcNow - StartTime;
-        var operations = GetOperationsSnapshot();
+        TransactionOperation[] operations;
+        int savepointCount;
+        TransactionState state;
+        lock (_syncRoot)
+        {
+            operations = _operations.ToArray();
+            savepointCount = _savepoints.Count;
+            state = State;
+        }
+
         var operationCounts = operations.GroupBy(op => op.OperationType)
             .ToDictionary(g => g.Key, g => g.Count());
 
         return new TransactionStatistics
         {
             TransactionId = TransactionId,
-            State = State,
+            State = state,
             StartTime = StartTime,
             Duration = duration,
             OperationCount = operations.Length,
-            SavepointCount = _savepoints.Count,
+            SavepointCount = savepointCount,
             OperationCounts = operationCounts,
             IsReadOnly = operations.Length == 0
         };
@@ -503,8 +512,11 @@ internal sealed class Transaction : ITransaction
 
                 try
                 {
-                    ClearOperations();
-                    _savepoints.Clear();
+                    lock (_syncRoot)
+                    {
+                        ClearOperations();
+                        _savepoints.Clear();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -527,7 +539,15 @@ internal sealed class Transaction : ITransaction
     /// </summary>
     public override string ToString()
     {
-        return $"Transaction[{TransactionId:N}]: {State}, {GetOperationsSnapshot().Length} operations, {_savepoints.Count} savepoints";
+        int operationCount;
+        int savepointCount;
+        lock (_syncRoot)
+        {
+            operationCount = _operations.Count;
+            savepointCount = _savepoints.Count;
+        }
+
+        return $"Transaction[{TransactionId:N}]: {State}, {operationCount} operations, {savepointCount} savepoints";
     }
 }
 
