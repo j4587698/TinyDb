@@ -216,6 +216,7 @@ public sealed class DiskStream : IDiskStream
 
     private static RegionLockEntry RentRegionLockEntry(string fullPath)
     {
+        var spinWait = new SpinWait();
         while (true)
         {
             var entry = _regionLocks.GetOrAdd(fullPath, static path => new RegionLockEntry(path));
@@ -225,6 +226,7 @@ public sealed class DiskStream : IDiskStream
             }
 
             TryRemoveRegionLockEntry(entry);
+            spinWait.SpinOnce();
         }
     }
 

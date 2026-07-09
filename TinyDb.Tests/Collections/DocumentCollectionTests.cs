@@ -1,5 +1,6 @@
 using TinyDb.Core;
 using TinyDb.Attributes;
+using TinyDb.Bson;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -82,6 +83,26 @@ public class DocumentCollectionTests : IDisposable
         collection.Insert(new DocumentCollectionItem { Id = 3, Name = "B" });
 
         var deleted = collection.DeleteMany(x => x.Name == "A");
+
+        await Assert.That(deleted).IsEqualTo(2);
+        await Assert.That(collection.Count()).IsEqualTo(1);
+        await Assert.That(collection.FindById(3)).IsNotNull();
+    }
+
+    [Test]
+    public async Task Delete_Batch_InTransaction_ShouldRecordDistinctDeletes()
+    {
+        var collection = _engine.GetCollection<DocumentCollectionItem>();
+        collection.Insert(new[]
+        {
+            new DocumentCollectionItem { Id = 1, Name = "A" },
+            new DocumentCollectionItem { Id = 2, Name = "B" },
+            new DocumentCollectionItem { Id = 3, Name = "C" }
+        });
+
+        using var tx = _engine.BeginTransaction();
+        var deleted = collection.Delete(new BsonValue[] { 1, 1, 2 });
+        tx.Commit();
 
         await Assert.That(deleted).IsEqualTo(2);
         await Assert.That(collection.Count()).IsEqualTo(1);

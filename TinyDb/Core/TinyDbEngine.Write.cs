@@ -442,6 +442,54 @@ public sealed partial class TinyDbEngine
         return deleted;
     }
 
+    internal int DeleteDocuments(string col, IReadOnlyList<BsonValue> ids)
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (ids == null) throw new ArgumentNullException(nameof(ids));
+        if (ids.Count == 0) return 0;
+
+        var distinctIds = ids
+            .Where(static id => id != null && !id.IsNull)
+            .Distinct(BsonValueComparer.EqualityComparer)
+            .ToArray();
+        if (distinctIds.Length == 0) return 0;
+
+        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
+        var st = GetCollectionState(col);
+        var idxMgr = GetIndexManager(col);
+        var deleted = 0;
+
+        using (st.EnterDocumentLocks(distinctIds))
+        {
+            using var durabilityScope = BeginImplicitWalTransaction();
+            try
+            {
+                foreach (var id in distinctIds)
+                {
+                    deleted += DeleteDocumentCore(col, id, st, idxMgr);
+                }
+
+                if (deleted > 0)
+                {
+                    durabilityScope?.Commit();
+                }
+            }
+            catch (Exception ex)
+            {
+                RollbackImplicitWalTransaction(durabilityScope, ex);
+                throw;
+            }
+        }
+
+        if (deleted > 0)
+        {
+            EnsureWriteDurability();
+        }
+
+        return deleted;
+    }
+
     /// <summary>
     /// 异步删除文档
     /// </summary>

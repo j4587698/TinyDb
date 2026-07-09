@@ -27,20 +27,28 @@ public class AotEntityAdapterCoverageTests
     }
 
     [Test]
-    public async Task CreateListFrom_ShouldFilterItems()
+    public async Task CreateListFrom_ShouldPreserveTypedItemsAndNulls()
     {
         var adapter = CreateAdapter();
         var items = new object[]
         {
             new AdapterEntity { Id = 1 },
-            null!,
-            "ignored"
+            null!
         };
 
         var list = adapter.CreateListFrom(items);
         await Assert.That(list.Count).IsEqualTo(2);
         await Assert.That(list[0]).IsTypeOf<AdapterEntity>();
         await Assert.That(list[1]).IsNull();
+    }
+
+    [Test]
+    public async Task CreateListFrom_WithMismatchedItem_ShouldThrow()
+    {
+        var adapter = CreateAdapter();
+        var items = new object[] { new AdapterEntity { Id = 1 }, "invalid" };
+
+        await Assert.That(() => adapter.CreateListFrom(items)).Throws<InvalidCastException>();
     }
 
     private static AotEntityAdapter<AdapterEntity> CreateAdapter()
