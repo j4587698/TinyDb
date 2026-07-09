@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using TinyDb.Storage;
+using TinyDb.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -27,6 +28,39 @@ public sealed class PageManagerEvictionCoverageTests
             await Assert.That(() => pm.NewPage(PageType.Data))
                 .Throws<InvalidOperationException>();
             await Assert.That(pm.CachedPages).IsLessThanOrEqualTo(pm.MaxCacheSize + 4096);
+        }
+        finally
+        {
+            foreach (var page in pinnedPages)
+            {
+                page.Unpin();
+            }
+        }
+    }
+
+    [Test]
+    public async Task PageManagerLru_WhenOverflowLimitReached_ShouldRejectUntrackedOverflowInsteadOfAutoEvicting()
+    {
+        using var ds = new MockDiskStream();
+        using var pm = new PageManager(ds, pageSize: 4096, maxCacheSize: 1);
+        var pinnedPages = new List<Page>();
+        using var overflowPage = new Page(uint.MaxValue, 4096, PageType.Data);
+
+        try
+        {
+            for (var i = 0; i < pm.MaxCacheSize + 4096; i++)
+            {
+                var page = pm.NewPage(PageType.Data);
+                page.Pin();
+                pinnedPages.Add(page);
+            }
+
+            var lruField = typeof(PageManager).GetField("_lruCache", BindingFlags.NonPublic | BindingFlags.Instance);
+            await Assert.That(lruField).IsNotNull();
+            var lru = (LRUCache<uint, Page>)lruField!.GetValue(pm)!;
+
+            await Assert.That(() => lru.Put(overflowPage.PageID, overflowPage)).Throws<InvalidOperationException>();
+            await Assert.That(lru.Count).IsEqualTo(pm.CachedPages);
         }
         finally
         {

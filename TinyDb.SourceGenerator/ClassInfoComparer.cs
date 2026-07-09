@@ -24,7 +24,9 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                StringEquals(x.TypeParameterList, y.TypeParameterList) &&
                StringEquals(x.TypeParameterConstraints, y.TypeParameterConstraints) &&
                x.IsValueType == y.IsValueType &&
+               StringEquals(x.FullyQualifiedTypeReference, y.FullyQualifiedTypeReference) &&
                StringEquals(x.RuntimeFullName, y.RuntimeFullName) &&
+               LocationEquals(x.Location, y.Location) &&
                StringEquals(x.CollectionName, y.CollectionName) &&
                StringEquals(x.DisplayName, y.DisplayName) &&
                StringEquals(x.Description, y.Description) &&
@@ -35,6 +37,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                ListEquals(x.EntityCircularReferences, y.EntityCircularReferences, EntityCircularReferenceEquals) &&
                ListEquals(x.BsonRefMissingEntityErrors, y.BsonRefMissingEntityErrors, BsonRefMissingEntityEquals) &&
                StringEquals(x.InvalidIdPropertyName, y.InvalidIdPropertyName) &&
+               LocationEquals(x.InvalidIdPropertyLocation, y.InvalidIdPropertyLocation) &&
                ListEquals(x.ConstructorParameters, y.ConstructorParameters, ConstructorParameterEquals);
     }
 
@@ -54,7 +57,9 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, obj.TypeParameterList);
             hash = Add(hash, obj.TypeParameterConstraints);
             hash = Add(hash, obj.IsValueType);
+            hash = Add(hash, obj.FullyQualifiedTypeReference);
             hash = Add(hash, obj.RuntimeFullName);
+            hash = Add(hash, obj.Location);
             hash = Add(hash, obj.CollectionName);
             hash = Add(hash, obj.DisplayName);
             hash = Add(hash, obj.Description);
@@ -65,6 +70,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = AddList(hash, obj.EntityCircularReferences, GetEntityCircularReferenceHashCode);
             hash = AddList(hash, obj.BsonRefMissingEntityErrors, GetBsonRefMissingEntityHashCode);
             hash = Add(hash, obj.InvalidIdPropertyName);
+            hash = Add(hash, obj.InvalidIdPropertyLocation);
             hash = AddList(hash, obj.ConstructorParameters, GetConstructorParameterHashCode);
             return hash;
         }
@@ -300,7 +306,8 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
     {
         return StringEquals(x.PropertyName, y.PropertyName) &&
                StringEquals(x.ContainingTypeName, y.ContainingTypeName) &&
-               StringEquals(x.ReferencedTypeName, y.ReferencedTypeName);
+               StringEquals(x.ReferencedTypeName, y.ReferencedTypeName) &&
+               LocationEquals(x.Location, y.Location);
     }
 
     private static int GetBsonRefMissingEntityHashCode(BsonRefMissingEntityInfo value)
@@ -311,6 +318,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.PropertyName);
             hash = Add(hash, value.ContainingTypeName);
             hash = Add(hash, value.ReferencedTypeName);
+            hash = Add(hash, value.Location);
             return hash;
         }
     }
@@ -318,7 +326,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
     private static bool ConstructorParameterEquals(ConstructorParameterInfo x, ConstructorParameterInfo y)
     {
         return StringEquals(x.ParameterName, y.ParameterName) &&
-               StringEquals(x.Property.Name, y.Property.Name);
+               PropertyEquals(x.Property, y.Property);
     }
 
     private static int GetConstructorParameterHashCode(ConstructorParameterInfo value)
@@ -327,7 +335,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         {
             var hash = 17;
             hash = Add(hash, value.ParameterName);
-            hash = Add(hash, value.Property.Name);
+            hash = hash * 31 + GetPropertyHashCode(value.Property);
             return hash;
         }
     }
@@ -335,6 +343,11 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
     private static bool StringEquals(string? x, string? y)
     {
         return string.Equals(x, y, StringComparison.Ordinal);
+    }
+
+    private static bool LocationEquals(DiagnosticLocationInfo? x, DiagnosticLocationInfo? y)
+    {
+        return x.Equals(y);
     }
 
     private static int Add(int hash, string? value)
@@ -358,6 +371,14 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         unchecked
         {
             return hash * 31 + value;
+        }
+    }
+
+    private static int Add(int hash, DiagnosticLocationInfo? value)
+    {
+        unchecked
+        {
+            return hash * 31 + (value.HasValue ? value.Value.GetHashCode() : 0);
         }
     }
 

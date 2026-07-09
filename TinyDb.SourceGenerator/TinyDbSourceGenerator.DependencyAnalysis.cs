@@ -215,8 +215,23 @@ public partial class TinyDbSourceGenerator
     private static string GetShortTypeName(string fullTypeName)
     {
         var name = fullTypeName.Replace("global::", "");
-        var lastDot = name.LastIndexOf('.');
-        return lastDot >= 0 ? name.Substring(lastDot + 1) : name;
+        var genericDepth = 0;
+        for (var i = name.Length - 1; i >= 0; i--)
+        {
+            switch (name[i])
+            {
+                case '>':
+                    genericDepth++;
+                    break;
+                case '<':
+                    genericDepth--;
+                    break;
+                case '.' when genericDepth == 0:
+                    return name.Substring(i + 1);
+            }
+        }
+
+        return name;
     }
 
 

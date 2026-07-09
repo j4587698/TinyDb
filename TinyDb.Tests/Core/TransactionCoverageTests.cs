@@ -211,6 +211,61 @@ public class TransactionCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task GetStatistics_ShouldBeSafeWhileSavepointsMutate()
+    {
+        using var engine = CreateTestEngine();
+        using var trans = (Transaction)engine.BeginTransaction();
+        Exception? failure = null;
+        var stop = 0;
+
+        var writer = Task.Run(() =>
+        {
+            try
+            {
+                var index = 0;
+                while (Volatile.Read(ref stop) == 0)
+                {
+                    var savepoint = trans.CreateSavepoint($"sp{index++}");
+                    if ((index & 1) == 0)
+                    {
+                        trans.ReleaseSavepoint(savepoint);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+                Volatile.Write(ref stop, 1);
+            }
+        });
+
+        var readers = Enumerable.Range(0, 4)
+            .Select(readerIndex => Task.Run(() =>
+            {
+                try
+                {
+                    while (Volatile.Read(ref stop) == 0)
+                    {
+                        trans.GetStatistics();
+                        trans.ToString();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                    Volatile.Write(ref stop, 1);
+                }
+            }))
+            .ToArray();
+
+        await Task.Delay(250);
+        Volatile.Write(ref stop, 1);
+        await Task.WhenAll(readers.Append(writer)).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(failure).IsNull();
+    }
+
+    [Test]
     public async Task RecordDropIndex_ShouldAttemptToGetIndexInfo()
     {
         using var engine = CreateTestEngine();

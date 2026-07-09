@@ -8,6 +8,7 @@ namespace TinyDb.Utils;
 public sealed class LRUCache<TKey, TValue> where TKey : notnull
 {
     private int _capacity;
+    private readonly bool _evictOnCapacity;
     private readonly Dictionary<TKey, LinkedListNode<CacheItem>> _cacheMap;
     private readonly LinkedList<CacheItem> _lruList;
     private long _hits;
@@ -61,9 +62,15 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
     /// </summary>
     /// <param name="capacity">缓存容量</param>
     public LRUCache(int capacity)
+        : this(capacity, evictOnCapacity: true)
+    {
+    }
+
+    internal LRUCache(int capacity, bool evictOnCapacity)
     {
         if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
         _capacity = capacity;
+        _evictOnCapacity = evictOnCapacity;
         _cacheMap = new Dictionary<TKey, LinkedListNode<CacheItem>>();
         _lruList = new LinkedList<CacheItem>();
     }
@@ -389,7 +396,16 @@ public sealed class LRUCache<TKey, TValue> where TKey : notnull
 
         if (_cacheMap.Count > _capacity)
         {
-            Evict();
+            if (_evictOnCapacity)
+            {
+                Evict();
+            }
+            else
+            {
+                _cacheMap.Remove(key);
+                _lruList.Remove(newNode);
+                throw new InvalidOperationException($"LRU cache capacity {_capacity} exceeded.");
+            }
         }
     }
 

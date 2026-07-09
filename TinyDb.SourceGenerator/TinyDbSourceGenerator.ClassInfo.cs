@@ -103,11 +103,7 @@ public partial class TinyDbSourceGenerator
         {
             // 1. 优先使用Entity属性中指定的ID属性
             idProperty = properties.FirstOrDefault(p => p.Name == specifiedIdProperty);
-            if (idProperty != null)
-            {
-                idProperty.IsId = true;
-            }
-            else
+            if (idProperty == null)
             {
                 invalidIdPropertyName = specifiedIdProperty;
                 invalidIdPropertyLocation = DiagnosticLocationInfo.From(classDeclaration.GetLocation());
@@ -120,10 +116,6 @@ public partial class TinyDbSourceGenerator
             idProperty = idAttributePropertyName == null
                 ? null
                 : properties.FirstOrDefault(p => p.Name == idAttributePropertyName);
-            if (idProperty != null)
-            {
-                idProperty.IsId = true;
-            }
 
             if (idProperty == null)
             {
@@ -135,12 +127,19 @@ public partial class TinyDbSourceGenerator
                     var foundIdProperty = properties.FirstOrDefault(p => p.Name == idName);
                     if (foundIdProperty != null)
                     {
-                        foundIdProperty.IsId = true;
                         idProperty = foundIdProperty;
                         break;
                     }
                 }
             }
+        }
+
+        if (idProperty != null)
+        {
+            var idPropertyName = idProperty.Name;
+            properties = MarkIdProperty(properties, idPropertyName);
+            idProperty = properties.First(p => p.Name == idPropertyName);
+            constructorParameters = RebindConstructorParameters(constructorParameters, properties);
         }
 
         // 3. 如果还是没有找到，检查是否有[Id]属性标记
@@ -175,6 +174,43 @@ public partial class TinyDbSourceGenerator
             typeParameterList,
             typeParameterConstraints,
             containingTypeDisplayPath);
+    }
+
+    private static List<PropertyInfo> MarkIdProperty(List<PropertyInfo> properties, string idPropertyName)
+    {
+        var result = new List<PropertyInfo>(properties.Count);
+        foreach (var property in properties)
+        {
+            result.Add(property.Name == idPropertyName ? property.WithIsId(true) : property);
+        }
+
+        return result;
+    }
+
+    private static List<ConstructorParameterInfo> RebindConstructorParameters(
+        List<ConstructorParameterInfo> constructorParameters,
+        List<PropertyInfo> properties)
+    {
+        if (constructorParameters.Count == 0)
+        {
+            return constructorParameters;
+        }
+
+        var propertyMap = new Dictionary<string, PropertyInfo>(StringComparer.Ordinal);
+        foreach (var property in properties)
+        {
+            propertyMap[property.Name] = property;
+        }
+
+        var result = new List<ConstructorParameterInfo>(constructorParameters.Count);
+        foreach (var parameter in constructorParameters)
+        {
+            result.Add(propertyMap.TryGetValue(parameter.Property.Name, out var property)
+                ? new ConstructorParameterInfo(parameter.ParameterName, property)
+                : parameter);
+        }
+
+        return result;
     }
 
     private static bool IsFirstEntityAttributeDeclaration(

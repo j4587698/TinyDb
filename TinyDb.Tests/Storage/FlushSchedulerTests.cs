@@ -147,6 +147,19 @@ public class FlushSchedulerTests
     }
 
     [Test]
+    public async Task FlushScheduler_Dispose_ShouldDisposeSignals()
+    {
+        var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.Zero);
+        var journalSignal = UnsafeAccessors.FlushSchedulerAccessor.JournalSignal(fs);
+        var syncedSignal = UnsafeAccessors.FlushSchedulerAccessor.SyncedSignal(fs);
+
+        fs.Dispose();
+
+        await Assert.That(() => journalSignal.Release()).Throws<ObjectDisposedException>();
+        await Assert.That(() => syncedSignal.Release()).Throws<ObjectDisposedException>();
+    }
+
+    [Test]
     public async Task FlushScheduler_BackgroundLoop_ShouldWork()
     {
         using var fs = new FlushScheduler(_pageManager, _wal, TimeSpan.FromMilliseconds(100));
