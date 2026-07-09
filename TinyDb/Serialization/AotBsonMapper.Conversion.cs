@@ -167,6 +167,8 @@ public static partial class AotBsonMapper
             var t when t == typeof(decimal) => default(decimal),
             var t when t == typeof(char) => default(char),
             var t when t == typeof(DateTime) => default(DateTime),
+            var t when t == typeof(DateTimeOffset) => default(DateTimeOffset),
+            var t when t == typeof(TimeSpan) => default(TimeSpan),
             var t when t == typeof(Guid) => default(Guid),
             var t when t == typeof(ObjectId) => default(ObjectId),
             var t when t == typeof(Decimal128) => default(Decimal128),
@@ -208,6 +210,8 @@ public static partial class AotBsonMapper
             type == typeof(string) ||
             type == typeof(byte[]) ||
             type == typeof(DateTime) ||
+            type == typeof(DateTimeOffset) ||
+            type == typeof(TimeSpan) ||
             type == typeof(Guid) ||
             type == typeof(ObjectId) ||
             type == typeof(decimal) ||

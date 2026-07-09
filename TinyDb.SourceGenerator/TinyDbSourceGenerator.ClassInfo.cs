@@ -23,8 +23,8 @@ public partial class TinyDbSourceGenerator
         var semanticModel = context.SemanticModel;
 
         var className = classDeclaration.Identifier.Text;
-        var typeParameterList = classDeclaration.TypeParameterList?.ToString() ?? string.Empty;
-        var typeParameterConstraints = string.Join(" ", classDeclaration.ConstraintClauses.Select(static clause => clause.ToString()));
+        var typeParameterList = BuildHelperTypeParameterList(classDeclaration);
+        var typeParameterConstraints = BuildHelperTypeParameterConstraints(classDeclaration);
 
         // 获取类符号信息
         var classSymbol = context.TargetSymbol as INamedTypeSymbol
@@ -33,7 +33,7 @@ public partial class TinyDbSourceGenerator
             ? containingNamespace.ToDisplayString()
             : string.Empty;
         var metadataName = classSymbol?.MetadataName ?? className;
-        var isGenericType = classSymbol?.IsGenericType ?? classDeclaration.TypeParameterList != null;
+        var isGenericType = (classSymbol?.IsGenericType ?? false) || !string.IsNullOrEmpty(typeParameterList);
 
         // 获取包含类的全名（用于生成唯一的文件名）
         var containingTypeNames = new List<string>();
@@ -168,6 +168,74 @@ public partial class TinyDbSourceGenerator
             typeParameterList,
             typeParameterConstraints,
             containingTypeDisplayPath);
+    }
+
+    private static string BuildHelperTypeParameterList(TypeDeclarationSyntax classDeclaration)
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var declaration in EnumerateContainingTypeDeclarations(classDeclaration))
+        {
+            AddTypeParameterNames(declaration, names, seen);
+        }
+
+        AddTypeParameterNames(classDeclaration, names, seen);
+        return names.Count == 0 ? string.Empty : $"<{string.Join(", ", names)}>";
+    }
+
+    private static string BuildHelperTypeParameterConstraints(TypeDeclarationSyntax classDeclaration)
+    {
+        var constraints = new List<string>();
+        foreach (var declaration in EnumerateContainingTypeDeclarations(classDeclaration))
+        {
+            AddConstraintClauses(declaration, constraints);
+        }
+
+        AddConstraintClauses(classDeclaration, constraints);
+        return string.Join(" ", constraints);
+    }
+
+    private static IEnumerable<TypeDeclarationSyntax> EnumerateContainingTypeDeclarations(TypeDeclarationSyntax classDeclaration)
+    {
+        var declarations = new Stack<TypeDeclarationSyntax>();
+        for (var parent = classDeclaration.Parent; parent != null; parent = parent.Parent)
+        {
+            if (parent is TypeDeclarationSyntax typeDeclaration)
+            {
+                declarations.Push(typeDeclaration);
+            }
+        }
+
+        while (declarations.Count > 0)
+        {
+            yield return declarations.Pop();
+        }
+    }
+
+    private static void AddTypeParameterNames(TypeDeclarationSyntax declaration, List<string> names, HashSet<string> seen)
+    {
+        if (declaration.TypeParameterList == null)
+        {
+            return;
+        }
+
+        foreach (var parameter in declaration.TypeParameterList.Parameters)
+        {
+            var name = parameter.Identifier.Text;
+            if (seen.Add(name))
+            {
+                names.Add(name);
+            }
+        }
+    }
+
+    private static void AddConstraintClauses(TypeDeclarationSyntax declaration, List<string> constraints)
+    {
+        foreach (var clause in declaration.ConstraintClauses)
+        {
+            constraints.Add(clause.ToString());
+        }
     }
 
 }

@@ -110,7 +110,7 @@ public static partial class SourceGeneratorHelpers
 
         return propertyType switch
         {
-            "string" => $"document = document.Set(\"{bsonFieldName}\", string.IsNullOrEmpty(entity.{propertyAccess}) ? BsonNull.Value : new BsonString(entity.{propertyAccess}));",
+            "string" => $"document = document.Set(\"{bsonFieldName}\", entity.{propertyAccess} == null ? BsonNull.Value : new BsonString(entity.{propertyAccess}));",
             "int" or "Int32" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt32(entity.{propertyAccess}));",
             "long" or "Int64" => $"document = document.Set(\"{bsonFieldName}\", new BsonInt64(entity.{propertyAccess}));",
             "double" or "Double" => $"document = document.Set(\"{bsonFieldName}\", new BsonDouble(entity.{propertyAccess}));",

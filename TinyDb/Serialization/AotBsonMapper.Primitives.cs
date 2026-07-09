@@ -161,11 +161,30 @@ public static partial class AotBsonMapper
                 BsonString s => short.Parse(s.Value, CultureInfo.InvariantCulture),
                 _ => Convert.ToInt16(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
+            var t when t == typeof(char) => bsonValue switch
+            {
+                BsonInt32 i32 => checked((char)i32.Value),
+                BsonString s when s.Value.Length > 0 => s.Value[0],
+                _ => Convert.ToChar(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            },
             var t when t == typeof(DateTime) => bsonValue switch
             {
                 BsonDateTime date => date.Value,
                 BsonString s => DateTime.Parse(s.Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
                 _ => DateTime.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            },
+            var t when t == typeof(DateTimeOffset) => bsonValue switch
+            {
+                BsonString s => DateTimeOffset.Parse(s.Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                BsonDateTime date => new DateTimeOffset(date.Value),
+                _ => DateTimeOffset.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            },
+            var t when t == typeof(TimeSpan) => bsonValue switch
+            {
+                BsonInt64 i64 => TimeSpan.FromTicks(i64.Value),
+                BsonInt32 i32 => TimeSpan.FromTicks(i32.Value),
+                BsonString s => TimeSpan.Parse(s.Value, CultureInfo.InvariantCulture),
+                _ => TimeSpan.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture)
             },
             var t when t == typeof(Guid) => bsonValue switch
             {

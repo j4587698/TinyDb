@@ -365,12 +365,13 @@ public partial class TinyDbSourceGenerator
         cancellationToken.ThrowIfCancellationRequested();
 
         propertyInfo = null;
-        var canSet = propertySymbol.SetMethod is { DeclaredAccessibility: Accessibility.Public, IsInitOnly: false };
+        var hasPublicSetter = propertySymbol.SetMethod is { DeclaredAccessibility: Accessibility.Public };
+        var canSet = hasPublicSetter && propertySymbol.SetMethod is { IsInitOnly: false };
         if (propertySymbol.DeclaredAccessibility != Accessibility.Public ||
             propertySymbol.IsStatic ||
             propertySymbol.IsIndexer ||
             propertySymbol.GetMethod == null ||
-            (requirePublicMutableSetter && !canSet))
+            (requirePublicMutableSetter && !hasPublicSetter))
         {
             return false;
         }

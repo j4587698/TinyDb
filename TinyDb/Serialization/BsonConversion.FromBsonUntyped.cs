@@ -251,6 +251,21 @@ public static partial class BsonConversion
                 bsonValue is BsonDateTime dt
                     ? dt.Value
                     : DateTime.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            var t when t == typeof(DateTimeOffset) =>
+                bsonValue switch
+                {
+                    BsonString str => DateTimeOffset.Parse(str.Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    BsonDateTime dt => new DateTimeOffset(dt.Value),
+                    _ => DateTimeOffset.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+                },
+            var t when t == typeof(TimeSpan) =>
+                bsonValue switch
+                {
+                    BsonInt64 i64 => TimeSpan.FromTicks(i64.Value),
+                    BsonInt32 i32 => TimeSpan.FromTicks(i32.Value),
+                    BsonString str => TimeSpan.Parse(str.Value, CultureInfo.InvariantCulture),
+                    _ => TimeSpan.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture)
+                },
             var t when t == typeof(Guid) =>
                 bsonValue is BsonString bsonString
                     ? Guid.Parse(bsonString.Value)

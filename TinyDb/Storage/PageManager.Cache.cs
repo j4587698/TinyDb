@@ -213,7 +213,6 @@ public sealed partial class PageManager
                 continue;
             }
 
-            Page? removedPageToDispose = null;
             try
             {
                 lock (lockObj)
@@ -241,14 +240,12 @@ public sealed partial class PageManager
 
                     RemoveDirtyTracking(removedPage);
                     _lruCache.Remove(pageID);
-                    removedPageToDispose = removedPage;
                     return true; // 成功驱逐一个，退出
                 }
             }
             finally
             {
                 evictionCandidate.Unpin();
-                removedPageToDispose?.Dispose();
             }
         }
 

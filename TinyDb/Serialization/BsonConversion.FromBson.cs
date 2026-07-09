@@ -94,6 +94,25 @@ public static partial class BsonConversion
                 ? dt.Value
                 : DateTime.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
         }
+        else if (targetType == typeof(DateTimeOffset))
+        {
+            converted = bsonValue switch
+            {
+                BsonString str => DateTimeOffset.Parse(str.Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                BsonDateTime dt => new DateTimeOffset(dt.Value),
+                _ => DateTimeOffset.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
+            };
+        }
+        else if (targetType == typeof(TimeSpan))
+        {
+            converted = bsonValue switch
+            {
+                BsonInt64 i64 => TimeSpan.FromTicks(i64.Value),
+                BsonInt32 i32 => TimeSpan.FromTicks(i32.Value),
+                BsonString str => TimeSpan.Parse(str.Value, CultureInfo.InvariantCulture),
+                _ => TimeSpan.Parse(bsonValue.ToString(), CultureInfo.InvariantCulture)
+            };
+        }
         else if (targetType == typeof(Guid))
         {
             converted = bsonValue is BsonString guidString

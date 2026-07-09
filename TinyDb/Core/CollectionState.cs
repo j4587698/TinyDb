@@ -16,7 +16,7 @@ internal sealed partial class CollectionState
     private readonly ConcurrentDictionary<uint, KeyedPageLock> _pageMutationLocks = new();
 
     public DataPageState PageState { get; } = new();
-    public object CommitGate { get; } = new();
+    public CollectionCommitGate CommitGate { get; } = new();
 
     // 抽象层：可以是内存索引，也可以是磁盘索引
     public IDocumentIndex Index { get; set; } = default!;
