@@ -428,6 +428,7 @@ public sealed partial class QueryExecutor
                 switch (key.ComparisonType)
                 {
                     case ComparisonType.NotEqual:
+                        minValues.Add(BsonMinKey.Value);
                         maxValues.Add(BsonMaxKey.Value);
                         includeMin = true;
                         includeMax = true;

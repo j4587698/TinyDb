@@ -62,7 +62,10 @@ internal static partial class ExpressionConstantEvaluator
             return field.GetValue(container);
         }
 
-        var prop = (System.Reflection.PropertyInfo)memberExpr.Member;
+        if (memberExpr.Member is not System.Reflection.PropertyInfo prop)
+        {
+            return null;
+        }
 
         if (container is string s && prop.Name == nameof(string.Length))
         {
@@ -79,7 +82,19 @@ internal static partial class ExpressionConstantEvaluator
             return System.Environment.NewLine;
         }
 
-        return null;
+        if (memberExpr.Expression == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return prop.GetValue(container);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.Reflection.TargetException or System.Reflection.TargetInvocationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

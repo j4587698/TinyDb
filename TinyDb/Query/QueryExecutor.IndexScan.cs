@@ -106,6 +106,7 @@ public sealed partial class QueryExecutor
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (doc == null) continue;
+                if (!TransactionDocumentMatchesIndexRange(index, doc, range)) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
 
                 var entity = AotBsonMapper.FromDocument<T>(doc);
@@ -179,6 +180,7 @@ public sealed partial class QueryExecutor
             foreach (var doc in txOverlay.Values)
             {
                 if (doc == null) continue;
+                if (!TransactionDocumentMatchesIndexRange(index, doc, range)) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
 
                 var entity = AotBsonMapper.FromDocument<T>(doc);
@@ -315,6 +317,7 @@ public sealed partial class QueryExecutor
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (doc == null) continue;
+                if (!TransactionDocumentMatchesExactIndexKey(index, doc, key)) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
 
                 var entity = AotBsonMapper.FromDocument<T>(doc);
@@ -423,11 +426,28 @@ public sealed partial class QueryExecutor
             foreach (var doc in txOverlay.Values)
             {
                 if (doc == null) continue;
+                if (!TransactionDocumentMatchesExactIndexKey(index, doc, key)) continue;
                 if (qe != null && !ExpressionEvaluator.Evaluate(qe, doc)) continue;
 
                 var entity = AotBsonMapper.FromDocument<T>(doc);
                 if (entity != null) yield return entity;
             }
         }
+    }
+
+    private static bool TransactionDocumentMatchesIndexRange(BTreeIndex index, BsonDocument document, IndexScanRange range)
+    {
+        var key = OrderIndexTransactionRows.BuildKey(index, document);
+        var minCompare = key.CompareTo(range.MinKey);
+        if (minCompare < 0 || (minCompare == 0 && !range.IncludeMin)) return false;
+
+        var maxCompare = key.CompareTo(range.MaxKey);
+        return maxCompare < 0 || (maxCompare == 0 && range.IncludeMax);
+    }
+
+    private static bool TransactionDocumentMatchesExactIndexKey(BTreeIndex index, BsonDocument document, IndexKey expectedKey)
+    {
+        var key = OrderIndexTransactionRows.BuildKey(index, document);
+        return key.CompareTo(expectedKey) == 0;
     }
 }

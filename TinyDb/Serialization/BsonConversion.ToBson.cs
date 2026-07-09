@@ -38,7 +38,10 @@ public static partial class BsonConversion
             float f => new BsonDouble(f),
             decimal dec => new BsonDecimal128(dec),
             bool b => BsonBoolean.FromValue(b),    // 使用单例
+            char ch => new BsonString(ch.ToString()),
             DateTime dt => new BsonDateTime(dt),
+            DateTimeOffset dto => new BsonString(dto.ToString("O", CultureInfo.InvariantCulture)),
+            TimeSpan timeSpan => new BsonInt64(timeSpan.Ticks),
             Guid guid => new BsonBinary(guid),
             ObjectId oid => new BsonObjectId(oid),
             JsonElement jsonElement => ConvertJsonElementToBsonValue(jsonElement),

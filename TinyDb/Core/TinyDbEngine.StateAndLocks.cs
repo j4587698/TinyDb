@@ -57,8 +57,49 @@ public sealed partial class TinyDbEngine
 
     internal IDisposable EnterCollectionCommitGates(IEnumerable<string> collectionNames)
     {
+        return EnterCollectionGates(collectionNames, exclusive: true);
+    }
+
+    internal Task<IDisposable> EnterCollectionCommitGatesAsync(
+        IEnumerable<string> collectionNames,
+        CancellationToken cancellationToken = default)
+    {
+        return EnterCollectionGatesAsync(collectionNames, exclusive: true, cancellationToken);
+    }
+
+    internal IDisposable EnterCollectionWriteGates(IEnumerable<string> collectionNames)
+    {
+        return EnterCollectionGates(collectionNames, exclusive: false);
+    }
+
+    internal Task<IDisposable> EnterCollectionWriteGatesAsync(
+        IEnumerable<string> collectionNames,
+        CancellationToken cancellationToken = default)
+    {
+        return EnterCollectionGatesAsync(collectionNames, exclusive: false, cancellationToken);
+    }
+
+    private IDisposable EnterCollectionGates(IEnumerable<string> collectionNames, bool exclusive)
+    {
         if (collectionNames == null) throw new ArgumentNullException(nameof(collectionNames));
 
+        var gates = GetCollectionCommitGates(collectionNames);
+        return new CollectionState.CollectionCommitGateScope(gates, exclusive);
+    }
+
+    private Task<IDisposable> EnterCollectionGatesAsync(
+        IEnumerable<string> collectionNames,
+        bool exclusive,
+        CancellationToken cancellationToken)
+    {
+        if (collectionNames == null) throw new ArgumentNullException(nameof(collectionNames));
+
+        var gates = GetCollectionCommitGates(collectionNames);
+        return EnterCollectionGatesAsyncCore(gates, exclusive, cancellationToken);
+    }
+
+    private CollectionCommitGate[] GetCollectionCommitGates(IEnumerable<string> collectionNames)
+    {
         var gates = collectionNames
             .Where(static name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.Ordinal)
@@ -67,7 +108,15 @@ public sealed partial class TinyDbEngine
             .Select(static state => state.CommitGate)
             .ToArray();
 
-        return new CollectionState.MonitorLockScope(gates);
+        return gates;
+    }
+
+    private static async Task<IDisposable> EnterCollectionGatesAsyncCore(
+        CollectionCommitGate[] gates,
+        bool exclusive,
+        CancellationToken cancellationToken)
+    {
+        return await CollectionState.CollectionCommitGateScope.EnterAsync(gates, exclusive, cancellationToken).ConfigureAwait(false);
     }
 
     internal IDisposable EnterCollectionDocumentLocks(IEnumerable<CollectionDocumentLockKey> lockKeys)
