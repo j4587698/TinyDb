@@ -324,6 +324,22 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     }
 
     [Test]
+    public async Task SourceGenerator_TrySetPropertyValue_ShouldConvertNumericValueTypes()
+    {
+        var found = AotHelperRegistry.TryGetAdapter<AdapterNumericConversionEntity>(out var adapter);
+        await Assert.That(found).IsTrue();
+
+        var entity = new AdapterNumericConversionEntity { Id = 1 };
+        var updated = adapter!.TrySetPropertyValue(
+            entity,
+            nameof(AdapterNumericConversionEntity.LongValue),
+            123);
+
+        await Assert.That(updated).IsTrue();
+        await Assert.That(entity.LongValue).IsEqualTo(123L);
+    }
+
+    [Test]
     public async Task DiskBTree_ShouldFindDuplicateKeysAfterMultipleSplits()
     {
         using var disk = new MemoryDiskStream();
@@ -454,6 +470,13 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
     {
         public int Id { get; set; }
         public string Name { get; set; }
+    }
+
+    [Entity("AdapterNumericConversionEntities")]
+    public partial class AdapterNumericConversionEntity
+    {
+        public int Id { get; set; }
+        public long LongValue { get; set; }
     }
 
     private sealed class MemoryDiskStream : IDiskStream

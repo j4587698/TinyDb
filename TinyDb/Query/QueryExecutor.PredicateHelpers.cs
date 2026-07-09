@@ -408,6 +408,7 @@ public sealed partial class QueryExecutor
 
         var minValues = new List<BsonValue>();
         var maxValues = new List<BsonValue>();
+        var indexFieldCount = executionPlan.UseIndex?.Fields.Length ?? executionPlan.IndexScanKeys.Count;
         bool includeMin = true;
         bool includeMax = true;
         bool stoppedAtRange = false;
@@ -435,6 +436,11 @@ public sealed partial class QueryExecutor
                         break;
                     case ComparisonType.GreaterThan:
                         minValues.Add(key.Value);
+                        if (HasTrailingIndexFields(minValues.Count, indexFieldCount))
+                        {
+                            minValues.Add(BsonMaxKey.Value);
+                        }
+
                         maxValues.Add(BsonMaxKey.Value);
                         includeMin = false;
                         break;
@@ -453,6 +459,13 @@ public sealed partial class QueryExecutor
                         break;
                     case ComparisonType.Range:
                         minValues.Add(key.LowerValue ?? BsonMinKey.Value);
+                        if (key.LowerValue != null &&
+                            !key.IncludeLower &&
+                            HasTrailingIndexFields(minValues.Count, indexFieldCount))
+                        {
+                            minValues.Add(BsonMaxKey.Value);
+                        }
+
                         maxValues.Add(key.UpperValue ?? BsonMaxKey.Value);
                         includeMin = key.IncludeLower;
                         includeMax = key.IncludeUpper;
@@ -506,5 +519,10 @@ public sealed partial class QueryExecutor
         return values.Count == 1
             ? IndexKey.Create(values[0])
             : new IndexKey(values.ToArray());
+    }
+
+    private static bool HasTrailingIndexFields(int populatedFieldCount, int indexFieldCount)
+    {
+        return populatedFieldCount < indexFieldCount;
     }
 }

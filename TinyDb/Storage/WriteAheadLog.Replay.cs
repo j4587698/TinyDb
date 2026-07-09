@@ -21,6 +21,44 @@ public sealed partial class WriteAheadLog
         return true;
     }
 
+    private static int ReadFullHeader(Stream stream, byte[] buffer, int length)
+    {
+        var totalRead = 0;
+        while (totalRead < length)
+        {
+            var read = stream.Read(buffer, totalRead, length - totalRead);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
+        }
+
+        return totalRead;
+    }
+
+    private static async Task<int> ReadFullHeaderAsync(
+        Stream stream,
+        byte[] buffer,
+        int length,
+        CancellationToken cancellationToken)
+    {
+        var totalRead = 0;
+        while (totalRead < length)
+        {
+            var read = await stream.ReadAsync(buffer, totalRead, length - totalRead, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
+        }
+
+        return totalRead;
+    }
+
 
     private static bool TryReadTransactionPage(
         ReadOnlySpan<byte> data,
@@ -81,7 +119,7 @@ public sealed partial class WriteAheadLog
             {
                 long currentEntryStart = stream.Position;
 
-                var read = stream.Read(headerBuffer, 0, FullHeaderSize);
+                var read = ReadFullHeader(stream, headerBuffer, FullHeaderSize);
                 if (read < HeaderSize)
                 {
                     replayStoppedAtInvalidRecord = true;
@@ -104,14 +142,11 @@ public sealed partial class WriteAheadLog
                 {
                     expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer.AsSpan(9, 4));
                 }
-                else
+                else if (read > HeaderSize)
                 {
-                    if (read > HeaderSize)
-                    {
-                        Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
+                    Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
+                    break;
                 }
 
                 if (length <= 0 || length > _maxRecordSize)
@@ -313,7 +348,7 @@ public sealed partial class WriteAheadLog
                 long currentEntryStart = stream.Position;
 
                 // 尝试读取完整头部
-                var read = await stream.ReadAsync(headerBuffer, 0, FullHeaderSize, cancellationToken).ConfigureAwait(false);
+                var read = await ReadFullHeaderAsync(stream, headerBuffer, FullHeaderSize, cancellationToken).ConfigureAwait(false);
 
                 // 如果连最小头部 (HeaderSize = 9) 都读不够，说明文件结束或损坏
                 if (read < HeaderSize)
@@ -339,14 +374,11 @@ public sealed partial class WriteAheadLog
                 {
                     expectedCrc = BinaryPrimitives.ReadUInt32LittleEndian(headerBuffer.AsSpan(9, 4));
                 }
-                else
+                else if (read > HeaderSize)
                 {
-                    if (read > HeaderSize)
-                    {
-                        Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
-                        replayStoppedAtInvalidRecord = true;
-                        break;
-                    }
+                    Log(TinyDbLogLevel.Warning, $"Incomplete header at {currentEntryStart}.");
+                    replayStoppedAtInvalidRecord = true;
+                    break;
                 }
 
                 if (length <= 0 || length > _maxRecordSize)

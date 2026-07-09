@@ -75,7 +75,6 @@ internal static class OrderIndexTransactionRows
         var cmp = txRow.Key.CompareTo(baseKey);
         if (cmp != 0) return descending ? -cmp : cmp;
 
-        cmp = txRow.Id.CompareTo(baseId);
-        return descending ? -cmp : cmp;
+        return 0;
     }
 }

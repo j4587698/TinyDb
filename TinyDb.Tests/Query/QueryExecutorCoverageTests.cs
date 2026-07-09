@@ -72,6 +72,19 @@ public class QueryExecutorCoverageTests
         var rangeGT = QueryExecutor.BuildIndexScanRange(planGT);
         await Assert.That(rangeGT.IncludeMin).IsFalse();
 
+        var planCompoundGT = new QueryExecutionPlan
+        {
+            UseIndex = new IndexStatistics { Fields = new[] { "a", "b" } },
+            IndexScanKeys = new List<IndexScanKey>
+            {
+                new IndexScanKey { FieldName = "a", Value = new BsonInt32(10), ComparisonType = ComparisonType.GreaterThan }
+            }
+        };
+        var rangeCompoundGT = QueryExecutor.BuildIndexScanRange(planCompoundGT);
+        await Assert.That(rangeCompoundGT.MinKey.Length).IsEqualTo(2);
+        await Assert.That(rangeCompoundGT.MinKey.Values[0].RawValue).IsEqualTo(10);
+        await Assert.That(rangeCompoundGT.MinKey.Values[1]).IsTypeOf<BsonMaxKey>();
+
         // Case 3: LessThan
         var planLT = new QueryExecutionPlan
         {

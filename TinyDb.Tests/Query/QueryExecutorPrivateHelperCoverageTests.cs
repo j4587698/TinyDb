@@ -598,8 +598,8 @@ public sealed class QueryExecutorPrivateHelperCoverageTests : IDisposable
 
         var cmpToBaseAsc = OrderIndexTransactionRows.CompareToBase(rowA, sharedKey, new BsonInt32(2), descending: false);
         var cmpToBaseDesc = OrderIndexTransactionRows.CompareToBase(rowA, sharedKey, new BsonInt32(2), descending: true);
-        await Assert.That(cmpToBaseAsc < 0).IsTrue();
-        await Assert.That(cmpToBaseDesc > 0).IsTrue();
+        await Assert.That(cmpToBaseAsc).IsEqualTo(0);
+        await Assert.That(cmpToBaseDesc).IsEqualTo(0);
 
         var boolKeyFalse = SortKey.FromBsonValue(new BsonBoolean(false));
         var boolKeyTrue = SortKey.FromBsonValue(new BsonBoolean(true));

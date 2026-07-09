@@ -96,7 +96,7 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             .WithComparer(ClassInfoComparer.Instance);
 
         // 注册源代码生成
-        var diagnosticClassDeclarations = comparableClassDeclarations
+        var diagnosticClassDeclarations = classDeclarations
             .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo));
 
         var validClassDeclarations = comparableClassDeclarations
@@ -133,13 +133,15 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
     private static List<ClassInfo> GetValidClasses(ImmutableArray<ClassInfo?> classes)
     {
         var validClasses = new List<ClassInfo>(classes.Length);
+        var seenTypes = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var classInfo in classes)
         {
             if (classInfo == null) continue;
 
             // 嵌套类现在已支持。复杂类型的 AOT 优化机制同样适用于嵌套的 Entity 类。
-            if (ShouldGenerateMapper(classInfo))
+            if (ShouldGenerateMapper(classInfo) &&
+                seenTypes.Add(classInfo.FullyQualifiedTypeReference))
             {
                 validClasses.Add(classInfo);
             }

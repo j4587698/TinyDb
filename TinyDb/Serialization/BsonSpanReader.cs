@@ -33,7 +33,7 @@ public ref struct BsonSpanReader
         try
         {
             // 检查剩余长度是否至少包含大小(4) + 结束符(1)
-            if (_data.Length < 5) throw new EndOfStreamException();
+            if (Remaining < 5) throw new EndOfStreamException();
 
             int startPos = _position;
             int docSize = ReadInt32();

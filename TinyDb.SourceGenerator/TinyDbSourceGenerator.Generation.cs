@@ -19,6 +19,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("#nullable enable");
         sb.AppendLine("using System;");
         sb.AppendLine("using System.Collections.Generic;");
+        sb.AppendLine("using System.Globalization;");
         sb.AppendLine("using TinyDb.Bson;");
         sb.AppendLine("using TinyDb.Serialization;");
         sb.AppendLine("using System.Diagnostics.CodeAnalysis;");
@@ -378,13 +379,36 @@ public partial class TinyDbSourceGenerator
         foreach (var prop in classInfo.Properties.Where(p => !p.HasIgnoreAttribute && p.CanSet))
         {
             sb.AppendLine($"                case \"{prop.Name}\":");
-            sb.AppendLine($"                    entity.{prop.AccessName} = value is null ? default! : ({prop.FullyQualifiedType})value;");
+            sb.AppendLine($"                    entity.{prop.AccessName} = ConvertPropertyValue<{prop.FullyQualifiedType}>(value);");
             sb.AppendLine("                    return true;");
         }
 
         sb.AppendLine("                default:");
         sb.AppendLine("                    return false;");
         sb.AppendLine("            }");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+        sb.AppendLine("        private static TProperty ConvertPropertyValue<TProperty>(object? value)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            if (value is null) return default!;");
+        sb.AppendLine("            if (value is TProperty typedValue) return typedValue;");
+        sb.AppendLine();
+        sb.AppendLine("            var targetType = typeof(TProperty);");
+        sb.AppendLine("            if (value is BsonValue bsonValue)");
+        sb.AppendLine("            {");
+        sb.AppendLine("                return (TProperty)AotBsonMapper.ConvertValue(bsonValue, targetType)!;");
+        sb.AppendLine("            }");
+        sb.AppendLine();
+        sb.AppendLine("            var conversionType = Nullable.GetUnderlyingType(targetType) ?? targetType;");
+        sb.AppendLine("            if (conversionType.IsEnum)");
+        sb.AppendLine("            {");
+        sb.AppendLine("                var enumValue = value is string text");
+        sb.AppendLine("                    ? Enum.Parse(conversionType, text, ignoreCase: true)");
+        sb.AppendLine("                    : Enum.ToObject(conversionType, Convert.ChangeType(value, Enum.GetUnderlyingType(conversionType), CultureInfo.InvariantCulture)!);");
+        sb.AppendLine("                return (TProperty)enumValue;");
+        sb.AppendLine("            }");
+        sb.AppendLine();
+        sb.AppendLine("            return (TProperty)Convert.ChangeType(value, conversionType, CultureInfo.InvariantCulture)!;");
         sb.AppendLine("        }");
         sb.AppendLine();
 
