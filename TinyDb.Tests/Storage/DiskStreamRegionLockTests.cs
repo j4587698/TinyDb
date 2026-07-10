@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using TinyDb.Storage;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -213,6 +214,7 @@ public class DiskStreamRegionLockTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("This test reflects over private region-lock state; AOT coverage is provided by public lock behavior tests.")]
     public async Task LockRegion_AfterUnlock_ShouldRemoveStaticEntryForPath()
     {
         using var diskStream = new DiskStream(_dbPath);
@@ -226,6 +228,7 @@ public class DiskStreamRegionLockTests : IDisposable
     }
 
     [Test]
+    [SkipInAot("This test reflects over private region-lock state; AOT coverage is provided by public lock behavior tests.")]
     public async Task Dispose_WithActiveRegionLock_ShouldRemoveStaticEntryForPath()
     {
         var diskStream = new DiskStream(_dbPath);

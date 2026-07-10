@@ -394,7 +394,7 @@ public class AotBsonMapperMissingLinesCoverageTests
         var entity = new EntityWithNullableGenericDictionary
         {
             Id = 1,
-            Items = new Dictionary<string?, NullableGenericDictionaryValue?>
+            Items = new Dictionary<string, NullableGenericDictionaryValue?>
             {
                 ["present"] = new NullableGenericDictionaryValue { Name = null },
                 ["missing"] = null
@@ -417,7 +417,7 @@ public class AotBsonMapperMissingLinesCoverageTests
     {
         public int Id { get; set; }
 
-        public Dictionary<string?, NullableGenericDictionaryValue?>? Items { get; set; }
+        public Dictionary<string, NullableGenericDictionaryValue?>? Items { get; set; }
     }
 
     internal sealed class NullableGenericDictionaryValue

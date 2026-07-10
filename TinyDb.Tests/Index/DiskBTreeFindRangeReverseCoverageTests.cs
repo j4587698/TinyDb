@@ -5,6 +5,7 @@ using TinyDb.Bson;
 using TinyDb.Core;
 using TinyDb.Index;
 using TinyDb.Storage;
+using TinyDb.Tests.Utils;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 
@@ -147,6 +148,7 @@ public sealed class DiskBTreeFindRangeReverseCoverageTests
     }
 
     [Test]
+    [SkipInAot("This test reflects over private page-lease state; AOT coverage should use public BTreeIndex/PageManager behavior.")]
     public async Task InterleavedEnumerators_DisposeOutOfOrder_ShouldClearCurrentPageLease()
     {
         var path = Path.Combine(Path.GetTempPath(), $"btree_interleaved_lease_{Guid.NewGuid():N}.db");
