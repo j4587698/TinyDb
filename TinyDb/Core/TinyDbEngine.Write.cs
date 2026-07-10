@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -51,17 +51,18 @@ public sealed partial class TinyDbEngine
                 throw;
             }
         }
+        collectionCommitGate.Dispose();
         EnsureWriteDurability();
         return res;
     }
 
     /// <summary>
-    /// 异步插入文档
+    /// å¼‚æ­¥æ’å…¥æ–‡æ¡£
     /// </summary>
-    /// <param name="col">集合名称</param>
-    /// <param name="doc">要插入的文档</param>
-    /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>插入文档的ID</returns>
+    /// <param name="col">é›†åˆåç§°</param>
+    /// <param name="doc">è¦æ’å…¥çš„æ–‡æ¡£</param>
+    /// <param name="cancellationToken">å–æ¶ˆä»¤ç‰Œ</param>
+    /// <returns>æ’å…¥æ–‡æ¡£çš„ID</returns>
     internal async Task<BsonValue> InsertDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
         using var collectionCommitGate = await EnterCollectionWriteGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
@@ -86,6 +87,7 @@ public sealed partial class TinyDbEngine
                 throw;
             }
         }
+        collectionCommitGate.Dispose();
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return res;
     }
@@ -119,17 +121,18 @@ public sealed partial class TinyDbEngine
 
         if (!updated) return 0;
 
+        collectionCommitGate.Dispose();
         EnsureWriteDurability();
         return 1;
     }
 
     /// <summary>
-    /// 异步更新文档
+    /// å¼‚æ­¥æ›´æ–°æ–‡æ¡£
     /// </summary>
-    /// <param name="col">集合名称</param>
-    /// <param name="doc">要更新的文档</param>
-    /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>更新的文档数量</returns>
+    /// <param name="col">é›†åˆåç§°</param>
+    /// <param name="doc">è¦æ›´æ–°çš„æ–‡æ¡£</param>
+    /// <param name="cancellationToken">å–æ¶ˆä»¤ç‰Œ</param>
+    /// <returns>æ›´æ–°çš„æ–‡æ¡£æ•°é‡</returns>
     internal async Task<int> UpdateDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -162,6 +165,7 @@ public sealed partial class TinyDbEngine
 
         if (!updated) return 0;
 
+        collectionCommitGate.Dispose();
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
     }
@@ -215,6 +219,7 @@ public sealed partial class TinyDbEngine
 
         if (updatedCount > 0)
         {
+            collectionCommitGate.Dispose();
             EnsureWriteDurability();
         }
 
@@ -274,6 +279,7 @@ public sealed partial class TinyDbEngine
 
         if (updatedCount > 0)
         {
+            collectionCommitGate.Dispose();
             await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -349,6 +355,7 @@ public sealed partial class TinyDbEngine
 
         if (insertedCount + updatedCount > 0)
         {
+            collectionCommitGate.Dispose();
             EnsureWriteDurability();
         }
 
@@ -415,6 +422,7 @@ public sealed partial class TinyDbEngine
 
         if (insertedCount + updatedCount > 0)
         {
+            collectionCommitGate.Dispose();
             await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -436,6 +444,7 @@ public sealed partial class TinyDbEngine
 
         if (deleted > 0)
         {
+            collectionCommitGate.Dispose();
             EnsureWriteDurability();
         }
 
@@ -484,6 +493,7 @@ public sealed partial class TinyDbEngine
 
         if (deleted > 0)
         {
+            collectionCommitGate.Dispose();
             EnsureWriteDurability();
         }
 
@@ -491,12 +501,12 @@ public sealed partial class TinyDbEngine
     }
 
     /// <summary>
-    /// 异步删除文档
+    /// å¼‚æ­¥åˆ é™¤æ–‡æ¡£
     /// </summary>
-    /// <param name="col">集合名称</param>
-    /// <param name="id">要删除的文档ID</param>
-    /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>删除的文档数量</returns>
+    /// <param name="col">é›†åˆåç§°</param>
+    /// <param name="id">è¦åˆ é™¤çš„æ–‡æ¡£ID</param>
+    /// <param name="cancellationToken">å–æ¶ˆä»¤ç‰Œ</param>
+    /// <returns>åˆ é™¤çš„æ–‡æ¡£æ•°é‡</returns>
     internal async Task<int> DeleteDocumentAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
         if (id == null || id.IsNull) return 0;
@@ -509,6 +519,7 @@ public sealed partial class TinyDbEngine
             var deleted = await DeleteDocumentCoreAsync(col, id, st, idxMgr, cancellationToken).ConfigureAwait(false);
             if (deleted == 0) return 0;
         }
+        collectionCommitGate.Dispose();
         await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
         return 1;
     }
@@ -593,6 +604,7 @@ public sealed partial class TinyDbEngine
                 }
             }
 
+            collectionCommitGate.Dispose();
             EnsureWriteDurability();
             return insertedCount;
         }
@@ -606,12 +618,12 @@ public sealed partial class TinyDbEngine
     }
 
     /// <summary>
-    /// 异步批量插入文档
+    /// å¼‚æ­¥æ‰¹é‡æ’å…¥æ–‡æ¡£
     /// </summary>
-    /// <param name="col">集合名称</param>
-    /// <param name="docs">要插入的文档数组</param>
-    /// <param name="cancellationToken">取消令牌</param>
-    /// <returns>插入的文档数量</returns>
+    /// <param name="col">é›†åˆåç§°</param>
+    /// <param name="docs">è¦æ’å…¥çš„æ–‡æ¡£æ•°ç»„</param>
+    /// <param name="cancellationToken">å–æ¶ˆä»¤ç‰Œ</param>
+    /// <returns>æ’å…¥çš„æ–‡æ¡£æ•°é‡</returns>
     internal async Task<int> InsertDocumentsAsync(string col, IReadOnlyList<BsonDocument> docs, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -720,6 +732,7 @@ public sealed partial class TinyDbEngine
                 }
             }
 
+            collectionCommitGate.Dispose();
             await EnsureWriteDurabilityAsync(cancellationToken).ConfigureAwait(false);
             return insertedCount;
         }
@@ -757,7 +770,4 @@ public sealed partial class TinyDbEngine
 
         return result;
     }
-
-
-
 }

@@ -2,6 +2,7 @@ using TinyDb.Storage;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 
 namespace TinyDb.Tests.Storage;
 
@@ -98,25 +99,89 @@ public class PageManagerCacheTests : IDisposable
             ?? throw new MissingFieldException(typeof(PageManager).FullName, "_cacheLock");
         var cacheLock = cacheLockField.GetValue(pm) ?? throw new InvalidOperationException("Cache lock instance is missing.");
 
-        Monitor.Enter(cacheLock);
-        try
+        var probe = new TaskCompletionSource<(bool GetDone, bool PinnedDone, Page? GetPage, Page? PinnedPage)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var probeThread = new Thread(() =>
         {
-            var getTask = Task.Run(() => pm.GetPage(page.PageID));
-            var pinnedTask = Task.Run(() =>
+            Monitor.Enter(cacheLock);
+            try
             {
-                var pinnedPage = pm.GetPagePinned(page.PageID);
-                pinnedPage.Unpin();
-                return pinnedPage;
-            });
+                Page? getPage = null;
+                Page? pinnedPage = null;
+                Exception? getException = null;
+                Exception? pinnedException = null;
 
-            await Assert.That(await Task.WhenAny(getTask, Task.Delay(TimeSpan.FromMilliseconds(500))) == getTask).IsTrue();
-            await Assert.That(await Task.WhenAny(pinnedTask, Task.Delay(TimeSpan.FromMilliseconds(500))) == pinnedTask).IsTrue();
-            await Assert.That((await getTask).PageID).IsEqualTo(page.PageID);
-            await Assert.That((await pinnedTask).PageID).IsEqualTo(page.PageID);
-        }
-        finally
+                var getThread = new Thread(() =>
+                {
+                    try
+                    {
+                        getPage = pm.GetPage(page.PageID);
+                    }
+                    catch (Exception ex)
+                    {
+                        getException = ex;
+                    }
+                })
+                {
+                    IsBackground = true
+                };
+
+                var pinnedThread = new Thread(() =>
+                {
+                    try
+                    {
+                        pinnedPage = pm.GetPagePinned(page.PageID);
+                        pinnedPage.Unpin();
+                    }
+                    catch (Exception ex)
+                    {
+                        pinnedException = ex;
+                    }
+                })
+                {
+                    IsBackground = true
+                };
+
+                getThread.Start();
+                pinnedThread.Start();
+
+                var getDone = getThread.Join(TimeSpan.FromMilliseconds(500));
+                var pinnedDone = pinnedThread.Join(TimeSpan.FromMilliseconds(500));
+                if (getException != null)
+                {
+                    ExceptionDispatchInfo.Capture(getException).Throw();
+                }
+
+                if (pinnedException != null)
+                {
+                    ExceptionDispatchInfo.Capture(pinnedException).Throw();
+                }
+
+                probe.SetResult((
+                    getDone,
+                    pinnedDone,
+                    getDone ? getPage : null,
+                    pinnedDone ? pinnedPage : null));
+            }
+            catch (Exception ex)
+            {
+                probe.SetException(ex);
+            }
+            finally
+            {
+                Monitor.Exit(cacheLock);
+            }
+        })
         {
-            Monitor.Exit(cacheLock);
-        }
+            IsBackground = true
+        };
+
+        probeThread.Start();
+        var result = await probe.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(result.GetDone).IsTrue();
+        await Assert.That(result.PinnedDone).IsTrue();
+        await Assert.That(result.GetPage!.PageID).IsEqualTo(page.PageID);
+        await Assert.That(result.PinnedPage!.PageID).IsEqualTo(page.PageID);
     }
 }
