@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -58,6 +59,12 @@ public partial class TinyDbSourceGenerator
             }
             else if (prop.IsCollection && prop.IsElementComplexType)
             {
+                if (prop.IsCircularReference)
+                {
+                    sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    continue;
+                }
+
                 if (prop.IsNullable)
                 {
                     sb.AppendLine($"            if (obj.{propertyAccess} == null)");
@@ -92,6 +99,12 @@ public partial class TinyDbSourceGenerator
             }
             else if (prop.IsDictionary)
             {
+                if (prop.IsDictionaryValueComplexType && prop.IsCircularReference)
+                {
+                    sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
+                    continue;
+                }
+
                 var valueExpression = prop.IsDictionaryValueComplexType
                     ? "SerializeComplexObject(kvp.Value)"
                     : "ConvertToBsonValue(kvp.Value)";
@@ -147,6 +160,14 @@ public partial class TinyDbSourceGenerator
     /// </summary>
     private static void GenerateInlineDeserializerForDependentType(StringBuilder sb, DependentComplexType depType)
     {
+        if (!depType.IsValueType &&
+            !depType.HasAccessibleParameterlessConstructor &&
+            depType.ConstructorParameters.Count > 0)
+        {
+            GenerateInlineDeserializerForDependentTypeWithConstructor(sb, depType);
+            return;
+        }
+
         if (HasInitOnlyDependentProperties(depType))
         {
             GenerateInlineDeserializerForDependentTypeWithInitOnly(sb, depType);
@@ -214,6 +235,12 @@ public partial class TinyDbSourceGenerator
             }
             else if (prop.IsCollection)
             {
+                if (prop.IsElementComplexType && prop.IsCircularReference)
+                {
+                    sb.AppendLine($"            // Property {prop.Name} is part of a circular reference; keep the default value.");
+                    continue;
+                }
+
                 var elementType = prop.ElementType ?? "object";
                 var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(
                     prop.FullyQualifiedTypeName,
@@ -263,6 +290,12 @@ public partial class TinyDbSourceGenerator
             }
             else if (prop.IsDictionary)
             {
+                if (prop.IsDictionaryValueComplexType && prop.IsCircularReference)
+                {
+                    sb.AppendLine($"            // Property {prop.Name} is part of a circular reference; keep the default value.");
+                    continue;
+                }
+
                 var keyType = prop.DictionaryKeyType ?? "string";
                 var valueType = prop.DictionaryValueType ?? "object";
 
@@ -310,6 +343,86 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine($"                result.{prop.AccessName} = ConvertFromBsonValue<{prop.FullyQualifiedTypeName}>(bson_{prop.Name});");
                 sb.AppendLine("            }");
             }
+        }
+
+        sb.AppendLine("            return result;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
+    }
+
+    private static void GenerateInlineDeserializerForDependentTypeWithConstructor(StringBuilder sb, DependentComplexType depType)
+    {
+        sb.AppendLine($"        /// <summary>");
+        sb.AppendLine($"        /// {depType.ShortName} constructor-based inline deserializer.");
+        sb.AppendLine($"        /// </summary>");
+        sb.AppendLine($"        private static {depType.FullyQualifiedName} Deserialize_{depType.SafeMethodName}(BsonDocument document)");
+        sb.AppendLine("        {");
+
+        var constructorPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parameter in depType.ConstructorParameters)
+        {
+            constructorPropertyNames.Add(parameter.Property.Name);
+            sb.AppendLine($"            {parameter.Property.FullyQualifiedTypeName} value_{parameter.Property.Name} = default!;");
+        }
+
+        var initializerProperties = new List<DependentTypeProperty>();
+        foreach (var prop in depType.Properties)
+        {
+            if (constructorPropertyNames.Contains(prop.Name))
+            {
+                continue;
+            }
+
+            if (prop.IsInitOnly)
+            {
+                initializerProperties.Add(prop);
+                sb.AppendLine($"            {prop.FullyQualifiedTypeName} value_{prop.Name} = default!;");
+            }
+        }
+
+        if (depType.ConstructorParameters.Count > 0 || initializerProperties.Count > 0)
+        {
+            sb.AppendLine();
+        }
+
+        foreach (var parameter in depType.ConstructorParameters)
+        {
+            AppendDependentPropertyDeserializationToTarget(sb, parameter.Property, $"value_{parameter.Property.Name}");
+            sb.AppendLine();
+        }
+
+        foreach (var prop in initializerProperties)
+        {
+            AppendDependentPropertyDeserializationToTarget(sb, prop, $"value_{prop.Name}");
+            sb.AppendLine();
+        }
+
+        var arguments = string.Join(", ", depType.ConstructorParameters.Select(p => $"value_{p.Property.Name}"));
+        if (initializerProperties.Count == 0)
+        {
+            sb.AppendLine($"            var result = new {depType.FullyQualifiedName}({arguments});");
+        }
+        else
+        {
+            sb.AppendLine($"            var result = new {depType.FullyQualifiedName}({arguments})");
+            sb.AppendLine("            {");
+            foreach (var prop in initializerProperties)
+            {
+                sb.AppendLine($"                {prop.AccessName} = value_{prop.Name},");
+            }
+            sb.AppendLine("            };");
+        }
+        sb.AppendLine();
+
+        foreach (var prop in depType.Properties)
+        {
+            if (constructorPropertyNames.Contains(prop.Name) || prop.IsInitOnly)
+            {
+                continue;
+            }
+
+            AppendDependentPropertyDeserializationToTarget(sb, prop, $"result.{prop.AccessName}");
+            sb.AppendLine();
         }
 
         sb.AppendLine("            return result;");
@@ -436,6 +549,12 @@ public partial class TinyDbSourceGenerator
 
         if (prop.IsCollection)
         {
+            if (prop.IsElementComplexType && prop.IsCircularReference)
+            {
+                sb.AppendLine($"            // Property {prop.Name} is part of a circular reference; keep the default value.");
+                return;
+            }
+
             var elementType = prop.ElementType ?? "object";
             var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(
                 prop.FullyQualifiedTypeName,
@@ -487,6 +606,12 @@ public partial class TinyDbSourceGenerator
 
         if (prop.IsDictionary)
         {
+            if (prop.IsDictionaryValueComplexType && prop.IsCircularReference)
+            {
+                sb.AppendLine($"            // Property {prop.Name} is part of a circular reference; keep the default value.");
+                return;
+            }
+
             var keyType = prop.DictionaryKeyType ?? "string";
             var valueType = prop.DictionaryValueType ?? "object";
 

@@ -30,14 +30,16 @@ public sealed partial class TinyDbEngine
 {
     internal CollectionState GetCollectionState(string col)
     {
-        if (_collectionStates.TryGetValue(col, out var existing))
+        var collectionStates = Volatile.Read(ref _collectionStates);
+        if (collectionStates.TryGetValue(col, out var existing))
         {
             return existing;
         }
 
         lock (_collectionStateInitLock)
         {
-            if (_collectionStates.TryGetValue(col, out existing))
+            collectionStates = Volatile.Read(ref _collectionStates);
+            if (collectionStates.TryGetValue(col, out existing))
             {
                 return existing;
             }
@@ -45,7 +47,7 @@ public sealed partial class TinyDbEngine
             var state = CreateEmptyCollectionState();
             BuildDocumentLocationCache(col, state);
             state.MarkCacheInitialized();
-            _collectionStates[col] = state;
+            collectionStates[col] = state;
             return state;
         }
     }

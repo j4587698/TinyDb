@@ -257,7 +257,7 @@ public sealed partial class PageManager
             TotalPages = totalPages,
             UsedPages = usedPages,
             FreePages = freeCount,
-            CachedPages = _pageCache.Count,
+            CachedPages = GetCachedPageCount(),
             DirtyPages = dirtyPages,
             MaxCacheSize = MaxCacheSize,
             CacheHitRatio = _lruCache.HitRatio,

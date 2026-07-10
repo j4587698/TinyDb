@@ -37,6 +37,8 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
     /// </summary>
     public int MaxTransactions { get; }
 
+    public int MaxTransactionSize { get; }
+
     /// <summary>
     /// 事务超时时间
     /// </summary>
@@ -48,10 +50,16 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
     /// <param name="engine">数据库引擎</param>
     /// <param name="maxTransactions">最大事务数量</param>
     /// <param name="transactionTimeout">事务超时时间</param>
-    public TransactionManager(TinyDbEngine engine, int maxTransactions = 100, TimeSpan? transactionTimeout = null)
+    public TransactionManager(
+        TinyDbEngine engine,
+        int maxTransactions = 100,
+        TimeSpan? transactionTimeout = null,
+        int maxTransactionSize = 10000)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        if (maxTransactionSize <= 0) throw new ArgumentOutOfRangeException(nameof(maxTransactionSize));
         MaxTransactions = maxTransactions;
+        MaxTransactionSize = maxTransactionSize;
         TransactionTimeout = transactionTimeout ?? TimeSpan.FromMinutes(5);
         _activeTransactions = new ConcurrentDictionary<Guid, Transaction>();
         _timedOutTransactions = new ConcurrentDictionary<Guid, DateTime>();

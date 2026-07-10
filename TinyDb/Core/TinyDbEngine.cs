@@ -52,7 +52,7 @@ public sealed partial class TinyDbEngine : IDisposable
     internal CollectionMetaStore _collectionMetaStore = null!;
     private readonly ConcurrentDictionary<string, IndexManager> _indexManagers;
     private readonly TransactionManager _transactionManager;
-    private readonly ConcurrentDictionary<string, CollectionState> _collectionStates;
+    private ConcurrentDictionary<string, CollectionState> _collectionStates;
     private readonly object _collectionRegistryLock = new();
     private readonly object _collectionStateInitLock = new();
     private readonly object _identitySequenceLock = new();
@@ -152,7 +152,11 @@ public sealed partial class TinyDbEngine : IDisposable
 
         _collections = new ConcurrentDictionary<string, IDocumentCollection>(StringComparer.Ordinal);
         _indexManagers = new ConcurrentDictionary<string, IndexManager>(StringComparer.Ordinal);
-        _transactionManager = new TransactionManager(this, _options.MaxTransactions, _options.TransactionTimeout);
+        _transactionManager = new TransactionManager(
+            this,
+            _options.MaxTransactions,
+            _options.TransactionTimeout,
+            _options.MaxTransactionSize);
         _collectionStates = new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal);
         _indexCreationLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         _identitySequences = new ConcurrentDictionary<string, IdentitySequenceState>(StringComparer.Ordinal);

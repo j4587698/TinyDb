@@ -136,7 +136,12 @@ public sealed partial class TinyDbEngine
                 _header.FreePageCount,
                 _header.HasFreePageCount);
 
-            _collectionStates.Clear();
+            lock (_collectionStateInitLock)
+            {
+                Volatile.Write(
+                    ref _collectionStates,
+                    new ConcurrentDictionary<string, CollectionState>(StringComparer.Ordinal));
+            }
             DisposeIndexManagers();
 
             _collectionMetaStore = new CollectionMetaStore(

@@ -31,8 +31,33 @@ public partial class TinyDbSourceGenerator
         if (currentClassSymbol == null) return result;
 
         var currentTypeName = currentClassSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
-        var visited = new HashSet<string> { currentTypeName };
+        var emittedCycles = new HashSet<string>(StringComparer.Ordinal);
+        var enqueuedPaths = new HashSet<string>(StringComparer.Ordinal);
         var toProcess = new Queue<(ITypeSymbol Symbol, string PropertyName, List<string> Path)>();
+
+        void AddCycle(string targetTypeName, string originPropertyName, string cycleChain)
+        {
+            var key = $"{targetTypeName}|{originPropertyName}|{cycleChain}";
+            if (!emittedCycles.Add(key))
+            {
+                return;
+            }
+
+            result.Add(new EntityCircularReferenceInfo(
+                GetShortTypeName(currentTypeName),
+                GetShortTypeName(targetTypeName),
+                originPropertyName,
+                cycleChain));
+        }
+
+        void EnqueuePath(ITypeSymbol symbol, string originPropertyName, List<string> path)
+        {
+            var key = originPropertyName + "|" + string.Join("|", path);
+            if (enqueuedPaths.Add(key))
+            {
+                toProcess.Enqueue((symbol, originPropertyName, path));
+            }
+        }
 
         // 遍历当前类的所有属性，查找引用了Entity类型的属性
         foreach (var prop in properties)
@@ -67,17 +92,12 @@ public partial class TinyDbSourceGenerator
                 if (propTypeName == currentTypeName)
                 {
                     var cycleChain = $"{GetShortTypeName(currentTypeName)} -> {prop.Name} -> {GetShortTypeName(currentTypeName)}";
-                    result.Add(new EntityCircularReferenceInfo(
-                        GetShortTypeName(currentTypeName),
-                        GetShortTypeName(propTypeName),
-                        prop.Name,
-                        cycleChain));
+                    AddCycle(propTypeName, prop.Name, cycleChain);
                 }
-                else if (!visited.Contains(propTypeName))
+                else
                 {
-                    visited.Add(propTypeName);
                     var path = new List<string> { currentTypeName, propTypeName };
-                    toProcess.Enqueue((propTypeSymbol, prop.Name, path));
+                    EnqueuePath(propTypeSymbol, prop.Name, path);
                 }
             }
         }
@@ -114,11 +134,7 @@ public partial class TinyDbSourceGenerator
                         {
                             // 找到循环引用回当前类
                             var cycleChain = string.Join(" -> ", path.Select(GetShortTypeName)) + " -> " + GetShortTypeName(currentTypeName);
-                            result.Add(new EntityCircularReferenceInfo(
-                                GetShortTypeName(currentTypeName),
-                                GetShortTypeName(propTypeName),
-                                originPropertyName,
-                                cycleChain));
+                            AddCycle(propTypeName, originPropertyName, cycleChain);
                         }
                         else if (path.Contains(propTypeName))
                         {
@@ -128,17 +144,12 @@ public partial class TinyDbSourceGenerator
                             var cyclePath = path.Skip(cycleStartIndex).ToList();
                             cyclePath.Add(propTypeName);
                             var cycleChain = string.Join(" -> ", cyclePath.Select(GetShortTypeName));
-                            result.Add(new EntityCircularReferenceInfo(
-                                GetShortTypeName(currentTypeName),
-                                GetShortTypeName(propTypeName),
-                                originPropertyName,
-                                cycleChain));
+                            AddCycle(propTypeName, originPropertyName, cycleChain);
                         }
-                        else if (!visited.Contains(propTypeName))
+                        else
                         {
-                            visited.Add(propTypeName);
                             var newPath = new List<string>(path) { propTypeName };
-                            toProcess.Enqueue((propType, originPropertyName, newPath));
+                            EnqueuePath(propType, originPropertyName, newPath);
                         }
                     }
                 }
@@ -377,6 +388,8 @@ public partial class TinyDbSourceGenerator
         cancellationToken.ThrowIfCancellationRequested();
 
         var properties = new List<DependentTypeProperty>();
+        var propertySymbols = new Dictionary<string, IPropertySymbol>(StringComparer.Ordinal);
+        var propertyInfos = new Dictionary<string, DependentTypeProperty>(StringComparer.Ordinal);
         var circularRefs = new List<CircularReferenceInfo>();
 
         // 获取类型的所有公共属性
@@ -475,7 +488,7 @@ public partial class TinyDbSourceGenerator
                     TrackDependentType(actualValueType);
                 }
 
-                properties.Add(new DependentTypeProperty(
+                var propertyInfo = new DependentTypeProperty(
                     propertySymbol.Name,
                     propTypeName,
                     propFullTypeName,
@@ -495,7 +508,11 @@ public partial class TinyDbSourceGenerator
                     typeAnalysis.IsDictionaryValueComplexType,
                     typeAnalysis.IsDictionaryValueValueType,
                     isInitOnly,
-                    isCircularRef));
+                    isCircularRef);
+
+                properties.Add(propertyInfo);
+                propertySymbols[propertySymbol.Name] = propertySymbol;
+                propertyInfos[propertySymbol.Name] = propertyInfo;
             }
         }
 
@@ -504,12 +521,64 @@ public partial class TinyDbSourceGenerator
             return (null, circularRefs);
         }
 
+        var constructorParameters = CollectDependentConstructorParameters(
+            typeSymbol,
+            propertySymbols,
+            propertyInfos,
+            cancellationToken);
+
         return (new DependentComplexType(
             fullName,
             typeSymbol.Name,
             typeSymbol.IsValueType,
             HasAccessibleParameterlessConstructor(typeSymbol, cancellationToken),
-            properties), circularRefs);
+            properties,
+            constructorParameters), circularRefs);
+    }
+
+    private static List<DependentConstructorParameterInfo> CollectDependentConstructorParameters(
+        ITypeSymbol typeSymbol,
+        IReadOnlyDictionary<string, IPropertySymbol> propertySymbols,
+        IReadOnlyDictionary<string, DependentTypeProperty> propertyInfos,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (typeSymbol is not INamedTypeSymbol namedType)
+        {
+            return new List<DependentConstructorParameterInfo>();
+        }
+
+        foreach (var constructor in namedType.InstanceConstructors
+                     .Where(static ctor => ctor.DeclaredAccessibility == Accessibility.Public && ctor.Parameters.Length > 0)
+                     .OrderByDescending(static ctor => ctor.Parameters.Length))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var parameters = new List<DependentConstructorParameterInfo>(constructor.Parameters.Length);
+            var matchedAll = true;
+
+            foreach (var parameter in constructor.Parameters)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!TryFindConstructorProperty(parameter, propertySymbols, cancellationToken, out var propertySymbol) ||
+                    !propertyInfos.TryGetValue(propertySymbol.Name, out var propertyInfo))
+                {
+                    matchedAll = false;
+                    break;
+                }
+
+                parameters.Add(new DependentConstructorParameterInfo(parameter.Name, propertyInfo));
+            }
+
+            if (matchedAll)
+            {
+                return parameters;
+            }
+        }
+
+        return new List<DependentConstructorParameterInfo>();
     }
 
     private static bool HasAccessibleParameterlessConstructor(ITypeSymbol typeSymbol, CancellationToken cancellationToken)

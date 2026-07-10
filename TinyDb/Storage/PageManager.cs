@@ -29,6 +29,7 @@ public sealed partial class PageManager : IDisposable
     private const int BackgroundWritebackMinBatchSize = 16;
     private const int BackgroundWritebackMaxBatchSize = 256;
     private readonly SemaphoreSlim[] _pageLoadStripes;
+    private int _cachedPageCount;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private uint _freePageCount;
@@ -58,7 +59,7 @@ public sealed partial class PageManager : IDisposable
     /// <summary>
     /// 缓存页面数量
     /// </summary>
-    public int CachedPages => _pageCache.Count;
+    public int CachedPages => GetCachedPageCount();
 
     /// <summary>
     /// 第一个空闲页面ID

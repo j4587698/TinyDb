@@ -293,21 +293,16 @@ public partial class TinyDbSourceGenerator
         var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
                                       fieldSymbol.NullableAnnotation == NullableAnnotation.Annotated;
         var isEnumType = typeSymbol.TypeKind == TypeKind.Enum;
-        var nonNullableType = fieldType;
-        var fullyQualifiedNonNullableType = fieldType;
+        var nonNullableType = ToFullyQualifiedNonNullableTypeName(typeSymbol);
+        var fullyQualifiedNonNullableType = nonNullableType;
 
         if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
         {
             var underlyingType = nullableType.TypeArguments[0];
             isEnumType = underlyingType.TypeKind == TypeKind.Enum;
-            nonNullableType = underlyingType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+            nonNullableType = ToFullyQualifiedNonNullableTypeName(underlyingType);
             fullyQualifiedNonNullableType = nonNullableType;
             AddTypeSymbolIfMissing(typeSymbolMap, fullyQualifiedNonNullableType, underlyingType);
-        }
-        else if (!propIsValueType && fieldType.EndsWith("?", StringComparison.Ordinal))
-        {
-            nonNullableType = fieldType.TrimEnd('?').Trim();
-            fullyQualifiedNonNullableType = nonNullableType;
         }
 
         var typeAnalysis = AnalyzePropertyType(typeSymbol, cancellationToken);
@@ -408,21 +403,16 @@ public partial class TinyDbSourceGenerator
         var isNullableReferenceType = typeSymbol is { IsReferenceType: true } &&
                                       propertySymbol.NullableAnnotation == NullableAnnotation.Annotated;
         var isEnumType = typeSymbol.TypeKind == TypeKind.Enum;
-        var nonNullableType = propertyType;
-        var fullyQualifiedNonNullableType = propertyType;
+        var nonNullableType = ToFullyQualifiedNonNullableTypeName(typeSymbol);
+        var fullyQualifiedNonNullableType = nonNullableType;
 
         if (isNullableValueType && typeSymbol is INamedTypeSymbol nullableType && nullableType.TypeArguments.Length == 1)
         {
             var underlyingType = nullableType.TypeArguments[0];
             isEnumType = underlyingType.TypeKind == TypeKind.Enum;
-            nonNullableType = underlyingType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+            nonNullableType = ToFullyQualifiedNonNullableTypeName(underlyingType);
             fullyQualifiedNonNullableType = nonNullableType;
             AddTypeSymbolIfMissing(typeSymbolMap, fullyQualifiedNonNullableType, underlyingType);
-        }
-        else if (!propIsValueType && propertyType.EndsWith("?", StringComparison.Ordinal))
-        {
-            nonNullableType = propertyType.TrimEnd('?').Trim();
-            fullyQualifiedNonNullableType = nonNullableType;
         }
 
         var typeAnalysis = AnalyzePropertyType(typeSymbol, cancellationToken);

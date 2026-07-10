@@ -18,6 +18,21 @@ public sealed class ConstructorParameterInfo
 /// <summary>
 /// 类信息
 /// </summary>
+public sealed class DependentConstructorParameterInfo
+{
+    public string ParameterName { get; }
+    public DependentTypeProperty Property { get; }
+
+    public DependentConstructorParameterInfo(string parameterName, DependentTypeProperty property)
+    {
+        ParameterName = parameterName;
+        Property = property;
+    }
+}
+
+/// <summary>
+/// ç±»ä¿¡æ¯
+/// </summary>
 public class ClassInfo
 {
         private readonly string _fullName;
@@ -176,6 +191,8 @@ public class DependentComplexType
 
     public bool HasAccessibleParameterlessConstructor { get; }
 
+    public IReadOnlyList<DependentConstructorParameterInfo> ConstructorParameters { get; }
+
     /// <summary>
     /// 类型的属性列表
     /// </summary>
@@ -186,13 +203,20 @@ public class DependentComplexType
     /// </summary>
     public string SafeMethodName => _safeMethodName;
 
-    public DependentComplexType(string fullyQualifiedName, string shortName, bool isValueType, bool hasAccessibleParameterlessConstructor, List<DependentTypeProperty> properties)
+    public DependentComplexType(
+        string fullyQualifiedName,
+        string shortName,
+        bool isValueType,
+        bool hasAccessibleParameterlessConstructor,
+        List<DependentTypeProperty> properties,
+        List<DependentConstructorParameterInfo>? constructorParameters = null)
     {
         FullyQualifiedName = fullyQualifiedName;
         ShortName = shortName;
         IsValueType = isValueType;
         HasAccessibleParameterlessConstructor = hasAccessibleParameterlessConstructor;
         Properties = properties.ToArray();
+        ConstructorParameters = constructorParameters?.ToArray() ?? Array.Empty<DependentConstructorParameterInfo>();
         _safeMethodName = CreateSafeMethodName(fullyQualifiedName);
     }
 

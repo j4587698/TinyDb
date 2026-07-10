@@ -310,9 +310,7 @@ public partial class TinyDbSourceGenerator
                 var bsonFieldName = GetBsonFieldName(prop);
                 var localName = $"ctor_{prop.Name}";
                 var bsonLocalName = $"bsonCtor_{prop.Name}";
-                sb.AppendLine($"            {prop.FullyQualifiedType} {localName} = document.TryGetValue(\"{bsonFieldName}\", out var {bsonLocalName})");
-                sb.AppendLine($"                ? ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName})!");
-                sb.AppendLine("                : default!;");
+                AppendConstructorParameterDeserialization(sb, prop, bsonFieldName, localName, bsonLocalName);
             }
 
             var arguments = string.Join(", ", classInfo.ConstructorParameters.Select(p => $"ctor_{p.Property.Name}"));
@@ -388,7 +386,7 @@ public partial class TinyDbSourceGenerator
         sb.AppendLine("            }");
         sb.AppendLine("        }");
         sb.AppendLine();
-        sb.AppendLine("        private static TProperty ConvertPropertyValue<TProperty>(object? value)");
+        sb.AppendLine("        private static TProperty ConvertPropertyValue<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.Interfaces)] TProperty>(object? value)");
         sb.AppendLine("        {");
         sb.AppendLine("            if (value is null) return default!;");
         sb.AppendLine("            if (value is TProperty typedValue) return typedValue;");
@@ -423,6 +421,126 @@ public partial class TinyDbSourceGenerator
         }
 
         return sb.ToString();
+    }
+
+    private static void AppendConstructorParameterDeserialization(
+        StringBuilder sb,
+        PropertyInfo prop,
+        string bsonFieldName,
+        string localName,
+        string bsonLocalName)
+    {
+        sb.AppendLine($"            {prop.FullyQualifiedType} {localName} = default!;");
+        sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var {bsonLocalName}) && !{bsonLocalName}.IsNull)");
+        sb.AppendLine("            {");
+
+        if (prop.IsComplexType)
+        {
+            sb.AppendLine($"                if ({bsonLocalName} is BsonDocument nested_{prop.Name})");
+            sb.AppendLine($"                    {localName} = DeserializeComplexObject<{prop.FullyQualifiedNonNullableType}>(nested_{prop.Name});");
+            sb.AppendLine("                else");
+            sb.AppendLine($"                    {localName} = ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName});");
+        }
+        else if (prop.IsCollection)
+        {
+            AppendConstructorCollectionDeserialization(sb, prop, localName, bsonLocalName);
+        }
+        else if (prop.IsDictionary)
+        {
+            AppendConstructorDictionaryDeserialization(sb, prop, localName, bsonLocalName);
+        }
+        else if (prop.IsEnum)
+        {
+            sb.AppendLine($"                {localName} = global::TinyDb.Serialization.BsonConversion.FromBsonValueEnum<{prop.FullyQualifiedNonNullableType}>({bsonLocalName});");
+        }
+        else
+        {
+            sb.AppendLine($"                {localName} = ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName});");
+        }
+
+        sb.AppendLine("            }");
+    }
+
+    private static void AppendConstructorCollectionDeserialization(
+        StringBuilder sb,
+        PropertyInfo prop,
+        string localName,
+        string bsonLocalName)
+    {
+        var elementType = prop.ElementType ?? "object";
+        var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(prop.FullyQualifiedType, elementType);
+
+        sb.AppendLine($"                if ({bsonLocalName} is BsonArray array_{prop.Name})");
+        sb.AppendLine("                {");
+        sb.AppendLine($"                    var list_{prop.Name} = {collectionInstance};");
+        sb.AppendLine($"                    foreach (var item in array_{prop.Name})");
+        sb.AppendLine("                    {");
+        sb.AppendLine("                        if (item.IsNull)");
+        sb.AppendLine($"                            list_{prop.Name}.Add(default!);");
+
+        if (prop.IsElementComplexType)
+        {
+            sb.AppendLine("                        else if (item is BsonDocument itemDoc)");
+            sb.AppendLine($"                            list_{prop.Name}.Add(DeserializeComplexObject<{elementType}>(itemDoc));");
+            sb.AppendLine("                        else");
+            sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+        }
+        else
+        {
+            sb.AppendLine("                        else");
+            sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+        }
+
+        sb.AppendLine("                    }");
+        if (prop.IsArray)
+        {
+            sb.AppendLine($"                    {localName} = list_{prop.Name}.ToArray();");
+        }
+        else
+        {
+            sb.AppendLine($"                    {localName} = list_{prop.Name};");
+        }
+        sb.AppendLine("                }");
+        sb.AppendLine("                else");
+        sb.AppendLine($"                    {localName} = ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName});");
+    }
+
+    private static void AppendConstructorDictionaryDeserialization(
+        StringBuilder sb,
+        PropertyInfo prop,
+        string localName,
+        string bsonLocalName)
+    {
+        var keyType = prop.DictionaryKeyType ?? "string";
+        var valueType = prop.DictionaryValueType ?? "object";
+
+        sb.AppendLine($"                if ({bsonLocalName} is BsonDocument dict_{prop.Name})");
+        sb.AppendLine("                {");
+        sb.AppendLine($"                    var result_{prop.Name} = new System.Collections.Generic.Dictionary<{keyType}, {valueType}>();");
+        sb.AppendLine($"                    foreach (var kvp in dict_{prop.Name})");
+        sb.AppendLine("                    {");
+        sb.AppendLine($"                        var key_{prop.Name} = {SourceGeneratorHelpers.CreateDictionaryKeyExpression(keyType, "kvp.Key")};");
+        sb.AppendLine("                        if (kvp.Value.IsNull)");
+        sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = default!;");
+
+        if (prop.IsDictionaryValueComplexType)
+        {
+            sb.AppendLine("                        else if (kvp.Value is BsonDocument valueDoc)");
+            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = DeserializeComplexObject<{valueType}>(valueDoc);");
+            sb.AppendLine("                        else");
+            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+        }
+        else
+        {
+            sb.AppendLine("                        else");
+            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+        }
+
+        sb.AppendLine("                    }");
+        sb.AppendLine($"                    {localName} = result_{prop.Name};");
+        sb.AppendLine("                }");
+        sb.AppendLine("                else");
+        sb.AppendLine($"                    {localName} = ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName});");
     }
 
     private static string RewriteDocumentSetToBuilder(string source)

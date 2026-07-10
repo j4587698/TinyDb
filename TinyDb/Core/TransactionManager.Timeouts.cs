@@ -52,9 +52,19 @@ public sealed partial class TransactionManager
             foreach (var expiredTransaction in expiredTransactions)
             {
                 var failureReason = CreateTransactionTimeoutMessage(expiredTransaction.TransactionId, now);
-                if (!expiredTransaction.TryTransitionState(TransactionState.Active, TransactionState.Failed)) continue;
                 expiredTransaction.FailureReason = failureReason;
-                RemoveActiveTransaction(expiredTransaction.TransactionId);
+
+                try
+                {
+                    RollbackTransaction(expiredTransaction);
+                }
+                catch (Exception ex)
+                {
+                    expiredTransaction.MarkFailed(failureReason);
+                    RemoveActiveTransaction(expiredTransaction.TransactionId);
+                    _engine.Log(TinyDbLogLevel.Warning, failureReason, ex);
+                }
+
                 _timedOutTransactions[expiredTransaction.TransactionId] = now;
             }
 

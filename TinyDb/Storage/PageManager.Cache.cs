@@ -9,6 +9,36 @@ namespace TinyDb.Storage;
 
 public sealed partial class PageManager
 {
+    private int GetCachedPageCount()
+    {
+        var count = Volatile.Read(ref _cachedPageCount);
+        return count > 0 ? count : 0;
+    }
+
+    private void RecordCachedPageAdded()
+    {
+        Interlocked.Increment(ref _cachedPageCount);
+    }
+
+    private void RecordCachedPageRemoved()
+    {
+        if (Interlocked.Decrement(ref _cachedPageCount) < 0)
+        {
+            Interlocked.Exchange(ref _cachedPageCount, 0);
+        }
+    }
+
+    private bool TryRemovePageCacheEntry(uint pageID, out Page page)
+    {
+        if (!_pageCache.TryRemove(pageID, out page!))
+        {
+            return false;
+        }
+
+        RecordCachedPageRemoved();
+        return true;
+    }
+
     public void ClearCache(int maxPagesToKeep = 0, bool flushDirtyPages = true)
     {
         ThrowIfDisposed();
@@ -36,7 +66,7 @@ public sealed partial class PageManager
             else
             {
                 // 保留最近使用的页面
-                var pagesToRemove = _pageCache.Count - maxPagesToKeep;
+                var pagesToRemove = GetCachedPageCount() - maxPagesToKeep;
                 if (pagesToRemove > 0)
                 {
                     var lruPages = _lruCache.GetLeastRecentlyUsed(pagesToRemove);
@@ -58,7 +88,7 @@ public sealed partial class PageManager
 
         if (page.IsDisposed)
         {
-            if (!_pageCache.TryRemove(pageID, out var removedPage))
+            if (!TryRemovePageCacheEntry(pageID, out var removedPage))
             {
                 return false;
             }
@@ -86,7 +116,7 @@ public sealed partial class PageManager
                 return false;
             }
 
-            if (!_pageCache.TryRemove(pageID, out var removedPage))
+            if (!TryRemovePageCacheEntry(pageID, out var removedPage))
             {
                 return false;
             }
@@ -143,14 +173,14 @@ public sealed partial class PageManager
             }
 
             // 如果缓存已满，移除最少使用的页面
-            if (_pageCache.Count >= MaxCacheSize && !EvictLeastRecentlyUsed())
+            if (GetCachedPageCount() >= MaxCacheSize && !EvictLeastRecentlyUsed())
             {
                 ScheduleBackgroundWriteback();
-                if (_pageCache.Count >= CacheOverflowLimit)
+                if (GetCachedPageCount() >= CacheOverflowLimit)
                 {
                     _backgroundWritebackIdle.Wait(TimeSpan.FromSeconds(5));
-                    var evicted = EvictLeastRecentlyUsed(_pageCache.Count);
-                    if (!evicted && _pageCache.Count >= CacheOverflowLimit)
+                    var evicted = EvictLeastRecentlyUsed(GetCachedPageCount());
+                    if (!evicted && GetCachedPageCount() >= CacheOverflowLimit)
                     {
                         throw new InvalidOperationException(
                             $"Page cache is full ({MaxCacheSize} pages, overflow limit {CacheOverflowLimit}) and no clean unpinned page is available for eviction.");
@@ -171,29 +201,30 @@ public sealed partial class PageManager
                     return cachedPage;
                 }
 
-                if (_pageCache.Count >= CacheOverflowLimit)
+                if (GetCachedPageCount() >= CacheOverflowLimit)
                 {
                     continue;
                 }
 
                 if (_pageCache.TryAdd(page.PageID, page))
                 {
-                    AttachDirtyTracking(page);
+                    RecordCachedPageAdded();
                     var pinnedForCache = false;
-                    if (pinned)
-                    {
-                        page.Pin();
-                        pinnedForCache = true;
-                    }
-
                     try
                     {
+                        AttachDirtyTracking(page);
+                        if (pinned)
+                        {
+                            page.Pin();
+                            pinnedForCache = true;
+                        }
+
                         _lruCache.Put(page.PageID, page);
                         return page;
                     }
                     catch
                     {
-                        _pageCache.TryRemove(page.PageID, out _);
+                        TryRemovePageCacheEntry(page.PageID, out _);
                         RemoveDirtyTracking(page);
                         if (pinnedForCache)
                         {
@@ -265,7 +296,7 @@ public sealed partial class PageManager
                         continue;
                     }
 
-                    if (!_pageCache.TryRemove(pageID, out var removedPage))
+                    if (!TryRemovePageCacheEntry(pageID, out var removedPage))
                     {
                         continue;
                     }
@@ -388,7 +419,7 @@ public sealed partial class PageManager
 
     private int GetBackgroundWritebackCandidateCount(int targetWrites)
     {
-        var cachedPages = _pageCache.Count;
+        var cachedPages = GetCachedPageCount();
         if (cachedPages <= 0)
         {
             return 0;
@@ -453,7 +484,7 @@ public sealed partial class PageManager
         Page? removedPage = null;
         lock (_cacheLock)
         {
-            if (_pageCache.TryRemove(pageID, out var page))
+            if (TryRemovePageCacheEntry(pageID, out var page))
             {
                 RemoveDirtyTracking(page);
                 removedPage = page;
