@@ -38,4 +38,20 @@ public sealed class ExpressionEvaluatorToDoubleCoverageTests
         var bsonObjectId = new BinaryExpression(System.Linq.Expressions.ExpressionType.Add, new ConstantExpression(new BsonObjectId(ObjectId.NewObjectId())), new ConstantExpression(1.0d));
         await Assert.That(() => ExpressionEvaluator.EvaluateValue(bsonObjectId, entity)).Throws<InvalidOperationException>();
     }
+
+    [Test]
+    public async Task IntegralMathOverflow_ShouldThrow()
+    {
+        var entity = new object();
+
+        var add = new BinaryExpression(System.Linq.Expressions.ExpressionType.Add, new ConstantExpression(long.MaxValue), new ConstantExpression(1L));
+        var subtract = new BinaryExpression(System.Linq.Expressions.ExpressionType.Subtract, new ConstantExpression(long.MinValue), new ConstantExpression(1L));
+        var multiply = new BinaryExpression(System.Linq.Expressions.ExpressionType.Multiply, new ConstantExpression(long.MaxValue), new ConstantExpression(2L));
+        var divide = new BinaryExpression(System.Linq.Expressions.ExpressionType.Divide, new ConstantExpression(long.MinValue), new ConstantExpression(-1L));
+
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(add, entity)).Throws<OverflowException>();
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(subtract, entity)).Throws<OverflowException>();
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(multiply, entity)).Throws<OverflowException>();
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(divide, entity)).Throws<OverflowException>();
+    }
 }

@@ -352,4 +352,102 @@ public class PageManagerTests : IDisposable
         await Assert.That(pageIds.Contains(1u)).IsTrue();
         await Assert.That(pageIds.Contains(10u)).IsTrue();
     }
+
+    [Test]
+    public async Task Dispose_ConcurrentCalls_ShouldDisposeDiskStreamOnce()
+    {
+        var diskStream = new CountingDiskStream();
+        var pageManager = new PageManager(diskStream, TestPageSize, TestCacheSize);
+
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(pageManager.Dispose))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        await Assert.That(diskStream.DisposeCount).IsEqualTo(1);
+    }
+
+    private sealed class CountingDiskStream : IDiskStream
+    {
+        private readonly MemoryStream _stream = new();
+        private int _disposeCount;
+
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public string FilePath => "counting";
+
+        public long Size => _stream.Length;
+
+        public bool IsReadable => true;
+
+        public bool IsWritable => true;
+
+        public void Dispose()
+        {
+            Interlocked.Increment(ref _disposeCount);
+        }
+
+        public void Flush()
+        {
+        }
+
+        public Task FlushAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public byte[] ReadPage(long pageOffset, int pageSize)
+        {
+            var buffer = new byte[pageSize];
+            if (pageOffset >= _stream.Length)
+            {
+                return buffer;
+            }
+
+            _stream.Position = pageOffset;
+            _stream.Read(buffer, 0, pageSize);
+            return buffer;
+        }
+
+        public Task<byte[]> ReadPageAsync(long pageOffset, int pageSize, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(ReadPage(pageOffset, pageSize));
+        }
+
+        public void WritePage(long pageOffset, byte[] pageData)
+        {
+            if (pageOffset + pageData.Length > _stream.Length)
+            {
+                _stream.SetLength(pageOffset + pageData.Length);
+            }
+
+            _stream.Position = pageOffset;
+            _stream.Write(pageData, 0, pageData.Length);
+        }
+
+        public Task WritePageAsync(long pageOffset, byte[] pageData, CancellationToken cancellationToken = default)
+        {
+            WritePage(pageOffset, pageData);
+            return Task.CompletedTask;
+        }
+
+        public void SetLength(long length)
+        {
+            _stream.SetLength(length);
+        }
+
+        public DiskStreamStatistics GetStatistics()
+        {
+            return new DiskStreamStatistics
+            {
+                FilePath = FilePath,
+                Size = Size,
+                Position = _stream.Position,
+                IsReadable = IsReadable,
+                IsWritable = IsWritable,
+                IsSeekable = true
+            };
+        }
+    }
 }

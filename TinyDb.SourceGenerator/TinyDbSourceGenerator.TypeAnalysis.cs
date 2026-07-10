@@ -110,7 +110,7 @@ public partial class TinyDbSourceGenerator
             return true;
         }
 
-        var nonNullableTypeName = RemoveNullableAnnotations(typeName);
+        var nonNullableTypeName = RemoveTopLevelNullableAnnotation(typeName);
         if (!string.Equals(typeName, nonNullableTypeName, StringComparison.Ordinal) &&
             typeSymbols.TryGetValue(nonNullableTypeName, out typeSymbol))
         {
@@ -121,11 +121,11 @@ public partial class TinyDbSourceGenerator
         return false;
     }
 
-    private static string RemoveNullableAnnotations(string typeName)
+    private static string RemoveTopLevelNullableAnnotation(string typeName)
     {
-        return typeName.IndexOf('?') < 0
-            ? typeName
-            : typeName.Replace("?", string.Empty);
+        return typeName.EndsWith("?", StringComparison.Ordinal)
+            ? typeName.Substring(0, typeName.Length - 1)
+            : typeName;
     }
 
     private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol, CancellationToken cancellationToken)
