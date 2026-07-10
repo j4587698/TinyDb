@@ -110,14 +110,22 @@ public partial class TinyDbSourceGenerator
             return true;
         }
 
-        if (typeName.EndsWith("?", StringComparison.Ordinal) &&
-            typeSymbols.TryGetValue(typeName.Substring(0, typeName.Length - 1), out typeSymbol))
+        var nonNullableTypeName = RemoveNullableAnnotations(typeName);
+        if (!string.Equals(typeName, nonNullableTypeName, StringComparison.Ordinal) &&
+            typeSymbols.TryGetValue(nonNullableTypeName, out typeSymbol))
         {
             return true;
         }
 
         typeSymbol = null!;
         return false;
+    }
+
+    private static string RemoveNullableAnnotations(string typeName)
+    {
+        return typeName.IndexOf('?') < 0
+            ? typeName
+            : typeName.Replace("?", string.Empty);
     }
 
     private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol, CancellationToken cancellationToken)
@@ -390,35 +398,36 @@ public partial class TinyDbSourceGenerator
     /// <summary>
     /// 获取 BsonRef 属性引用的目标类型（处理集合类型时获取元素类型）
     /// </summary>
-    private static ITypeSymbol? GetBsonRefTargetType(ITypeSymbol typeSymbol)
+    private static ITypeSymbol? GetBsonRefTargetType(ITypeSymbol typeSymbol, CancellationToken cancellationToken)
     {
         // 处理数组类型
-        if (typeSymbol is IArrayTypeSymbol arrayType)
-        {
-            return arrayType.ElementType;
-        }
+        var current = typeSymbol;
 
         // 处理泛型集合类型（List<T>, ICollection<T> 等）
-        if (typeSymbol is INamedTypeSymbol namedType && namedType.IsGenericType)
+        while (true)
         {
-            var typeName = namedType.OriginalDefinition.ToDisplayString();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (current is IArrayTypeSymbol arrayType)
+            {
+                current = arrayType.ElementType;
+                continue;
+            }
 
             // 检查是否是集合类型
-            if (typeName.StartsWith("System.Collections.Generic.List<", StringComparison.Ordinal) ||
-                typeName.StartsWith("System.Collections.Generic.IList<", StringComparison.Ordinal) ||
-                typeName.StartsWith("System.Collections.Generic.ICollection<", StringComparison.Ordinal) ||
-                typeName.StartsWith("System.Collections.Generic.IEnumerable<", StringComparison.Ordinal) ||
-                typeName.StartsWith("System.Collections.Generic.HashSet<", StringComparison.Ordinal))
+            if (current is INamedTypeSymbol namedType && IsCollectionType(namedType, cancellationToken))
             {
-                if (namedType.TypeArguments.Length == 1)
+                var elementType = GetCollectionElementType(namedType, cancellationToken);
+                if (elementType != null &&
+                    !SymbolEqualityComparer.Default.Equals(elementType, current))
                 {
-                    return namedType.TypeArguments[0];
+                    current = elementType;
+                    continue;
                 }
             }
-        }
 
-        // 非集合类型，直接返回类型本身
-        return typeSymbol;
+            return current;
+        }
     }
 
     /// <summary>

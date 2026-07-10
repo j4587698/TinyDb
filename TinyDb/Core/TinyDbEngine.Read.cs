@@ -831,7 +831,7 @@ public sealed partial class TinyDbEngine
             return;
         }
 
-        var entries = _dataPageAccess.ReadDocumentsFromPage(page);
+        var entries = _dataPageAccess.ReadDocumentsFromPageForRead(page);
         foreach (var lookup in lookups)
         {
             if (lookup.Location.EntryIndex >= entries.Count)

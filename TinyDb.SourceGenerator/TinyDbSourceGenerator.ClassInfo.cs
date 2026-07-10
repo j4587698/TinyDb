@@ -24,7 +24,10 @@ public partial class TinyDbSourceGenerator
 
         var className = classDeclaration.Identifier.Text;
         var typeParameterList = BuildHelperTypeParameterList(classDeclaration);
-        var typeParameterConstraints = BuildHelperTypeParameterConstraints(classDeclaration);
+        var typeParameterConstraints = BuildHelperTypeParameterConstraints(
+            classDeclaration,
+            semanticModel,
+            cancellationToken);
 
         // 获取类符号信息
         var classSymbol = context.TargetSymbol as INamedTypeSymbol
@@ -273,15 +276,18 @@ public partial class TinyDbSourceGenerator
         return names.Count == 0 ? string.Empty : $"<{string.Join(", ", names)}>";
     }
 
-    private static string BuildHelperTypeParameterConstraints(TypeDeclarationSyntax classDeclaration)
+    private static string BuildHelperTypeParameterConstraints(
+        TypeDeclarationSyntax classDeclaration,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
     {
         var constraints = new List<string>();
         foreach (var declaration in EnumerateContainingTypeDeclarations(classDeclaration))
         {
-            AddConstraintClauses(declaration, constraints);
+            AddConstraintClauses(declaration, semanticModel, constraints, cancellationToken);
         }
 
-        AddConstraintClauses(classDeclaration, constraints);
+        AddConstraintClauses(classDeclaration, semanticModel, constraints, cancellationToken);
         return string.Join(" ", constraints);
     }
 
@@ -319,12 +325,49 @@ public partial class TinyDbSourceGenerator
         }
     }
 
-    private static void AddConstraintClauses(TypeDeclarationSyntax declaration, List<string> constraints)
+    private static void AddConstraintClauses(
+        TypeDeclarationSyntax declaration,
+        SemanticModel semanticModel,
+        List<string> constraints,
+        CancellationToken cancellationToken)
     {
         foreach (var clause in declaration.ConstraintClauses)
         {
-            constraints.Add(clause.ToString());
+            cancellationToken.ThrowIfCancellationRequested();
+            constraints.Add(FormatConstraintClause(clause, semanticModel, cancellationToken));
         }
+    }
+
+    private static string FormatConstraintClause(
+        TypeParameterConstraintClauseSyntax clause,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        var constraintTexts = new List<string>();
+        foreach (var constraint in clause.Constraints)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            constraintTexts.Add(FormatConstraint(constraint, semanticModel, cancellationToken));
+        }
+
+        return $"where {clause.Name} : {string.Join(", ", constraintTexts)}";
+    }
+
+    private static string FormatConstraint(
+        TypeParameterConstraintSyntax constraint,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        if (constraint is TypeConstraintSyntax typeConstraint)
+        {
+            var typeSymbol = semanticModel.GetTypeInfo(typeConstraint.Type, cancellationToken).Type;
+            if (typeSymbol is { TypeKind: not TypeKind.Error })
+            {
+                return typeSymbol.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+            }
+        }
+
+        return constraint.ToString();
     }
 
 }

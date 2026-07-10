@@ -6,6 +6,7 @@ using TinyDb.IdGeneration;
 using TinyDb.Index;
 using TinyDb.Serialization;
 using TinyDb.Storage;
+using TinyDb.Tests.Regression.ExternalConstraints;
 using TinyDb.Tests.Regression.Systematic.Models;
 using TUnit.Assertions;
 using TUnit.Assertions.Extensions;
@@ -208,6 +209,28 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
         await Assert.That(twoArgumentType.Name).StartsWith("GenericArityRegressionEntity`2");
         await Assert.That(AotHelperRegistry.TryGetAdapter<GenericArityRegressionEntity<int>>(out _)).IsFalse();
         await Assert.That(AotHelperRegistry.TryGetAdapter<GenericArityRegressionEntity<int, string>>(out _)).IsFalse();
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldCompileGenericConstraintsFromExternalNamespace()
+    {
+        var entityType = typeof(GenericConstraintRegressionEntity<ExternalConstraintImplementation>);
+
+        await Assert.That(entityType.Name).StartsWith("GenericConstraintRegressionEntity`1");
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldNotInstantiateAbstractDependentTypes()
+    {
+        await Assert.That(typeof(AbstractDependentRegressionEntity).Name)
+            .IsEqualTo(nameof(AbstractDependentRegressionEntity));
+    }
+
+    [Test]
+    public async Task SourceGenerator_ShouldResolveNestedBsonRefCollectionTargets()
+    {
+        await Assert.That(typeof(NestedBsonRefContainer).Name)
+            .IsEqualTo(nameof(NestedBsonRefContainer));
     }
 
     [Test]
@@ -479,6 +502,45 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
         public long LongValue { get; set; }
     }
 
+    [Entity("GenericConstraintRegressionEntities")]
+    public partial class GenericConstraintRegressionEntity<T>
+        where T : IExternalConstraint
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    [Entity("AbstractDependentRegressionEntities")]
+    public partial class AbstractDependentRegressionEntity
+    {
+        public int Id { get; set; }
+        public AbstractDependentDetail? Detail { get; set; }
+    }
+
+    public abstract class AbstractDependentDetail
+    {
+        protected internal AbstractDependentDetail()
+        {
+        }
+
+        public string Code { get; set; } = string.Empty;
+    }
+
+    [Entity("NestedBsonRefContainers")]
+    public partial class NestedBsonRefContainer
+    {
+        public int Id { get; set; }
+
+        [BsonRef("BsonRefTargetEntities")]
+        public List<List<BsonRefTargetEntity>> Targets { get; set; } = new();
+    }
+
+    [Entity("BsonRefTargetEntities")]
+    public partial class BsonRefTargetEntity
+    {
+        public int Id { get; set; }
+    }
+
     private sealed class MemoryDiskStream : IDiskStream
     {
         private readonly MemoryStream _stream = new();
@@ -578,5 +640,16 @@ public sealed class DeepReviewFixRegressionTests : IDisposable
                 IsSeekable = true
             };
         }
+    }
+}
+
+[AttributeUsage(AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class BsonRefAttribute : Attribute
+{
+    public string CollectionName { get; }
+
+    public BsonRefAttribute(string collectionName)
+    {
+        CollectionName = collectionName;
     }
 }

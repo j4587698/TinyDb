@@ -42,9 +42,9 @@ public partial class TinyDbSourceGenerator
 
     private static bool IsTinyDbObjectIdTypeName(string? type)
     {
-        if (string.IsNullOrWhiteSpace(type)) return false;
+        if (type is not { } nonEmptyType || string.IsNullOrWhiteSpace(nonEmptyType)) return false;
 
-        var normalized = type.Trim();
+        var normalized = nonEmptyType.Trim();
         if (normalized.EndsWith("?", StringComparison.Ordinal))
         {
             normalized = normalized.Substring(0, normalized.Length - 1).TrimEnd();
