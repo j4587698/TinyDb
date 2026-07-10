@@ -363,11 +363,15 @@ public sealed partial class TinyDbEngine
         }
         catch
         {
-            RestoreDocumentDataWithoutIndexUpdate(col, st, id, old);
-            if (newLargeDocumentPageId != 0)
+            if (!_writeAheadLog.IsInTransactionScope)
             {
-                DeleteLargeDocumentOrThrow(newLargeDocumentPageId);
+                RestoreDocumentDataWithoutIndexUpdate(col, st, id, old);
+                if (newLargeDocumentPageId != 0)
+                {
+                    DeleteLargeDocumentOrThrow(newLargeDocumentPageId);
+                }
             }
+
             throw;
         }
 
@@ -453,11 +457,15 @@ public sealed partial class TinyDbEngine
         }
         catch
         {
-            RestoreDocumentDataWithoutIndexUpdate(col, st, id, old);
-            if (newLargeDocumentPageId != 0)
+            if (!_writeAheadLog.IsInTransactionScope)
             {
-                DeleteLargeDocumentOrThrow(newLargeDocumentPageId);
+                RestoreDocumentDataWithoutIndexUpdate(col, st, id, old);
+                if (newLargeDocumentPageId != 0)
+                {
+                    DeleteLargeDocumentOrThrow(newLargeDocumentPageId);
+                }
             }
+
             throw;
         }
 

@@ -26,6 +26,52 @@ using TinyDb.Utils;
 
 namespace TinyDb.Core;
 
+internal sealed class EngineWalDurabilityScope : IDisposable
+{
+    private readonly WriteAheadLog.WalTransactionScope _walScope;
+    private readonly IDisposable? _pageMutationLocks;
+    private bool _disposed;
+
+    public EngineWalDurabilityScope(WriteAheadLog.WalTransactionScope walScope, IDisposable? pageMutationLocks)
+    {
+        _walScope = walScope ?? throw new ArgumentNullException(nameof(walScope));
+        _pageMutationLocks = pageMutationLocks;
+    }
+
+    public void Commit()
+    {
+        _walScope.Commit();
+    }
+
+    public Task CommitAsync(CancellationToken cancellationToken = default)
+    {
+        return _walScope.CommitAsync(cancellationToken);
+    }
+
+    public void Rollback(Action<uint, byte[]> restore, Action<uint>? discardNewPage)
+    {
+        _walScope.Rollback(restore, discardNewPage);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            _pageMutationLocks?.Dispose();
+        }
+        finally
+        {
+            _walScope.Dispose();
+        }
+    }
+}
+
 public sealed partial class TinyDbEngine
 {
     /// <summary>
@@ -59,12 +105,16 @@ public sealed partial class TinyDbEngine
         _writeAheadLog.FlushLog();
     }
 
-    internal WriteAheadLog.WalTransactionScope BeginTransactionDurabilityScope(Guid transactionId)
+    internal EngineWalDurabilityScope BeginTransactionDurabilityScope(Guid transactionId)
     {
-        return _writeAheadLog.BeginTransaction(transactionId);
+        var walScope = _writeAheadLog.BeginTransaction(transactionId);
+        var pageMutationLocks = _writeAheadLog.IsEnabled
+            ? CollectionState.RetainPageMutationLocksForCurrentContext()
+            : null;
+        return new EngineWalDurabilityScope(walScope, pageMutationLocks);
     }
 
-    internal void RollbackTransactionDurabilityScope(WriteAheadLog.WalTransactionScope durabilityScope)
+    internal void RollbackTransactionDurabilityScope(EngineWalDurabilityScope durabilityScope)
     {
         if (durabilityScope == null) throw new ArgumentNullException(nameof(durabilityScope));
 
@@ -101,14 +151,16 @@ public sealed partial class TinyDbEngine
         }
     }
 
-    private WriteAheadLog.WalTransactionScope? BeginImplicitWalTransaction()
+    private EngineWalDurabilityScope? BeginImplicitWalTransaction()
     {
         if (!_writeAheadLog.IsEnabled || _writeAheadLog.IsInTransactionScope)
         {
             return null;
         }
 
-        return _writeAheadLog.BeginTransaction(Guid.NewGuid(), flushOnCommit: false);
+        var walScope = _writeAheadLog.BeginTransaction(Guid.NewGuid(), flushOnCommit: false);
+        var pageMutationLocks = CollectionState.RetainPageMutationLocksForCurrentContext();
+        return new EngineWalDurabilityScope(walScope, pageMutationLocks);
     }
 
     private readonly struct PendingImplicitWalTransaction
@@ -139,16 +191,21 @@ public sealed partial class TinyDbEngine
             _writeAheadLog.WriteTransactionBeginAsync(transactionId, cancellationToken));
     }
 
-    private WriteAheadLog.WalTransactionScope? EnterImplicitWalTransactionContext(
+    private EngineWalDurabilityScope? EnterImplicitWalTransactionContext(
         PendingImplicitWalTransaction pendingTransaction)
     {
-        return pendingTransaction.HasTransaction
-            ? _writeAheadLog.EnterTransactionContext(pendingTransaction.TransactionId, flushOnCommit: false)
-            : null;
+        if (!pendingTransaction.HasTransaction)
+        {
+            return null;
+        }
+
+        var walScope = _writeAheadLog.EnterTransactionContext(pendingTransaction.TransactionId, flushOnCommit: false);
+        var pageMutationLocks = CollectionState.RetainPageMutationLocksForCurrentContext();
+        return new EngineWalDurabilityScope(walScope, pageMutationLocks);
     }
 
     private void RollbackImplicitWalTransaction(
-        WriteAheadLog.WalTransactionScope? durabilityScope,
+        EngineWalDurabilityScope? durabilityScope,
         Exception originalException)
     {
         if (durabilityScope == null)

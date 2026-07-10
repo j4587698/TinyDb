@@ -77,7 +77,7 @@ public sealed partial class TransactionManager
     }
 
 
-    private List<Exception> RollbackDurabilityScope(WriteAheadLog.WalTransactionScope durabilityScope)
+    private List<Exception> RollbackDurabilityScope(EngineWalDurabilityScope durabilityScope)
     {
         var rollbackErrors = new List<Exception>();
         try

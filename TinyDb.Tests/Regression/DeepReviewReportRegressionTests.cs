@@ -193,10 +193,105 @@ public sealed class DeepReviewReportRegressionTests : IDisposable
         var collection = engine.GetCollection<CommitGateRegressionItem>(collectionName);
         using var gate = EnterCollectionWriteGate(engine, collectionName);
 
-        var insertTask = Task.Run(() => collection.Insert(new CommitGateRegressionItem { Id = 1, Name = "shared" }));
+        var insertTask = Task.Run(() =>
+        {
+            collection.Insert(new CommitGateRegressionItem { Id = 1, Name = "shared" });
+        });
 
         await insertTask.WaitAsync(TimeSpan.FromSeconds(2));
         await Assert.That(collection.FindById(1)).IsNotNull();
+    }
+
+    [Test]
+    public async Task WriteAheadLog_Replay_ShouldUndoPendingTransactionsInGlobalReverseOrder()
+    {
+        var path = Path.Combine(_directory, "wal-global-undo.db");
+        using (var wal = new WriteAheadLog(path, pageSize: 4096, enabled: true))
+        {
+            using (wal.BeginTransaction(Guid.NewGuid(), flushOnCommit: false))
+            {
+                var page = new Page(1, 4096, PageType.Data);
+                page.WriteData(0, new byte[] { 1 });
+                wal.AppendPage(page, CreateWalPageImage(0));
+            }
+
+            using (wal.BeginTransaction(Guid.NewGuid(), flushOnCommit: false))
+            {
+                var page = new Page(1, 4096, PageType.Data);
+                page.WriteData(0, new byte[] { 2 });
+                wal.AppendPage(page, CreateWalPageImage(1));
+            }
+
+            wal.FlushLog();
+        }
+
+        byte restored = 2;
+        using (var recoveryWal = new WriteAheadLog(path, pageSize: 4096, enabled: true))
+        {
+            recoveryWal.Replay(
+                (_, data) => restored = data.Span[Page.DataStartOffset],
+                (_, data) => restored = data.Span[Page.DataStartOffset]);
+        }
+
+        await Assert.That(restored).IsEqualTo((byte)0);
+    }
+
+    [Test]
+    public async Task WriteAheadLog_ReplayAsync_ShouldUndoPendingTransactionsInGlobalReverseOrder()
+    {
+        var path = Path.Combine(_directory, "wal-global-undo-async.db");
+        using (var wal = new WriteAheadLog(path, pageSize: 4096, enabled: true))
+        {
+            using (wal.BeginTransaction(Guid.NewGuid(), flushOnCommit: false))
+            {
+                var page = new Page(1, 4096, PageType.Data);
+                page.WriteData(0, new byte[] { 1 });
+                wal.AppendPage(page, CreateWalPageImage(0));
+            }
+
+            using (wal.BeginTransaction(Guid.NewGuid(), flushOnCommit: false))
+            {
+                var page = new Page(1, 4096, PageType.Data);
+                page.WriteData(0, new byte[] { 2 });
+                wal.AppendPage(page, CreateWalPageImage(1));
+            }
+
+            wal.FlushLog();
+        }
+
+        byte restored = 2;
+        using (var recoveryWal = new WriteAheadLog(path, pageSize: 4096, enabled: true))
+        {
+            await recoveryWal.ReplayAsync(
+                (_, data) =>
+                {
+                    restored = data.Span[Page.DataStartOffset];
+                    return Task.CompletedTask;
+                },
+                (_, data) =>
+                {
+                    restored = data.Span[Page.DataStartOffset];
+                    return Task.CompletedTask;
+                });
+        }
+
+        await Assert.That(restored).IsEqualTo((byte)0);
+    }
+
+    [Test]
+    public async Task BsonValueComparer_NumericHash_ShouldMatchNumericEquality()
+    {
+        var integerOne = new BsonInt32(1);
+        var decimalOne = new BsonDecimal128(1.0m);
+        var seen = new HashSet<BsonValue>(BsonValueComparer.EqualityComparer)
+        {
+            integerOne,
+            decimalOne
+        };
+
+        await Assert.That(BsonValueComparer.ValueEquals(integerOne, decimalOne)).IsTrue();
+        await Assert.That(BsonValueComparer.GetHashCode(integerOne)).IsEqualTo(BsonValueComparer.GetHashCode(decimalOne));
+        await Assert.That(seen.Count).IsEqualTo(1);
     }
 
     private static IDisposable EnterCollectionCommitGate(TinyDbEngine engine, string collectionName)
@@ -217,6 +312,13 @@ public sealed class DeepReviewReportRegressionTests : IDisposable
             ?? throw new MissingMethodException(typeof(TinyDbEngine).FullName, methodName);
 
         return (IDisposable)method.Invoke(engine, new object[] { new[] { collectionName } })!;
+    }
+
+    private static byte[] CreateWalPageImage(byte marker)
+    {
+        var page = new Page(1, 4096, PageType.Data);
+        page.WriteData(0, new byte[] { marker });
+        return page.Snapshot();
     }
 
     [Entity("deep_review_overlay_items")]

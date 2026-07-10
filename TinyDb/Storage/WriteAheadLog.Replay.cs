@@ -114,6 +114,7 @@ public sealed partial class WriteAheadLog
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
             var headerBuffer = new byte[FullHeaderSize];
             var pendingTransactions = new Dictionary<Guid, List<(uint PageId, byte[]? BeforeImage, byte[] AfterImage)>>();
+            var pendingUndoRecords = new List<(Guid TransactionId, uint PageId, byte[]? BeforeImage)>();
 
             while (stream.Position < stream.Length)
             {
@@ -233,6 +234,7 @@ public sealed partial class WriteAheadLog
                         }
 
                         records.Add((pageId, beforeImage, afterImage));
+                        pendingUndoRecords.Add((transactionId, pageId, beforeImage));
                     }
                     else if (entryType == EntryTypeTransactionCommit)
                     {
@@ -262,16 +264,15 @@ public sealed partial class WriteAheadLog
                 lastSuccessfulPosition = stream.Position;
             }
 
-            foreach (var records in pendingTransactions.Values)
+            for (var i = pendingUndoRecords.Count - 1; i >= 0; i--)
             {
-                for (int i = records.Count - 1; i >= 0; i--)
+                var record = pendingUndoRecords[i];
+                if (!pendingTransactions.ContainsKey(record.TransactionId) || record.BeforeImage == null)
                 {
-                    var record = records[i];
-                    if (record.BeforeImage != null)
-                    {
-                        (restore ?? apply)(record.PageId, record.BeforeImage);
-                    }
+                    continue;
                 }
+
+                (restore ?? apply)(record.PageId, record.BeforeImage);
             }
 
             if (replayStoppedAtInvalidRecord)
@@ -342,6 +343,7 @@ public sealed partial class WriteAheadLog
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
             var headerBuffer = new byte[FullHeaderSize];
             var pendingTransactions = new Dictionary<Guid, List<(uint PageId, byte[]? BeforeImage, byte[] AfterImage)>>();
+            var pendingUndoRecords = new List<(Guid TransactionId, uint PageId, byte[]? BeforeImage)>();
 
             while (stream.Position < stream.Length)
             {
@@ -466,6 +468,7 @@ public sealed partial class WriteAheadLog
                         }
 
                         records.Add((pageId, beforeImage, afterImage));
+                        pendingUndoRecords.Add((transactionId, pageId, beforeImage));
                     }
                     else if (entryType == EntryTypeTransactionCommit)
                     {
@@ -496,16 +499,15 @@ public sealed partial class WriteAheadLog
             }
 
             // 清理或截断日志
-            foreach (var records in pendingTransactions.Values)
+            for (var i = pendingUndoRecords.Count - 1; i >= 0; i--)
             {
-                for (int i = records.Count - 1; i >= 0; i--)
+                var record = pendingUndoRecords[i];
+                if (!pendingTransactions.ContainsKey(record.TransactionId) || record.BeforeImage == null)
                 {
-                    var record = records[i];
-                    if (record.BeforeImage != null)
-                    {
-                        await (restoreAsync ?? applyAsync)(record.PageId, record.BeforeImage).ConfigureAwait(false);
-                    }
+                    continue;
                 }
+
+                await (restoreAsync ?? applyAsync)(record.PageId, record.BeforeImage).ConfigureAwait(false);
             }
 
             if (replayStoppedAtInvalidRecord)
