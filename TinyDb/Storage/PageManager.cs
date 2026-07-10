@@ -35,6 +35,7 @@ public sealed partial class PageManager : IDisposable
     private uint _freePageCount;
     private long _fileSize;
     private bool _disposed;
+    private int _disposeStarted;
     private Exception? _corruptionException;
     private readonly SemaphoreSlim _backgroundWritebackGate = new(1, 1);
     private readonly ManualResetEventSlim _backgroundWritebackIdle = new(true);
@@ -178,7 +179,7 @@ public sealed partial class PageManager : IDisposable
     /// </summary>
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed))
             throw new ObjectDisposedException(nameof(PageManager));
 
         if (Volatile.Read(ref _corruptionException) is { } corruptionException)
@@ -194,7 +195,7 @@ public sealed partial class PageManager : IDisposable
     /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
+        if (Interlocked.Exchange(ref _disposeStarted, 1) == 0)
         {
             Exception? flushException = null;
             Exception? cleanupException = null;
@@ -240,7 +241,7 @@ public sealed partial class PageManager : IDisposable
                     }
                     finally
                     {
-                        _disposed = true;
+                        Volatile.Write(ref _disposed, true);
                     }
                 }
                 finally

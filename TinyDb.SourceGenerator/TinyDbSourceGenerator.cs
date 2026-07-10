@@ -96,7 +96,8 @@ public partial class TinyDbSourceGenerator : IIncrementalGenerator
             .WithComparer(ClassInfoComparer.Instance);
 
         // 注册源代码生成
-        var diagnosticClassDeclarations = comparableClassDeclarations
+        var diagnosticClassDeclarations = classDeclarations
+            .WithComparer(ClassInfoComparer.DiagnosticInstance)
             .Where(static classInfo => classInfo is not null && ShouldGenerateMapper(classInfo) && HasDiagnostics(classInfo));
 
         var validClassDeclarations = comparableClassDeclarations

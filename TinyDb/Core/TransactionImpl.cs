@@ -16,6 +16,7 @@ internal sealed class Transaction : ITransaction
     private int _state;
     private string? _failureReason;
     private bool _disposed;
+    private int _disposeStarted;
 
     /// <summary>
     /// 事务ID
@@ -484,7 +485,7 @@ internal sealed class Transaction : ITransaction
     /// </summary>
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed))
             throw new ObjectDisposedException(nameof(Transaction));
     }
 
@@ -493,7 +494,7 @@ internal sealed class Transaction : ITransaction
     /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
+        if (Interlocked.Exchange(ref _disposeStarted, 1) == 0)
         {
             try
             {
@@ -529,7 +530,7 @@ internal sealed class Transaction : ITransaction
             }
             finally
             {
-                _disposed = true;
+                Volatile.Write(ref _disposed, true);
             }
         }
     }

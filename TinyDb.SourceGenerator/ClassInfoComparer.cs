@@ -8,7 +8,15 @@ namespace TinyDb.SourceGenerator;
 /// </summary>
 internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
 {
-    public static readonly ClassInfoComparer Instance = new();
+    public static readonly ClassInfoComparer Instance = new(includeDiagnosticLocations: false);
+    public static readonly ClassInfoComparer DiagnosticInstance = new(includeDiagnosticLocations: true);
+
+    private readonly bool _includeDiagnosticLocations;
+
+    private ClassInfoComparer(bool includeDiagnosticLocations)
+    {
+        _includeDiagnosticLocations = includeDiagnosticLocations;
+    }
 
     public bool Equals(ClassInfo? x, ClassInfo? y)
     {
@@ -26,7 +34,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                x.IsValueType == y.IsValueType &&
                StringEquals(x.FullyQualifiedTypeReference, y.FullyQualifiedTypeReference) &&
                StringEquals(x.RuntimeFullName, y.RuntimeFullName) &&
-               LocationEquals(x.Location, y.Location) &&
+               (!_includeDiagnosticLocations || LocationEquals(x.Location, y.Location)) &&
                StringEquals(x.CollectionName, y.CollectionName) &&
                StringEquals(x.DisplayName, y.DisplayName) &&
                StringEquals(x.Description, y.Description) &&
@@ -37,7 +45,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                ListEquals(x.EntityCircularReferences, y.EntityCircularReferences, EntityCircularReferenceEquals) &&
                ListEquals(x.BsonRefMissingEntityErrors, y.BsonRefMissingEntityErrors, BsonRefMissingEntityEquals) &&
                StringEquals(x.InvalidIdPropertyName, y.InvalidIdPropertyName) &&
-               LocationEquals(x.InvalidIdPropertyLocation, y.InvalidIdPropertyLocation) &&
+               (!_includeDiagnosticLocations || LocationEquals(x.InvalidIdPropertyLocation, y.InvalidIdPropertyLocation)) &&
                ListEquals(x.ConstructorParameters, y.ConstructorParameters, ConstructorParameterEquals);
     }
 
@@ -59,7 +67,10 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, obj.IsValueType);
             hash = Add(hash, obj.FullyQualifiedTypeReference);
             hash = Add(hash, obj.RuntimeFullName);
-            hash = Add(hash, obj.Location);
+            if (_includeDiagnosticLocations)
+            {
+                hash = Add(hash, obj.Location);
+            }
             hash = Add(hash, obj.CollectionName);
             hash = Add(hash, obj.DisplayName);
             hash = Add(hash, obj.Description);
@@ -70,7 +81,10 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = AddList(hash, obj.EntityCircularReferences, GetEntityCircularReferenceHashCode);
             hash = AddList(hash, obj.BsonRefMissingEntityErrors, GetBsonRefMissingEntityHashCode);
             hash = Add(hash, obj.InvalidIdPropertyName);
-            hash = Add(hash, obj.InvalidIdPropertyLocation);
+            if (_includeDiagnosticLocations)
+            {
+                hash = Add(hash, obj.InvalidIdPropertyLocation);
+            }
             hash = AddList(hash, obj.ConstructorParameters, GetConstructorParameterHashCode);
             return hash;
         }
@@ -323,15 +337,15 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
         }
     }
 
-    private static bool BsonRefMissingEntityEquals(BsonRefMissingEntityInfo x, BsonRefMissingEntityInfo y)
+    private bool BsonRefMissingEntityEquals(BsonRefMissingEntityInfo x, BsonRefMissingEntityInfo y)
     {
         return StringEquals(x.PropertyName, y.PropertyName) &&
                StringEquals(x.ContainingTypeName, y.ContainingTypeName) &&
                StringEquals(x.ReferencedTypeName, y.ReferencedTypeName) &&
-               LocationEquals(x.Location, y.Location);
+               (!_includeDiagnosticLocations || LocationEquals(x.Location, y.Location));
     }
 
-    private static int GetBsonRefMissingEntityHashCode(BsonRefMissingEntityInfo value)
+    private int GetBsonRefMissingEntityHashCode(BsonRefMissingEntityInfo value)
     {
         unchecked
         {
@@ -339,7 +353,10 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.PropertyName);
             hash = Add(hash, value.ContainingTypeName);
             hash = Add(hash, value.ReferencedTypeName);
-            hash = Add(hash, value.Location);
+            if (_includeDiagnosticLocations)
+            {
+                hash = Add(hash, value.Location);
+            }
             return hash;
         }
     }
@@ -368,7 +385,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
 
     private static bool LocationEquals(DiagnosticLocationInfo? x, DiagnosticLocationInfo? y)
     {
-        return x.Equals(y);
+        return Nullable.Equals(x, y);
     }
 
     private static int Add(int hash, string? value)

@@ -64,4 +64,25 @@ public sealed class TransactionImplAdditionalCoverageTests : IDisposable
         await Assert.That(tx.OperationCount).IsEqualTo(0);
         await Assert.That(tx.State).IsEqualTo(TransactionState.RolledBack);
     }
+
+    [Test]
+    public async Task Dispose_ConcurrentCalls_ShouldRollbackOnlyOnce()
+    {
+        using var engine = new TinyDbEngine(_dbPath);
+        engine.BeginTransaction();
+
+        var tx = engine.GetCurrentTransaction();
+        await Assert.That(tx).IsNotNull();
+
+        tx!.RecordInsert("col", new BsonDocument().Set("_id", 1));
+
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Run(tx.Dispose))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        await Assert.That(tx.OperationCount).IsEqualTo(0);
+        await Assert.That(tx.State).IsEqualTo(TransactionState.RolledBack);
+    }
 }

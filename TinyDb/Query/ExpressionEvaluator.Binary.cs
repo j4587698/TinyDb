@@ -77,10 +77,10 @@ public static partial class ExpressionEvaluator
                 {
                     return (leftValue?.ToString() ?? "") + (rightValue?.ToString() ?? "");
                 }
-                return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a + b, (a, b) => a + b, (a, b) => a + b);
-            case ExpressionType.Subtract: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a - b, (a, b) => a - b, (a, b) => a - b);
-            case ExpressionType.Multiply: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a * b, (a, b) => a * b, (a, b) => a * b);
-            case ExpressionType.Divide: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a / b, (a, b) => a / b, (a, b) => a / b);
+                return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a + b, (a, b) => a + b, CheckedAdd);
+            case ExpressionType.Subtract: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a - b, (a, b) => a - b, CheckedSubtract);
+            case ExpressionType.Multiply: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a * b, (a, b) => a * b, CheckedMultiply);
+            case ExpressionType.Divide: return EvaluateIntegralMathOp(leftValue, rightValue, (a, b) => a / b, (a, b) => a / b, CheckedDivide);
 
             default: throw new NotSupportedException($"Binary operation {nodeType} is not supported");
         }
@@ -112,6 +112,14 @@ public static partial class ExpressionEvaluator
 
         return EvaluateMathOp(left, right, doubleFunc, decimalFunc);
     }
+
+    private static long CheckedAdd(long left, long right) => checked(left + right);
+
+    private static long CheckedSubtract(long left, long right) => checked(left - right);
+
+    private static long CheckedMultiply(long left, long right) => checked(left * right);
+
+    private static long CheckedDivide(long left, long right) => checked(left / right);
 
     internal static object? EvaluateMathOp(object? left, object? right, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc)
     {

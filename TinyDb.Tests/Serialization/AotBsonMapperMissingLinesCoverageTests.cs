@@ -387,4 +387,41 @@ public class AotBsonMapperMissingLinesCoverageTests
         // ConvertCollection argument validation
         await Assert.That(InvokePrivateStatic<object?>("ConvertCollection", typeof(int[]), null!)).IsNull();
     }
+
+    [Test]
+    public async Task SourceGenerator_ShouldPreserveNestedNullableGenericArguments()
+    {
+        var entity = new EntityWithNullableGenericDictionary
+        {
+            Id = 1,
+            Items = new Dictionary<string?, NullableGenericDictionaryValue?>
+            {
+                ["present"] = new NullableGenericDictionaryValue { Name = null },
+                ["missing"] = null
+            }
+        };
+
+        var document = AotBsonMapper.ToDocument(entity);
+        var restored = AotBsonMapper.FromDocument<EntityWithNullableGenericDictionary>(document);
+
+        await Assert.That(restored).IsNotNull();
+        await Assert.That(restored!.Items).IsNotNull();
+        await Assert.That(restored.Items!.ContainsKey("present")).IsTrue();
+        await Assert.That(restored.Items["present"]!.Name).IsNull();
+        await Assert.That(restored.Items.ContainsKey("missing")).IsTrue();
+        await Assert.That(restored.Items["missing"]).IsNull();
+    }
+
+    [Entity("nullable_generic_dictionary_entities")]
+    internal sealed class EntityWithNullableGenericDictionary
+    {
+        public int Id { get; set; }
+
+        public Dictionary<string?, NullableGenericDictionaryValue?>? Items { get; set; }
+    }
+
+    internal sealed class NullableGenericDictionaryValue
+    {
+        public string? Name { get; set; }
+    }
 }
