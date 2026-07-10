@@ -69,12 +69,35 @@ public partial class TinyDbSourceGenerator
             namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
             namedType.TypeArguments.Length == 1)
         {
-            typeSymbol = namedType.TypeArguments[0];
+            return ToFullyQualifiedNonNullableTypeName(namedType.TypeArguments[0]);
         }
 
-        return typeSymbol
-            .ToDisplayString(FullyQualifiedNullableDisplayFormat)
-            .TrimEnd('?');
+        if (typeSymbol is IArrayTypeSymbol arrayType)
+        {
+            return ToFullyQualifiedNonNullableTypeName(arrayType.ElementType) + CreateArrayRankSuffix(arrayType.Rank);
+        }
+
+        if (typeSymbol is INamedTypeSymbol { IsGenericType: true } genericType)
+        {
+            var definitionName = genericType.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            var genericMarkerIndex = definitionName.IndexOf('<');
+            if (genericMarkerIndex >= 0)
+            {
+                definitionName = definitionName.Substring(0, genericMarkerIndex);
+            }
+
+            var arguments = string.Join(", ", genericType.TypeArguments.Select(ToFullyQualifiedNonNullableTypeName));
+            return $"{definitionName}<{arguments}>";
+        }
+
+        return typeSymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+    }
+
+    private static string CreateArrayRankSuffix(int rank)
+    {
+        return rank <= 1
+            ? "[]"
+            : "[" + new string(',', rank - 1) + "]";
     }
 
     private static bool TryGetTypeSymbol(
@@ -88,7 +111,7 @@ public partial class TinyDbSourceGenerator
         }
 
         if (typeName.EndsWith("?", StringComparison.Ordinal) &&
-            typeSymbols.TryGetValue(typeName.TrimEnd('?'), out typeSymbol))
+            typeSymbols.TryGetValue(typeName.Substring(0, typeName.Length - 1), out typeSymbol))
         {
             return true;
         }

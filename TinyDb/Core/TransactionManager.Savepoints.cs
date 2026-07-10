@@ -165,6 +165,12 @@ public sealed partial class TransactionManager
                 throw new InvalidOperationException($"Transaction cannot record operations in state {state}");
             }
 
+            if (transaction.OperationCount >= MaxTransactionSize)
+            {
+                throw new InvalidOperationException(
+                    $"Transaction {transaction.TransactionId} exceeded the configured maximum operation count of {MaxTransactionSize}.");
+            }
+
             transaction.AddOperation(operation);
         }
     }

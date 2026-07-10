@@ -190,6 +190,7 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
                StringEquals(x.ShortName, y.ShortName) &&
                x.IsValueType == y.IsValueType &&
                x.HasAccessibleParameterlessConstructor == y.HasAccessibleParameterlessConstructor &&
+               ListEquals(x.ConstructorParameters, y.ConstructorParameters, DependentConstructorParameterEquals) &&
                ListEquals(x.Properties, y.Properties, DependentTypePropertyEquals);
     }
 
@@ -202,7 +203,27 @@ internal sealed class ClassInfoComparer : IEqualityComparer<ClassInfo?>
             hash = Add(hash, value.ShortName);
             hash = Add(hash, value.IsValueType);
             hash = Add(hash, value.HasAccessibleParameterlessConstructor);
+            hash = AddList(hash, value.ConstructorParameters, GetDependentConstructorParameterHashCode);
             hash = AddList(hash, value.Properties, GetDependentTypePropertyHashCode);
+            return hash;
+        }
+    }
+
+    private static bool DependentConstructorParameterEquals(
+        DependentConstructorParameterInfo x,
+        DependentConstructorParameterInfo y)
+    {
+        return StringEquals(x.ParameterName, y.ParameterName) &&
+               DependentTypePropertyEquals(x.Property, y.Property);
+    }
+
+    private static int GetDependentConstructorParameterHashCode(DependentConstructorParameterInfo value)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = Add(hash, value.ParameterName);
+            hash = hash * 31 + GetDependentTypePropertyHashCode(value.Property);
             return hash;
         }
     }

@@ -166,6 +166,34 @@ public class TransactionManagerAdditionalCoverageTests
     }
 
     [Test]
+    public async Task RecordOperation_WhenTransactionExceedsConfiguredOperationLimit_ShouldThrow()
+    {
+        var testDirectory = CreateTempDirectory();
+        try
+        {
+            var dbPath = Path.Combine(testDirectory, "test.db");
+            using var engine = new TinyDbEngine(dbPath, new TinyDbOptions { EnableJournaling = false });
+            using var manager = new TransactionManager(
+                engine,
+                maxTransactions: 10,
+                transactionTimeout: TimeSpan.FromMinutes(1),
+                maxTransactionSize: 1);
+
+            var tx = (Transaction)manager.BeginTransaction();
+            manager.RecordOperation(tx, new TransactionOperation(TransactionOperationType.Insert, "c", new BsonInt32(1)));
+
+            await Assert.That(() => manager.RecordOperation(
+                    tx,
+                    new TransactionOperation(TransactionOperationType.Insert, "c", new BsonInt32(2))))
+                .Throws<InvalidOperationException>();
+        }
+        finally
+        {
+            TryDeleteDirectory(testDirectory);
+        }
+    }
+
+    [Test]
     public async Task Commit_ForeignKeyValidation_ShouldCover_FieldLookupBranches()
     {
         var testDirectory = CreateTempDirectory();

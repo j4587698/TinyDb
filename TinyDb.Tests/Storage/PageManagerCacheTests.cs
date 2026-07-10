@@ -54,6 +54,30 @@ public class PageManagerCacheTests : IDisposable
     }
 
     [Test]
+    public async Task CachedPages_ShouldTrackAddsDiscardAndClear()
+    {
+        using var ds = new DiskStream(_testDbPath);
+        using var pm = new PageManager(ds, 4096, 10);
+
+        var first = pm.NewPage(PageType.Data);
+        var second = pm.NewPage(PageType.Data);
+
+        await Assert.That(pm.CachedPages).IsEqualTo(2);
+
+        pm.DiscardCachedPage(first.PageID);
+        await Assert.That(pm.CachedPages).IsEqualTo(1);
+
+        pm.DiscardCachedPage(second.PageID);
+        await Assert.That(pm.CachedPages).IsEqualTo(0);
+
+        _ = pm.NewPage(PageType.Data);
+        await Assert.That(pm.CachedPages).IsEqualTo(1);
+
+        pm.ClearCache();
+        await Assert.That(pm.CachedPages).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task ClearCache_ShouldFlushDirtyPagesBeforeRemoving()
     {
         using var ds = new DiskStream(_testDbPath);

@@ -234,14 +234,17 @@ public sealed partial class DiskBTree
 
         if (child.IsLeaf)
         {
+            var moveCount = child.KeyCount - mid;
+            if (newNode.Keys.Capacity < moveCount) newNode.Keys.Capacity = moveCount;
+            if (newNode.Values.Capacity < moveCount) newNode.Values.Capacity = moveCount;
+
             for(int j = mid; j < child.KeyCount; j++)
             {
                 newNode.Keys.Add(child.Keys[j]);
                 newNode.Values.Add(child.Values[j]);
             }
-            int removeCount = child.KeyCount - mid;
-            child.Keys.RemoveRange(mid, removeCount);
-            child.Values.RemoveRange(mid, removeCount);
+            child.Keys.RemoveRange(mid, moveCount);
+            child.Values.RemoveRange(mid, moveCount);
             child.MarkDirty();
 
             newNode.SetNext(child.NextSiblingId);
@@ -257,6 +260,11 @@ public sealed partial class DiskBTree
         }
         else
         {
+            var moveKeyCount = child.KeyCount - (mid + 1);
+            var moveChildCount = child.ChildrenIds.Count - (mid + 1);
+            if (newNode.Keys.Capacity < moveKeyCount) newNode.Keys.Capacity = moveKeyCount;
+            if (newNode.ChildrenIds.Capacity < moveChildCount) newNode.ChildrenIds.Capacity = moveChildCount;
+
             for(int j = mid + 1; j < child.KeyCount; j++)
                 newNode.Keys.Add(child.Keys[j]);
             for(int j = mid + 1; j < child.ChildrenIds.Count; j++)

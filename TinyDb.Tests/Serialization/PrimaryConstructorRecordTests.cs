@@ -77,9 +77,45 @@ public sealed class PrimaryConstructorRecordTests : IDisposable
         await Assert.That(updated.Note).IsEqualTo("updated");
     }
 
+    [Test]
+    public async Task AotMapper_ShouldRoundTrip_PrimaryConstructorRecord_WithComplexConstructorParameters()
+    {
+        var source = new ComplexPrimaryRecordEntity(
+            7,
+            new ComplexRecordChild("main", new ComplexRecordDetail("M1")),
+            new List<ComplexRecordChild>
+            {
+                new("child", new ComplexRecordDetail("C1"))
+            },
+            new Dictionary<string, ComplexRecordChild>
+            {
+                ["main"] = new("dict", new ComplexRecordDetail("D1"))
+            });
+
+        var document = AotBsonMapper.ToDocument(source);
+        var roundtrip = AotBsonMapper.FromDocument<ComplexPrimaryRecordEntity>(document);
+
+        await Assert.That(roundtrip.Id).IsEqualTo(7);
+        await Assert.That(roundtrip.Child.Code).IsEqualTo("main");
+        await Assert.That(roundtrip.Child.Detail.Lot).IsEqualTo("M1");
+        await Assert.That(roundtrip.Children[0].Detail.Lot).IsEqualTo("C1");
+        await Assert.That(roundtrip.ChildByCode["main"].Detail.Lot).IsEqualTo("D1");
+    }
+
     [Entity("primary_records")]
     public sealed record PrimaryRecordEntity([property: Id] int Id, string Name, int Age)
     {
         public string? Note { get; set; }
     }
+
+    [Entity("complex_primary_records")]
+    public sealed record ComplexPrimaryRecordEntity(
+        [property: Id] int Id,
+        ComplexRecordChild Child,
+        List<ComplexRecordChild> Children,
+        Dictionary<string, ComplexRecordChild> ChildByCode);
+
+    public sealed record ComplexRecordChild(string Code, ComplexRecordDetail Detail);
+
+    public sealed record ComplexRecordDetail(string Lot);
 }
