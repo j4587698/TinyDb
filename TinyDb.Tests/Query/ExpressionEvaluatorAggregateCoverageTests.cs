@@ -241,7 +241,7 @@ public class ExpressionEvaluatorAggregateCoverageTests
         await Assert.That(ExpressionEvaluator.EvaluateValue(staticCount, entity)).IsEqualTo(3);
 
         var absFromString = new FunctionExpression("Abs", null, new QueryExpression[] { new ConstantExpression("9") });
-        await Assert.That(ExpressionEvaluator.EvaluateValue(absFromString, entity)).IsEqualTo(9d);
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(absFromString, entity)).Throws<InvalidOperationException>();
 
         var minWithNull = new FunctionExpression("Min", null, new QueryExpression[] { new ConstantExpression(null), new ConstantExpression(5) });
         await Assert.That(ExpressionEvaluator.EvaluateValue(minWithNull, entity)).IsEqualTo(0.0);

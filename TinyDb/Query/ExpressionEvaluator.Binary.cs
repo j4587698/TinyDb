@@ -180,40 +180,61 @@ public static partial class ExpressionEvaluator
         }
     }
 
-    private static decimal ToDecimal(object val)
+    private static decimal ToDecimal(object? val)
     {
+        if (val == null) return 0m;
+
+        if (val is decimal dec) return dec;
         if (val is Decimal128 d128) return d128.ToDecimal();
-        return Convert.ToDecimal(val);
+        if (val is BsonDecimal128 bsonDecimal128) return bsonDecimal128.Value.ToDecimal();
+
+        if (val is byte b) return b;
+        if (val is sbyte sb) return sb;
+        if (val is short s) return s;
+        if (val is ushort us) return us;
+        if (val is int i) return i;
+        if (val is uint ui) return ui;
+        if (val is long l) return l;
+        if (val is ulong ul) return ul;
+        if (val is float f) return Convert.ToDecimal(f, CultureInfo.InvariantCulture);
+        if (val is double d) return Convert.ToDecimal(d, CultureInfo.InvariantCulture);
+
+        if (val is BsonInt32 bsonInt32) return bsonInt32.Value;
+        if (val is BsonInt64 bsonInt64) return bsonInt64.Value;
+        if (val is BsonDouble bsonDouble) return Convert.ToDecimal(bsonDouble.Value, CultureInfo.InvariantCulture);
+
+        throw CreateNumericConversionException(val, "decimal");
     }
 
     private static double ToDouble(object? val)
     {
         if (val == null) return 0.0;
 
-        // 快速路径：直接匹配常见数值类型
         if (val is double d) return d;
         if (val is int i) return i;
         if (val is long l) return l;
         if (val is float f) return f;
         if (val is decimal dec) return (double)dec;
-        if (val is Decimal128 d128) return (double)d128.ToDecimal(); // 关键修复：支持 Decimal128 结构体
+        if (val is Decimal128 d128) return (double)d128.ToDecimal();
         if (val is byte b) return b;
+        if (val is sbyte sb) return sb;
         if (val is short s) return s;
+        if (val is ushort us) return us;
+        if (val is uint ui) return ui;
+        if (val is ulong ul) return ul;
 
-        // BsonValue 转换
         if (val is BsonDouble bd) return bd.Value;
         if (val is BsonInt32 bi) return bi.Value;
         if (val is BsonInt64 bl) return bl.Value;
+        if (val is BsonDecimal128 b128) return b128.Value.ToDouble(CultureInfo.InvariantCulture);
 
-        // 备选路径：字符串或其它类型
-        try
-        {
-            return Convert.ToDouble(val, CultureInfo.InvariantCulture);
-        }
-        catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
-        {
-            throw new InvalidOperationException($"Unable to convert value '{val}' ({val.GetType().FullName}) to double.", ex);
-        }
+        throw CreateNumericConversionException(val, "double");
+    }
+
+    private static InvalidOperationException CreateNumericConversionException(object val, string targetType)
+    {
+        return new InvalidOperationException(
+            $"Arithmetic operation requires numeric operands; value '{val}' ({val.GetType().FullName}) cannot be converted to {targetType}.");
     }
 
 }

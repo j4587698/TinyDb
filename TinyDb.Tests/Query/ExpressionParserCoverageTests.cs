@@ -214,13 +214,11 @@ public class ExpressionParserCoverageTests
     [Test]
     public async Task Parse_Static_Member_Access()
     {
-        // DateTime.Now is evaluated as constant?
-        // Implementation tries to evaluate static members.
         Expression<Func<TestDoc, bool>> expr = x => x.Created < DateTime.Now;
         var result = _parser.Parse(expr);
         await Assert.That(result).IsNotNull();
         var binary = (BinaryExpression)result;
-        await Assert.That(binary.Right).IsTypeOf<ConstantExpression>();
+        await Assert.That(binary.Right).IsTypeOf<FunctionExpression>();
     }
 
     [Test]

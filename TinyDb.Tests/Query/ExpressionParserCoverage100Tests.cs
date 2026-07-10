@@ -74,9 +74,9 @@ public sealed class ExpressionParserCoverage100Tests
         var newLine = ExpressionMemberInfo.Property(() => Environment.NewLine);
         var machineName = ExpressionMemberInfo.Property(() => Environment.MachineName);
 
-        await Assert.That(parser.ParseExpression(Expression.Property(null, now))).IsTypeOf<ConstantExpression>();
-        await Assert.That(parser.ParseExpression(Expression.Property(null, utcNow))).IsTypeOf<ConstantExpression>();
-        await Assert.That(parser.ParseExpression(Expression.Property(null, today))).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseExpression(Expression.Property(null, now))).IsTypeOf<FunctionExpression>();
+        await Assert.That(parser.ParseExpression(Expression.Property(null, utcNow))).IsTypeOf<FunctionExpression>();
+        await Assert.That(parser.ParseExpression(Expression.Property(null, today))).IsTypeOf<FunctionExpression>();
         await Assert.That(parser.ParseExpression(Expression.Property(null, newLine))).IsTypeOf<ConstantExpression>();
 
         await Assert.That(() => parser.ParseExpression(Expression.Property(null, machineName)))
@@ -353,13 +353,13 @@ public sealed class ExpressionParserCoverage100Tests
         var parser = new ExpressionParser();
 
         var now = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.Now));
-        await Assert.That(parser.ParseMemberExpression(now)).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(now)).IsTypeOf<FunctionExpression>();
 
         var utcNow = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.UtcNow));
-        await Assert.That(parser.ParseMemberExpression(utcNow)).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(utcNow)).IsTypeOf<FunctionExpression>();
 
         var today = Expression.Property(null, ExpressionMemberInfo.Property(() => DateTime.Today));
-        await Assert.That(parser.ParseMemberExpression(today)).IsTypeOf<ConstantExpression>();
+        await Assert.That(parser.ParseMemberExpression(today)).IsTypeOf<FunctionExpression>();
 
         var machineName = Expression.Property(null, ExpressionMemberInfo.Property(() => Environment.MachineName));
 

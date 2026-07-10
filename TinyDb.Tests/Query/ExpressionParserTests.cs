@@ -189,6 +189,37 @@ public class ExpressionParserTests
     }
 
     [Test]
+    public async Task Parse_DateTimeUtcNow_ShouldEvaluateAtRuntime()
+    {
+        Expression<Func<DateTime>> expr = () => DateTime.UtcNow;
+        var query = _parser.ParseExpression(expr.Body);
+
+        await Assert.That(query).IsTypeOf<TinyDb.Query.FunctionExpression>();
+
+        var first = (DateTime)ExpressionEvaluator.EvaluateValue(query, new object())!;
+        await Task.Delay(50);
+        var second = (DateTime)ExpressionEvaluator.EvaluateValue(query, new object())!;
+
+        await Assert.That(second > first).IsTrue();
+    }
+
+    [Test]
+    public async Task Bind_DateTimeUtcNow_ShouldProduceExecutionTimeConstant()
+    {
+        Expression<Func<DateTime>> expr = () => DateTime.UtcNow;
+        var query = _parser.ParseExpression(expr.Body);
+
+        var firstBound = (TinyDb.Query.ConstantExpression)RuntimeQueryExpressionBinder.Bind(query)!;
+        var first = (DateTime)firstBound.Value!;
+        await Task.Delay(50);
+        var secondBound = (TinyDb.Query.ConstantExpression)RuntimeQueryExpressionBinder.Bind(query)!;
+        var second = (DateTime)secondBound.Value!;
+
+        await Assert.That(query).IsTypeOf<TinyDb.Query.FunctionExpression>();
+        await Assert.That(second > first).IsTrue();
+    }
+
+    [Test]
     public async Task Parse_ObjectInitialization_ShouldSucceed()
     {
         // MemberInitExpression (e.g. Select(x => new QueryDoc { Name = x.Name }))

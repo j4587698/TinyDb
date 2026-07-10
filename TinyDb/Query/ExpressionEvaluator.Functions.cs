@@ -42,6 +42,13 @@ public static partial class ExpressionEvaluator
 
     private static object? EvaluateFunction(string functionName, object? targetValue, object?[] args)
     {
+        if (targetValue == null && args.Length == 0)
+        {
+            if (functionName == RuntimeFunctionNames.DateTimeNow) return DateTime.Now;
+            if (functionName == RuntimeFunctionNames.DateTimeUtcNow) return DateTime.UtcNow;
+            if (functionName == RuntimeFunctionNames.DateTimeToday) return DateTime.Today;
+        }
+
         if (targetValue == null && args.Length > 0 && args[0] is System.Collections.IEnumerable && IsEnumerableFunction(functionName))
         {
             targetValue = args[0];
@@ -117,22 +124,22 @@ public static partial class ExpressionEvaluator
             }
             else if (functionName == "Pow")
             {
-                return args.Length == 2 ? Math.Pow(Convert.ToDouble(args[0]), Convert.ToDouble(args[1])) : 0.0;
+                return args.Length == 2 ? Math.Pow(ToDouble(args[0]), ToDouble(args[1])) : 0.0;
             }
             else if (functionName == "Sqrt")
             {
-                return args.Length == 1 ? Math.Sqrt(Convert.ToDouble(args[0])) : 0.0;
+                return args.Length == 1 ? Math.Sqrt(ToDouble(args[0])) : 0.0;
             }
         }
 
         if (targetValue is DateTime dt)
         {
-            if (functionName == "AddDays") return dt.AddDays(Convert.ToDouble(args[0]));
-            if (functionName == "AddHours") return dt.AddHours(Convert.ToDouble(args[0]));
-            if (functionName == "AddMinutes") return dt.AddMinutes(Convert.ToDouble(args[0]));
-            if (functionName == "AddSeconds") return dt.AddSeconds(Convert.ToDouble(args[0]));
-            if (functionName == "AddYears") return dt.AddYears(Convert.ToInt32(args[0]));
-            if (functionName == "AddMonths") return dt.AddMonths(Convert.ToInt32(args[0]));
+            if (functionName == "AddDays") return dt.AddDays(ToDouble(args[0]));
+            if (functionName == "AddHours") return dt.AddHours(ToDouble(args[0]));
+            if (functionName == "AddMinutes") return dt.AddMinutes(ToDouble(args[0]));
+            if (functionName == "AddSeconds") return dt.AddSeconds(ToDouble(args[0]));
+            if (functionName == "AddYears") return dt.AddYears(ToInt32(args[0]));
+            if (functionName == "AddMonths") return dt.AddMonths(ToInt32(args[0]));
             throw new NotSupportedException($"DateTime function '{functionName}' is not supported");
         }
 
@@ -274,7 +281,7 @@ public static partial class ExpressionEvaluator
         if (val is decimal dec) return decimalFunc(dec);
         if (val is Decimal128 d128) return new Decimal128(decimalFunc(d128.ToDecimal()));
 
-        return doubleFunc(Convert.ToDouble(val));
+        return doubleFunc(ToDouble(val));
     }
 
     private static object EvaluateMathTwoArgs(object?[] args, Func<double, double, double> doubleFunc, Func<decimal, decimal, decimal> decimalFunc)
@@ -303,6 +310,17 @@ public static partial class ExpressionEvaluator
         {
             throw new InvalidOperationException("Numeric aggregate could not be evaluated without overflow or conversion loss.", ex);
         }
+    }
+
+    private static int ToInt32(object? value)
+    {
+        if (value == null) return 0;
+        if (value is int i) return i;
+        if (value is decimal dec) return Convert.ToInt32(dec, CultureInfo.InvariantCulture);
+        if (value is Decimal128 d128) return Convert.ToInt32(d128.ToDecimal(), CultureInfo.InvariantCulture);
+        if (value is BsonDecimal128 bsonDecimal128) return Convert.ToInt32(bsonDecimal128.Value.ToDecimal(), CultureInfo.InvariantCulture);
+
+        return Convert.ToInt32(ToDouble(value));
     }
 
 }

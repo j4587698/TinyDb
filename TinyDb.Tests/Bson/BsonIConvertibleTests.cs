@@ -14,10 +14,8 @@ public class BsonIConvertibleTests
         var oid = ObjectId.NewObjectId();
         var val = new BsonObjectId(oid);
         
-        // These rely on Convert.To...(string)
-        // Usually throw FormatException for most types unless string is valid for that type
-        await Assert.That(() => val.ToBoolean(null)).Throws<FormatException>();
-        await Assert.That(() => val.ToInt32(null)).Throws<FormatException>();
+        await Assert.That(() => val.ToBoolean(null)).Throws<InvalidCastException>();
+        await Assert.That(() => val.ToInt32(null)).Throws<InvalidCastException>();
         await Assert.That(val.ToString(null)).IsEqualTo(oid.ToString());
         
         await Assert.That(val.GetTypeCode()).IsEqualTo(TypeCode.Object);

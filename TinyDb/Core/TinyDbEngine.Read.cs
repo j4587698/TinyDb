@@ -557,8 +557,11 @@ public sealed partial class TinyDbEngine
 
     private IEnumerable<RawScanResult> StreamRawScanResultPages(string col, CollectionState st, ScanPredicate[]? predicates)
     {
-        List<uint> pages;
-        pages = st.OwnedPages.Keys.ToList();
+        var pages = new List<uint>(st.OwnedPages.Count);
+        foreach (var page in st.OwnedPages)
+        {
+            pages.Add(page.Key);
+        }
 
         pages.Sort();
 
@@ -635,8 +638,11 @@ public sealed partial class TinyDbEngine
         ScanPredicate[]? predicates,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        List<uint> pages;
-        pages = st.OwnedPages.Keys.ToList();
+        var pages = new List<uint>(st.OwnedPages.Count);
+        foreach (var page in st.OwnedPages)
+        {
+            pages.Add(page.Key);
+        }
 
         pages.Sort();
 

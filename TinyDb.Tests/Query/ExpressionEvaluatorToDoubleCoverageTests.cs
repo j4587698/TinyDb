@@ -31,5 +31,11 @@ public sealed class ExpressionEvaluatorToDoubleCoverageTests
 
         var invalid = new BinaryExpression(System.Linq.Expressions.ExpressionType.Add, new ConstantExpression(new object()), new ConstantExpression(1.0d));
         await Assert.That(() => ExpressionEvaluator.EvaluateValue(invalid, entity)).Throws<InvalidOperationException>();
+
+        var bsonDateTime = new BinaryExpression(System.Linq.Expressions.ExpressionType.Add, new ConstantExpression(new BsonDateTime(DateTime.UtcNow)), new ConstantExpression(1.0d));
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(bsonDateTime, entity)).Throws<InvalidOperationException>();
+
+        var bsonObjectId = new BinaryExpression(System.Linq.Expressions.ExpressionType.Add, new ConstantExpression(new BsonObjectId(ObjectId.NewObjectId())), new ConstantExpression(1.0d));
+        await Assert.That(() => ExpressionEvaluator.EvaluateValue(bsonObjectId, entity)).Throws<InvalidOperationException>();
     }
 }

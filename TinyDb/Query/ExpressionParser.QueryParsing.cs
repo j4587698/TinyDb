@@ -110,11 +110,11 @@ public sealed partial class ExpressionParser
                 if (member.Member.DeclaringType == typeof(DateTime) && member.Member is System.Reflection.PropertyInfo dateTimeProp)
                 {
                     if (dateTimeProp.Name == nameof(DateTime.Now))
-                        return new ConstantExpression(DateTime.Now);
+                        return new FunctionExpression(RuntimeFunctionNames.DateTimeNow, null, Array.Empty<QueryExpression>());
                     if (dateTimeProp.Name == nameof(DateTime.UtcNow))
-                        return new ConstantExpression(DateTime.UtcNow);
+                        return new FunctionExpression(RuntimeFunctionNames.DateTimeUtcNow, null, Array.Empty<QueryExpression>());
                     if (dateTimeProp.Name == nameof(DateTime.Today))
-                        return new ConstantExpression(DateTime.Today);
+                        return new FunctionExpression(RuntimeFunctionNames.DateTimeToday, null, Array.Empty<QueryExpression>());
                 }
 
                 if (member.Member is System.Reflection.FieldInfo field && field.IsStatic)
