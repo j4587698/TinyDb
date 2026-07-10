@@ -307,8 +307,15 @@ public partial class TinyDbSourceGenerator
             foreach (var parameter in classInfo.ConstructorParameters)
             {
                 var prop = parameter.Property;
-                var bsonFieldName = GetBsonFieldName(prop);
                 var localName = $"ctor_{prop.Name}";
+
+                if (prop.HasIgnoreAttribute)
+                {
+                    sb.AppendLine($"            {prop.FullyQualifiedType} {localName} = default!;");
+                    continue;
+                }
+
+                var bsonFieldName = GetBsonFieldName(prop);
                 var bsonLocalName = $"bsonCtor_{prop.Name}";
                 AppendConstructorParameterDeserialization(sb, prop, bsonFieldName, localName, bsonLocalName);
             }

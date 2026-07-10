@@ -60,4 +60,28 @@ public class MapperCollectionTests
         await Assert.That(restored.Matrix.Count).IsEqualTo(2);
         await Assert.That(restored.Matrix[0][0]).IsEqualTo(1);
     }
+
+    [Entity]
+    public class ComplexCollectionNullContainer
+    {
+        public int Id { get; set; }
+        public List<ComplexCollectionChild> Children { get; set; } = null!;
+        public Dictionary<string, ComplexCollectionChild> ChildByKey { get; set; } = null!;
+    }
+
+    public class ComplexCollectionChild
+    {
+        public string Name { get; set; } = string.Empty;
+    }
+
+    [Test]
+    public async Task Mapper_Should_Serialize_Null_NonNullable_Complex_Collections_AsBsonNull()
+    {
+        var container = new ComplexCollectionNullContainer { Id = 1 };
+
+        var doc = AotBsonMapper.ToDocument(container);
+
+        await Assert.That(doc["children"].IsNull).IsTrue();
+        await Assert.That(doc["childByKey"].IsNull).IsTrue();
+    }
 }

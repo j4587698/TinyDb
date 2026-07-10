@@ -12,6 +12,10 @@ namespace TinyDb.SourceGenerator;
 
 public partial class TinyDbSourceGenerator
 {
+    private static bool CanBeNullAtRuntime(DependentTypeProperty prop)
+    {
+        return !prop.IsValueType || prop.IsNullable;
+    }
 
     /// <summary>
     /// 为依赖类型生成内联序列化方法
@@ -44,7 +48,7 @@ public partial class TinyDbSourceGenerator
                 else
                 {
                     // 复杂类型使用递归调用
-                    if (prop.IsNullable || !prop.IsValueType)
+                    if (CanBeNullAtRuntime(prop))
                     {
                         sb.AppendLine($"            if (obj.{propertyAccess} == null)");
                         sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
@@ -65,7 +69,7 @@ public partial class TinyDbSourceGenerator
                     continue;
                 }
 
-                if (prop.IsNullable)
+                if (CanBeNullAtRuntime(prop))
                 {
                     sb.AppendLine($"            if (obj.{propertyAccess} == null)");
                     sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
@@ -92,7 +96,7 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine($"            }}");
                 sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", array_{prop.Name});");
 
-                if (prop.IsNullable)
+                if (CanBeNullAtRuntime(prop))
                 {
                     sb.AppendLine($"            }}");
                 }
@@ -109,7 +113,7 @@ public partial class TinyDbSourceGenerator
                     ? "SerializeComplexObject(kvp.Value)"
                     : "ConvertToBsonValue(kvp.Value)";
 
-                if (prop.IsNullable)
+                if (CanBeNullAtRuntime(prop))
                 {
                     sb.AppendLine($"            if (obj.{propertyAccess} == null)");
                     sb.AppendLine($"                documentBuilder.Set(\"{bsonFieldName}\", BsonNull.Value);");
@@ -137,7 +141,7 @@ public partial class TinyDbSourceGenerator
                 sb.AppendLine($"            }}");
                 sb.AppendLine($"            documentBuilder.Set(\"{bsonFieldName}\", dict_{prop.Name});");
 
-                if (prop.IsNullable)
+                if (CanBeNullAtRuntime(prop))
                 {
                     sb.AppendLine($"            }}");
                 }
