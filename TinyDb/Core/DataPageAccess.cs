@@ -71,9 +71,19 @@ internal sealed class DataPageAccess
 
     public List<PageDocumentEntry> ReadDocumentsFromPage(Page p)
     {
+        return new List<PageDocumentEntry>(ReadDocumentsFromPageCore(p));
+    }
+
+    public IReadOnlyList<PageDocumentEntry> ReadDocumentsFromPageForRead(Page p)
+    {
+        return ReadDocumentsFromPageCore(p);
+    }
+
+    private List<PageDocumentEntry> ReadDocumentsFromPageCore(Page p)
+    {
         if (p.CachedParsedData is List<PageDocumentEntry> cached)
         {
-            return new List<PageDocumentEntry>(cached);
+            return cached;
         }
 
         var res = new List<PageDocumentEntry>();
@@ -108,7 +118,7 @@ internal sealed class DataPageAccess
         }
 
         p.CachedParsedData = res;
-        return new List<PageDocumentEntry>(res);
+        return res;
     }
 
     public PageDocumentEntry? ReadDocumentAt(Page p, int index)

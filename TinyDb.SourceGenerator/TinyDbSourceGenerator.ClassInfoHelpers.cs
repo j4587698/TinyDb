@@ -274,7 +274,7 @@ public partial class TinyDbSourceGenerator
         var typeSymbol = fieldSymbol.Type;
         if (!string.IsNullOrEmpty(bsonRefCollectionName))
         {
-            var refTypeSymbol = GetBsonRefTargetType(typeSymbol);
+            var refTypeSymbol = GetBsonRefTargetType(typeSymbol, cancellationToken);
             if (refTypeSymbol != null &&
                 !HasAttribute(refTypeSymbol.GetAttributes(), "EntityAttribute"))
             {
@@ -384,7 +384,7 @@ public partial class TinyDbSourceGenerator
         var typeSymbol = propertySymbol.Type;
         if (!string.IsNullOrEmpty(bsonRefCollectionName))
         {
-            var refTypeSymbol = GetBsonRefTargetType(typeSymbol);
+            var refTypeSymbol = GetBsonRefTargetType(typeSymbol, cancellationToken);
             if (refTypeSymbol != null &&
                 !HasAttribute(refTypeSymbol.GetAttributes(), "EntityAttribute"))
             {
@@ -505,6 +505,13 @@ public partial class TinyDbSourceGenerator
         if (!typeSymbolMap.ContainsKey(typeName))
         {
             typeSymbolMap[typeName] = typeSymbol;
+        }
+
+        var nonNullableTypeSymbol = typeSymbol.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
+        var nonNullableTypeName = ToFullyQualifiedNonNullableTypeName(nonNullableTypeSymbol);
+        if (!typeSymbolMap.ContainsKey(nonNullableTypeName))
+        {
+            typeSymbolMap[nonNullableTypeName] = nonNullableTypeSymbol;
         }
     }
 

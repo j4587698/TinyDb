@@ -590,6 +590,11 @@ public partial class TinyDbSourceGenerator
             return true;
         }
 
+        if (typeSymbol.IsAbstract || typeSymbol.TypeKind == TypeKind.Interface)
+        {
+            return false;
+        }
+
         if (typeSymbol is not INamedTypeSymbol namedType)
         {
             return false;

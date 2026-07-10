@@ -163,6 +163,21 @@ public class DataPageAccessLowLevelTests : IDisposable
         await Assert.That(entries2[0].Document["_id"].ToInt32(null)).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task ReadDocumentsFromPageForRead_ReturnsCachedInstance()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        var doc = new BsonDocument().Set("_id", 1).Set("cached", true);
+        page.Append(BsonSerializer.SerializeDocument(doc));
+
+        var entries1 = _dpa.ReadDocumentsFromPageForRead(page);
+        var entries2 = _dpa.ReadDocumentsFromPageForRead(page);
+
+        await Assert.That(ReferenceEquals(entries1, entries2)).IsTrue();
+    }
+
     #endregion
 
     #region ReadDocumentAt Tests
