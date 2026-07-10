@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 using TinyDb.Query;
+using TinyDb.Tests.Utils;
 
 namespace TinyDb.Tests.Query;
 
@@ -10,6 +11,7 @@ public class QueryableCountExtensionsTests
     private static int _skipCallCount;
 
     [Test]
+    [SkipInAot("This test uses EnumerableQuery expression interpretation, which is not part of the TinyDb AOT query provider contract.")]
     [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "This test intentionally uses EnumerableQuery to exercise IQueryable fallback behavior in the test runtime.")]
     [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "This test intentionally uses EnumerableQuery to exercise IQueryable fallback behavior in the test runtime.")]
     public async Task Count_WithUnsupportedPaginationExpression_ShouldExecuteQueryOnce()

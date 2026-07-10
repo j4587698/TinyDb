@@ -15,11 +15,10 @@ public class QueryableToEnumerableRewriterAdditionalCoverageTests
         return assembly.GetType(fullTypeName, throwOnError: false) != null;
     }
 
-    private static bool ContainsDeclaredMethod(
-        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods | DynamicallyAccessedMemberTypes.NonPublicMethods)] Type type,
-        string methodName)
+    [UnconditionalSuppressMessage("Trimming", "IL2075", Justification = "This test intentionally verifies that an internal method name is absent from declared assembly metadata.")]
+    private static bool ContainsQueryPipelineDeclaredMethod(string methodName)
     {
-        var methods = type.GetMethods(
+        var methods = typeof(QueryPipeline).GetMethods(
             BindingFlags.Public |
             BindingFlags.NonPublic |
             BindingFlags.Static |
@@ -40,7 +39,7 @@ public class QueryableToEnumerableRewriterAdditionalCoverageTests
     [Test]
     public async Task ExecuteInMemory_ShouldBeRemoved_InAotOnlyMode()
     {
-        await Assert.That(ContainsDeclaredMethod(typeof(QueryPipeline), "ExecuteInMemory")).IsFalse();
+        await Assert.That(ContainsQueryPipelineDeclaredMethod("ExecuteInMemory")).IsFalse();
     }
 
     [Test]
