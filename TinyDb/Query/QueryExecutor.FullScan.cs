@@ -30,6 +30,7 @@ public sealed partial class QueryExecutor
         QueryExpression? queryExpression)
         where T : class
     {
+        queryExpression = RuntimeQueryExpressionBinder.Bind(queryExpression);
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;

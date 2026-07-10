@@ -24,7 +24,7 @@ public class ExpressionParserEdgeCaseTests3
     #region Static Member Access Tests
 
     [Test]
-    public async Task ParseExpression_StaticPropertyAccess_ShouldReturnConstant()
+    public async Task ParseExpression_DateTimeNow_ShouldReturnRuntimeFunction()
     {
         // DateTime.Now is a static property
         Expression<Func<TestEntity, bool>> expr = x => x.CreatedAt < DateTime.Now;
@@ -33,6 +33,7 @@ public class ExpressionParserEdgeCaseTests3
         
         await Assert.That(result).IsNotNull();
         await Assert.That(result).IsTypeOf<BinaryExpression>();
+        await Assert.That(((BinaryExpression)result).Right).IsTypeOf<TinyDb.Query.FunctionExpression>();
     }
 
     [Test]
@@ -48,13 +49,15 @@ public class ExpressionParserEdgeCaseTests3
     }
 
     [Test]
-    public async Task ParseExpression_DateTimeUtcNow_ShouldReturnConstant()
+    public async Task ParseExpression_DateTimeUtcNow_ShouldReturnRuntimeFunction()
     {
         Expression<Func<TestEntity, bool>> expr = x => x.CreatedAt < DateTime.UtcNow;
         
         var result = _parser.Parse(expr);
         
         await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsTypeOf<BinaryExpression>();
+        await Assert.That(((BinaryExpression)result).Right).IsTypeOf<TinyDb.Query.FunctionExpression>();
     }
 
     [Test]

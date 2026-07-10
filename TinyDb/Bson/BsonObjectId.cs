@@ -38,17 +38,17 @@ public sealed class BsonObjectId : BsonValue
 
     // IConvertible 接口的实现
     public override TypeCode GetTypeCode() => TypeCode.Object;
-    public override bool ToBoolean(IFormatProvider? provider) => Convert.ToBoolean(Value.ToString(), provider);
-    public override byte ToByte(IFormatProvider? provider) => Convert.ToByte(Value.ToString(), provider);
-    public override char ToChar(IFormatProvider? provider) => Convert.ToChar(Value.ToString(), provider);
-    public override DateTime ToDateTime(IFormatProvider? provider) => throw new InvalidCastException();
-    public override decimal ToDecimal(IFormatProvider? provider) => Convert.ToDecimal(Value.ToString(), provider);
-    public override double ToDouble(IFormatProvider? provider) => Convert.ToDouble(Value.ToString(), provider);
-    public override short ToInt16(IFormatProvider? provider) => Convert.ToInt16(Value.ToString(), provider);
-    public override int ToInt32(IFormatProvider? provider) => Convert.ToInt32(Value.ToString(), provider);
-    public override long ToInt64(IFormatProvider? provider) => Convert.ToInt64(Value.ToString(), provider);
-    public override sbyte ToSByte(IFormatProvider? provider) => Convert.ToSByte(Value.ToString(), provider);
-    public override float ToSingle(IFormatProvider? provider) => Convert.ToSingle(Value.ToString(), provider);
+    public override bool ToBoolean(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Boolean));
+    public override byte ToByte(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Byte));
+    public override char ToChar(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Char));
+    public override DateTime ToDateTime(IFormatProvider? provider) => throw ConversionNotSupported(nameof(DateTime));
+    public override decimal ToDecimal(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Decimal));
+    public override double ToDouble(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Double));
+    public override short ToInt16(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Int16));
+    public override int ToInt32(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Int32));
+    public override long ToInt64(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Int64));
+    public override sbyte ToSByte(IFormatProvider? provider) => throw ConversionNotSupported(nameof(SByte));
+    public override float ToSingle(IFormatProvider? provider) => throw ConversionNotSupported(nameof(Single));
     public override string ToString(IFormatProvider? provider) => ToString();
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
@@ -56,9 +56,14 @@ public sealed class BsonObjectId : BsonValue
         if (conversionType == typeof(BsonObjectId)) return this;
         if (conversionType == typeof(object)) return this;
         if (conversionType == typeof(string)) return ToString();
-        return Convert.ChangeType(Value.ToString(), conversionType, provider);
+        throw ConversionNotSupported(conversionType.Name);
     }
-    public override ushort ToUInt16(IFormatProvider? provider) => Convert.ToUInt16(Value.ToString(), provider);
-    public override uint ToUInt32(IFormatProvider? provider) => Convert.ToUInt32(Value.ToString(), provider);
-    public override ulong ToUInt64(IFormatProvider? provider) => Convert.ToUInt64(Value.ToString(), provider);
+    public override ushort ToUInt16(IFormatProvider? provider) => throw ConversionNotSupported(nameof(UInt16));
+    public override uint ToUInt32(IFormatProvider? provider) => throw ConversionNotSupported(nameof(UInt32));
+    public override ulong ToUInt64(IFormatProvider? provider) => throw ConversionNotSupported(nameof(UInt64));
+
+    private static InvalidCastException ConversionNotSupported(string targetType)
+    {
+        return new InvalidCastException($"BsonObjectId does not support conversion to {targetType}.");
+    }
 }

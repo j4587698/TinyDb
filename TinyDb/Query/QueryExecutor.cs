@@ -37,7 +37,7 @@ public sealed partial class QueryExecutor
 
         try
         {
-            return _expressionParser.Parse(expression);
+            return RuntimeQueryExpressionBinder.Bind(_expressionParser.Parse(expression));
         }
         catch (Exception ex)
         {
@@ -91,6 +91,7 @@ public sealed partial class QueryExecutor
         if (string.IsNullOrWhiteSpace(collectionName))
             throw new ArgumentException("Collection name cannot be null or empty", nameof(collectionName));
 
+        queryExpression = RuntimeQueryExpressionBinder.Bind(queryExpression);
         var executionPlan = _queryOptimizer.CreateExecutionPlan(collectionName, queryExpression);
 
         return executionPlan.Strategy switch
@@ -140,6 +141,7 @@ public sealed partial class QueryExecutor
 
     internal long Count(string collectionName, QueryExpression? queryExpression)
     {
+        queryExpression = RuntimeQueryExpressionBinder.Bind(queryExpression);
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;
@@ -213,6 +215,7 @@ public sealed partial class QueryExecutor
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        queryExpression = RuntimeQueryExpressionBinder.Bind(queryExpression);
         var predicates = new List<ScanPredicate>();
         bool fullyPushed = CollectPredicates(queryExpression, predicates);
         var pushDownPredicates = predicates.Count > 0 ? predicates.ToArray() : null;

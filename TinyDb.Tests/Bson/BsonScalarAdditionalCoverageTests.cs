@@ -56,7 +56,7 @@ public class BsonScalarAdditionalCoverageTests
         await Assert.That(val.CompareTo(new BsonInt32(1))).IsNotEqualTo(0);
 
         await Assert.That(val.ToType(typeof(string), null)).IsEqualTo(oid.ToString());
-        await Assert.That(() => val.ToType(typeof(int), null)).Throws<FormatException>();
+        await Assert.That(() => val.ToType(typeof(int), null)).Throws<InvalidCastException>();
     }
 
     [Test]
@@ -66,6 +66,7 @@ public class BsonScalarAdditionalCoverageTests
         var val = new BsonDateTime(now);
 
         await Assert.That(val.ToType(typeof(string), null)).IsEqualTo(val.ToString());
+        await Assert.That(val.ToType(typeof(long), null)).IsEqualTo(now.Ticks);
         await Assert.That(() => val.ToType(typeof(Guid), null)).Throws<InvalidCastException>();
     }
 
@@ -96,4 +97,3 @@ public class BsonScalarAdditionalCoverageTests
         await Assert.That(doc.Equals(new BsonInt32(1))).IsFalse();
     }
 }
-

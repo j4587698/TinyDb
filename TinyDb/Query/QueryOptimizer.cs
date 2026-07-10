@@ -44,7 +44,7 @@ public sealed class QueryOptimizer
 
         try
         {
-            var queryExpression = _expressionParser.Parse(expression);
+            var queryExpression = RuntimeQueryExpressionBinder.Bind(_expressionParser.Parse(expression));
             return _planBuilder.CreatePlan(collectionName, queryExpression, expression, planningMetadataOnly);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException)
@@ -58,6 +58,7 @@ public sealed class QueryOptimizer
         QueryExpression? queryExpression,
         bool planningMetadataOnly = false)
     {
+        queryExpression = RuntimeQueryExpressionBinder.Bind(queryExpression);
         return _planBuilder.CreatePlan(collectionName, queryExpression, originalExpression: null, planningMetadataOnly);
     }
 

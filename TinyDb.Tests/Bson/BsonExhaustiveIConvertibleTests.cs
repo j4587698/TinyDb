@@ -18,20 +18,20 @@ public class BsonExhaustiveIConvertibleTests
         var bson = new BsonObjectId(oid);
         var s = oid.ToString();
 
-        await Assert.That(() => bson.ToBoolean(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToByte(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToChar(Provider)).Throws<FormatException>();
+        await Assert.That(() => bson.ToBoolean(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToByte(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToChar(Provider)).Throws<InvalidCastException>();
         await Assert.That(() => bson.ToDateTime(Provider)).Throws<InvalidCastException>();
-        await Assert.That(() => bson.ToDecimal(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToDouble(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToInt16(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToInt32(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToInt64(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToSByte(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToSingle(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToUInt16(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToUInt32(Provider)).Throws<FormatException>();
-        await Assert.That(() => bson.ToUInt64(Provider)).Throws<FormatException>();
+        await Assert.That(() => bson.ToDecimal(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToDouble(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToInt16(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToInt32(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToInt64(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToSByte(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToSingle(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToUInt16(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToUInt32(Provider)).Throws<InvalidCastException>();
+        await Assert.That(() => bson.ToUInt64(Provider)).Throws<InvalidCastException>();
         
         await Assert.That(bson.ToType(typeof(ObjectId), Provider)).IsEqualTo(oid);
         await Assert.That(bson.ToType(typeof(BsonObjectId), Provider)).IsEqualTo(bson);

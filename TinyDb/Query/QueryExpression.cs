@@ -100,6 +100,13 @@ public sealed class FunctionExpression : QueryExpression
     }
 }
 
+internal static class RuntimeFunctionNames
+{
+    public const string DateTimeNow = "$DateTime.Now";
+    public const string DateTimeUtcNow = "$DateTime.UtcNow";
+    public const string DateTimeToday = "$DateTime.Today";
+}
+
 /// <summary>
 /// 一元表达式（如 Convert, Not）
 /// </summary>
