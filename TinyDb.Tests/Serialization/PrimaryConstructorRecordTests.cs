@@ -102,6 +102,34 @@ public sealed class PrimaryConstructorRecordTests : IDisposable
         await Assert.That(roundtrip.ChildByCode["main"].Detail.Lot).IsEqualTo("D1");
     }
 
+    [Test]
+    public async Task AotMapper_ShouldDeserialize_PrimaryConstructorRecord_WithIgnoredConstructorParameter()
+    {
+        var source = new IgnoredPrimaryRecordEntity(9, "visible", "secret");
+
+        var document = AotBsonMapper.ToDocument(source);
+        var injectedDocument = document.Set("secret", "injected");
+        var roundtrip = AotBsonMapper.FromDocument<IgnoredPrimaryRecordEntity>(injectedDocument);
+
+        await Assert.That(document.ContainsKey("secret")).IsFalse();
+        await Assert.That(roundtrip.Id).IsEqualTo(9);
+        await Assert.That(roundtrip.Name).IsEqualTo("visible");
+        await Assert.That(roundtrip.Secret).IsNull();
+    }
+
+    [Test]
+    public async Task AotMapper_ShouldRoundTrip_ReadonlyFields_BoundThroughConstructor()
+    {
+        var source = new ReadonlyFieldConstructorEntity(11, "field-name");
+
+        var document = AotBsonMapper.ToDocument(source);
+        var roundtrip = AotBsonMapper.FromDocument<ReadonlyFieldConstructorEntity>(document);
+
+        await Assert.That(document["_id"].ToInt32(null)).IsEqualTo(11);
+        await Assert.That(roundtrip.Id).IsEqualTo(11);
+        await Assert.That(roundtrip.Name).IsEqualTo("field-name");
+    }
+
     [Entity("primary_records")]
     public sealed record PrimaryRecordEntity([property: Id] int Id, string Name, int Age)
     {
@@ -114,6 +142,25 @@ public sealed class PrimaryConstructorRecordTests : IDisposable
         ComplexRecordChild Child,
         List<ComplexRecordChild> Children,
         Dictionary<string, ComplexRecordChild> ChildByCode);
+
+    [Entity("ignored_primary_records")]
+    public sealed record IgnoredPrimaryRecordEntity(
+        [property: Id] int Id,
+        string Name,
+        [property: BsonIgnore] string? Secret);
+
+    [Entity("readonly_field_constructor_records")]
+    public sealed class ReadonlyFieldConstructorEntity
+    {
+        public readonly int Id;
+        public readonly string Name;
+
+        public ReadonlyFieldConstructorEntity(int id, string name)
+        {
+            Id = id;
+            Name = name;
+        }
+    }
 
     public sealed record ComplexRecordChild(string Code, ComplexRecordDetail Detail);
 

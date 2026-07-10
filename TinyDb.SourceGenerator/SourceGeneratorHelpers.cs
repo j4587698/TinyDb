@@ -20,6 +20,11 @@ public static partial class SourceGeneratorHelpers
                prop.Type.EndsWith("?", StringComparison.Ordinal);
     }
 
+    private static bool CanBeNullAtRuntime(PropertyInfo prop)
+    {
+        return !prop.IsValueType || IsNullableProperty(prop);
+    }
+
     internal static string CreateCollectionInstanceExpression(string collectionTypeName, string elementType)
     {
         return IsSetCollectionType(collectionTypeName)
@@ -133,7 +138,7 @@ public static partial class SourceGeneratorHelpers
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
         var collectionName = prop.BsonRefCollectionName!;
-        var isNullable = IsNullableProperty(prop);
+        var isNullable = CanBeNullAtRuntime(prop);
         var isElementValueType = prop.IsElementValueType;
 
         var sb = new StringBuilder();
@@ -232,7 +237,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var isNullable = IsNullableProperty(prop);
+        var isNullable = CanBeNullAtRuntime(prop);
 
         if (isNullable)
         {
@@ -252,7 +257,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var isNullable = IsNullableProperty(prop);
+        var isNullable = CanBeNullAtRuntime(prop);
         var isElementValueType = prop.IsElementValueType;
 
         var sb = new StringBuilder();
@@ -300,7 +305,7 @@ public static partial class SourceGeneratorHelpers
     {
         var propertyName = prop.Name;
         var propertyAccess = prop.AccessName;
-        var isNullable = IsNullableProperty(prop);
+        var isNullable = CanBeNullAtRuntime(prop);
         var isValueValueType = prop.IsDictionaryValueValueType;
         var isValueComplex = prop.IsDictionaryValueComplexType;
         var valueExpression = isValueComplex

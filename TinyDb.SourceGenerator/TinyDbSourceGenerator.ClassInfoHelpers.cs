@@ -107,7 +107,7 @@ public partial class TinyDbSourceGenerator
             return new List<ConstructorParameterInfo>();
         }
 
-        var propertySymbols = new Dictionary<string, IPropertySymbol>(StringComparer.Ordinal);
+        var bindableMembers = new Dictionary<string, ISymbol>(StringComparer.Ordinal);
         foreach (var typeSymbol in EnumerateTypeAndBaseTypes(classSymbol, cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -121,9 +121,19 @@ public partial class TinyDbSourceGenerator
                     !property.IsStatic &&
                     !property.IsIndexer &&
                     property.GetMethod != null &&
-                    !propertySymbols.ContainsKey(property.Name))
+                    !bindableMembers.ContainsKey(property.Name))
                 {
-                    propertySymbols.Add(property.Name, property);
+                    bindableMembers.Add(property.Name, property);
+                    continue;
+                }
+
+                if (member is IFieldSymbol field &&
+                    field.DeclaredAccessibility == Accessibility.Public &&
+                    !field.IsStatic &&
+                    !field.IsConst &&
+                    !bindableMembers.ContainsKey(field.Name))
+                {
+                    bindableMembers.Add(field.Name, field);
                 }
             }
         }
@@ -141,23 +151,36 @@ public partial class TinyDbSourceGenerator
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (!TryFindConstructorProperty(parameter, propertySymbols, cancellationToken, out var propertySymbol))
+                if (!TryFindConstructorMember(parameter, bindableMembers, cancellationToken, out var memberSymbol))
                 {
                     matchedAll = false;
                     break;
                 }
 
-                var propertyInfo = properties.FirstOrDefault(p => string.Equals(p.Name, propertySymbol.Name, StringComparison.Ordinal));
+                var propertyInfo = properties.FirstOrDefault(p => string.Equals(p.Name, memberSymbol.Name, StringComparison.Ordinal));
                 if (propertyInfo == null)
                 {
-                    if (!TryCreatePropertyInfoFromSymbol(
+                    var created = memberSymbol switch
+                    {
+                        IPropertySymbol propertySymbol => TryCreatePropertyInfoFromSymbol(
                             propertySymbol,
                             containingTypeName,
                             typeSymbolMap,
                             bsonRefMissingEntityErrors,
                             requirePublicMutableSetter: false,
                             cancellationToken,
-                            out propertyInfo))
+                            out propertyInfo),
+                        IFieldSymbol fieldSymbol => TryCreatePropertyInfoFromFieldSymbol(
+                            fieldSymbol,
+                            containingTypeName,
+                            typeSymbolMap,
+                            bsonRefMissingEntityErrors,
+                            cancellationToken,
+                            out propertyInfo),
+                        _ => false
+                    };
+
+                    if (!created)
                     {
                         matchedAll = false;
                         break;
@@ -166,12 +189,6 @@ public partial class TinyDbSourceGenerator
                     var constructorPropertyInfo = propertyInfo!;
                     properties.Add(constructorPropertyInfo);
                     propertyInfo = constructorPropertyInfo;
-                }
-
-                if (propertyInfo.HasIgnoreAttribute)
-                {
-                    matchedAll = false;
-                    break;
                 }
 
                 parameters.Add(new ConstructorParameterInfo(parameter.Name, propertyInfo));
@@ -186,6 +203,44 @@ public partial class TinyDbSourceGenerator
         return new List<ConstructorParameterInfo>();
     }
 
+
+    private static bool TryFindConstructorMember(
+        IParameterSymbol parameter,
+        IReadOnlyDictionary<string, ISymbol> members,
+        CancellationToken cancellationToken,
+        out ISymbol memberSymbol)
+    {
+        if (members.TryGetValue(parameter.Name, out memberSymbol!) &&
+            SymbolEqualityComparer.Default.Equals(GetBindableMemberType(memberSymbol), parameter.Type))
+        {
+            return true;
+        }
+
+        foreach (var candidate in members.Values)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.Equals(candidate.Name, parameter.Name, StringComparison.OrdinalIgnoreCase) &&
+                SymbolEqualityComparer.Default.Equals(GetBindableMemberType(candidate), parameter.Type))
+            {
+                memberSymbol = candidate;
+                return true;
+            }
+        }
+
+        memberSymbol = null!;
+        return false;
+    }
+
+    private static ITypeSymbol? GetBindableMemberType(ISymbol symbol)
+    {
+        return symbol switch
+        {
+            IPropertySymbol propertySymbol => propertySymbol.Type,
+            IFieldSymbol fieldSymbol => fieldSymbol.Type,
+            _ => null
+        };
+    }
 
     private static bool TryFindConstructorProperty(
         IParameterSymbol parameter,
@@ -340,6 +395,7 @@ public partial class TinyDbSourceGenerator
             foreignKeyCollectionName: foreignKeyCollectionName,
             idGenerationStrategyValue: idGenerationInfo.StrategyValue,
             idGenerationSequenceName: idGenerationInfo.SequenceName,
+            canSet: !fieldSymbol.IsReadOnly,
             displayName: GetConstructorString(propertyMetadataAttribute, 0) ?? fieldSymbol.Name,
             description: GetNamedString(propertyMetadataAttribute, "Description"),
             order: GetNamedInt(propertyMetadataAttribute, "Order"),
