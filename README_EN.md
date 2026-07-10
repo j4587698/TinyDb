@@ -319,22 +319,31 @@ var options = new TinyDbOptions
 
 ## Performance
 
-Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-02-28):
+Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-07-10):
 
-| Operation | `SynchronousWrites=true` | `SynchronousWrites=false` | Allocation |
+| Operation | `SynchronousWrites=true` | `SynchronousWrites=false` | Allocation (true / false) |
 |-----------|--------------------------|---------------------------|------------|
-| `Insert1000_Individual` | `3,704,472.3 μs` (~`270 ops/s`) | `3,771,622.8 μs` (~`265 ops/s`) | `~5.2 MB` |
-| `Insert1000_Batch` | `259,325.2 μs` (~`3,856 ops/s`) | `223,901.9 μs` (~`4,466 ops/s`) | `~4.8-4.9 MB` |
-| `QueryWithoutIndex` | `582.2 μs` | `596.2 μs` | `260.99 KB` |
-| `QueryWithIndex` | `415.7 μs` | `421.7 μs` | `59.47 KB` |
-| `QueryWithUniqueIndex` | `257.4 μs` | `267.6 μs` | `7.80 KB` |
-| `FindById` | `235.5 μs` | `244.1 μs` | `6.49 KB` |
+| `Insert1000_Individual` | `8,976,726.1 μs` (~`111 ops/s`) | `412,939.3 μs` (~`2,422 ops/s`) | `12.60 MB / 10.80 MB` |
+| `Insert1000_Batch` | `297,528.8 μs` (~`3,361 ops/s`) | `215,342.3 μs` (~`4,644 ops/s`) | `13.27 MB / 13.49 MB` |
+| `QueryWithoutIndex` | `752.2 μs` | `1,827.3 μs` | `280.56 KB / 292.28 KB` |
+| `QueryWithIndex` | `525.3 μs` | `737.6 μs` | `74.23 KB / 76.57 KB` |
+| `QueryWithUniqueIndex` | `331.2 μs` | `419.0 μs` | `18.16 KB / 18.24 KB` |
+| `FindById` | `267.3 μs` | `295.0 μs` | `6.59 KB / 6.67 KB` |
 
 > **Note:** Environment: AMD EPYC 7763 2.44GHz, .NET 9.0.12. This benchmark set uses `EnableJournaling=false` to isolate core read/write path behavior.
 
 ## Version History
 
-### v0.4.5 (Current)
+### v0.5.0 (Current)
+- **Concurrency and write-path hardening**: refined collection write locks, page locks, and document lock boundaries to reduce contention in concurrent writes, transaction commits, and cache writeback paths.
+- **WAL and durability hardening**: strengthened synced flush, batched commit, replay validation, and transaction recovery paths across crash-recovery and half-written-page scenarios.
+- **Query and SQL execution improvements**: hardened dynamic SQL/DML, runtime expression binding, index planning, ordering/TopK, and transaction visibility behavior.
+- **AOT and source generator stability**: split and hardened source generator type analysis, dependency analysis, field naming, and mapper generation paths to reduce AOT/trim edge cases.
+- **Serialization and BSON compatibility**: improved round-tripping for `Decimal128`, `ObjectId`, `DateTime`, numeric conversions, complex collections, and nested objects.
+- **Performance baseline refresh**: updated `QuickIndexBenchmark` data for write, indexed query, unique-index query, and primary-key lookup timing and allocation.
+- **Regression coverage**: added and expanded concurrency, WAL, index, query, AOT, encryption, source generator, and serialization regression tests.
+
+### v0.4.5
 - **Dynamic query and SQL subset**: added AOT-compatible string predicate queries, a unified `Execute` SQL entry point, `BsonDocument` dynamic projection, generic DTO projection, and basic `select/insert/update/delete` parsing and execution.
 - **SQL capability boundaries documented**: documented supported predicate syntax, projection rules, DML scope, and unsupported capabilities such as joins, aggregation, subqueries, and expression assignments.
 - **WAL crash recovery hardening**: appends and flushes WAL before page writes, and replay now validates disk page headers, page IDs, and checksums so latest-LSN half-written pages are restored from WAL.

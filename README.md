@@ -319,22 +319,31 @@ var options = new TinyDbOptions
 
 ## 性能数据
 
-以下为 `BenchmarkDotNet` 最新实测均值（`QuickIndexBenchmark`，2026-02-28）：
+以下为 `BenchmarkDotNet` 最新实测均值（`QuickIndexBenchmark`，2026-07-10）：
 
-| 操作 | `SynchronousWrites=true` | `SynchronousWrites=false` | 内存分配 |
+| 操作 | `SynchronousWrites=true` | `SynchronousWrites=false` | 内存分配（true / false） |
 |------|------|------|------|
-| `Insert1000_Individual` | `3,704,472.3 μs`（约 `270 ops/s`） | `3,771,622.8 μs`（约 `265 ops/s`） | `~5.2 MB` |
-| `Insert1000_Batch` | `259,325.2 μs`（约 `3,856 ops/s`） | `223,901.9 μs`（约 `4,466 ops/s`） | `~4.8-4.9 MB` |
-| `QueryWithoutIndex` | `582.2 μs` | `596.2 μs` | `260.99 KB` |
-| `QueryWithIndex` | `415.7 μs` | `421.7 μs` | `59.47 KB` |
-| `QueryWithUniqueIndex` | `257.4 μs` | `267.6 μs` | `7.80 KB` |
-| `FindById` | `235.5 μs` | `244.1 μs` | `6.49 KB` |
+| `Insert1000_Individual` | `8,976,726.1 μs`（约 `111 ops/s`） | `412,939.3 μs`（约 `2,422 ops/s`） | `12.60 MB / 10.80 MB` |
+| `Insert1000_Batch` | `297,528.8 μs`（约 `3,361 ops/s`） | `215,342.3 μs`（约 `4,644 ops/s`） | `13.27 MB / 13.49 MB` |
+| `QueryWithoutIndex` | `752.2 μs` | `1,827.3 μs` | `280.56 KB / 292.28 KB` |
+| `QueryWithIndex` | `525.3 μs` | `737.6 μs` | `74.23 KB / 76.57 KB` |
+| `QueryWithUniqueIndex` | `331.2 μs` | `419.0 μs` | `18.16 KB / 18.24 KB` |
+| `FindById` | `267.3 μs` | `295.0 μs` | `6.59 KB / 6.67 KB` |
 
 > **注：** 测试环境为 AMD EPYC 7763 2.44GHz，.NET 9.0.12。该组基准使用 `EnableJournaling=false`，用于对比核心读写路径。
 
 ## 版本历史
 
-### v0.4.5 (当前)
+### v0.5.0 (当前)
+- **并发与写入路径强化**：细化集合写锁、页锁和文档锁边界，降低并发写入、事务提交和缓存回写路径的锁竞争。
+- **WAL 与持久化安全增强**：加强同步刷盘、批量提交、回放校验和事务恢复路径，覆盖更多崩溃恢复与半写盘场景。
+- **查询与 SQL 执行完善**：补强动态 SQL/DML、运行时表达式绑定、索引规划、排序/TopK 和事务可见性相关逻辑。
+- **AOT 与源码生成器稳定性提升**：拆分并强化源码生成器类型分析、依赖分析、字段命名和 mapper 生成路径，减少 AOT/trim 边界问题。
+- **序列化与 BSON 兼容增强**：强化 `Decimal128`、`ObjectId`、`DateTime`、数值转换、复杂集合和嵌套对象的往返转换。
+- **性能基线刷新**：更新 `QuickIndexBenchmark` 基准数据，当前报告覆盖写入、索引查询、唯一索引查询和主键查找的耗时与分配。
+- **回归验证补齐**：新增并扩展并发、WAL、索引、查询、AOT、加密、源码生成器和序列化回归测试。
+
+### v0.4.5
 - **动态查询与 SQL 子集**：新增 AOT 兼容的字符串条件查询、统一 `Execute` SQL 入口、`BsonDocument` 动态投影、泛型 DTO 投影，以及基础 `select/insert/update/delete` 解析执行。
 - **SQL 能力边界文档化**：明确列出当前支持的条件语法、投影规则、DML 范围，以及暂不支持的 join、聚合、子查询、表达式赋值等能力。
 - **WAL 崩溃恢复增强**：页写入前先追加并刷新 WAL，重放时会校验磁盘页头、页号和页校验和，即使半写盘页带有最新 LSN 也会从 WAL 恢复。
