@@ -28,11 +28,15 @@ public sealed partial class PageManager : IDisposable
     private const int CacheOverflowSlack = 4096;
     private const int BackgroundWritebackMinBatchSize = 16;
     private const int BackgroundWritebackMaxBatchSize = 256;
+    private const int DeferredFreePageScanNone = 0;
+    private const int DeferredFreePageScanRebuild = 1;
+    private const int DeferredFreePageScanCount = 2;
     private readonly SemaphoreSlim[] _pageLoadStripes;
     private int _cachedPageCount;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private uint _freePageCount;
+    private int _deferredFreePageScanMode;
     private long _fileSize;
     private bool _disposed;
     private int _disposeStarted;
@@ -69,6 +73,7 @@ public sealed partial class PageManager : IDisposable
     {
         get
         {
+            EnsureDeferredFreePageScanCompleted();
             lock (_stateLock)
             {
                 return _firstFreePageID;
@@ -111,6 +116,7 @@ public sealed partial class PageManager : IDisposable
     {
         get
         {
+            EnsureDeferredFreePageScanCompleted();
             lock (_stateLock)
             {
                 return _freePageCount;

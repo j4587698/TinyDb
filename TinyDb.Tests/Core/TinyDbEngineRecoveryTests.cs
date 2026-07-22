@@ -115,28 +115,64 @@ public class TinyDbEngineRecoveryTests : IDisposable
     {
         using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { EnableJournaling = false }))
         {
-            engine.GetCollection<RecoveryDataItem>().Insert(new RecoveryDataItem { Id = 1, Value = "readonly" });
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            collection.Insert(new RecoveryDataItem { Id = 1, Value = "readonly" });
+            engine.EnsureIndex(collection.CollectionName, "value", "idx_value");
         }
 
         var before = File.ReadAllBytes(_testDbPath);
         using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions
         {
             ReadOnly = true,
-            EnableJournaling = false
+            EnableJournaling = true
         }))
         {
             var collection = engine.GetCollection<RecoveryDataItem>();
             await Assert.That(collection.FindById(1)?.Value).IsEqualTo("readonly");
+            await Assert.That(engine.GetStatistics().EnableJournaling).IsFalse();
+            await Assert.That(engine.Header.EnableJournaling).IsFalse();
             await Assert.That(() => collection.Insert(new RecoveryDataItem { Id = 2, Value = "blocked" }))
                 .Throws<InvalidOperationException>();
             await Assert.That(() => engine.EnsureIndex(nameof(RecoveryDataItem), "value", "idx_value"))
                 .Throws<InvalidOperationException>();
             await Assert.That(() => engine.DropCollection(nameof(RecoveryDataItem)))
                 .Throws<InvalidOperationException>();
+
+            var indexManager = collection.GetIndexManager();
+            await Assert.That(() => indexManager.CreateIndex("idx_blocked", new[] { "value" }))
+                .Throws<InvalidOperationException>();
+            await Assert.That(() => indexManager.DropIndex("idx_value"))
+                .Throws<InvalidOperationException>();
+            await Assert.That(() => indexManager.GetIndex("idx_value")!.Clear())
+                .Throws<InvalidOperationException>();
+            await Assert.That(async () => await engine.CheckpointAsync())
+                .Throws<InvalidOperationException>();
+            await Assert.That(() => new TinyDbEngine(
+                    _testDbPath,
+                    new TinyDbOptions { EnableJournaling = false }))
+                .Throws<IOException>();
         }
 
         var after = File.ReadAllBytes(_testDbPath);
         await Assert.That(after.SequenceEqual(before)).IsTrue();
+    }
+
+    [Test]
+    public async Task ReadOnlyEngine_MissingParentDirectory_ShouldNotCreateDirectory()
+    {
+        var parentDirectory = Path.Combine(Path.GetTempPath(), $"tinydb_readonly_{Guid.NewGuid():N}");
+        var databasePath = Path.Combine(parentDirectory, "missing.db");
+
+        try
+        {
+            await Assert.That(() => new TinyDbEngine(databasePath, new TinyDbOptions { ReadOnly = true }))
+                .Throws<IOException>();
+            await Assert.That(Directory.Exists(parentDirectory)).IsFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(parentDirectory)) Directory.Delete(parentDirectory, recursive: true);
+        }
     }
 
     [Test]

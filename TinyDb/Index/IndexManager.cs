@@ -10,6 +10,8 @@ public sealed class IndexManager : IDisposable
     private readonly string _collectionName;
     private readonly PageManager _pm;
     private readonly Action<IReadOnlyList<PersistedIndexDefinition>, bool>? _persistDefinitions;
+    private readonly Func<string, string[], bool, bool, bool>? _createIndex;
+    private readonly Action? _ensureWritable;
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly ReaderWriterLockSlim _rwLock = new();
     private readonly bool _ownsPageManager;
@@ -73,11 +75,15 @@ public sealed class IndexManager : IDisposable
         string collectionName,
         PageManager pm,
         IReadOnlyList<PersistedIndexDefinition>? persistedDefinitions,
-        Action<IReadOnlyList<PersistedIndexDefinition>, bool>? persistDefinitions)
+        Action<IReadOnlyList<PersistedIndexDefinition>, bool>? persistDefinitions,
+        Func<string, string[], bool, bool, bool>? createIndex = null,
+        Action? ensureWritable = null)
     {
         _collectionName = collectionName ?? throw new ArgumentNullException(nameof(collectionName));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
         _persistDefinitions = persistDefinitions;
+        _createIndex = createIndex;
+        _ensureWritable = ensureWritable;
         _ownsPageManager = false;
 
         LoadPersistedIndexes(persistedDefinitions);
@@ -99,6 +105,8 @@ public sealed class IndexManager : IDisposable
 
         _pm = new PageManager(ds);
         _persistDefinitions = null;
+        _createIndex = null;
+        _ensureWritable = null;
         _ownsPageManager = true;
     }
 
@@ -112,16 +120,24 @@ public sealed class IndexManager : IDisposable
     /// <returns>如果创建成功则为 true；如果已存在则为 false。</returns>
     public bool CreateIndex(string name, string[] fields, bool unique = false, bool sparse = false)
     {
+        EnsureWritable();
+        if (_createIndex != null)
+        {
+            return _createIndex(name, fields, unique, sparse);
+        }
+
         return CreateIndexCore(name, fields, unique, sparse, persistImmediately: true);
     }
 
     internal bool CreateIndexForBackfill(string name, string[] fields, bool unique = false, bool sparse = false)
     {
+        EnsureWritable();
         return CreateIndexCore(name, fields, unique, sparse, persistImmediately: false);
     }
 
     internal void PersistCurrentDefinitions(bool forceFlush = false)
     {
+        EnsureWritable();
         _rwLock.EnterReadLock();
         try
         {
@@ -140,6 +156,7 @@ public sealed class IndexManager : IDisposable
     /// <returns>如果删除成功则为 true；如果未找到则为 false。</returns>
     public bool DropIndex(string name)
     {
+        EnsureWritable();
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
 
         _mutationGate.Wait();
@@ -293,6 +310,7 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public void ClearAllIndexes()
     {
+        EnsureWritable();
         _mutationGate.Wait();
         try
         {
@@ -317,6 +335,7 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public void DropAllIndexes()
     {
+        EnsureWritable();
         IReadOnlyList<string> names;
         _rwLock.EnterReadLock();
         try
@@ -341,6 +360,7 @@ public sealed class IndexManager : IDisposable
     /// <param name="documentId">文档 ID。</param>
     public void InsertDocument(BsonDocument document, BsonValue documentId)
     {
+        EnsureWritable();
         _mutationGate.Wait();
         try
         {
@@ -365,6 +385,7 @@ public sealed class IndexManager : IDisposable
         BsonValue documentId,
         CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         BTreeIndex[] indexes;
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -398,6 +419,7 @@ public sealed class IndexManager : IDisposable
     /// <param name="documents">用于回填的文档集合。</param>
     public void RebuildIndex(string name, IEnumerable<BsonDocument> documents)
     {
+        EnsureWritable();
         if (string.IsNullOrEmpty(name)) throw new ArgumentException("Index name cannot be null or empty", nameof(name));
         if (documents == null) throw new ArgumentNullException(nameof(documents));
 
@@ -434,6 +456,7 @@ public sealed class IndexManager : IDisposable
     /// <param name="id">文档 ID。</param>
     public void UpdateDocument(BsonDocument oldDoc, BsonDocument newDoc, BsonValue id)
     {
+        EnsureWritable();
         _mutationGate.Wait();
         try
         {
@@ -459,6 +482,7 @@ public sealed class IndexManager : IDisposable
         BsonValue id,
         CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         BTreeIndex[] indexes;
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -493,6 +517,7 @@ public sealed class IndexManager : IDisposable
     /// <param name="id">文档 ID。</param>
     public void DeleteDocument(BsonDocument doc, BsonValue id)
     {
+        EnsureWritable();
         _mutationGate.Wait();
         try
         {
@@ -517,6 +542,7 @@ public sealed class IndexManager : IDisposable
         BsonValue id,
         CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         BTreeIndex[] indexes;
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -598,7 +624,7 @@ public sealed class IndexManager : IDisposable
                     return false;
                 }
 
-                var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse);
+                var index = new BTreeIndex(_pm, name, normalizedFields, unique, 200, sparse, _ensureWritable);
                 AddNewIndex(index);
 
                 if (persistImmediately)
@@ -662,7 +688,8 @@ public sealed class IndexManager : IDisposable
                 definition.IsUnique,
                 definition.RootPageId,
                 definition.MaxKeys,
-                definition.IsSparse);
+                definition.IsSparse,
+                _ensureWritable);
 
             if (!_catalog.TryAddLoaded(index))
             {
@@ -674,6 +701,11 @@ public sealed class IndexManager : IDisposable
     private void PersistDefinitions(bool forceFlush)
     {
         _persistDefinitions?.Invoke(_catalog.CreateDefinitionSnapshot(), forceFlush);
+    }
+
+    private void EnsureWritable()
+    {
+        _ensureWritable?.Invoke();
     }
 
     private static void EnsureExistingIndexIsCompatible(

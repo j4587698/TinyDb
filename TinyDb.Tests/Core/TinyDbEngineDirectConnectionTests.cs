@@ -61,4 +61,26 @@ public sealed class TinyDbEngineDirectConnectionTests : IDisposable
 
         await Assert.That(reader.Length).IsGreaterThan(0L);
     }
+
+    [Test]
+    public async Task DirectConnection_ShouldAllowMultipleReadOnlyEngines()
+    {
+        using (var writer = new TinyDbEngine(DatabasePath, new TinyDbOptions { EnableJournaling = false }))
+        {
+            writer.GetBsonCollection("items").Insert(
+                new BsonDocument().Set("_id", ObjectId.NewObjectId()));
+        }
+
+        var readOnlyOptions = new TinyDbOptions
+        {
+            ReadOnly = true,
+            EnableJournaling = false
+        };
+
+        using var first = new TinyDbEngine(DatabasePath, readOnlyOptions);
+        using var second = new TinyDbEngine(DatabasePath, readOnlyOptions);
+
+        await Assert.That(first.GetBsonCollection("items").FindAll().Count()).IsEqualTo(1);
+        await Assert.That(second.GetBsonCollection("items").FindAll().Count()).IsEqualTo(1);
+    }
 }

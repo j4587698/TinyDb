@@ -79,6 +79,7 @@ public sealed partial class PageManager
         bool hasFreePageCount = false,
         bool readOnly = false)
     {
+        Volatile.Write(ref _deferredFreePageScanMode, DeferredFreePageScanNone);
         bool rebuildFreeList;
         bool countExistingFreeList;
         uint nextPageId;
@@ -103,6 +104,14 @@ public sealed partial class PageManager
             countExistingFreeList = !rebuildFreeList &&
                                     _firstFreePageID != 0 &&
                                     (!hasFreePageCount || _freePageCount == 0);
+        }
+
+        if (readOnly && (rebuildFreeList || countExistingFreeList))
+        {
+            Volatile.Write(
+                ref _deferredFreePageScanMode,
+                rebuildFreeList ? DeferredFreePageScanRebuild : DeferredFreePageScanCount);
+            return;
         }
 
         if (rebuildFreeList)
@@ -215,6 +224,50 @@ public sealed partial class PageManager
         return count;
     }
 
+    private void EnsureDeferredFreePageScanCompleted()
+    {
+        if (Volatile.Read(ref _deferredFreePageScanMode) == DeferredFreePageScanNone)
+        {
+            return;
+        }
+
+        lock (_freeListLock)
+        {
+            var scanMode = Volatile.Read(ref _deferredFreePageScanMode);
+            if (scanMode == DeferredFreePageScanNone)
+            {
+                return;
+            }
+
+            uint nextPageId;
+            uint firstFreePageId;
+            lock (_stateLock)
+            {
+                nextPageId = _nextPageID;
+                firstFreePageId = _firstFreePageID;
+            }
+
+            uint resolvedFirstFreePageId;
+            uint resolvedFreePageCount;
+            if (scanMode == DeferredFreePageScanRebuild)
+            {
+                (resolvedFirstFreePageId, resolvedFreePageCount) = ScanFreePages(nextPageId, rewriteLinks: false);
+            }
+            else
+            {
+                resolvedFirstFreePageId = firstFreePageId;
+                resolvedFreePageCount = CountFreePages(firstFreePageId, nextPageId);
+            }
+
+            lock (_stateLock)
+            {
+                _firstFreePageID = resolvedFirstFreePageId;
+                _freePageCount = resolvedFreePageCount;
+                Volatile.Write(ref _deferredFreePageScanMode, DeferredFreePageScanNone);
+            }
+        }
+    }
+
     private void WriteFreePageLink(uint pageId, uint nextPageId)
     {
         var pageOffset = CalculatePageOffset(pageId);
@@ -242,6 +295,7 @@ public sealed partial class PageManager
     public PageManagerStatistics GetStatistics()
     {
         ThrowIfDisposed();
+        EnsureDeferredFreePageScanCompleted();
 
         var dirtyPages = CountDirtyPages();
         uint freeCount;

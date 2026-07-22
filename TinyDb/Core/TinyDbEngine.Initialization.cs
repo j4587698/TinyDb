@@ -38,10 +38,21 @@ public sealed partial class TinyDbEngine
         else
         {
             var dir = Path.GetDirectoryName(_filePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            // Direct connection mode: allow concurrent read handles, but reject a second writer.
+            if (!_options.ReadOnly && !string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            if (_options.ReadOnly && !File.Exists(_filePath))
+            {
+                throw new FileNotFoundException("Database file was not found.", _filePath);
+            }
+
+            AcquireConnectionLock();
+
+            // Multiple readers may coexist, but readers and writers must not overlap without snapshot isolation.
             _diskStream = _options.ReadOnly
-                ? new DiskStream(_filePath, FileAccess.Read, FileShare.ReadWrite)
+                ? new DiskStream(_filePath, FileAccess.Read, FileShare.Read)
                 : new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.Read);
         }
 
@@ -89,6 +100,26 @@ public sealed partial class TinyDbEngine
         _metadataManager = new TinyDb.Metadata.MetadataManager(this);
 
         InitializeDatabase();
+    }
+
+    private void AcquireConnectionLock()
+    {
+        if (_connectionLockStream != null)
+        {
+            return;
+        }
+
+        var lockFilePath = Path.GetFullPath(_filePath) + ".writer.lock";
+        _connectionLockStream = new FileStream(
+            lockFilePath,
+            FileMode.OpenOrCreate,
+            _options.ReadOnly ? FileAccess.Read : FileAccess.ReadWrite,
+            _options.ReadOnly ? FileShare.Read : FileShare.None);
+    }
+
+    private void ReleaseConnectionLock()
+    {
+        Interlocked.Exchange(ref _connectionLockStream, null)?.Dispose();
     }
 
 
@@ -274,7 +305,7 @@ public sealed partial class TinyDbEngine
                 }
 
                 // 步骤 4: 加载核心系统组件。
-                _header.EnableJournaling = _options.EnableJournaling;
+                _header.EnableJournaling = _writeAheadLog.IsEnabled;
                 InitializeSystemPages();
                 _collectionMetaStore = new CollectionMetaStore(_pageManager, () => _header.CollectionInfoPage, id => _header.CollectionInfoPage = id);
                 _collectionMetaStore.LoadCollections();
