@@ -81,6 +81,40 @@ public class QueryTests
     }
 
     [Test]
+    public async Task Query_StringIsNullOrEmpty_ShouldMatchNullAndEmptyValues()
+    {
+        var collection = _engine.GetCollection<UserWithIntId>();
+        collection.Insert(new UserWithIntId { Id = 101, Name = null!, Age = 30 });
+        collection.Insert(new UserWithIntId { Id = 102, Name = string.Empty, Age = 30 });
+        collection.Insert(new UserWithIntId { Id = 103, Name = " ", Age = 30 });
+
+        var results = collection
+            .Find(user => user.Id >= 101 && string.IsNullOrEmpty(user.Name))
+            .OrderBy(user => user.Id)
+            .ToList();
+
+        await Assert.That(results).Count().IsEqualTo(2);
+        await Assert.That(results[0].Id).IsEqualTo(101);
+        await Assert.That(results[1].Id).IsEqualTo(102);
+    }
+
+    [Test]
+    public async Task Query_StringIsNullOrWhiteSpace_ShouldSupportNegation()
+    {
+        var collection = _engine.GetCollection<UserWithIntId>();
+        collection.Insert(new UserWithIntId { Id = 101, Name = null!, Age = 30 });
+        collection.Insert(new UserWithIntId { Id = 102, Name = string.Empty, Age = 30 });
+        collection.Insert(new UserWithIntId { Id = 103, Name = " \t", Age = 30 });
+        collection.Insert(new UserWithIntId { Id = 104, Name = "certificate", Age = 30 });
+
+        var result = collection.FindOne(
+            user => user.Id >= 101 && !string.IsNullOrWhiteSpace(user.Name));
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Id).IsEqualTo(104);
+    }
+
+    [Test]
     public async Task Query_ComplexAnd_ShouldWork()
     {
         // Act
