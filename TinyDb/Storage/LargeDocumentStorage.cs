@@ -156,7 +156,7 @@ public class LargeDocumentStorage
             visitedPages++;
         }
 
-        if (offset != header.TotalLength || visitedPages != header.PageCount)
+        if (offset != header.TotalLength || visitedPages != header.PageCount || currentPageId != 0)
             throw new InvalidOperationException($"Large document chain is incomplete for index page {indexPageId}.");
 
         return result;
@@ -195,7 +195,7 @@ public class LargeDocumentStorage
             visitedPages++;
         }
 
-        if (offset != header.TotalLength || visitedPages != header.PageCount)
+        if (offset != header.TotalLength || visitedPages != header.PageCount || currentPageId != 0)
             throw new InvalidOperationException($"Large document chain is incomplete for index page {indexPageId}.");
 
         return result;

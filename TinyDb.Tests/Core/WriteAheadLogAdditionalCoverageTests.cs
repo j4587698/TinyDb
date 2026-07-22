@@ -132,6 +132,29 @@ public class WriteAheadLogAdditionalCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task WalFileNameFormat_ShouldRejectPathsOutsideDatabaseDirectory()
+    {
+        var sentinelPath = Path.Combine(Path.GetDirectoryName(_dbPath)!, $"sentinel_{Guid.NewGuid():N}.txt");
+        File.WriteAllText(sentinelPath, "keep");
+
+        try
+        {
+            var traversalFormat = $"..{Path.DirectorySeparatorChar}{Path.GetFileName(sentinelPath)}";
+            await Assert.That(() => new WriteAheadLog(
+                    _dbPath,
+                    8192,
+                    enabled: false,
+                    walFileNameFormat: traversalFormat))
+                .Throws<ArgumentException>();
+            await Assert.That(File.ReadAllText(sentinelPath)).IsEqualTo("keep");
+        }
+        finally
+        {
+            try { File.Delete(sentinelPath); } catch { }
+        }
+    }
+
+    [Test]
     public async Task AppendFlushSynchronizeTruncateAndDispose_ShouldCoverBranches()
     {
         using var wal = new WriteAheadLog(_dbPath, 8192, enabled: true, walFileNameFormat: "{name}-wal.{ext}");
