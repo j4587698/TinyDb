@@ -13,7 +13,7 @@ public sealed class DiskStream : IDiskStream
     private readonly string _fullPath;
     private readonly FileStream _fileStream;
     private readonly ConcurrentDictionary<RegionLock, byte> _ownedRegionLocks = new();
-    private bool _disposed;
+    private int _disposed;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     /// <summary>
@@ -95,7 +95,8 @@ public sealed class DiskStream : IDiskStream
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
         _fullPath = Path.GetFullPath(_filePath);
-        _fileStream = new FileStream(filePath, FileMode.OpenOrCreate, access, share, 4096, options);
+        var mode = access == FileAccess.Read ? FileMode.Open : FileMode.OpenOrCreate;
+        _fileStream = new FileStream(filePath, mode, access, share, 4096, options);
     }
 
     // ... Read, Write, Flush, Seek, SetLength ... (keeping them as is, just need to match surrounding code for context in replace)
@@ -442,7 +443,7 @@ public sealed class DiskStream : IDiskStream
     /// </summary>
     private void ThrowIfDisposed()
     {
-        if (_disposed)
+        if (Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(nameof(DiskStream));
     }
 
@@ -577,7 +578,13 @@ public sealed class DiskStream : IDiskStream
     /// </summary>
     public void Dispose()
     {
-        if (!_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _semaphore.Wait();
+        try
         {
             foreach (var regionLock in _ownedRegionLocks.Keys)
             {
@@ -585,9 +592,12 @@ public sealed class DiskStream : IDiskStream
                 UntrackRegionLock(regionLock);
             }
 
-            _semaphore.Dispose();
             _fileStream.Dispose();
-            _disposed = true;
+        }
+        finally
+        {
+            _semaphore.Release();
+            _semaphore.Dispose();
         }
     }
 

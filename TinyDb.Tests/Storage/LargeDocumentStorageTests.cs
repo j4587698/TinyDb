@@ -160,6 +160,8 @@ public class LargeDocumentStorageTests : IDisposable
         _pageManager.SavePage(lastPage);
 
         await Assert.That(storage.ValidateLargeDocument(indexPageId)).IsFalse();
+        await Assert.That(() => storage.ReadLargeDocument(indexPageId)).Throws<InvalidOperationException>();
+        await Assert.That(async () => await storage.ReadLargeDocumentAsync(indexPageId)).Throws<InvalidOperationException>();
     }
 
     [Test]

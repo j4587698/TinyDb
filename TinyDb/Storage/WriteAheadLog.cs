@@ -159,6 +159,14 @@ public sealed partial class WriteAheadLog : IDisposable
             .Replace("{name}", fileNameWithoutExt)
             .Replace("{ext}", extension);
 
+        if (Path.IsPathRooted(formattedFileName) ||
+            !string.Equals(Path.GetFileName(formattedFileName), formattedFileName, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "WAL file name format must produce a file name in the database directory.",
+                nameof(format));
+        }
+
         // 确保文件名以.db结尾（如果格式中没有包含扩展名）
         if (!Path.HasExtension(formattedFileName) && !string.IsNullOrEmpty(extension))
         {
