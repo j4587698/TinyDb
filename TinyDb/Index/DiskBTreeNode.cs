@@ -43,6 +43,7 @@ public sealed class DiskBTreeNode : IDisposable
     {
         _page = page ?? throw new ArgumentNullException(nameof(page));
         _pm = pm ?? throw new ArgumentNullException(nameof(pm));
+        EnsureIndexPage(_page);
         
         Keys = new List<IndexKey>();
         ChildrenIds = new List<uint>();
@@ -56,6 +57,15 @@ public sealed class DiskBTreeNode : IDisposable
         {
             IsLeaf = true;
             _isDirty = true;
+        }
+    }
+
+    private static void EnsureIndexPage(Page page)
+    {
+        if (page.PageType != PageType.Index)
+        {
+            throw new InvalidDataException(
+                $"Invalid B-tree page type for page {page.PageID}. Expected {PageType.Index}, found {page.PageType}.");
         }
     }
 
@@ -142,6 +152,7 @@ public sealed class DiskBTreeNode : IDisposable
 
     public void Save(PageManager pm)
     {
+        EnsureIndexPage(_page);
         if (!_isDirty) return;
 
         static void WriteByte(IBufferWriter<byte> writer, byte value)
@@ -253,7 +264,7 @@ public sealed class DiskBTreeNode : IDisposable
             while (remaining > 0)
             {
                 var page = pm.GetPage(currentPageId);
-                if (page.PageType != PageType.Index) page.UpdatePageType(PageType.Index);
+                EnsureIndexPage(page);
 
                 int chunkLen = Math.Min(remaining, page.DataCapacity - 4);
                 var subChunkSpan = fullDataSpan.Slice(offset, chunkLen);
@@ -296,6 +307,7 @@ public sealed class DiskBTreeNode : IDisposable
         while (current != 0)
         {
             var page = pm.GetPage(current);
+            EnsureIndexPage(page);
             uint next = page.Header.NextPageID;
             pm.FreePage(current);
             current = next;
@@ -361,6 +373,7 @@ public sealed class DiskBTreeNode : IDisposable
         while (true)
         {
             var page = currentPageId == _page.PageID ? _page : _pm.GetPage(currentPageId);
+            EnsureIndexPage(page);
             var span = page.ValidDataSpan;
             if (span.Length < 4) break;
 
@@ -383,6 +396,7 @@ public sealed class DiskBTreeNode : IDisposable
             while (true)
             {
                 var page = currentPageId == _page.PageID ? _page : _pm.GetPage(currentPageId);
+                EnsureIndexPage(page);
                 var span = page.ValidDataSpan;
                 if (span.Length < 4) break;
 
@@ -486,6 +500,7 @@ public sealed class DiskBTreeNode : IDisposable
 
     private static bool TryReadChunkInfo(Page page, out int length, out uint nextPageId)
     {
+        EnsureIndexPage(page);
         var span = page.ValidDataSpan;
         nextPageId = page.Header.NextPageID;
         length = 0;
@@ -498,6 +513,7 @@ public sealed class DiskBTreeNode : IDisposable
 
     private static bool TryCopyChunk(Page page, byte[] destination, int offset, out int length, out uint nextPageId)
     {
+        EnsureIndexPage(page);
         var span = page.ValidDataSpan;
         nextPageId = page.Header.NextPageID;
         length = 0;
