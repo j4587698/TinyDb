@@ -10,6 +10,7 @@
     <a href="https://app.codecov.io/gh/j4587698/TinyDb"><img src="https://codecov.io/gh/j4587698/TinyDb/graph/badge.svg" alt="codecov"></a>
     <img src="https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-blue.svg" alt=".NET Version">
     <img src="https://img.shields.io/badge/AOT-Compatible-green.svg" alt="AOT Compatible">
+    <a href="https://github.com/j4587698/TinyDb/actions/workflows/release.yml"><img src="https://github.com/j4587698/TinyDb/actions/workflows/release.yml/badge.svg" alt="CI"></a>
   </p>
   <p align="center">
     <a href="./README.md">中文</a> | <a href="./README_EN.md">English</a>
@@ -35,6 +36,7 @@ TinyDb is an **AOT-first**, **LiteDB-inspired** single-file embedded NoSQL datab
 - **Dynamic Predicates and SQL Subset** - AOT-compatible string predicates, `Execute`, and `select/insert/update/delete`
 - **ACID Transactions** - Full transaction support for data consistency
 - **Password Protection** - Built-in database-level encryption
+- **Read-Only Mode** - Open databases in read-only mode for safe file sharing
 - **High-Performance Indexing** - B+ tree indexes for fast data retrieval
 - **Cross-Platform** - Windows, Linux, macOS support
 
@@ -253,6 +255,26 @@ using var secureDb = new TinyDbEngine("secure.db", options);
 using var db = new TinyDbEngine("secure.db", new TinyDbOptions { Password = "MySecurePassword123!" });
 ```
 
+### Read-Only Mode
+
+TinyDb supports opening databases in read-only mode. Multiple processes can safely share the same data file without write-lock conflicts.
+
+```csharp
+// Open database in read-only mode
+var options = new TinyDbOptions
+{
+    ReadOnly = true
+};
+using var db = new TinyDbEngine("myapp.db", options);
+
+// Read-only mode supports query operations only
+var users = db.GetCollection<User>();
+var user = users.FindOne(u => u.Id == id);
+
+// Write operations throw InvalidOperationException
+// users.Insert(newUser);  // ❌
+```
+
 ### Transaction Support
 
 ```csharp
@@ -303,6 +325,7 @@ var options = new TinyDbOptions
 {
     Password = "password",          // Database password (optional)
     EnableEncryption = true,        // Encrypt data pages and WAL for new databases
+    ReadOnly = false,               // Open in read-only mode (default false, writable)
     PageSize = 8192,               // Page size (default 8KB)
     CacheSize = 1000,              // Cache pages count
     EnableJournaling = true,       // Enable WAL journaling
@@ -334,7 +357,17 @@ Latest measured means from `BenchmarkDotNet` (`QuickIndexBenchmark`, 2026-07-10)
 
 ## Version History
 
-### v0.5.0 (Current)
+### v0.6.0 (Current)
+- **Read-only mode**: added read-only database support, enabling multiple processes to safely share the same data file; all write operations throw `InvalidOperationException` in read-only mode.
+- **Writer lock file**: enforced single-writer access via a lock file mechanism to prevent data corruption from concurrent multi-process writes.
+- **Deferred free page scan**: postponed free page reclamation in read-only mode for faster open and improved concurrent safety.
+- **Storage safety hardening**: fixed `DiskStream` dispose thread safety, large document chain integrity validation, and WAL path traversal protection.
+- **Query expression enhancement**: added `string.IsNullOrEmpty` and `IsNullOrWhiteSpace` support in query predicate functions.
+- **Options validation**: `TinyDbOptions` is now validated at construction time, catching invalid configurations early.
+- **CI workflow**: automatic CI triggered on `TinyDb.csproj` changes, with full release pipeline when version changes.
+- **Regression coverage**: added regression tests for read-only mode, single-writer lock, and storage safety scenarios.
+
+### v0.5.0
 - **Concurrency and write-path hardening**: refined collection write locks, page locks, and document lock boundaries to reduce contention in concurrent writes, transaction commits, and cache writeback paths.
 - **WAL and durability hardening**: strengthened synced flush, batched commit, replay validation, and transaction recovery paths across crash-recovery and half-written-page scenarios.
 - **Query and SQL execution improvements**: hardened dynamic SQL/DML, runtime expression binding, index planning, ordering/TopK, and transaction visibility behavior.

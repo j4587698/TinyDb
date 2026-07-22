@@ -10,6 +10,7 @@
     <a href="https://app.codecov.io/gh/j4587698/TinyDb"><img src="https://codecov.io/gh/j4587698/TinyDb/graph/badge.svg" alt="codecov"></a>
     <img src="https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-blue.svg" alt=".NET Version">
     <img src="https://img.shields.io/badge/AOT-Compatible-green.svg" alt="AOT Compatible">
+    <a href="https://github.com/j4587698/TinyDb/actions/workflows/release.yml"><img src="https://github.com/j4587698/TinyDb/actions/workflows/release.yml/badge.svg" alt="CI"></a>
   </p>
   <p align="center">
     <a href="./README.md">中文</a> | <a href="./README_EN.md">English</a>
@@ -35,6 +36,7 @@ TinyDb 是一个 **AOT 优先**、受 **LiteDB** 启发的单文件嵌入式 NoS
 - **动态字符串与 SQL 子集** - 支持 AOT 兼容的字符串条件、`Execute`、`select/insert/update/delete`
 - **ACID 事务** - 完整的事务支持，保证数据一致性
 - **密码保护** - 内置数据库级别加密保护
+- **只读模式** - 支持以只读方式打开数据库，安全共享数据文件
 - **高性能索引** - B+树索引，支持快速数据检索
 - **跨平台** - 支持 Windows、Linux、macOS
 
@@ -253,6 +255,26 @@ using var secureDb = new TinyDbEngine("secure.db", options);
 using var db = new TinyDbEngine("secure.db", new TinyDbOptions { Password = "MySecurePassword123!" });
 ```
 
+### 只读模式
+
+TinyDb 支持以只读模式打开数据库。只读模式下多个进程可安全共享同一个数据文件，无需担心写入锁冲突。
+
+```csharp
+// 以只读模式打开数据库
+var options = new TinyDbOptions
+{
+    ReadOnly = true
+};
+using var db = new TinyDbEngine("myapp.db", options);
+
+// 只读模式下仅支持查询操作
+var users = db.GetCollection<User>();
+var user = users.FindOne(u => u.Id == id);
+
+// 写入操作会抛出 InvalidOperationException
+// users.Insert(newUser);  // ❌
+```
+
 ### 事务支持
 
 ```csharp
@@ -303,6 +325,7 @@ var options = new TinyDbOptions
 {
     Password = "密码",           // 数据库密码（可选）
     EnableEncryption = true,    // 创建新库时启用数据页和 WAL 加密
+    ReadOnly = false,           // 以只读方式打开（默认 false，写入模式）
     PageSize = 8192,            // 页面大小（默认 8KB）
     CacheSize = 1000,           // 缓存页数
     EnableJournaling = true,    // 启用 WAL 日志
@@ -334,7 +357,17 @@ var options = new TinyDbOptions
 
 ## 版本历史
 
-### v0.5.0 (当前)
+### v0.6.0 (当前)
+- **只读模式**：新增只读打开数据库支持，多进程可安全共享数据文件，只读时所有写入操作抛出 `InvalidOperationException`。
+- **写入锁文件**：通过锁文件机制强制单写者访问，防止多进程同时写入导致数据损坏。
+- **推迟空闲页扫描**：只读模式下延迟空闲页回收，优化打开速度和并发安全。
+- **存储层安全性强化**：修复 `DiskStream` 释放线程安全、大文档链完整性校验、WAL 路径穿越防护。
+- **查询表达式增强**：新增 `string.IsNullOrEmpty` 和 `IsNullOrWhiteSpace` 查询函数支持。
+- **配置选项验证**：`TinyDbOptions` 构造时进行有效性校验，早期发现非法配置。
+- **CI 工作流完善**：为 `TinyDb.csproj` 变更自动触发 CI，版本号变化时执行完整发布流程。
+- **回归验证补齐**：新增只读模式、单写者锁、存储安全相关的回归测试。
+
+### v0.5.0
 - **并发与写入路径强化**：细化集合写锁、页锁和文档锁边界，降低并发写入、事务提交和缓存回写路径的锁竞争。
 - **WAL 与持久化安全增强**：加强同步刷盘、批量提交、回放校验和事务恢复路径，覆盖更多崩溃恢复与半写盘场景。
 - **查询与 SQL 执行完善**：补强动态 SQL/DML、运行时表达式绑定、索引规划、排序/TopK 和事务可见性相关逻辑。

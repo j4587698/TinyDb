@@ -3,6 +3,8 @@ name: Release TinyDb to NuGet
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'TinyDb/TinyDb.csproj'
   workflow_dispatch:
 
 jobs:
