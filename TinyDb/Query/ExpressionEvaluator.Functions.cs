@@ -49,6 +49,14 @@ public static partial class ExpressionEvaluator
             if (functionName == RuntimeFunctionNames.DateTimeToday) return DateTime.Today;
         }
 
+        if (targetValue == null && args.Length == 1)
+        {
+            if (functionName == nameof(string.IsNullOrEmpty))
+                return EvaluateStaticStringPredicate(args[0], string.IsNullOrEmpty);
+            if (functionName == nameof(string.IsNullOrWhiteSpace))
+                return EvaluateStaticStringPredicate(args[0], string.IsNullOrWhiteSpace);
+        }
+
         if (targetValue == null && args.Length > 0 && args[0] is System.Collections.IEnumerable && IsEnumerableFunction(functionName))
         {
             targetValue = args[0];
@@ -144,6 +152,16 @@ public static partial class ExpressionEvaluator
         }
 
         throw new NotSupportedException($"Function '{functionName}' is not supported for type {targetValue?.GetType().Name ?? "null"}");
+    }
+
+    private static bool EvaluateStaticStringPredicate(object? value, Func<string?, bool> predicate)
+    {
+        if (value is not null and not string)
+        {
+            throw new ArgumentException("Static string predicate requires a string argument.");
+        }
+
+        return predicate((string?)value);
     }
 
     private static bool EvaluateStringPredicate(
