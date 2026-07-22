@@ -147,7 +147,7 @@ public class MetadataManager
 
         if (GetMetadata(tableName) != null) return;
 
-        if (_engine.Options.ReadOnly)
+        if (_engine.IsReadOnly)
         {
             throw new InvalidOperationException($"Schema not found for table '{tableName}' (read-only mode).");
         }
@@ -393,7 +393,7 @@ public class MetadataManager
         {
             if ((builder?.ContainsKey(field.Name) ?? document.ContainsKey(field.Name))) continue;
 
-            // �?后兼容：旧 Schema 可能用 PascalCase 存，文档用 camelCase 存
+            // 向后兼容：旧 Schema 可能用 PascalCase 存，文档用 camelCase 存
             if (field.CamelName != field.Name &&
                 (builder?.ContainsKey(field.CamelName) ?? document.ContainsKey(field.CamelName)))
             {

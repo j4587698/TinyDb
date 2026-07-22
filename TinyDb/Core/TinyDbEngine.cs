@@ -63,6 +63,7 @@ public sealed partial class TinyDbEngine : IDisposable
     private readonly object _lock = new();
     private readonly AsyncLocal<CurrentTransactionHolder?> _currentTransaction = new();
     private readonly Action<TinyDbLogLevel, string, Exception?> _log;
+    private FileStream? _connectionLockStream;
     private DatabaseHeader _header;
     private EncryptionContext? _encryptionContext;
     private int _disposed;
@@ -100,6 +101,8 @@ public sealed partial class TinyDbEngine : IDisposable
     /// 获取此数据库实例使用的选项。
     /// </summary>
     public TinyDbOptions Options => _options.Clone();
+
+    internal bool IsReadOnly => _options.ReadOnly;
 
     /// <summary>
     /// 获取 FindById 查询回退到全集合扫描的次数。
@@ -180,6 +183,7 @@ public sealed partial class TinyDbEngine : IDisposable
         TryDispose(_diskStream);
         TryDispose(_encryptionContext);
         TryDispose(_transactionManager);
+        TryDispose(Interlocked.Exchange(ref _connectionLockStream, null));
     }
 
     private static void TryDispose(IDisposable? disposable)

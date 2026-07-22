@@ -53,7 +53,7 @@ public sealed partial class DocumentCollection<[DynamicallyAccessedMembers(Dynam
         _queryExecutor = new QueryExecutor(engine);
 
         // 只读实例仅加载已持久化索引，不能在集合构造期间隐式创建索引。
-        if (!_engine.Options.ReadOnly)
+        if (!_engine.IsReadOnly)
         {
             CreateAutoIndexes();
         }

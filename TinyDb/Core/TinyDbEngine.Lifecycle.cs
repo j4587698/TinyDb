@@ -35,8 +35,7 @@ public sealed partial class TinyDbEngine
     /// </summary>
     public async Task CheckpointAsync(CancellationToken cancellationToken = default)
     {
-        ThrowIfDisposed();
-        EnsureInitialized();
+        EnsureWritable();
 
         // 1. 刷新所有脏页面
         // 由于 SavePage 已包含 WAL 检查，这一步会确保相关日志先刷新
@@ -88,7 +87,7 @@ public sealed partial class TinyDbEngine
             TotalPages = _header.TotalPages,
             UsedPages = _header.UsedPages,
             CollectionCount = GetCollectionNames().Count(),
-            EnableJournaling = _options.EnableJournaling,
+            EnableJournaling = _writeAheadLog.IsEnabled,
             IsReadOnly = _options.ReadOnly,
             FileSize = _diskStream.Size,
             FreePages = pmStats.FreePages,
@@ -189,8 +188,15 @@ public sealed partial class TinyDbEngine
             }
             finally
             {
-                DisposeComponents();
-                _isInitialized = false;
+                try
+                {
+                    DisposeComponents();
+                }
+                finally
+                {
+                    ReleaseConnectionLock();
+                    _isInitialized = false;
+                }
             }
 
             if (flushException != null)

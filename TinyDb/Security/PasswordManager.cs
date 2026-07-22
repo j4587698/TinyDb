@@ -175,7 +175,7 @@ public static class PasswordManager
         if (!System.IO.File.Exists(filePath))
             throw new FileNotFoundException("数据库文件不存在", filePath);
 
-        var dbOptions = options ?? new TinyDbOptions();
+        var dbOptions = options?.Clone() ?? new TinyDbOptions();
         dbOptions.Password = password;
 
         return new TinyDbEngine(filePath, dbOptions);
@@ -195,7 +195,7 @@ public static class PasswordManager
         if (!System.IO.File.Exists(filePath))
             throw new FileNotFoundException("数据库文件不存在", filePath);
 
-        var dbOptions = options ?? new TinyDbOptions();
+        var dbOptions = options?.Clone() ?? new TinyDbOptions();
 
         // 检查是否需要密码
         if (IsPasswordProtected(filePath))
