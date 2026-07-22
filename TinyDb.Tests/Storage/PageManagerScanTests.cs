@@ -104,6 +104,24 @@ public class PageManagerScanTests : IDisposable
         await Assert.That(ds.WriteCount).IsEqualTo(1);
     }
 
+    [Test]
+    public async Task Initialize_ReadOnly_ShouldDeferFreePageScanUntilStatisticsAreRequested()
+    {
+        const uint pageSize = 4096;
+        using var ds = new CountingDiskStream("mem://readonly-scan", initialSize: (long)pageSize * 3);
+        using var pm = new PageManager(ds, pageSize);
+
+        pm.Initialize(3, 0, readOnly: true);
+
+        await Assert.That(ds.ReadCount).IsEqualTo(0);
+        await Assert.That(ds.WriteCount).IsEqualTo(0);
+
+        var stats = pm.GetStatistics();
+        await Assert.That(stats.FreePages).IsEqualTo(2u);
+        await Assert.That(ds.ReadCount).IsGreaterThan(0);
+        await Assert.That(ds.WriteCount).IsEqualTo(0);
+    }
+
     private sealed class ThrowOnWriteDiskStream : IDiskStream
     {
         public ThrowOnWriteDiskStream(string filePath, long initialSize)
@@ -170,10 +188,12 @@ public class PageManagerScanTests : IDisposable
         public long Size => _stream.Length;
         public bool IsReadable => true;
         public bool IsWritable => true;
+        public int ReadCount { get; private set; }
         public int WriteCount { get; private set; }
 
         public byte[] ReadPage(long pageOffset, int pageSize)
         {
+            ReadCount++;
             var buffer = new byte[pageSize];
             if (pageOffset >= _stream.Length)
             {

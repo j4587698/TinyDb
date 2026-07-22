@@ -108,7 +108,9 @@ public sealed partial class TinyDbEngine
             (definitions, forceFlush) => SavePersistedIndexDefinitions(
                 collectionName,
                 definitions,
-                forceFlush || _options.WriteConcern == WriteConcern.Synced));
+                forceFlush || _options.WriteConcern == WriteConcern.Synced),
+            (name, fields, unique, sparse) => EnsureIndex(collectionName, fields, name, unique, sparse),
+            EnsureWritable);
     }
 
     private IReadOnlyList<PersistedIndexDefinition> LoadPersistedIndexDefinitions(string collectionName)

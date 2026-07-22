@@ -21,6 +21,7 @@ public sealed class BTreeIndex : IDisposable
     private readonly bool _unique;
     private readonly bool _sparse;
     private readonly DiskBTree _tree;
+    private readonly Action? _ensureWritable;
     private int _disposed;
 
     private readonly bool _ownsPageManager;
@@ -80,6 +81,18 @@ public sealed class BTreeIndex : IDisposable
     }
 
     public BTreeIndex(PageManager pm, string name, string[] fields, bool unique, int maxKeys, bool sparse = false)
+        : this(pm, name, fields, unique, maxKeys, sparse, null)
+    {
+    }
+
+    internal BTreeIndex(
+        PageManager pm,
+        string name,
+        string[] fields,
+        bool unique,
+        int maxKeys,
+        bool sparse,
+        Action? ensureWritable)
     {
         _name = name ?? throw new ArgumentNullException(nameof(name));
         _fields = fields ?? throw new ArgumentNullException(nameof(fields));
@@ -87,12 +100,21 @@ public sealed class BTreeIndex : IDisposable
         _unique = unique;
         _sparse = sparse;
         _maxKeys = maxKeys;
+        _ensureWritable = ensureWritable;
         _tree = DiskBTree.Create(pm, maxKeys);
         _ownsPageManager = false;
         UpdateRootField();
     }
 
-    internal BTreeIndex(PageManager pm, string name, string[] fields, bool unique, uint rootPageId, int maxKeys, bool sparse = false)
+    internal BTreeIndex(
+        PageManager pm,
+        string name,
+        string[] fields,
+        bool unique,
+        uint rootPageId,
+        int maxKeys,
+        bool sparse = false,
+        Action? ensureWritable = null)
     {
         if (rootPageId == 0) throw new ArgumentOutOfRangeException(nameof(rootPageId));
 
@@ -102,6 +124,7 @@ public sealed class BTreeIndex : IDisposable
         _unique = unique;
         _sparse = sparse;
         _maxKeys = maxKeys > 0 ? maxKeys : 200;
+        _ensureWritable = ensureWritable;
         _tree = new DiskBTree(pm ?? throw new ArgumentNullException(nameof(pm)), rootPageId, _maxKeys);
         _ownsPageManager = false;
         UpdateRootField();
@@ -115,6 +138,7 @@ public sealed class BTreeIndex : IDisposable
         _unique = unique;
         _sparse = sparse;
         _maxKeys = maxKeys;
+        _ensureWritable = null;
 
         _tempFilePath = Path.Combine(Path.GetTempPath(), $"btree_idx_{Guid.NewGuid():N}.db");
         var ds = new DiskStream(
@@ -136,6 +160,7 @@ public sealed class BTreeIndex : IDisposable
 
     public bool Insert(IndexKey key, BsonValue documentId)
     {
+        EnsureWritable();
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
@@ -147,6 +172,7 @@ public sealed class BTreeIndex : IDisposable
 
     internal async Task<bool> InsertAsync(IndexKey key, BsonValue documentId, CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         if (key == null) throw new ArgumentNullException(nameof(key));
         if (documentId == null) throw new ArgumentNullException(nameof(documentId));
 
@@ -184,6 +210,7 @@ public sealed class BTreeIndex : IDisposable
 
     public bool Delete(IndexKey key, BsonValue documentId)
     {
+        EnsureWritable();
         if (key == null) throw new ArgumentNullException(nameof(key));
 
         using (EnterAsyncWriteGate())
@@ -194,6 +221,7 @@ public sealed class BTreeIndex : IDisposable
 
     internal async Task<bool> DeleteAsync(IndexKey key, BsonValue documentId, CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         if (key == null) throw new ArgumentNullException(nameof(key));
 
         using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
@@ -500,6 +528,7 @@ public sealed class BTreeIndex : IDisposable
 
     public void Clear()
     {
+        EnsureWritable();
         using (EnterAsyncWriteGate())
         {
             ClearCore();
@@ -508,6 +537,7 @@ public sealed class BTreeIndex : IDisposable
 
     internal async Task ClearAsync(CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
         {
             ClearCore();
@@ -530,6 +560,7 @@ public sealed class BTreeIndex : IDisposable
 
     internal void DropStorage()
     {
+        EnsureWritable();
         using (EnterAsyncWriteGate())
         {
             DropStorageCore();
@@ -538,6 +569,7 @@ public sealed class BTreeIndex : IDisposable
 
     internal async Task DropStorageAsync(CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         using (await EnterAsyncWriteGateAsync(cancellationToken).ConfigureAwait(false))
         {
             DropStorageCore();
@@ -590,6 +622,11 @@ public sealed class BTreeIndex : IDisposable
 
             throw;
         }
+    }
+
+    private void EnsureWritable()
+    {
+        _ensureWritable?.Invoke();
     }
 
     private async Task<IDisposable> EnterAsyncWriteGateAsync(CancellationToken cancellationToken)

@@ -63,6 +63,25 @@ public class QueryExecutorIndexTests : IDisposable
     }
 
     [Test]
+    public async Task IndexManagerCreateIndex_AfterExistingDocuments_ShouldBackfillIndex()
+    {
+        var col = _engine.GetCollection<Product>("products_manager_backfill");
+        col.Insert(new Product { Id = 1, Code = "A", Group = 1, Score = 10 });
+        col.Insert(new Product { Id = 2, Code = "B", Group = 1, Score = 20 });
+
+        var created = _engine.GetIndexManager("products_manager_backfill")
+            .CreateIndex("idx_group_score_manager", new[] { "Group", "Score" });
+
+        await Assert.That(created).IsTrue();
+        await Assert.That(_engine.GetIndexManager("products_manager_backfill")
+            .GetIndex("idx_group_score_manager")!.EntryCount).IsEqualTo(2);
+
+        var res = col.Find(p => p.Group == 1 && p.Score >= 20).ToList();
+        await Assert.That(res.Count).IsEqualTo(1);
+        await Assert.That(res[0].Id).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task EnsureIndex_AfterReopen_ShouldLoadPersistedRootPage()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"idx_persist_{Guid.NewGuid():N}.db");
