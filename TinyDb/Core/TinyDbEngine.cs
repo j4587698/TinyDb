@@ -99,7 +99,7 @@ public sealed partial class TinyDbEngine : IDisposable
     /// <summary>
     /// 获取此数据库实例使用的选项。
     /// </summary>
-    public TinyDbOptions Options => _options;
+    public TinyDbOptions Options => _options.Clone();
 
     /// <summary>
     /// 获取 FindById 查询回退到全集合扫描的次数。
@@ -146,7 +146,7 @@ public sealed partial class TinyDbEngine : IDisposable
     internal TinyDbEngine(string f, TinyDbOptions? o, IDiskStream? ds)
     {
         _filePath = f ?? throw new ArgumentNullException();
-        _options = o ?? new TinyDbOptions();
+        _options = o?.Clone() ?? new TinyDbOptions();
         _options.Validate();
         _log = _options.Logger ?? TinyDbLogging.NoopLogger;
 
@@ -161,7 +161,37 @@ public sealed partial class TinyDbEngine : IDisposable
         _indexCreationLocks = new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         _identitySequences = new ConcurrentDictionary<string, IdentitySequenceState>(StringComparer.Ordinal);
 
-        InitializeComponents(ds);
+        try
+        {
+            InitializeComponents(ds);
+        }
+        catch
+        {
+            CleanupFailedInitialization();
+            throw;
+        }
+    }
+
+    private void CleanupFailedInitialization()
+    {
+        TryDispose(_flushScheduler);
+        TryDispose(_writeAheadLog);
+        TryDispose(_pageManager);
+        TryDispose(_diskStream);
+        TryDispose(_encryptionContext);
+        TryDispose(_transactionManager);
+    }
+
+    private static void TryDispose(IDisposable? disposable)
+    {
+        try
+        {
+            disposable?.Dispose();
+        }
+        catch
+        {
+            // Preserve the initialization exception; partially constructed resources are best-effort cleanup.
+        }
     }
 
 }

@@ -31,6 +31,14 @@ public class TinyDbOptionsCoverageTests
     }
 
     [Test]
+    public async Task Validate_CompressionNotImplemented_ShouldThrow()
+    {
+        var options = new TinyDbOptions { EnableCompression = true };
+
+        await Assert.That(() => options.Validate()).Throws<NotSupportedException>();
+    }
+
+    [Test]
     public async Task Validate_InvalidDatabaseName_ShouldThrow()
     {
         var options = new TinyDbOptions { DatabaseName = "" };

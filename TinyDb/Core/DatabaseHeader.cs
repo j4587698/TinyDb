@@ -333,7 +333,7 @@ public struct DatabaseHeader
     {
         return Magic == MagicNumber &&
                DatabaseVersion == Version &&
-               PageSize >= 4096 &&
+               TinyDbOptions.IsSupportedPageSize(PageSize) &&
                TotalPages >= 1 &&
                UsedPages <= TotalPages &&
                CreatedAt > 0 &&
