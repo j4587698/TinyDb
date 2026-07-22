@@ -28,6 +28,16 @@ namespace TinyDb.Core;
 
 public sealed partial class TinyDbEngine
 {
+    internal void EnsureWritable()
+    {
+        ThrowIfDisposed();
+        EnsureInitialized();
+        if (_options.ReadOnly)
+        {
+            throw new InvalidOperationException("The database was opened in read-only mode.");
+        }
+    }
+
     internal CollectionState GetCollectionState(string col)
     {
         var collectionStates = Volatile.Read(ref _collectionStates);
@@ -78,6 +88,20 @@ public sealed partial class TinyDbEngine
         IEnumerable<string> collectionNames,
         CancellationToken cancellationToken = default)
     {
+        return EnterCollectionGatesAsync(collectionNames, exclusive: false, cancellationToken);
+    }
+
+    internal IDisposable EnterCollectionMutationGates(IEnumerable<string> collectionNames)
+    {
+        EnsureWritable();
+        return EnterCollectionGates(collectionNames, exclusive: false);
+    }
+
+    internal Task<IDisposable> EnterCollectionMutationGatesAsync(
+        IEnumerable<string> collectionNames,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureWritable();
         return EnterCollectionGatesAsync(collectionNames, exclusive: false, cancellationToken);
     }
 

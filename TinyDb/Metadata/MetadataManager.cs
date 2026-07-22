@@ -185,6 +185,7 @@ public class MetadataManager
     /// </summary>
     public void SaveMetadata(MetadataDocument doc)
     {
+        _engine.EnsureWritable();
         if (doc == null) throw new ArgumentNullException(nameof(doc));
         if (string.IsNullOrWhiteSpace(doc.TableName)) throw new ArgumentException("TableName is required.", nameof(doc));
 
@@ -273,6 +274,7 @@ public class MetadataManager
     /// </summary>
     public void DeleteMetadata(string tableName)
     {
+        _engine.EnsureWritable();
         lock (_schemaSyncRoot)
         {
             var col = _engine.GetCollection<MetadataDocument>(CATALOG_COLLECTION);

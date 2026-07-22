@@ -220,8 +220,7 @@ public sealed partial class TinyDbEngine
     /// <returns>如果集合被删除则为 true；如果集合不存在则为 false。</returns>
     public bool DropCollection(string n)
     {
-        ThrowIfDisposed();
-        EnsureInitialized();
+        EnsureWritable();
 
         using var collectionLock = EnterCollectionCommitGates(new[] { n });
         bool r = _collections.TryRemove(n, out var col);

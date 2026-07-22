@@ -44,6 +44,7 @@ public sealed partial class TinyDbEngine
 
     internal void SetSecurityMetadata(DatabaseSecurityMetadata m)
     {
+        EnsureWritable();
         lock (_lock)
         {
             _header.SetSecurityMetadata(m);
@@ -53,6 +54,7 @@ public sealed partial class TinyDbEngine
 
     internal void ClearSecurityMetadata()
     {
+        EnsureWritable();
         lock (_lock)
         {
             _header.ClearSecurityMetadata();
@@ -62,6 +64,7 @@ public sealed partial class TinyDbEngine
 
     internal void RewrapEncryptionPassword(string newPassword)
     {
+        EnsureWritable();
         if (_encryptionContext == null)
         {
             return;
@@ -283,6 +286,9 @@ public sealed partial class TinyDbEngine
             if (!DatabaseSecurity.AuthenticateDatabase(this, p)) throw new UnauthorizedAccessException();
             return;
         }
-        DatabaseSecurity.CreateSecureDatabase(this, p);
+        if (!_options.ReadOnly)
+        {
+            DatabaseSecurity.CreateSecureDatabase(this, p);
+        }
     }
 }

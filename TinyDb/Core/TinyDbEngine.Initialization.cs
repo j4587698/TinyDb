@@ -40,10 +40,17 @@ public sealed partial class TinyDbEngine
             var dir = Path.GetDirectoryName(_filePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
             // Direct connection mode: allow concurrent read handles, but reject a second writer.
-            _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.Read);
+            _diskStream = _options.ReadOnly
+                ? new DiskStream(_filePath, FileAccess.Read, FileShare.ReadWrite)
+                : new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.Read);
         }
 
         var isNewDatabase = _diskStream.Size == 0;
+        if (isNewDatabase && _options.ReadOnly)
+        {
+            throw new InvalidOperationException("Cannot create a new database in read-only mode.");
+        }
+
         var hasBootstrapHeader = TryReadBootstrapHeader(_diskStream, out var bootstrapHeader);
         if (hasBootstrapHeader && bootstrapHeader.Magic == DatabaseHeader.MagicNumber && IsSupportedPageSize(bootstrapHeader.PageSize))
         {
@@ -55,7 +62,14 @@ public sealed partial class TinyDbEngine
         var walCodec = _encryptionContext?.WalCodec ?? new NoOpWalCodec();
 
         _pageManager = new PageManager(_diskStream, _options.PageSize, _options.CacheSize, _log, pageCodec);
-        _writeAheadLog = new WriteAheadLog(_filePath, (int)_options.PageSize, _options.EnableJournaling, _options.WalFileNameFormat, _log, walCodec);
+        _writeAheadLog = new WriteAheadLog(
+            _filePath,
+            (int)_options.PageSize,
+            _options.EnableJournaling,
+            _options.WalFileNameFormat,
+            _log,
+            walCodec,
+            _options.ReadOnly);
 
         _pageManager.RegisterWAL(
             (page, beforeImage, ctx) => _writeAheadLog.AppendPage(page, beforeImage, ctx),
@@ -66,7 +80,10 @@ public sealed partial class TinyDbEngine
         _pageManager.RegisterWAL((page, beforeImage, ctx, ct) => _writeAheadLog.AppendPageAsync(page, beforeImage, ctx, ct));
         _pageManager.RegisterWAL((lsn, ctx, ct) => _writeAheadLog.FlushToLSNAsync(lsn, ctx, ct));
 
-        _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, NormalizeInterval(_options.BackgroundFlushInterval), _log);
+        var flushInterval = _options.EnableAutoCheckpoint && !_options.ReadOnly
+            ? NormalizeInterval(_options.BackgroundFlushInterval)
+            : TimeSpan.Zero;
+        _flushScheduler = new FlushScheduler(_pageManager, _writeAheadLog, flushInterval, _log);
         _largeDocumentStorage = new LargeDocumentStorage(_pageManager, (int)_options.PageSize, _log);
         _dataPageAccess = new DataPageAccess(_pageManager, _largeDocumentStorage, _writeAheadLog);
         _metadataManager = new TinyDb.Metadata.MetadataManager(this);
@@ -111,10 +128,13 @@ public sealed partial class TinyDbEngine
 
             _options.PageSize = metadata.LogicalPageSize;
             _options.EnableEncryption = true;
-            var context = EncryptionContext.OpenExisting(metadata, _options);
+            var context = EncryptionContext.OpenExisting(metadata, _options, _options.ReadOnly);
             try
             {
-                EncryptionMetadataStore.WriteToDisk(_diskStream, metadata.LogicalPageSize, context.Metadata);
+                if (!_options.ReadOnly)
+                {
+                    EncryptionMetadataStore.WriteToDisk(_diskStream, metadata.LogicalPageSize, context.Metadata);
+                }
                 return context;
             }
             catch
@@ -140,7 +160,7 @@ public sealed partial class TinyDbEngine
 
     private static bool IsSupportedPageSize(uint pageSize)
     {
-        return pageSize >= 4096 && pageSize <= int.MaxValue && (pageSize & (pageSize - 1)) == 0;
+        return TinyDbOptions.IsSupportedPageSize(pageSize);
     }
 
     private sealed class IdentitySequenceState
@@ -237,15 +257,17 @@ public sealed partial class TinyDbEngine
                         _header.TotalPages,
                         _header.FirstFreePage,
                         _header.FreePageCount,
-                        _header.HasFreePageCount);
+                        _header.HasFreePageCount,
+                        _options.ReadOnly);
 
                     // 步骤 3: 状态一致性同步。
                     // 关键修复：如果在崩溃前分配了页面但 Header 未更新，
                     // WAL 重放后 PageManager 知道最新状态，需反向同步回 Header
-                    if (_pageManager.TotalPages > _header.TotalPages ||
+                    if (!_options.ReadOnly &&
+                        (_pageManager.TotalPages > _header.TotalPages ||
                         _pageManager.FirstFreePageID != _header.FirstFreePage ||
                         !_header.HasFreePageCount ||
-                        _pageManager.FreePageCount != _header.FreePageCount)
+                        _pageManager.FreePageCount != _header.FreePageCount))
                     {
                         WriteHeader();
                     }
@@ -353,6 +375,17 @@ public sealed partial class TinyDbEngine
 
     private void InitializeSystemPages()
     {
+        if (_options.ReadOnly)
+        {
+            if (_header.CollectionInfoPage == 0 || _header.IndexInfoPage == 0)
+            {
+                throw new InvalidDataException(
+                    "Read-only database is missing required system pages and cannot be repaired without write access.");
+            }
+
+            return;
+        }
+
         var headerChanged = false;
         if (_header.CollectionInfoPage == 0)
         {

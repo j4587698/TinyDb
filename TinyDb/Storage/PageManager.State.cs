@@ -72,7 +72,12 @@ public sealed partial class PageManager
     /// </summary>
     /// <param name="totalPages">总页面数</param>
     /// <param name="firstFreePageID">第一个空闲页面ID</param>
-    public void Initialize(uint totalPages, uint firstFreePageID, uint freePageCount = 0, bool hasFreePageCount = false)
+    public void Initialize(
+        uint totalPages,
+        uint firstFreePageID,
+        uint freePageCount = 0,
+        bool hasFreePageCount = false,
+        bool readOnly = false)
     {
         bool rebuildFreeList;
         bool countExistingFreeList;
@@ -102,7 +107,7 @@ public sealed partial class PageManager
 
         if (rebuildFreeList)
         {
-            var (rebuiltFirstFreePageId, countedFreePages) = ScanFreePages(nextPageId);
+            var (rebuiltFirstFreePageId, countedFreePages) = ScanFreePages(nextPageId, rewriteLinks: !readOnly);
             lock (_stateLock)
             {
                 if (_firstFreePageID == initialFirstFreePageId)
@@ -131,7 +136,7 @@ public sealed partial class PageManager
         return Math.Min(freePageCount, maxFreePages);
     }
 
-    private (uint FirstFreePageId, uint FreePageCount) ScanFreePages(uint nextPageId)
+    private (uint FirstFreePageId, uint FreePageCount) ScanFreePages(uint nextPageId, bool rewriteLinks)
     {
         var freePageIds = new List<uint>();
         uint skippedPages = 0;
@@ -155,18 +160,21 @@ public sealed partial class PageManager
             }
         }
 
-        for (var index = 0; index < freePageIds.Count; index++)
+        if (rewriteLinks)
         {
-            var pageId = freePageIds[index];
-            var nextFreePageId = index + 1 < freePageIds.Count ? freePageIds[index + 1] : 0;
-            try
+            for (var index = 0; index < freePageIds.Count; index++)
             {
-                WriteFreePageLink(pageId, nextFreePageId);
-            }
-            catch (Exception ex)
-            {
-                skippedPages++;
-                Log(TinyDbLogLevel.Warning, $"Skipping page {pageId} while rebuilding the free list.", ex);
+                var pageId = freePageIds[index];
+                var nextFreePageId = index + 1 < freePageIds.Count ? freePageIds[index + 1] : 0;
+                try
+                {
+                    WriteFreePageLink(pageId, nextFreePageId);
+                }
+                catch (Exception ex)
+                {
+                    skippedPages++;
+                    Log(TinyDbLogLevel.Warning, $"Skipping page {pageId} while rebuilding the free list.", ex);
+                }
             }
         }
 

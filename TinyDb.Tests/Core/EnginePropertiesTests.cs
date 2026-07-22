@@ -46,4 +46,15 @@ public class EnginePropertiesTests : IDisposable
         await Assert.That(names).Contains("Col1");
         await Assert.That(names).Contains("Col2");
     }
+
+    [Test]
+    public async Task Options_ShouldReturnAnImmutableSnapshot()
+    {
+        var snapshot = _engine.Options;
+        snapshot.PageSize = 4096;
+        snapshot.DatabaseName = "changed";
+
+        await Assert.That(_engine.Options.PageSize).IsEqualTo(TinyDbOptions.DefaultPageSize);
+        await Assert.That(_engine.Options.DatabaseName).IsEqualTo("TinyDb");
+    }
 }

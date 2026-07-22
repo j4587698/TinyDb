@@ -59,7 +59,7 @@ public sealed partial class TinyDbEngine
 
     private void FlushCore()
     {
-        if (!_isInitialized) return;
+        if (!_isInitialized || _options.ReadOnly) return;
         _flushScheduler.Flush();
         FlushIdentitySequenceExactValues();
         _collectionMetaStore.SaveCollections(true);
@@ -81,13 +81,19 @@ public sealed partial class TinyDbEngine
         {
             FilePath = _filePath,
             DatabaseName = _header.DatabaseName,
+            Version = _header.DatabaseVersion,
+            CreatedAt = new DateTime(_header.CreatedAt, DateTimeKind.Utc),
+            ModifiedAt = new DateTime(_header.ModifiedAt, DateTimeKind.Utc),
             PageSize = _header.PageSize,
             TotalPages = _header.TotalPages,
             UsedPages = _header.UsedPages,
             CollectionCount = GetCollectionNames().Count(),
             EnableJournaling = _options.EnableJournaling,
+            IsReadOnly = _options.ReadOnly,
             FileSize = _diskStream.Size,
-            FreePages = pmStats.FreePages
+            FreePages = pmStats.FreePages,
+            CachedPages = pmStats.CachedPages,
+            CacheHitRatio = pmStats.CacheHitRatio
         };
     }
 
@@ -147,7 +153,7 @@ public sealed partial class TinyDbEngine
 
             try
             {
-                if (_isInitialized && Volatile.Read(ref _corruptionException) == null)
+                if (_isInitialized && !_options.ReadOnly && Volatile.Read(ref _corruptionException) == null)
                 {
                     _collectionMetaStore.SaveCollections(false);
                 }
