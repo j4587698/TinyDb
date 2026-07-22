@@ -14,6 +14,8 @@ public sealed class TinyDbOptions
     /// </summary>
     public const uint DefaultPageSize = 8192;
 
+    internal const uint MaxPageSize = PageHeader.Size + ushort.MaxValue;
+
     /// <summary>
     /// 默认缓存大小
     /// </summary>
@@ -150,9 +152,9 @@ public sealed class TinyDbOptions
         if (!IsPowerOfTwo(PageSize))
             throw new ArgumentException("Page size must be a power of 2", nameof(PageSize));
 
-        if ((long)PageSize - PageHeader.Size > ushort.MaxValue)
+        if (PageSize > MaxPageSize)
             throw new ArgumentException(
-                $"Page size cannot exceed {PageHeader.Size + ushort.MaxValue} bytes with the current page format",
+                $"Page size cannot exceed {MaxPageSize} bytes with the current page format",
                 nameof(PageSize));
 
         // 验证缓存大小
@@ -173,6 +175,9 @@ public sealed class TinyDbOptions
         // 验证用户数据
         if (UserData != null && UserData.Length > 64)
             throw new ArgumentException("User data is too long (max 64 bytes)", nameof(UserData));
+
+        if (EnableCompression)
+            throw new NotSupportedException("Database compression is not implemented.");
 
         // 验证加密配置
         if (EnableEncryption)
@@ -219,6 +224,11 @@ public sealed class TinyDbOptions
     internal static bool IsPowerOfTwo(uint value)
     {
         return value != 0 && (value & (value - 1)) == 0;
+    }
+
+    internal static bool IsSupportedPageSize(uint value)
+    {
+        return value >= 4096 && value <= MaxPageSize && IsPowerOfTwo(value);
     }
 
     /// <summary>

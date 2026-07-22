@@ -69,9 +69,10 @@
         <None Include="aot-example.csproj" Pack="true" PackagePath="content\" />
     </ItemGroup>
 
-    <!-- 包含SourceGenerator DLL作为分析器 - 静态声明 -->
-    <ItemGroup Condition="Exists('../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll')">
-        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll" Pack="true" PackagePath="analyzers/dotnet/cs" />
+    <ItemGroup>
+        <None Include="../TinyDb.SourceGenerator/bin/Release/netstandard2.0/TinyDb.SourceGenerator.dll"
+              Pack="true"
+              PackagePath="analyzers/dotnet/cs" />
     </ItemGroup>
 
     <!-- 打包前的目标：确保 SourceGenerator 已构建 -->

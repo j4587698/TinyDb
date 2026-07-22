@@ -247,6 +247,10 @@ public sealed class ImplementationFixRegressionTests : IDisposable
         var options = new TinyDbOptions { PageSize = 131072 };
 
         await Assert.That(() => options.Validate()).Throws<ArgumentException>();
+
+        var header = new DatabaseHeader();
+        header.Initialize(131072);
+        await Assert.That(header.IsValid()).IsFalse();
     }
 
     [Test]
