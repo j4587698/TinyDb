@@ -115,6 +115,11 @@ public sealed partial class TransactionManager : IDisposable, IAsyncDisposable
             operations = transaction.GetOperationsSnapshot();
         }
 
+        if (operations.Length > 0)
+        {
+            _engine.EnsureWritable();
+        }
+
         try
         {
             var transactionLockCollections = GetTransactionLockCollectionNames(operations).ToArray();

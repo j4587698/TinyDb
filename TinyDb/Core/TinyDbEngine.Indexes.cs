@@ -43,6 +43,7 @@ public sealed partial class TinyDbEngine
 
     internal bool EnsureIndex(string collectionName, string[] fields, string indexName, bool unique = false, bool sparse = false)
     {
+        EnsureWritable();
         var lockKey = collectionName + "\u001F" + indexName;
         var indexLock = _indexCreationLocks.GetOrAdd(lockKey, _ => new object());
         lock (indexLock)

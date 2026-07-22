@@ -52,8 +52,11 @@ public sealed partial class DocumentCollection<[DynamicallyAccessedMembers(Dynam
         _name = name ?? throw new ArgumentNullException(nameof(name));
         _queryExecutor = new QueryExecutor(engine);
 
-        // 自动扫描并创建基于属性的索引
-        CreateAutoIndexes();
+        // 只读实例仅加载已持久化索引，不能在集合构造期间隐式创建索引。
+        if (!_engine.Options.ReadOnly)
+        {
+            CreateAutoIndexes();
+        }
     }
 
     /// <summary>

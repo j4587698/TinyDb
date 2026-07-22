@@ -25,6 +25,12 @@ public class EngineStatisticsTests : IDisposable
         var stats = engine.GetStatistics();
         
         await Assert.That(stats.DatabaseName).IsEqualTo("TinyDb");
+        await Assert.That(stats.Version).IsEqualTo(DatabaseHeader.Version);
+        await Assert.That(stats.CreatedAt).IsGreaterThan(DateTime.UnixEpoch);
+        await Assert.That(stats.ModifiedAt).IsGreaterThanOrEqualTo(stats.CreatedAt);
+        await Assert.That(stats.IsReadOnly).IsFalse();
+        await Assert.That(stats.CachedPages).IsGreaterThanOrEqualTo(0);
+        await Assert.That(stats.CacheHitRatio).IsGreaterThanOrEqualTo(0d);
         await Assert.That(stats.UsedPages).IsGreaterThan(0u);
         await Assert.That(stats.CollectionCount).IsEqualTo(0);
         

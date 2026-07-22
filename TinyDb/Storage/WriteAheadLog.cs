@@ -101,7 +101,8 @@ public sealed partial class WriteAheadLog : IDisposable
         bool enabled,
         string? walFileNameFormat,
         Action<TinyDbLogLevel, string, Exception?>? logger,
-        IWalCodec? walCodec)
+        IWalCodec? walCodec,
+        bool readOnly = false)
     {
         if (string.IsNullOrWhiteSpace(databaseFilePath))
             throw new ArgumentException("Database file path cannot be null or empty", nameof(databaseFilePath));
@@ -109,8 +110,21 @@ public sealed partial class WriteAheadLog : IDisposable
         _log = logger ?? TinyDbLogging.NoopLogger;
         _walCodec = walCodec ?? new NoOpWalCodec();
         _maxRecordSize = Math.Max(pageSize * 2 + TransactionIdSize + BeforeLengthSize, pageSize) + _walCodec.MaxOverhead;
-        IsEnabled = enabled;
         _logFilePath = GenerateWalFilePath(databaseFilePath, walFileNameFormat ?? "{name}-wal.{ext}");
+
+        if (readOnly)
+        {
+            if (File.Exists(_logFilePath) && new FileInfo(_logFilePath).Length > 0)
+            {
+                throw new InvalidOperationException(
+                    "Cannot open the database in read-only mode while WAL recovery is pending.");
+            }
+
+            IsEnabled = false;
+            return;
+        }
+
+        IsEnabled = enabled;
 
         if (!IsEnabled)
         {

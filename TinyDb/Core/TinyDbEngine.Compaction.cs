@@ -55,9 +55,7 @@ public sealed partial class TinyDbEngine
     /// </summary>
     public void CompactDatabase()
     {
-        ThrowIfDisposed();
-
-        EnsureInitialized();
+        EnsureWritable();
         var tempFile = _filePath + ".compact";
         var collectionNames = GetCollectionNames(includeSystemCollections: true)
             .Distinct(StringComparer.Ordinal)

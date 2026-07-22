@@ -111,7 +111,7 @@ internal sealed class EncryptionContext : IDisposable
         }
     }
 
-    public static EncryptionContext OpenExisting(EncryptionMetadata metadata, TinyDbOptions options)
+    public static EncryptionContext OpenExisting(EncryptionMetadata metadata, TinyDbOptions options, bool readOnly = false)
     {
         if (metadata == null) throw new ArgumentNullException(nameof(metadata));
         if (options == null) throw new ArgumentNullException(nameof(options));
@@ -122,7 +122,10 @@ internal sealed class EncryptionContext : IDisposable
         {
             dek = UnwrapDek(metadata, kek);
             VerifyMetadataMac(metadata, dek);
-            ReserveNextNonceEpoch(metadata, dek);
+            if (!readOnly)
+            {
+                ReserveNextNonceEpoch(metadata, dek);
+            }
             var context = new EncryptionContext(metadata, dek);
             dek = null;
             return context;

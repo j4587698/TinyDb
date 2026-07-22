@@ -31,7 +31,7 @@ public sealed partial class TinyDbEngine
 
     internal BsonValue InsertDocument(string col, BsonDocument doc)
     {
-        using var collectionCommitGate = EnterCollectionWriteGates(GetWriteGateCollectionsForForeignKeys(col));
+        using var collectionCommitGate = EnterCollectionMutationGates(GetWriteGateCollectionsForForeignKeys(col));
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
         BsonValue res;
@@ -65,7 +65,7 @@ public sealed partial class TinyDbEngine
     /// <returns>æ’å…¥æ–‡æ¡£çš„ID</returns>
     internal async Task<BsonValue> InsertDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
-        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
+        using var collectionCommitGate = await EnterCollectionMutationGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
         BsonValue res;
@@ -94,7 +94,7 @@ public sealed partial class TinyDbEngine
 
     internal int UpdateDocument(string col, BsonDocument doc)
     {
-        using var collectionCommitGate = EnterCollectionWriteGates(GetWriteGateCollectionsForForeignKeys(col));
+        using var collectionCommitGate = EnterCollectionMutationGates(GetWriteGateCollectionsForForeignKeys(col));
         doc = PrepareDocumentForUpdate(col, doc, out var id);
         if (id == null || id.IsNull) return 0;
 
@@ -136,7 +136,7 @@ public sealed partial class TinyDbEngine
     internal async Task<int> UpdateDocumentAsync(string col, BsonDocument doc, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
+        using var collectionCommitGate = await EnterCollectionMutationGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
         doc = PrepareDocumentForUpdate(col, doc, out var id);
         if (id == null || id.IsNull) return 0;
 
@@ -176,7 +176,7 @@ public sealed partial class TinyDbEngine
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return 0;
-        using var collectionCommitGate = EnterCollectionWriteGates(GetWriteGateCollectionsForForeignKeys(col));
+        using var collectionCommitGate = EnterCollectionMutationGates(GetWriteGateCollectionsForForeignKeys(col));
 
         var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
         foreach (var d in docs)
@@ -232,7 +232,7 @@ public sealed partial class TinyDbEngine
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return 0;
-        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
+        using var collectionCommitGate = await EnterCollectionMutationGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
 
         var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
         foreach (var d in docs)
@@ -308,7 +308,7 @@ public sealed partial class TinyDbEngine
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return (0, 0);
-        using var collectionCommitGate = EnterCollectionWriteGates(GetWriteGateCollectionsForForeignKeys(col));
+        using var collectionCommitGate = EnterCollectionMutationGates(GetWriteGateCollectionsForForeignKeys(col));
 
         var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
         foreach (var d in docs)
@@ -368,7 +368,7 @@ public sealed partial class TinyDbEngine
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return (0, 0);
-        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
+        using var collectionCommitGate = await EnterCollectionMutationGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
 
         var prepared = new List<(BsonDocument Doc, BsonValue Id)>(docs.Count);
         foreach (var d in docs)
@@ -432,7 +432,7 @@ public sealed partial class TinyDbEngine
     internal int DeleteDocument(string col, BsonValue id)
     {
         if (id == null || id.IsNull) return 0;
-        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
+        using var collectionCommitGate = EnterCollectionMutationGates(new[] { col });
 
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
@@ -464,7 +464,7 @@ public sealed partial class TinyDbEngine
             .ToArray();
         if (distinctIds.Length == 0) return 0;
 
-        using var collectionCommitGate = EnterCollectionWriteGates(new[] { col });
+        using var collectionCommitGate = EnterCollectionMutationGates(new[] { col });
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
         var deleted = 0;
@@ -510,7 +510,7 @@ public sealed partial class TinyDbEngine
     internal async Task<int> DeleteDocumentAsync(string col, BsonValue id, CancellationToken cancellationToken = default)
     {
         if (id == null || id.IsNull) return 0;
-        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false);
+        using var collectionCommitGate = await EnterCollectionMutationGatesAsync(new[] { col }, cancellationToken).ConfigureAwait(false);
 
         var st = GetCollectionState(col);
         var idxMgr = GetIndexManager(col);
@@ -530,7 +530,7 @@ public sealed partial class TinyDbEngine
         EnsureInitialized();
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return 0;
-        using var collectionCommitGate = EnterCollectionWriteGates(GetWriteGateCollectionsForForeignKeys(col));
+        using var collectionCommitGate = EnterCollectionMutationGates(GetWriteGateCollectionsForForeignKeys(col));
 
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
@@ -631,7 +631,7 @@ public sealed partial class TinyDbEngine
         if (docs == null) throw new ArgumentNullException(nameof(docs));
         if (docs.Count == 0) return 0;
         cancellationToken.ThrowIfCancellationRequested();
-        using var collectionCommitGate = await EnterCollectionWriteGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
+        using var collectionCommitGate = await EnterCollectionMutationGatesAsync(GetWriteGateCollectionsForForeignKeys(col), cancellationToken).ConfigureAwait(false);
 
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
@@ -747,7 +747,7 @@ public sealed partial class TinyDbEngine
 
     internal BsonValue InsertDocumentInternal(string col, BsonDocument d)
     {
-        using var collectionCommitGate = EnterCollectionWriteGates(GetWriteGateCollectionsForForeignKeys(col));
+        using var collectionCommitGate = EnterCollectionMutationGates(GetWriteGateCollectionsForForeignKeys(col));
         var st = GetCollectionState(col);
         var idx = GetIndexManager(col);
         using var pr = PrepareSerializedInsertPayload(col, d, out _);

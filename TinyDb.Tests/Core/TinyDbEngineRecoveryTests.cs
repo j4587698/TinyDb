@@ -111,6 +111,35 @@ public class TinyDbEngineRecoveryTests : IDisposable
     }
 
     [Test]
+    public async Task ReadOnlyEngine_ShouldReadWithoutMutatingAndRejectWrites()
+    {
+        using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions { EnableJournaling = false }))
+        {
+            engine.GetCollection<RecoveryDataItem>().Insert(new RecoveryDataItem { Id = 1, Value = "readonly" });
+        }
+
+        var before = File.ReadAllBytes(_testDbPath);
+        using (var engine = new TinyDbEngine(_testDbPath, new TinyDbOptions
+        {
+            ReadOnly = true,
+            EnableJournaling = false
+        }))
+        {
+            var collection = engine.GetCollection<RecoveryDataItem>();
+            await Assert.That(collection.FindById(1)?.Value).IsEqualTo("readonly");
+            await Assert.That(() => collection.Insert(new RecoveryDataItem { Id = 2, Value = "blocked" }))
+                .Throws<InvalidOperationException>();
+            await Assert.That(() => engine.EnsureIndex(nameof(RecoveryDataItem), "value", "idx_value"))
+                .Throws<InvalidOperationException>();
+            await Assert.That(() => engine.DropCollection(nameof(RecoveryDataItem)))
+                .Throws<InvalidOperationException>();
+        }
+
+        var after = File.ReadAllBytes(_testDbPath);
+        await Assert.That(after.SequenceEqual(before)).IsTrue();
+    }
+
+    [Test]
     public async Task Engine_Should_WriteValidHeader_DuringInitialCreation()
     {
         using var engine = new TinyDbEngine(_testDbPath);
