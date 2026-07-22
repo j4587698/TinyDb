@@ -39,7 +39,8 @@ public sealed partial class TinyDbEngine
         {
             var dir = Path.GetDirectoryName(_filePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.ReadWrite);
+            // Direct connection mode: allow concurrent read handles, but reject a second writer.
+            _diskStream = new DiskStream(_filePath, FileAccess.ReadWrite, FileShare.Read);
         }
 
         var isNewDatabase = _diskStream.Size == 0;

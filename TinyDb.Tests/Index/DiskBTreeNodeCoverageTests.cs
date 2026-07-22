@@ -49,6 +49,36 @@ public sealed class DiskBTreeNodeCoverageTests : IDisposable
     }
 
     [Test]
+    public async Task Ctor_WhenPageTypeIsNotIndex_ShouldThrowWithoutChangingPage()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+        var page = pm.NewPage(PageType.Data);
+
+        await Assert.That(() => new DiskBTreeNode(page, pm)).Throws<InvalidDataException>();
+        await Assert.That(page.PageType).IsEqualTo(PageType.Data);
+        await Assert.That(page.Header.ItemCount).IsEqualTo((ushort)0);
+    }
+
+    [Test]
+    public async Task Save_WhenRootPageTypeChanges_ShouldThrowWithoutWritingNodePayload()
+    {
+        using var diskStream = new DiskStream(_testFilePath);
+        using var pm = new PageManager(diskStream, TestPageSize, TestCacheSize);
+        var page = pm.NewPage(PageType.Index);
+        var node = new DiskBTreeNode(page, pm);
+
+        page.UpdatePageType(PageType.Data);
+        node.Keys.Add(new IndexKey(new BsonInt32(1)));
+        node.Values.Add(new BsonInt32(1));
+        node.MarkDirty();
+
+        await Assert.That(() => node.Save(pm)).Throws<InvalidDataException>();
+        await Assert.That(page.PageType).IsEqualTo(PageType.Data);
+        await Assert.That(page.Header.ItemCount).IsEqualTo((ushort)0);
+    }
+
+    [Test]
     public async Task Save_WhenAlreadyClean_ShouldReturnEarly()
     {
         using var diskStream = new DiskStream(_testFilePath);

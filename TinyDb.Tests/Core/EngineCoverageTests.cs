@@ -132,7 +132,9 @@ public class EngineCoverageTests
         {
             engine.GetBsonCollection("locked_compact").Insert(new BsonDocument().Set("x", 1));
 
-            using var lockStream = new FileStream(_dbFile, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            // Direct mode permits concurrent readers. Omitting FileShare.Delete keeps the
+            // Windows replacement-failure branch covered without opening a second writer.
+            using var lockStream = new FileStream(_dbFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
             // Windows: open handle blocks replace.
             // Linux/macOS: rename/replace generally allowed.

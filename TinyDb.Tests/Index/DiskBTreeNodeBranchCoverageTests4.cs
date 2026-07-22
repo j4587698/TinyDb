@@ -13,7 +13,7 @@ namespace TinyDb.Tests.Index;
 public class DiskBTreeNodeBranchCoverageTests4
 {
     [Test]
-    public async Task Save_WhenOverflowPageIsNotIndex_ShouldUpdatePageType()
+    public async Task Save_WhenOverflowPageIsNotIndex_ShouldThrowWithoutChangingPageType()
     {
         using var pm = new PageManager(new MockDiskStream(), pageSize: 4096, maxCacheSize: 64);
 
@@ -27,10 +27,10 @@ public class DiskBTreeNodeBranchCoverageTests4
         node.Values.Add(new BsonInt32(1));
         node.MarkDirty();
 
-        node.Save(pm);
+        await Assert.That(() => node.Save(pm)).Throws<InvalidDataException>();
 
         var overflowReloaded = pm.GetPage(overflow.PageID);
-        await Assert.That(overflowReloaded.PageType).IsEqualTo(PageType.Index);
+        await Assert.That(overflowReloaded.PageType).IsEqualTo(PageType.Data);
     }
 
     [Test]
