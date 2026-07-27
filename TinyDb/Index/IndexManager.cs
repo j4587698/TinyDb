@@ -228,6 +228,23 @@ public sealed class IndexManager : IDisposable
     }
 
     /// <summary>
+    /// 获取所有索引的定义（不遍历索引树）。
+    /// </summary>
+    /// <returns>索引定义的集合。</returns>
+    public IEnumerable<IndexDefinition> GetAllDefinitions()
+    {
+        _rwLock.EnterReadLock();
+        try
+        {
+            return _catalog.Indexes.Select(index => index.GetDefinition()).ToArray();
+        }
+        finally
+        {
+            _rwLock.ExitReadLock();
+        }
+    }
+
+    /// <summary>
     /// 获取所有索引的统计信息。
     /// </summary>
     /// <returns>索引统计信息的集合。</returns>

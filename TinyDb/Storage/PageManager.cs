@@ -36,6 +36,9 @@ public sealed partial class PageManager : IDisposable
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
     private uint _freePageCount;
+    // volatile：SetAllocatorStatePage/CreateAllocatorStatePage 的写不在锁内，
+    // 而 FreePage 的守卫是无锁读，需要保证跨线程可见性。
+    private volatile uint _allocatorStatePageId; // 0 = 未迁移（旧库），>0 = allocator state page 页号
     private int _deferredFreePageScanMode;
     private long _fileSize;
     private bool _disposed;

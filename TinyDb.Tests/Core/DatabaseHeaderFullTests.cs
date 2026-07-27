@@ -74,6 +74,6 @@ public class DatabaseHeaderFullTests
         await Assert.That(metadata.Salt.SequenceEqual(salt)).IsTrue();
         await Assert.That(metadata.KeyHash.SequenceEqual(hash)).IsTrue();
         await Assert.That(DatabaseHeader.ReservedHeaderExtensionBytes).IsGreaterThanOrEqualTo(8);
-        await Assert.That(DatabaseHeader.TrailingHeaderExtensionBytes).IsEqualTo(11);
+        await Assert.That(DatabaseHeader.TrailingHeaderExtensionBytes).IsEqualTo(7);
     }
 }

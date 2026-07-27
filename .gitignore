@@ -58,6 +58,9 @@ logs/
 *.temp
 *~
 
+# Local reproduction harness (not part of the solution)
+_repro/
+
 # OS generated files
 .DS_Store
 .DS_Store?

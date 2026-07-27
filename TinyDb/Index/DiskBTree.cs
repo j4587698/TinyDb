@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -82,46 +83,99 @@ public sealed partial class DiskBTree : IDisposable
     /// <summary>
     /// 获取树中节点的总数。
     /// </summary>
+    /// <remarks>
+    /// 遍历遇到结构损坏（子指针指向的页已不再是索引页）时不会抛出异常，而是跳过该子树继续统计。
+    /// 统计属性若因损坏抛异常，会连带让 CompactDatabase 之类的修复手段也无法执行，
+    /// 使一处局部损坏放大成整库不可恢复。需要知晓损坏范围时请改用 <see cref="CountNodes(out int)"/>。
+    /// </remarks>
     public int NodeCount
     {
         get
         {
             ThrowIfDisposed();
             using var lease = BeginPageLease();
-            return CountNodes(_rootPageId);
+            var damagedSubtrees = 0;
+            return CountNodes(_rootPageId, ref damagedSubtrees);
         }
+    }
+
+    /// <summary>
+    /// 统计节点总数，同时报告因结构损坏而无法遍历的子树数量。
+    /// </summary>
+    /// <param name="damagedSubtrees">无法加载的子树个数，0 表示结构完好。</param>
+    /// <returns>可正常遍历到的节点总数。</returns>
+    internal int CountNodes(out int damagedSubtrees)
+    {
+        ThrowIfDisposed();
+        using var lease = BeginPageLease();
+        var damaged = 0;
+        var count = CountNodes(_rootPageId, ref damaged);
+        damagedSubtrees = damaged;
+        return count;
     }
 
     /// <summary>
     /// 获取树的高度。
     /// </summary>
+    /// <remarks>
+    /// 遇到损坏的子指针时返回已能确认的高度，不抛异常，理由同 <see cref="NodeCount"/>。
+    /// 结构完好时最小值为 1（空树的根页本身即叶子），因此返回 0 唯一表示根页不可读。
+    /// </remarks>
     public int Height
     {
         get
         {
             ThrowIfDisposed();
             using var lease = BeginPageLease();
-            var node = LoadNode(_rootPageId);
+            DiskBTreeNode node;
+            try
+            {
+                node = LoadNode(_rootPageId);
+            }
+            catch (InvalidDataException)
+            {
+                return 0;
+            }
+
             int height = 1;
             while (!node.IsLeaf)
             {
                 if (node.ChildrenIds.Count == 0) break;
-                node = LoadNode(node.ChildrenIds[0]);
+                try
+                {
+                    node = LoadNode(node.ChildrenIds[0]);
+                }
+                catch (InvalidDataException)
+                {
+                    break;
+                }
                 height++;
             }
             return height;
         }
     }
 
-    private int CountNodes(uint pageId)
+    private int CountNodes(uint pageId, ref int damagedSubtrees)
     {
-        var node = LoadNode(pageId);
+        DiskBTreeNode node;
+        try
+        {
+            node = LoadNode(pageId);
+        }
+        catch (InvalidDataException)
+        {
+            // 子指针悬空：目标页已被改作他用，这棵子树里的索引项无法再恢复。
+            // 跳过并计数，而不是中断整次遍历。
+            damagedSubtrees++;
+            return 0;
+        }
+
         int count = 1;
         if (!node.IsLeaf)
         {
             foreach (var childId in node.ChildrenIds)
             {
-                count += CountNodes(childId);
+                count += CountNodes(childId, ref damagedSubtrees);
             }
         }
         return count;

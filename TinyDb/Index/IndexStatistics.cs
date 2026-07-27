@@ -19,9 +19,21 @@ public sealed class IndexStatistics
     public int TreeHeight { get; init; }
     public bool RootIsLeaf { get; init; }
 
+    /// <summary>
+    /// 因结构损坏而无法遍历的子树数量，0 表示索引结构完好。
+    /// 大于 0 时说明部分索引项已不可达，需重建索引或执行 CompactDatabase 恢复。
+    /// </summary>
+    public int DamagedSubtreeCount { get; init; }
+
+    /// <summary>
+    /// 索引结构是否存在损坏。
+    /// </summary>
+    public bool IsDamaged => DamagedSubtreeCount > 0;
+
     public override string ToString()
     {
+        var damage = DamagedSubtreeCount > 0 ? $", DAMAGED={DamagedSubtreeCount}" : string.Empty;
         return $"Index[{Name}]: {Type}, {Fields.Length} fields, {EntryCount} entries, " +
-               $"{NodeCount} nodes, Height={TreeHeight}";
+               $"{NodeCount} nodes, Height={TreeHeight}{damage}";
     }
 }

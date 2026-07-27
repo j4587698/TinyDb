@@ -130,11 +130,36 @@ public sealed partial class TinyDbEngine
         {
             _pageManager.ClearCache(flushDirtyPages: false);
             ReadHeader();
+
+            var firstFreePage = _header.FirstFreePage;
+            var freePageCount = _header.FreePageCount;
+            var hasFreePageCount = _header.HasFreePageCount;
+            var hasAllocatorStatePage = _pageManager.TryReadAllocatorState(
+                _header.AllocatorStatePageId,
+                out var allocatorFirstFreePage,
+                out var allocatorFreePageCount);
+            if (hasAllocatorStatePage)
+            {
+                firstFreePage = allocatorFirstFreePage;
+                freePageCount = allocatorFreePageCount;
+                hasFreePageCount = true;
+            }
+
             _pageManager.Initialize(
                 _header.TotalPages,
-                _header.FirstFreePage,
-                _header.FreePageCount,
-                _header.HasFreePageCount);
+                firstFreePage,
+                freePageCount,
+                hasFreePageCount);
+
+            if (hasAllocatorStatePage)
+            {
+                _pageManager.SetAllocatorStatePage(_header.AllocatorStatePageId);
+            }
+            else
+            {
+                // 页号不可信时不要绑定，否则分配器状态会被写进别的页。
+                _pageManager.SetAllocatorStatePage(0);
+            }
 
             lock (_collectionStateInitLock)
             {
