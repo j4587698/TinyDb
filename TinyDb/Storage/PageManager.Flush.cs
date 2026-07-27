@@ -14,6 +14,7 @@ public sealed partial class PageManager
     {
         ThrowIfDisposed();
         if (pageID == 0) throw new ArgumentException("Page ID cannot be zero", nameof(pageID));
+        if (pageID == _allocatorStatePageId) throw new ArgumentException("Cannot free the allocator state page", nameof(pageID));
 
         lock (_freeListLock)
         {
@@ -48,6 +49,8 @@ public sealed partial class PageManager
                 _firstFreePageID = pageID;
                 _freePageCount++;
             }
+
+            PersistAllocatorState();
         }
     }
 

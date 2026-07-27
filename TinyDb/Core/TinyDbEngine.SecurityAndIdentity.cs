@@ -102,9 +102,10 @@ public sealed partial class TinyDbEngine
 
             var sourceIndexManager = GetIndexManager(collectionName);
             var targetIndexManager = target.GetIndexManager(collectionName);
-            foreach (var stat in sourceIndexManager.GetAllStatistics())
+            // 只取索引定义：用 GetAllStatistics() 会遍历整棵索引树，而压缩/修复恰恰需要在结构已损坏时还能跑通。
+            foreach (var definition in sourceIndexManager.GetAllDefinitions())
             {
-                targetIndexManager.CreateIndex(stat.Name, stat.Fields, stat.IsUnique, stat.IsSparse);
+                targetIndexManager.CreateIndex(definition.Name, definition.Fields, definition.IsUnique, definition.IsSparse);
             }
 
             var documentBatch = new List<BsonDocument>(CopyBatchSize);

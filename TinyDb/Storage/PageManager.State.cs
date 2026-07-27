@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Threading;
@@ -287,6 +288,152 @@ public sealed partial class PageManager
         WriteEncodedPageToDisk(pageId, pageOffset, pageData);
         RemoveFromCache(pageId);
     }
+
+    /// <summary>
+    /// 读取 allocator state page 中记录的空闲链表状态。
+    /// </summary>
+    /// <param name="allocatorStatePageId">allocator state page 页号，0 表示旧库未迁移。</param>
+    /// <param name="firstFreePageId">读到的空闲链表头。</param>
+    /// <param name="freePageCount">读到的空闲页数量。</param>
+    /// <returns>成功读到可信状态则为 true；调用方应在返回 false 时沿用 header 中的值。</returns>
+    /// <remarks>
+    /// 由 <see cref="TinyDbEngine"/> 在 <see cref="Initialize"/> 之前调用，好让扫描/重建逻辑
+    /// 一开始就拿到正确的链表头，避免先做一次全盘 <c>ScanFreePages</c> 再被覆盖。
+    /// <para>
+    /// 页读取失败的处理分两种情况：未加密库按普通磁盘损坏处理，降级到 header 值并让上层重建
+    /// ——allocator state 的内容完全可以由空闲链表扫描重算，纯属缓存，绝不能因为它坏了就让整个库
+    /// 打不开（那正是本轮改动要消灭的"一处局部损坏放大成整库不可恢复"）。加密库则一律外抛：
+    /// 解密认证失败意味着文件被篡改，把它降级成警告等于给篡改开了一个后门。
+    /// </para>
+    /// </remarks>
+    internal bool TryReadAllocatorState(uint allocatorStatePageId, out uint firstFreePageId, out uint freePageCount)
+    {
+        firstFreePageId = 0;
+        freePageCount = 0;
+
+        if (allocatorStatePageId == 0) return false;
+
+        if (IsBeyondFileSize(CalculatePageOffset(allocatorStatePageId)))
+        {
+            // GetPage 对越界页号会静默新建一个空白页，那样会把空闲链表悄悄清零。
+            Log(TinyDbLogLevel.Warning,
+                $"Allocator state page {allocatorStatePageId} is beyond the end of the database file. Falling back to header values.");
+            return false;
+        }
+
+        Page page;
+        try
+        {
+            page = GetPage(allocatorStatePageId);
+        }
+        catch (InvalidDataException ex) when (!_pageCodec.IsEncrypted)
+        {
+            Log(TinyDbLogLevel.Warning,
+                $"Allocator state page {allocatorStatePageId} could not be read. Falling back to header values; the page will be rebuilt.", ex);
+            return false;
+        }
+
+        if (page.PageType != PageType.Extension)
+        {
+            Log(TinyDbLogLevel.Warning,
+                $"Allocator state page {allocatorStatePageId} has page type {page.PageType} instead of {PageType.Extension}. Falling back to header values.");
+            return false;
+        }
+
+        var data = page.ReadBytes(0, AllocatorStateDataSize);
+        firstFreePageId = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(0, 4));
+        freePageCount = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4));
+        return true;
+    }
+
+    /// <summary>
+    /// 绑定 allocator state page，使后续 <see cref="FreePage"/>/<see cref="NewPage"/> 自动持久化空闲链表状态。
+    /// </summary>
+    internal void SetAllocatorStatePage(uint allocatorStatePageId)
+    {
+        _allocatorStatePageId = allocatorStatePageId;
+    }
+
+    /// <summary>
+    /// 为旧库创建 allocator state page 并写入当前空闲链表状态。
+    /// </summary>
+    /// <remarks>
+    /// 由 <see cref="TinyDbEngine"/> 在检测到旧库（<c>AllocatorStatePageId == 0</c>）时调用。
+    /// 调用前 PageManager 应已完成 Initialize，_firstFreePageID/_freePageCount 是正确的。
+    /// </remarks>
+    internal uint CreateAllocatorStatePage()
+    {
+        // 分配一个新页作为 allocator state page
+        // 此时 _allocatorStatePageId 仍为 0，PersistAllocatorState 是 no-op，不会递归
+        var page = NewPage(PageType.Extension);
+
+        // 写入当前空闲链表状态
+        uint firstFreePageId;
+        uint freePageCount;
+        lock (_stateLock)
+        {
+            firstFreePageId = _firstFreePageID;
+            freePageCount = _freePageCount;
+        }
+
+        WriteAllocatorStateToPage(page, firstFreePageId, freePageCount);
+
+        // 设置 _allocatorStatePageId，后续 FreePage/NewPage 会自动持久化
+        _allocatorStatePageId = page.PageID;
+
+        // 立即写盘 + WAL
+        SavePage(page, forceFlush: false);
+
+        return page.PageID;
+    }
+
+    /// <summary>
+    /// 把当前空闲链表状态持久化到 allocator state page。
+    /// </summary>
+    /// <remarks>
+    /// 在 <see cref="FreePage"/> 和 <see cref="NewPage"/>/TryTakeFreePage 修改
+    /// <c>_firstFreePageID</c>/<c>_freePageCount</c> 后调用。
+    /// 调用方必须已持有 <c>_freeListLock</c>。
+    /// 若 <c>_allocatorStatePageId == 0</c>（旧库未迁移），此方法是 no-op。
+    /// 这里只写 WAL 并把页标脏，不做同步刷盘：分配/回收是热路径，每次都刷 WAL + 写盘
+    /// 会让批量删除和 B 树分裂合并的开销成倍上升。allocator state 落后最坏只是少回收一些空间，
+    /// 而 TryTakeFreePage 的页型守卫保证落后的链表头不会被误用。
+    /// </remarks>
+    private void PersistAllocatorState()
+    {
+        var statePageId = _allocatorStatePageId;
+        if (statePageId == 0) return;
+
+        uint firstFreePageId;
+        uint freePageCount;
+        lock (_stateLock)
+        {
+            firstFreePageId = _firstFreePageID;
+            freePageCount = _freePageCount;
+        }
+
+        var page = GetPage(statePageId);
+        byte[]? beforeImage = null;
+        if (_appendLogPage != null && _requiresWalBeforeImage?.Invoke() == true)
+        {
+            beforeImage = ReadPageSnapshotForWal(statePageId);
+        }
+
+        WriteAllocatorStateToPage(page, firstFreePageId, freePageCount);
+
+        _appendLogPage?.Invoke(page, beforeImage, null);
+    }
+
+    private void WriteAllocatorStateToPage(Page page, uint firstFreePageId, uint freePageCount)
+    {
+        // 分配/回收是热路径，用栈上缓冲避免每次调用产生一次堆分配。
+        Span<byte> data = stackalloc byte[AllocatorStateDataSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(0, 4), firstFreePageId);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(4, 4), freePageCount);
+        page.WriteData(0, data);
+    }
+
+    private const int AllocatorStateDataSize = 8;
 
     /// <summary>
     /// 获取页面使用统计

@@ -283,15 +283,44 @@ public sealed partial class TinyDbEngine
                     ReadHeader();
                     if (!_header.IsValid()) throw new InvalidOperationException(CreateInvalidHeaderMessage(_header));
 
+                    // allocator state page 优先于 header：它随每次分配/回收更新，且受 WAL 保护。
+                    // 必须在 Initialize 之前读，否则 Initialize 会先按 header 里过时的链表头
+                    // 做一次全盘 ScanFreePages（还会重写链接），结果随后被这里的值覆盖丢弃。
+                    var firstFreePage = _header.FirstFreePage;
+                    var freePageCount = _header.FreePageCount;
+                    var hasFreePageCount = _header.HasFreePageCount;
+                    var hasAllocatorStatePage = _pageManager.TryReadAllocatorState(
+                        _header.AllocatorStatePageId,
+                        out var allocatorFirstFreePage,
+                        out var allocatorFreePageCount);
+                    if (hasAllocatorStatePage)
+                    {
+                        firstFreePage = allocatorFirstFreePage;
+                        freePageCount = allocatorFreePageCount;
+                        hasFreePageCount = true;
+                    }
+
                     // 初始化 PageManager (现有数据库)
                     _pageManager.Initialize(
                         _header.TotalPages,
-                        _header.FirstFreePage,
-                        _header.FreePageCount,
-                        _header.HasFreePageCount,
+                        firstFreePage,
+                        freePageCount,
+                        hasFreePageCount,
                         _options.ReadOnly);
 
-                    // 步骤 3: 状态一致性同步。
+                    if (hasAllocatorStatePage)
+                    {
+                        _pageManager.SetAllocatorStatePage(_header.AllocatorStatePageId);
+                    }
+                    else
+                    {
+                        // 页号不可信（越界或页型不符）。绝不能就这么绑上去，否则分配器状态会被写进
+                        // 一个不属于它的页，把一处元数据不一致升级成真正的数据损坏。
+                        // 归零后交给步骤 6 重新创建。
+                        _header.AllocatorStatePageId = 0;
+                    }
+
+                    // 状态一致性同步。
                     // 关键修复：如果在崩溃前分配了页面但 Header 未更新，
                     // WAL 重放后 PageManager 知道最新状态，需反向同步回 Header
                     if (!_options.ReadOnly &&
@@ -313,6 +342,14 @@ public sealed partial class TinyDbEngine
 
                 // 步骤 5: 安全检查。
                 EnsureDatabaseSecurity();
+
+                // 步骤 6: allocator state page 的创建/迁移。
+                // 必须排在安全检查之后：否则用错误密码打开受保护的库，也已经改写了数据库文件。
+                if (!_options.ReadOnly && _header.AllocatorStatePageId == 0)
+                {
+                    _header.AllocatorStatePageId = _pageManager.CreateAllocatorStatePage();
+                    WriteHeader(forceFlush: true);
+                }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {

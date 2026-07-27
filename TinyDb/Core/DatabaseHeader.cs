@@ -124,6 +124,8 @@ public struct DatabaseHeader
     private const int FreePageCountOffset = HeaderExtensionOffset;
     private const int HeaderFlagsOffset = FreePageCountOffset + sizeof(uint);
     private const int SerializedLength = 245;
+    private const int AllocatorStatePageIdOffset = SerializedLength; // 偏移 245，尾部扩展区
+    private const int AllocatorStatePageIdLength = sizeof(uint);    // 4 字节
     private const uint HeaderFlagFreePageCount = 0x00000001;
     private static readonly byte[] SecurityMarker = { (byte)'S', (byte)'E', (byte)'C', (byte)'1' };
 
@@ -228,9 +230,24 @@ public struct DatabaseHeader
 
     public bool HasFreePageCount => (HeaderFlags & HeaderFlagFreePageCount) != 0;
 
+    /// <summary>
+    /// 分配器状态页的页号。0 表示旧库（未迁移），非 0 表示已迁移到自管理 allocator state page。
+    /// 存储在尾部扩展区（偏移 245），旧库此处为 0，向后兼容。
+    /// </summary>
+    public uint AllocatorStatePageId
+    {
+        get => _allocatorStatePageId;
+        set => _allocatorStatePageId = value;
+    }
+
+    private uint _allocatorStatePageId;
+
     public static int ReservedHeaderExtensionBytes => ReservedLength - HeaderExtensionOffset;
 
-    public static int TrailingHeaderExtensionBytes => Size - SerializedLength;
+    /// <summary>
+    /// 尾部扩展区中仍然可用的字节数（已扣除 <see cref="AllocatorStatePageId"/> 占用的 4 字节）。
+    /// </summary>
+    public static int TrailingHeaderExtensionBytes => Size - SerializedLength - AllocatorStatePageIdLength;
 
     private uint ReadReservedUInt32(int offset)
     {
@@ -271,6 +288,7 @@ public struct DatabaseHeader
         Checksum = 0;
         EnableJournaling = enableJournaling;
         DatabaseName = databaseName;
+        _allocatorStatePageId = 0;
 
         unsafe
         {
@@ -426,6 +444,11 @@ public struct DatabaseHeader
             }
         }
 
+        // 写入分配器状态页 ID（尾部扩展区，偏移 245）
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            buffer.AsSpan(AllocatorStatePageIdOffset, AllocatorStatePageIdLength),
+            _allocatorStatePageId);
+
         return buffer;
     }
 
@@ -479,6 +502,10 @@ public struct DatabaseHeader
                 header._userData[i] = reader.ReadByte();
             }
         }
+
+        // 读取分配器状态页 ID（尾部扩展区，偏移 245）
+        header._allocatorStatePageId = BinaryPrimitives.ReadUInt32LittleEndian(
+            data.AsSpan(AllocatorStatePageIdOffset, AllocatorStatePageIdLength));
 
         return header;
     }

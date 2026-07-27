@@ -813,14 +813,31 @@ public sealed class BTreeIndex : IDisposable
         }
     }
 
+    /// <summary>
+    /// 获取索引定义。不遍历索引树，因此在结构损坏时依然可用。
+    /// </summary>
+    public IndexDefinition GetDefinition()
+    {
+        ThrowIfDisposed();
+        return new IndexDefinition
+        {
+            Name = Name,
+            Type = Type,
+            Fields = _fields,
+            IsUnique = IsUnique,
+            IsSparse = IsSparse
+        };
+    }
+
     public IndexStatistics GetStatistics()
     {
         ThrowIfDisposed();
         _lock.EnterReadLock();
         try
         {
-            var nodeCount = _tree.NodeCount;
+            var nodeCount = _tree.CountNodes(out var damagedSubtrees);
             var entryCount = ClampEntryCount(_tree.EntryCount);
+            var treeHeight = _tree.Height;
             return new IndexStatistics
             {
                 Name = Name,
@@ -830,9 +847,12 @@ public sealed class BTreeIndex : IDisposable
                 IsSparse = IsSparse,
                 NodeCount = nodeCount,
                 EntryCount = entryCount,
-                AverageKeysPerNode = (double)entryCount / nodeCount,
-                TreeHeight = _tree.Height,
-                MaxKeysPerNode = _maxKeys
+                AverageKeysPerNode = nodeCount > 0 ? (double)entryCount / nodeCount : 0,
+                TreeHeight = treeHeight,
+                // 高度为 1 表示根页本身就是叶子；高度为 0 表示根页不可读，此时按 false 处理。
+                RootIsLeaf = treeHeight == 1,
+                MaxKeysPerNode = _maxKeys,
+                DamagedSubtreeCount = damagedSubtrees
             };
         }
         finally
