@@ -450,7 +450,7 @@ public partial class TinyDbSourceGenerator
     private static void GenerateInlineDeserializerForDependentTypeWithInitOnly(StringBuilder sb, DependentComplexType depType)
     {
         sb.AppendLine($"        /// <summary>");
-        sb.AppendLine($"        /// {depType.ShortName} çš„å†…è”ååºåˆ—åŒ–æ–¹æ³•ï¼ˆAOTå…¼å®¹ï¼‰");
+        sb.AppendLine($"        /// {depType.ShortName} 的内联反序列化方法（AOT兼容）");
         sb.AppendLine($"        /// </summary>");
         sb.AppendLine($"        private static {depType.FullyQualifiedName} Deserialize_{depType.SafeMethodName}(BsonDocument document)");
         sb.AppendLine("        {");
@@ -530,7 +530,7 @@ public partial class TinyDbSourceGenerator
         {
             if (prop.IsCircularReference)
             {
-                sb.AppendLine($"            // æ³¨æ„ï¼šå±žæ€§ {prop.Name} æ¶‰åŠå¾ªçŽ¯å¼•ç”¨ï¼Œè·³è¿‡é€’å½’ååºåˆ—åŒ–ä»¥é¿å…æ ˆæº¢å‡º");
+                sb.AppendLine($"            // 注意：属性 {prop.Name} 涉及循环引用，跳过递归反序列化以避免栈溢出");
                 return;
             }
 
