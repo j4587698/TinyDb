@@ -12,7 +12,7 @@ internal static class ExpressionMemberInfo
 
         var memberExpression = GetMemberExpression(expression);
         return memberExpression.Member as PropertyInfo
-               ?? throw new ArgumentException("è¡¨è¾¾å¼å¿…é¡»æ˜¯å±žæ€§è®¿é—®ã€‚", nameof(expression));
+               ?? throw new ArgumentException("表达式必须是属性访问。", nameof(expression));
     }
 
     public static PropertyInfo Property<T, TProperty>(Expression<Func<T, TProperty>> expression)

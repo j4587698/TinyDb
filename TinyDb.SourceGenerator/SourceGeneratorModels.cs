@@ -31,7 +31,7 @@ public sealed class DependentConstructorParameterInfo
 }
 
 /// <summary>
-/// ç±»ä¿¡æ¯
+/// 类信息
 /// </summary>
 public class ClassInfo
 {
