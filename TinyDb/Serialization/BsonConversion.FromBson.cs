@@ -20,7 +20,7 @@ public static partial class BsonConversion
             return default;
         }
 
-        var targetType = typeof(T);
+        var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
         object? converted;
 
         if (targetType == typeof(object))

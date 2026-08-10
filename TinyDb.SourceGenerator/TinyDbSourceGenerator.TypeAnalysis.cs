@@ -128,6 +128,18 @@ public partial class TinyDbSourceGenerator
             : typeName;
     }
 
+    private static ITypeSymbol UnwrapNullableType(ITypeSymbol typeSymbol)
+    {
+        if (typeSymbol is INamedTypeSymbol { IsGenericType: true } namedType &&
+            namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T &&
+            namedType.TypeArguments.Length == 1)
+        {
+            return namedType.TypeArguments[0];
+        }
+
+        return typeSymbol;
+    }
+
     private static TypeAnalysisResult AnalyzePropertyType(ITypeSymbol? typeSymbol, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -153,9 +165,10 @@ public partial class TinyDbSourceGenerator
         // 检查是否是数组
         if (typeSymbol is IArrayTypeSymbol arrayType)
         {
-            var elementType = arrayType.ElementType;
+            var rawElementType = arrayType.ElementType;
+            var elementType = UnwrapNullableType(rawElementType);
             var isElementComplex = IsComplexObjectType(elementType, cancellationToken);
-            var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+            var elementTypeName = rawElementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
             var isElementValueType = elementType.IsValueType;
             return new TypeAnalysisResult(false, true, false, true, arrayType.Rank, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
         }
@@ -166,10 +179,12 @@ public partial class TinyDbSourceGenerator
             var typeArgs = GetDictionaryTypeArguments(dictType, cancellationToken);
             if (typeArgs != null)
             {
-                var isValueComplex = IsComplexObjectType(typeArgs.Value.ValueType, cancellationToken);
+                var rawValueType = typeArgs.Value.ValueType;
+                var valueType = UnwrapNullableType(rawValueType);
+                var isValueComplex = IsComplexObjectType(valueType, cancellationToken);
                 var keyTypeName = typeArgs.Value.KeyType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
-                var valueTypeName = typeArgs.Value.ValueType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
-                var isValueValueType = typeArgs.Value.ValueType.IsValueType;
+                var valueTypeName = rawValueType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+                var isValueValueType = valueType.IsValueType;
                 return new TypeAnalysisResult(false, false, true, false, 0, null, false, false, keyTypeName, valueTypeName, isValueComplex, isValueValueType);
             }
         }
@@ -177,11 +192,12 @@ public partial class TinyDbSourceGenerator
         // 检查是否是集合类型 (List<T>, ICollection<T>, IEnumerable<T> 等)
         if (typeSymbol is INamedTypeSymbol collectionType && IsCollectionType(collectionType, cancellationToken))
         {
-            var elementType = GetCollectionElementType(collectionType, cancellationToken);
-            if (elementType != null)
+            var rawElementType = GetCollectionElementType(collectionType, cancellationToken);
+            if (rawElementType != null)
             {
+                var elementType = UnwrapNullableType(rawElementType);
                 var isElementComplex = IsComplexObjectType(elementType, cancellationToken);
-                var elementTypeName = elementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
+                var elementTypeName = rawElementType.ToDisplayString(FullyQualifiedNullableDisplayFormat);
                 var isElementValueType = elementType.IsValueType;
                 return new TypeAnalysisResult(false, true, false, false, 0, elementTypeName, isElementComplex, isElementValueType, null, null, false, false);
             }

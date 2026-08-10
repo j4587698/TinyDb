@@ -462,7 +462,7 @@ public partial class TinyDbSourceGenerator
         }
         else
         {
-            sb.AppendLine($"                {localName} = ConvertFromBsonValue<{prop.FullyQualifiedType}>({bsonLocalName});");
+            sb.AppendLine($"                {localName} = ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(prop.FullyQualifiedType)}>({bsonLocalName});");
         }
 
         sb.AppendLine("            }");
@@ -490,12 +490,12 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("                        else if (item is BsonDocument itemDoc)");
             sb.AppendLine($"                            list_{prop.Name}.Add(DeserializeComplexObject<{elementType}>(itemDoc));");
             sb.AppendLine("                        else");
-            sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+            sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(elementType)}>(item));");
         }
         else
         {
             sb.AppendLine("                        else");
-            sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+            sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(elementType)}>(item));");
         }
 
         sb.AppendLine("                    }");
@@ -535,12 +535,12 @@ public partial class TinyDbSourceGenerator
             sb.AppendLine("                        else if (kvp.Value is BsonDocument valueDoc)");
             sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = DeserializeComplexObject<{valueType}>(valueDoc);");
             sb.AppendLine("                        else");
-            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(valueType)}>(kvp.Value);");
         }
         else
         {
             sb.AppendLine("                        else");
-            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+            sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(valueType)}>(kvp.Value);");
         }
 
         sb.AppendLine("                    }");
