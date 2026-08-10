@@ -25,6 +25,14 @@ public static partial class SourceGeneratorHelpers
         return !prop.IsValueType || IsNullableProperty(prop);
     }
 
+    internal static string NonNullableTypeName(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return typeName;
+        return typeName.EndsWith("?", StringComparison.Ordinal)
+            ? typeName.Substring(0, typeName.Length - 1)
+            : typeName;
+    }
+
     internal static string CreateCollectionInstanceExpression(string collectionTypeName, string elementType)
     {
         return IsSetCollectionType(collectionTypeName)
@@ -532,12 +540,12 @@ public static partial class SourceGeneratorHelpers
             sb.AppendLine($@"                        else if (item is BsonDocument itemDoc)
                             list_{propertyName}.Add(DeserializeComplexObject<{elementType}>(itemDoc));
                         else
-                            list_{propertyName}.Add(ConvertFromBsonValue<{elementType}>(item));");
+                            list_{propertyName}.Add(ConvertFromBsonValue<{NonNullableTypeName(elementType)}>(item));");
         }
         else
         {
             sb.AppendLine($@"                        else
-                            list_{propertyName}.Add(ConvertFromBsonValue<{elementType}>(item));");
+                            list_{propertyName}.Add(ConvertFromBsonValue<{NonNullableTypeName(elementType)}>(item));");
         }
 
         sb.AppendLine(@"                    }");
@@ -595,12 +603,12 @@ public static partial class SourceGeneratorHelpers
             sb.AppendLine($@"                        else if (kvp.Value is BsonDocument valueDoc)
                             result_{propertyName}[key_{propertyName}] = DeserializeComplexObject<{valueType}>(valueDoc);
                         else
-                            result_{propertyName}[key_{propertyName}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                            result_{propertyName}[key_{propertyName}] = ConvertFromBsonValue<{NonNullableTypeName(valueType)}>(kvp.Value);");
         }
         else
         {
             sb.AppendLine($@"                        else
-                            result_{propertyName}[key_{propertyName}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                            result_{propertyName}[key_{propertyName}] = ConvertFromBsonValue<{NonNullableTypeName(valueType)}>(kvp.Value);");
         }
 
         sb.AppendLine($@"                    }}
@@ -615,7 +623,7 @@ public static partial class SourceGeneratorHelpers
     {
         return IsStringDictionaryKey(keyType)
             ? keyExpression
-            : $"ConvertFromBsonValue<{keyType}>(new BsonString({keyExpression}))";
+            : $"ConvertFromBsonValue<{NonNullableTypeName(keyType)}>(new BsonString({keyExpression}))";
     }
 
     internal static string CreateDictionaryFieldNameExpression(string keyExpression)

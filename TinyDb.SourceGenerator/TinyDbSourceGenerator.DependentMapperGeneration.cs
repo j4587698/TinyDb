@@ -584,14 +584,14 @@ public partial class TinyDbSourceGenerator
             if (prop.IsElementComplexType)
             {
                 sb.AppendLine($"                        else if (item is BsonDocument itemDoc)");
-                sb.AppendLine($"                            list_{prop.Name}.Add(DeserializeComplexObject<{elementType}>(itemDoc));");
+                sb.AppendLine($"                            list_{prop.Name}.Add(DeserializeComplexObject<{SourceGeneratorHelpers.NonNullableTypeName(elementType)}>(itemDoc));");
                 sb.AppendLine("                        else");
-                sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+                sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(elementType)}>(item));");
             }
             else
             {
                 sb.AppendLine("                        else");
-                sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{elementType}>(item));");
+                sb.AppendLine($"                            list_{prop.Name}.Add(ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(elementType)}>(item));");
             }
 
             sb.AppendLine("                    }");
@@ -640,14 +640,14 @@ public partial class TinyDbSourceGenerator
             if (prop.IsDictionaryValueComplexType)
             {
                 sb.AppendLine("                        else if (kvp.Value is BsonDocument valueDoc)");
-                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = DeserializeComplexObject<{valueType}>(valueDoc);");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = DeserializeComplexObject<{SourceGeneratorHelpers.NonNullableTypeName(valueType)}>(valueDoc);");
                 sb.AppendLine("                        else");
-                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(valueType)}>(kvp.Value);");
             }
             else
             {
                 sb.AppendLine("                        else");
-                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{valueType}>(kvp.Value);");
+                sb.AppendLine($"                            result_{prop.Name}[key_{prop.Name}] = ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(valueType)}>(kvp.Value);");
             }
 
             sb.AppendLine("                    }");
@@ -659,7 +659,7 @@ public partial class TinyDbSourceGenerator
 
         sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}) && !bson_{prop.Name}.IsNull)");
         sb.AppendLine("            {");
-        sb.AppendLine($"                {assignmentTarget} = ConvertFromBsonValue<{prop.FullyQualifiedTypeName}>(bson_{prop.Name});");
+        sb.AppendLine($"                {assignmentTarget} = ConvertFromBsonValue<{SourceGeneratorHelpers.NonNullableTypeName(prop.FullyQualifiedTypeName)}>(bson_{prop.Name});");
         sb.AppendLine("            }");
     }
 
