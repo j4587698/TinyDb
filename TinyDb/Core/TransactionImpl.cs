@@ -291,7 +291,19 @@ internal sealed class Transaction : ITransaction
             throw new InvalidOperationException($"Cannot record operation in transaction state {State}");
         }
 
-        var documentId = document.TryGetValue("_id", out var id) ? id : ObjectId.NewObjectId();
+        // _id 缺失或为 null 时生成新 id 并写回文档，保证返回给调用方的 id
+        // 与提交时实际写入的 id 一致（否则引擎提交时会另外生成一个）。
+        BsonValue documentId;
+        if (document.TryGetValue("_id", out var id) && id != null && !id.IsNull)
+        {
+            documentId = id;
+        }
+        else
+        {
+            documentId = ObjectId.NewObjectId();
+            document = document.Set("_id", documentId);
+        }
+
         var operation = new TransactionOperation(
             TransactionOperationType.Insert,
             collectionName,
