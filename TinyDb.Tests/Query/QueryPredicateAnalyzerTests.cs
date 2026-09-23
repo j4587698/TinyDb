@@ -74,8 +74,9 @@ public class QueryPredicateAnalyzerTests
     [Test]
     public async Task ExtractComparisonMap_ShouldConvertBooleanMemberPredicates()
     {
+        // 比较映射以 BSON 存储字段名为键（成员 IsActive -> 字段 isActive）。
         var positive = QueryPredicateAnalyzer.ExtractComparisonMap(new QueryMemberExpression("IsActive"));
-        var positiveKey = positive["IsActive"].ToIndexScanKey("IsActive");
+        var positiveKey = positive["isActive"].ToIndexScanKey("isActive");
         await Assert.That(positiveKey.ComparisonType).IsEqualTo(ComparisonType.Equal);
         await Assert.That(positiveKey.Value).IsEqualTo(BsonBoolean.True);
 
@@ -84,7 +85,7 @@ public class QueryPredicateAnalyzerTests
                 LinqExpressionType.Not,
                 new QueryMemberExpression("IsActive"),
                 typeof(bool)));
-        var negativeKey = negative["IsActive"].ToIndexScanKey("IsActive");
+        var negativeKey = negative["isActive"].ToIndexScanKey("isActive");
         await Assert.That(negativeKey.ComparisonType).IsEqualTo(ComparisonType.Equal);
         await Assert.That(negativeKey.Value).IsEqualTo(BsonBoolean.False);
     }

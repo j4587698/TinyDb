@@ -1053,10 +1053,15 @@ public sealed class ReviewReportRegressionTests : IDisposable
     [Test]
     public async Task QueryOptimizer_ShouldKeepCaseSensitiveFieldComparisonsSeparate()
     {
+        // 成员名 MyField 与 myField 都解析到同一个存储字段 myField（与 ExpressionEvaluator 的
+        // camelCase 优先语义一致）。规划器必须与求值器语义一致：两个条件落在同一字段上，
+        // 1 与 2 互斥，因此查询结果必须为空，且计划只使用 myField 上的索引。
         const string collectionName = "case_sensitive_fields";
         using var engine = CreateEngine("case-sensitive-optimizer.db");
         engine.GetIndexManager(collectionName)
             .CreateIndex("idx_case_fields", new[] { "myField" });
+        engine.InsertDocument(collectionName, new BsonDocument().Set("myField", 1));
+        engine.InsertDocument(collectionName, new BsonDocument().Set("myField", 2));
 
         var optimizer = new QueryOptimizer(engine);
         var query = new BinaryExpression(
@@ -1074,7 +1079,11 @@ public sealed class ReviewReportRegressionTests : IDisposable
 
         await Assert.That(plan.IndexScanKeys.Count).IsEqualTo(1);
         await Assert.That(plan.IndexScanKeys[0].FieldName).IsEqualTo("myField");
-        await Assert.That(plan.IndexScanKeys[0].Value).IsEqualTo(new BsonInt32(2));
+
+        var matches = engine.FindAll(collectionName)
+            .Where(doc => ExpressionEvaluator.Evaluate(query, doc))
+            .ToList();
+        await Assert.That(matches.Count).IsEqualTo(0);
     }
 
     [Test]

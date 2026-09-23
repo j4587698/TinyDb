@@ -6,29 +6,23 @@ namespace TinyDb.Query;
 
 internal readonly struct SortFieldBytes
 {
-    public static SortFieldBytes Id { get; } = Create("_id");
+    public static SortFieldBytes Id { get; } = Create(Serialization.BsonFieldName.Id);
 
     public byte[] Primary { get; }
     public byte[]? Alternate { get; }
-    public byte[]? SecondAlternate { get; }
 
-    private SortFieldBytes(byte[] primary, byte[]? alternate, byte[]? secondAlternate)
+    private SortFieldBytes(byte[] primary, byte[]? alternate)
     {
         Primary = primary;
         Alternate = alternate;
-        SecondAlternate = secondAlternate;
     }
 
+    /// <summary>
+    /// <paramref name="fieldName"/> 必须已经是存储字段名（由 <c>BsonFieldName.ForMember</c> 解析）。
+    /// Alternate 仅用于兼容手工构造、未走序列化器的 PascalCase 文档。
+    /// </summary>
     public static SortFieldBytes Create(string fieldName)
     {
-        if (string.Equals(fieldName, "_id", StringComparison.Ordinal))
-        {
-            return new SortFieldBytes(
-                Encoding.UTF8.GetBytes("_id"),
-                Encoding.UTF8.GetBytes("id"),
-                Encoding.UTF8.GetBytes("Id"));
-        }
-
         var primary = Encoding.UTF8.GetBytes(fieldName);
         byte[]? alt = null;
         if (fieldName.Length > 0 && fieldName[0] != '_')
@@ -40,7 +34,7 @@ internal readonly struct SortFieldBytes
             }
         }
 
-        return new SortFieldBytes(primary, alt, null);
+        return new SortFieldBytes(primary, alt);
     }
 }
 

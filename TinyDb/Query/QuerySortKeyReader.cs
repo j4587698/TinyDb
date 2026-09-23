@@ -105,16 +105,11 @@ internal static class QuerySortKeyReader
     {
         if (doc.TryGetValue(fieldName, out var value) && value != null) return value;
 
+        // 兼容手工构造、未走序列化器的 PascalCase 文档。
         if (fieldName.Length > 0 && fieldName[0] != '_')
         {
             var alt = char.ToUpperInvariant(fieldName[0]) + fieldName.Substring(1);
             if (doc.TryGetValue(alt, out var altValue) && altValue != null) return altValue;
-        }
-
-        if (string.Equals(fieldName, "_id", StringComparison.Ordinal))
-        {
-            if (doc.TryGetValue("id", out var idValue) && idValue != null) return idValue;
-            if (doc.TryGetValue("Id", out var pascalIdValue) && pascalIdValue != null) return pascalIdValue;
         }
 
         return null;
@@ -175,7 +170,6 @@ internal static class QuerySortKeyReader
     {
         if (BsonScanner.TryLocateField(document, field.Primary, out valueOffset, out type)) return true;
         if (field.Alternate != null && BsonScanner.TryLocateField(document, field.Alternate, out valueOffset, out type)) return true;
-        if (field.SecondAlternate != null && BsonScanner.TryLocateField(document, field.SecondAlternate, out valueOffset, out type)) return true;
 
         valueOffset = 0;
         type = BsonType.Null;

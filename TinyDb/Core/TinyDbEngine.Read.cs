@@ -471,12 +471,13 @@ public sealed partial class TinyDbEngine
     {
         RecordFindByIdFullScan();
 
+        // 插入时 PrepareDocumentForInsert 保证 _id 必定存在且为首字段，
+        // 且下面还会再校验一次 _id，因此这里不需要 id/Id 备选名。
         var idPredicate = new[]
         {
             new ScanPredicate(
                 Encoding.UTF8.GetBytes("_id"),
-                Encoding.UTF8.GetBytes("id"),
-                Encoding.UTF8.GetBytes("Id"),
+                null,
                 id,
                 ExpressionType.Equal)
         };
@@ -856,12 +857,12 @@ public sealed partial class TinyDbEngine
     {
         RecordFindByIdFullScan();
 
+        // 同 FindByIdFullScanAsync：_id 由写入路径保证存在，无需备选名。
         var idPredicate = new[]
         {
             new ScanPredicate(
                 Encoding.UTF8.GetBytes("_id"),
-                Encoding.UTF8.GetBytes("id"),
-                Encoding.UTF8.GetBytes("Id"),
+                null,
                 id,
                 ExpressionType.Equal)
         };

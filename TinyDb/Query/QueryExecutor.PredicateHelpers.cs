@@ -35,33 +35,18 @@ public sealed partial class QueryExecutor
         if (member == null || constant == null) return false;
 
         // 只对根对象的字段进行下推，避免嵌套属性导致误过滤。
-        if (member.Expression != null && member.Expression.NodeType != ExpressionType.Parameter) return false;
+        if (!member.IsRootMember) return false;
 
-        var memberName = member.MemberName;
-
-        byte[] fieldNameBytes;
+        // 存储字段名已在解析期由 BsonFieldName.ForMember 解析完毕（主键 -> _id，其余 -> camelCase）。
+        // 这里只额外保留一个原始 CLR 名候选，用于兼容手工构造的 PascalCase 文档。
+        var storageNameBytes = Encoding.UTF8.GetBytes(member.StorageName);
         byte[]? alternateFieldNameBytes = null;
-        byte[]? secondAlternateFieldNameBytes = null;
-
-        // 与 ExpressionEvaluator 行为保持一致：优先 camelCase，其次原字段名，Id 特殊映射到 _id。
-        if (string.Equals(memberName, "Id", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(member.StorageName, member.MemberName, StringComparison.Ordinal))
         {
-            fieldNameBytes = System.Text.Encoding.UTF8.GetBytes("id");
-            alternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes("Id");
-            secondAlternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes("_id");
-        }
-        else
-        {
-            var camelName = BsonFieldName.ToCamelCase(memberName);
-            fieldNameBytes = System.Text.Encoding.UTF8.GetBytes(camelName);
-
-            if (!string.Equals(camelName, memberName, StringComparison.Ordinal))
-            {
-                alternateFieldNameBytes = System.Text.Encoding.UTF8.GetBytes(memberName);
-            }
+            alternateFieldNameBytes = Encoding.UTF8.GetBytes(member.MemberName);
         }
 
-        predicates.Add(new ScanPredicate(fieldNameBytes, alternateFieldNameBytes, secondAlternateFieldNameBytes, constant.Value, op));
+        predicates.Add(new ScanPredicate(storageNameBytes, alternateFieldNameBytes, constant.Value, op));
         return true;
     }
 
@@ -257,19 +242,19 @@ public sealed partial class QueryExecutor
             return false;
         }
 
-        if (expression.Left is MemberExpression leftMember &&
+        if (expression.Left is MemberExpression { IsRootMember: true } leftMember &&
             TryConvertConstantExpression(expression.Right, out var rightValue))
         {
-            fieldName = leftMember.MemberName;
+            fieldName = leftMember.StorageName;
             comparisonType = leftComparisonType;
             value = rightValue;
             return true;
         }
 
-        if (expression.Right is MemberExpression rightMember &&
+        if (expression.Right is MemberExpression { IsRootMember: true } rightMember &&
             TryConvertConstantExpression(expression.Left, out var leftValue))
         {
-            fieldName = rightMember.MemberName;
+            fieldName = rightMember.StorageName;
             comparisonType = rightComparisonType;
             value = leftValue;
             return true;

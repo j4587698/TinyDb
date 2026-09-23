@@ -33,7 +33,6 @@ public sealed class PredicatePushdownLargeDocumentTests
             var predicate = new ScanPredicate(
                 fieldNameBytes: System.Text.Encoding.UTF8.GetBytes("age"),
                 alternateFieldNameBytes: null,
-                secondAlternateFieldNameBytes: null,
                 targetValue: 10,
                 op: ExpressionType.GreaterThan);
 

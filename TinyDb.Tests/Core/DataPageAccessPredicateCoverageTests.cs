@@ -23,8 +23,8 @@ public sealed class DataPageAccessPredicateCoverageTests
 
         var onlyEmptyPredicates = new[]
         {
-            new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal),
-            new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.NotEqual)
+            new ScanPredicate(Array.Empty<byte>(), null, null, ExpressionType.Equal),
+            new ScanPredicate(Array.Empty<byte>(), null, null, ExpressionType.NotEqual)
         };
 
         var okOnlyEmpty = DataPageAccess.TryMatchPredicates(doc, onlyEmptyPredicates, out var definitiveOnlyEmpty);
@@ -92,12 +92,12 @@ public sealed class DataPageAccessPredicateCoverageTests
         var doc = BsonSerializer.SerializeDocument(new BsonDocument().Set("Name", "Alice"));
 
         var slowPredicates = new ScanPredicate[65];
-        slowPredicates[0] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
+        slowPredicates[0] = new ScanPredicate(Array.Empty<byte>(), null, null, ExpressionType.Equal);
         slowPredicates[1] = CreatePredicate("name", "Alice", ExpressionType.Equal, "Name");
-        slowPredicates[2] = CreatePredicate("notFound", "Alice", ExpressionType.Equal, "stillNotFound", "Name");
+        slowPredicates[2] = CreatePredicate("notFound", "Alice", ExpressionType.Equal, "Name");
         for (int i = 3; i < slowPredicates.Length; i++)
         {
-            slowPredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
+            slowPredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, ExpressionType.Equal);
         }
 
         var slowResult = DataPageAccess.TryMatchPredicates(doc, slowPredicates, out var slowDefinitive);
@@ -113,7 +113,7 @@ public sealed class DataPageAccessPredicateCoverageTests
         slowFalsePredicates[0] = CreatePredicate("Name", "Bob", ExpressionType.Equal);
         for (int i = 1; i < slowFalsePredicates.Length; i++)
         {
-            slowFalsePredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
+            slowFalsePredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, ExpressionType.Equal);
         }
 
         var slowFalseResult = DataPageAccess.TryMatchPredicates(doc, slowFalsePredicates, out var slowFalseDefinitive);
@@ -124,7 +124,7 @@ public sealed class DataPageAccessPredicateCoverageTests
         slowMissingFalsePredicates[0] = CreatePredicate("Deleted", true, ExpressionType.Equal);
         for (int i = 1; i < slowMissingFalsePredicates.Length; i++)
         {
-            slowMissingFalsePredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, null, ExpressionType.Equal);
+            slowMissingFalsePredicates[i] = new ScanPredicate(Array.Empty<byte>(), null, null, ExpressionType.Equal);
         }
 
         var slowMissingFalseResult = DataPageAccess.TryMatchPredicates(doc, slowMissingFalsePredicates, out var slowMissingFalseDefinitive);
@@ -132,11 +132,10 @@ public sealed class DataPageAccessPredicateCoverageTests
         await Assert.That(slowMissingFalseDefinitive).IsFalse();
     }
 
-    private static ScanPredicate CreatePredicate(string field, object? value, ExpressionType op, string? alt1 = null, string? alt2 = null)
+    private static ScanPredicate CreatePredicate(string field, object? value, ExpressionType op, string? alt = null)
     {
         var fieldBytes = Encoding.UTF8.GetBytes(field);
-        var alt1Bytes = alt1 != null ? Encoding.UTF8.GetBytes(alt1) : null;
-        var alt2Bytes = alt2 != null ? Encoding.UTF8.GetBytes(alt2) : null;
-        return new ScanPredicate(fieldBytes, alt1Bytes, alt2Bytes, value, op);
+        var altBytes = alt != null ? Encoding.UTF8.GetBytes(alt) : null;
+        return new ScanPredicate(fieldBytes, altBytes, value, op);
     }
 }

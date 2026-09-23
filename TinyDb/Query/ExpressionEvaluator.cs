@@ -12,16 +12,16 @@ namespace TinyDb.Query;
 public static partial class ExpressionEvaluator
 {
     private const int MaxExpressionEvaluationDepth = 256;
-    private const int NameCacheCapacity = 2048;
     private const int PropertyCacheCapacity = 4096;
-    private static readonly LRUCache<string, string> CamelCaseNameCache = new(NameCacheCapacity);
     private static readonly LRUCache<(Type Type, string Name), PropertyInfo?> PropertyCache = new(PropertyCacheCapacity);
     [ThreadStatic]
     private static int _evaluationDepth;
 
-    internal static (int CamelCaseNames, int Properties) GetCacheCounts()
+    // 存储字段名现在由 MemberExpression 在解析期解析一次（见 BsonFieldName.ForMember），
+    // 求值期不再需要 camelCase 缓存，因此这里只剩反射属性缓存。
+    internal static int GetPropertyCacheCount()
     {
-        return (CamelCaseNameCache.Count, PropertyCache.Count);
+        return PropertyCache.Count;
     }
 
     public static bool Evaluate<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(QueryExpression expression, T entity)

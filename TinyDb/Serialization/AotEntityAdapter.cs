@@ -14,6 +14,13 @@ public interface IAotEntityAdapter
     BsonDocument ToDocumentUntyped(object entity);
     object FromDocumentUntyped(BsonDocument document);
     IReadOnlyList<AotForeignKeyReference> ForeignKeyReferences { get; }
+
+    /// <summary>
+    /// 实体主键属性的 CLR 名称；为 null 表示该类型没有主键属性。
+    /// 该属性在序列化时会被映射为保留字段名 <c>_id</c>，查询层据此解析存储字段名。
+    /// </summary>
+    string? IdPropertyName { get; }
+
     object? GetPropertyValueUntyped(object entity, string propertyName);
     bool TrySetPropertyValueUntyped(object entity, string propertyName, object? value);
     
@@ -251,10 +258,12 @@ public static partial class AotHelperRegistry
     public static void Register<T>(AotEntityAdapter<T> adapter)
     {
         _adapters[typeof(T)] = adapter;
+        BsonFieldName.ClearIdPropertyNameCache();
     }
 
     public static void Clear()
     {
         _adapters.Clear();
+        BsonFieldName.ClearIdPropertyNameCache();
     }
 }

@@ -12,7 +12,7 @@ internal static class RuntimeQueryExpressionBinder
             ConstantExpression => expression,
             ParameterExpression => expression,
             BinaryExpression binary => new BinaryExpression(binary.NodeType, Bind(binary.Left)!, Bind(binary.Right)!),
-            MemberExpression member => new MemberExpression(member.MemberName, Bind(member.Expression)),
+            MemberExpression member => new MemberExpression(member.MemberName, Bind(member.Expression), member.StorageName),
             UnaryExpression unary => new UnaryExpression(unary.NodeType, Bind(unary.Operand)!, unary.Type),
             FunctionExpression function => BindFunction(function),
             ConstructorExpression constructor => new ConstructorExpression(constructor.Type, constructor.Arguments.Select(argument => Bind(argument)!)),

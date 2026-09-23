@@ -169,10 +169,13 @@ internal static class QueryPredicateAnalyzer
 
         if (left is MemberExpression leftMember)
         {
+            // 只有根成员才可参与索引选择；嵌套成员（x.Owner.Name）不属于根文档字段。
+            if (!leftMember.IsRootMember) return;
+
             var value = ExtractConstantValue(right);
             if (value != null)
             {
-                AddComparison(comparisons, leftMember.MemberName, value, ToComparisonType(binaryExpr.NodeType, reversed: false));
+                AddComparison(comparisons, leftMember.StorageName, value, ToComparisonType(binaryExpr.NodeType, reversed: false));
             }
 
             return;
@@ -180,10 +183,12 @@ internal static class QueryPredicateAnalyzer
 
         if (right is MemberExpression rightMember)
         {
+            if (!rightMember.IsRootMember) return;
+
             var value = ExtractConstantValue(left);
             if (value != null)
             {
-                AddComparison(comparisons, rightMember.MemberName, value, ToComparisonType(binaryExpr.NodeType, reversed: true));
+                AddComparison(comparisons, rightMember.StorageName, value, ToComparisonType(binaryExpr.NodeType, reversed: true));
             }
         }
     }
@@ -192,14 +197,16 @@ internal static class QueryPredicateAnalyzer
     {
         if (queryExpression is MemberExpression member)
         {
-            AddComparison(comparisons, member.MemberName, BsonBoolean.True, ComparisonType.Equal);
+            if (!member.IsRootMember) return false;
+            AddComparison(comparisons, member.StorageName, BsonBoolean.True, ComparisonType.Equal);
             return true;
         }
 
         if (queryExpression is UnaryExpression { NodeType: System.Linq.Expressions.ExpressionType.Not } unary &&
             UnwrapConvert(unary.Operand) is MemberExpression negatedMember)
         {
-            AddComparison(comparisons, negatedMember.MemberName, BsonBoolean.False, ComparisonType.Equal);
+            if (!negatedMember.IsRootMember) return false;
+            AddComparison(comparisons, negatedMember.StorageName, BsonBoolean.False, ComparisonType.Equal);
             return true;
         }
 

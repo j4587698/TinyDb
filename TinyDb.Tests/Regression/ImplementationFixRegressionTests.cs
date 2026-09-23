@@ -158,9 +158,8 @@ public sealed class ImplementationFixRegressionTests : IDisposable
             ExpressionEvaluator.EvaluateValue(new TinyDb.Query.MemberExpression("Missing" + i, null), entity);
         }
 
-        var cacheCounts = ExpressionEvaluator.GetCacheCounts();
-        await Assert.That(cacheCounts.CamelCaseNames).IsLessThanOrEqualTo(2048);
-        await Assert.That(cacheCounts.Properties).IsLessThanOrEqualTo(4096);
+        var propertyCacheCount = ExpressionEvaluator.GetPropertyCacheCount();
+        await Assert.That(propertyCacheCount).IsLessThanOrEqualTo(4096);
     }
 
     [Test]
