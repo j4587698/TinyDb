@@ -471,8 +471,9 @@ public sealed partial class TinyDbEngine
     {
         RecordFindByIdFullScan();
 
-        // 插入时 PrepareDocumentForInsert 保证 _id 必定存在且为首字段，
-        // 且下面还会再校验一次 _id，因此这里不需要 id/Id 备选名。
+        // 写入路径保证每个存储文档都有非 null 的 _id（插入时由 PrepareDocumentForInsert 补齐，
+        // 更新时缺 _id 会被拒绝）。注意只有插入会把 _id 放在首位，更新后位置不固定，
+        // 扫描器会遍历全部字段，不依赖位置。下面还会再校验一次 _id，因此不需要 id/Id 备选名。
         var idPredicate = new[]
         {
             new ScanPredicate(
@@ -980,7 +981,8 @@ public sealed partial class TinyDbEngine
 
                 if (pageOwned)
                 {
-                    if (doc.TryGetValue("_id", out var id))
+                    // 与 RewritePageWithDocuments 一致：null _id 不入主键索引。
+                    if (doc.TryGetValue("_id", out var id) && id is { IsNull: false })
                     {
                         st.Index.Set(id, new DocumentLocation(p.PageID, idx));
                     }

@@ -810,6 +810,32 @@ public class DataPageAccessLowLevelTests : IDisposable
     }
 
     [Test]
+    public async Task RewritePageWithDocuments_WhenEntryIdIsMissingOrBsonNull_DoesNotInvokeUpdateCallback()
+    {
+        var page = _pm.NewPage(PageType.Data);
+        page.ResetBytes(0);
+
+        var missingIdDoc = new BsonDocument().Set("x", 1);
+        var bsonNullIdDoc = new BsonDocument().Set("_id", BsonNull.Value).Set("x", 2);
+        var docs = new List<PageDocumentEntry>
+        {
+            new PageDocumentEntry(missingIdDoc, BsonSerializer.SerializeDocument(missingIdDoc), false, 0, 0),
+            new PageDocumentEntry(bsonNullIdDoc, BsonSerializer.SerializeDocument(bsonNullIdDoc), false, 0, 0)
+        };
+
+        var calls = 0;
+        _dpa.RewritePageWithDocuments(
+            "test_col",
+            new CollectionState(),
+            page,
+            docs,
+            (_, _, _) => calls++);
+
+        await Assert.That(calls).IsEqualTo(0);
+        await Assert.That((int)page.Header.ItemCount).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task RewritePageWithDocuments_PassesIdThroughWithoutToString()
     {
         var page = _pm.NewPage(PageType.Data);

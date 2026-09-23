@@ -526,8 +526,12 @@ internal sealed class DataPageAccess
         for (ushort i = 0; i < docs.Count; i++)
         {
             AppendDocumentToPage(p, docs[i].RawMemory.Span);
+
+            // 字节原样保留，但缺失或为 null 的 _id 绝不能写入主键索引：
+            // PageDocumentEntry.Id 在缺失时返回 BsonNull.Value（而非 C# null），
+            // 若照单全收，会以 null 键入索引，导致 Count() 虚增、多条文档挤在同一个键上。
             var id = docs[i].Id;
-            if (id != null) updIdx(id, p.PageID, i);
+            if (id is { IsNull: false }) updIdx(id, p.PageID, i);
         }
         _pm.SavePage(p, false);
     }

@@ -107,7 +107,10 @@ public sealed partial class DocumentCollection<T> where T : class
         EnsureEntityHasId(entity);
 
         var document = AotBsonMapper.ToDocument(entity);
-        if (!document.ContainsKey("_id"))
+
+        // _id 缺失或为 null 都视为“未指定主键”，在进入事务/写入之前就确定下来。
+        // 否则事务路径会把 BsonNull 当作 id 返回，而提交时引擎又会另外生成一个。
+        if (!document.TryGetValue("_id", out var existingId) || existingId == null || existingId.IsNull)
         {
             var newId = ObjectId.NewObjectId();
             document = document.Set("_id", newId);
