@@ -32,7 +32,7 @@ public static partial class ExpressionEvaluator
         // Always use GetMemberValueFromTarget for proper dictionary-style access
         if (target is BsonDocument)
         {
-            return GetMemberValueFromTarget(expression.MemberName, target);
+            return GetMemberValueFromTarget(expression.MemberName, expression.StorageName, target);
         }
 
         // Optimization: Try to use AOT adapter or EntityMetadata if target is T
@@ -49,7 +49,7 @@ public static partial class ExpressionEvaluator
             }
         }
 
-        return GetMemberValueFromTarget(expression.MemberName, target);
+        return GetMemberValueFromTarget(expression.MemberName, expression.StorageName, target);
     }
 
     private static object? GetMemberValue(MemberExpression expression, object entity)
@@ -67,22 +67,21 @@ public static partial class ExpressionEvaluator
             return null;
         }
 
-        return GetMemberValueFromTarget(expression.MemberName, target);
+        return GetMemberValueFromTarget(expression.MemberName, expression.StorageName, target);
     }
 
-    private static object? GetMemberValueFromTarget(string memberName, object target)
+    private static object? GetMemberValueFromTarget(string memberName, string storageName, object target)
     {
         // Check BsonDocument first - it implements IEnumerable but needs special handling for property access
         if (target is BsonDocument doc)
         {
-            var camelName = CamelCaseNameCache.GetOrAdd(memberName, static name => BsonFieldName.ToCamelCase(name));
-
-            if (doc.TryGetValue(camelName, out var val)) return val.RawValue;
-            if (doc.TryGetValue(memberName, out val)) return val.RawValue;
-            if (string.Equals(memberName, "Id", StringComparison.OrdinalIgnoreCase) &&
-                doc.TryGetValue("_id", out val))
+            // storageName 已由解析层统一算出（主键属性 -> _id，其余 -> camelCase）。
+            // 再回退一次原始 CLR 名，以兼容手工构造的 PascalCase 文档。
+            if (doc.TryGetValue(storageName, out var val)) return UnwrapDocumentValue(val);
+            if (!string.Equals(storageName, memberName, StringComparison.Ordinal) &&
+                doc.TryGetValue(memberName, out val))
             {
-                return val.RawValue;
+                return UnwrapDocumentValue(val);
             }
 
             return null;
@@ -157,6 +156,15 @@ public static partial class ExpressionEvaluator
         if (memberName == "Value") return target;
 
         return null;
+    }
+
+    /// <summary>
+    /// 内嵌文档保持为 <see cref="BsonDocument"/>，以便继续对其做成员访问（x.Owner.Name）；
+    /// 其 RawValue 是底层的 ImmutableDictionary，会让下一层成员访问失效。
+    /// </summary>
+    private static object? UnwrapDocumentValue(BsonValue value)
+    {
+        return value is BsonDocument nested ? nested : value.RawValue;
     }
 
     [UnconditionalSuppressMessage("TrimAnalysis", "IL2075", Justification = "Fallback reflection for non-AOT scenarios. AOT apps should use Source Generator.")]

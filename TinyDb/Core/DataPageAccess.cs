@@ -387,8 +387,7 @@ internal sealed class DataPageAccess
                     var pred = predicates[i];
 
                     if (!nameSpan.SequenceEqual(pred.FieldNameBytes) &&
-                        !(pred.AlternateFieldNameBytes is { Length: > 0 } alt1 && nameSpan.SequenceEqual(alt1)) &&
-                        !(pred.SecondAlternateFieldNameBytes is { Length: > 0 } alt2 && nameSpan.SequenceEqual(alt2)))
+                        !(pred.AlternateFieldNameBytes is { Length: > 0 } alt1 && nameSpan.SequenceEqual(alt1)))
                     {
                         continue;
                     }
@@ -469,10 +468,6 @@ internal sealed class DataPageAccess
             if (!found && pred.AlternateFieldNameBytes is { Length: > 0 } alt1)
             {
                 found = BsonScanner.TryLocateField(document, alt1, out valueOffset, out type);
-            }
-            if (!found && pred.SecondAlternateFieldNameBytes is { Length: > 0 } alt2)
-            {
-                found = BsonScanner.TryLocateField(document, alt2, out valueOffset, out type);
             }
 
             if (!found)

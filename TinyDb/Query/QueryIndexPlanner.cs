@@ -29,14 +29,16 @@ internal static class QueryIndexPlanner
         var left = QueryPredicateAnalyzer.UnwrapConvert(binaryExpr.Left);
         var right = QueryPredicateAnalyzer.UnwrapConvert(binaryExpr.Right);
 
-        if (left is MemberExpression leftMember)
+        // 只有直接访问查询参数的成员才可能是根文档主键。
+        // 缺少这个守卫时 x.Owner.Id == 5 会被误判为根文档 _id == 5。
+        if (left is MemberExpression { IsRootMember: true } leftMember)
         {
-            fieldName = leftMember.MemberName;
+            fieldName = leftMember.StorageName;
             value = QueryPredicateAnalyzer.ExtractConstantValue(right);
         }
-        else if (right is MemberExpression rightMember)
+        else if (right is MemberExpression { IsRootMember: true } rightMember)
         {
-            fieldName = rightMember.MemberName;
+            fieldName = rightMember.StorageName;
             value = QueryPredicateAnalyzer.ExtractConstantValue(left);
         }
 
@@ -47,7 +49,7 @@ internal static class QueryIndexPlanner
     {
         return new IndexScanKey
         {
-            FieldName = "_id",
+            FieldName = BsonFieldName.Id,
             Value = value,
             ComparisonType = ComparisonType.Equal
         };
@@ -157,9 +159,8 @@ internal static class QueryIndexPlanner
 
     private static bool IsPrimaryKeyField(string? fieldName)
     {
-        return fieldName != null &&
-               (string.Equals(fieldName, "_id", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(fieldName, "Id", StringComparison.OrdinalIgnoreCase));
+        // fieldName 已经过 BsonFieldName.ForMember 解析，主键一定是保留名 _id。
+        return string.Equals(fieldName, BsonFieldName.Id, StringComparison.Ordinal);
     }
 
     private static bool TryGetComparisonForIndexField(
@@ -167,35 +168,9 @@ internal static class QueryIndexPlanner
         string indexFieldName,
         out QueryFieldComparison comparison)
     {
-        if (comparisons.TryGetValue(indexFieldName, out comparison!))
-        {
-            return true;
-        }
-
-        QueryFieldComparison? matched = null;
-        foreach (var candidate in comparisons)
-        {
-            if (!string.Equals(BsonFieldName.ToCamelCase(candidate.Key), indexFieldName, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            if (matched != null)
-            {
-                comparison = null!;
-                return false;
-            }
-
-            matched = candidate.Value;
-        }
-
-        if (matched == null)
-        {
-            comparison = null!;
-            return false;
-        }
-
-        comparison = matched;
-        return true;
+        // comparisons 的键已经是存储字段名；IndexManager 创建索引时也会把字段名归一化为 camelCase。
+        // 这里再按 camelCase 兜底一次，以兼容未归一化的索引元数据。
+        return comparisons.TryGetValue(indexFieldName, out comparison!) ||
+               comparisons.TryGetValue(BsonFieldName.ToCamelCase(indexFieldName), out comparison!);
     }
 }

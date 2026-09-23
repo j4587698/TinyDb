@@ -127,13 +127,12 @@ public sealed class QueryExecutorTopKAndSortCoverageTests : IDisposable
     [Test]
     public async Task QueryExecutor_InternalSortHelpers_ShouldCoverSortFieldBytesAndSortKeyFromValueBranches()
     {
+        // _id 以下划线开头，不再生成 PascalCase 备选名；备选名只服务于手工构造的 camelCase 字段。
         var idField = SortFieldBytes.Create("_id");
-        await Assert.That(idField.Alternate).IsNotNull();
-        await Assert.That(idField.SecondAlternate).IsNotNull();
+        await Assert.That(idField.Alternate).IsNull();
 
         var nameField = SortFieldBytes.Create("name");
         await Assert.That(nameField.Alternate).IsNotNull();
-        await Assert.That(nameField.SecondAlternate).IsNull();
 
         _ = SortKey.FromBsonValue(null);
         _ = SortKey.FromBsonValue(new BsonInt32(1));

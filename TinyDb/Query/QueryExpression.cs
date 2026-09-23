@@ -53,13 +53,40 @@ public sealed class BinaryExpression : QueryExpression
 public sealed class MemberExpression : QueryExpression
 {
     public override ExpressionType NodeType => ExpressionType.MemberAccess;
+
+    /// <summary>
+    /// CLR 属性名（例如 <c>Uid</c>）。用于针对实体对象求值。
+    /// </summary>
     public string MemberName { get; }
+
+    /// <summary>
+    /// 该成员对应的 BSON 存储字段名（例如主键属性 <c>Uid</c> 对应 <c>_id</c>）。
+    /// 用于所有面向文档的访问：谓词下推、索引选择、排序键读取、BsonDocument 求值。
+    /// </summary>
+    public string StorageName { get; }
+
     public QueryExpression? Expression { get; }
 
+    /// <summary>
+    /// 该成员是否直接访问查询参数（即根文档字段），而非嵌套对象的字段。
+    /// 只有根成员才允许参与谓词下推与索引选择。
+    /// </summary>
+    public bool IsRootMember => Expression == null || Expression.NodeType == ExpressionType.Parameter;
+
     public MemberExpression(string memberName, QueryExpression? expression = null)
+        : this(memberName, expression, storageName: null)
+    {
+    }
+
+    public MemberExpression(string memberName, QueryExpression? expression, string? storageName)
     {
         MemberName = memberName;
         Expression = expression;
+
+        // _id 改名只适用于集合根文档；内嵌复杂对象的字段一律是 camelCase。
+        StorageName = storageName ?? (IsRootMember
+            ? Serialization.BsonFieldName.ForMember(memberName, declaringType: null)
+            : Serialization.BsonFieldName.ToCamelCase(memberName));
     }
 }
 

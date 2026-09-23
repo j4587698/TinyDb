@@ -141,7 +141,9 @@ internal static class QueryShapeExtractor
         return true;
     }
 
-    private static bool TryExtractSortField<TSource>(LinqExp.MethodCallExpression call, bool descending, out QuerySortField field)
+    private static bool TryExtractSortField<
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] TSource>(
+        LinqExp.MethodCallExpression call, bool descending, out QuerySortField field)
         where TSource : class
     {
         field = default;
@@ -159,19 +161,9 @@ internal static class QueryShapeExtractor
         if (member.Expression is not LinqExp.ParameterExpression) return false;
 
         var memberName = member.Member.Name;
-        var fieldName = NormalizeFieldName(memberName);
+        var fieldName = BsonFieldName.ForMember(memberName, typeof(TSource));
         field = new QuerySortField(fieldName, member.Type, descending);
         return true;
-    }
-
-    private static string NormalizeFieldName(string memberName)
-    {
-        if (string.Equals(memberName, "Id", StringComparison.Ordinal))
-        {
-            return "_id";
-        }
-
-        return BsonFieldName.ToCamelCase(memberName);
     }
 
     private static LinqExp.Expression<Func<T, bool>> AndAlso<T>(LinqExp.Expression<Func<T, bool>> left, LinqExp.Expression<Func<T, bool>> right)

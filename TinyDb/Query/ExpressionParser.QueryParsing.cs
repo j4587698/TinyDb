@@ -155,7 +155,34 @@ public sealed partial class ExpressionParser
             }
         }
 
-        return new MemberExpression(member.Member.Name, expression);
+        return new MemberExpression(
+            member.Member.Name,
+            expression,
+            ResolveStorageName(member, expression));
+    }
+
+    /// <summary>
+    /// 基于成员的声明类型解析 BSON 存储字段名。这是查询层唯一的改名点，
+    /// 与源生成器的序列化规则保持一致：
+    /// 根文档的主键属性 -&gt; <c>_id</c>，其余（含所有内嵌对象字段）-&gt; camelCase。
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("TrimAnalysis", "IL2072",
+        Justification = "The declaring type comes from an expression tree, which already requires reflection metadata.")]
+    private static string ResolveStorageName(
+        System.Linq.Expressions.MemberExpression member,
+        QueryExpression parsedTarget)
+    {
+        // 内嵌成员（x.Owner.Id）不参与 _id 改名：源生成器为内嵌复杂对象生成的
+        // 序列化函数把 Id 写成 "id"，而不是 "_id"。
+        if (parsedTarget.NodeType != ExpressionType.Parameter)
+        {
+            return Serialization.BsonFieldName.ToCamelCase(member.Member.Name);
+        }
+
+        // 优先用实例表达式的静态类型：它反映查询书写时的类型，
+        // 而 DeclaringType 在存在继承时可能指向基类。
+        var declaringType = member.Expression?.Type ?? member.Member.DeclaringType;
+        return Serialization.BsonFieldName.ForMember(member.Member.Name, declaringType);
     }
 
     private static object? EvaluateProperty(object? container, System.Reflection.PropertyInfo prop)

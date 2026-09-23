@@ -477,14 +477,18 @@ public sealed class QueryExecutorPrivateHelperCoverageTests : IDisposable
         var zeroLengthRead = QuerySortKeyReader.ReadString(readStringBytes, stringOffset);
         await Assert.That(zeroLengthRead is null).IsTrue();
 
+        // 排序字段名已由 BsonFieldName.ForMember 解析为存储名。_id 是保留主键字段，
+        // 写入路径保证它必然存在，因此不再用 id / Id 字段冒充主键。
         var sortDoc = new BsonDocument().Set("Name", "Alice").Set("id", 99);
         var nameValue = QuerySortKeyReader.TryGetSortValue(sortDoc, "name");
         var idValue = QuerySortKeyReader.TryGetSortValue(sortDoc, "_id");
         var idPascalOnlyValue = QuerySortKeyReader.TryGetSortValue(new BsonDocument().Set("Id", 100), "_id");
+        var storedIdValue = QuerySortKeyReader.TryGetSortValue(new BsonDocument().Set("_id", 101).Set("id", 99), "_id");
         var noneValue = QuerySortKeyReader.TryGetSortValue(sortDoc, "notExists");
         await Assert.That(nameValue!.ToString()).IsEqualTo("Alice");
-        await Assert.That(idValue!.ToInt32()).IsEqualTo(99);
-        await Assert.That(idPascalOnlyValue!.ToInt32()).IsEqualTo(100);
+        await Assert.That(idValue).IsNull();
+        await Assert.That(idPascalOnlyValue).IsNull();
+        await Assert.That(storedIdValue!.ToInt32()).IsEqualTo(101);
         await Assert.That(noneValue).IsNull();
 
         var member = new TinyDb.Query.MemberExpression("A", new TinyDb.Query.ParameterExpression("x"));
