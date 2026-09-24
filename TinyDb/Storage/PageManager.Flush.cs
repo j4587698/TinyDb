@@ -234,7 +234,8 @@ public sealed partial class PageManager
             buffer = restoredPage.Buffer;
 
             var pageOffset = CalculatePageOffset(pageID);
-            WriteEncodedPageToDisk(pageID, pageOffset, buffer);
+            // 与进行中的异步快照写串行化，避免旧快照在恢复之后落盘把恢复结果覆盖掉。
+            WriteRawPageUnderWriteGate(pageID, pageOffset, buffer);
             _diskStream.Flush();
 
             RemoveFromCache(pageID);

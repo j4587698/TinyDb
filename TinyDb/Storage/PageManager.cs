@@ -32,6 +32,11 @@ public sealed partial class PageManager : IDisposable
     private const int DeferredFreePageScanRebuild = 1;
     private const int DeferredFreePageScanCount = 2;
     private readonly SemaphoreSlim[] _pageLoadStripes;
+    // 按页串行化磁盘写入：从“拍快照”到“写盘完成并标记干净”必须持有同一把锁，
+    // 否则异步写（锁外写盘）的旧快照可能晚于新内容落盘，把磁盘页永久回退为旧版本。
+    // 与 _pageLoadStripes 分开：加载页时可能触发淘汰并同步写出脏页，复用同一组锁会自锁。
+    private const int PageWriteStripeCount = 64;
+    private readonly SemaphoreSlim[] _pageWriteStripes;
     private int _cachedPageCount;
     private uint _nextPageID;
     private uint _firstFreePageID; // Head of free page linked list
@@ -176,6 +181,11 @@ public sealed partial class PageManager : IDisposable
         for (var i = 0; i < _pageLoadStripes.Length; i++)
         {
             _pageLoadStripes[i] = new SemaphoreSlim(1, 1);
+        }
+        _pageWriteStripes = new SemaphoreSlim[PageWriteStripeCount];
+        for (var i = 0; i < _pageWriteStripes.Length; i++)
+        {
+            _pageWriteStripes[i] = new SemaphoreSlim(1, 1);
         }
         _fileSize = _diskStream.Size;
         _nextPageID = 0;
