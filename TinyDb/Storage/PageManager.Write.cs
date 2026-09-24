@@ -115,8 +115,11 @@ public sealed partial class PageManager
         }
 
         page.Pin();
+        var writeGate = GetPageWriteGate(page.PageID);
+        await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // 快照必须在写锁内拍下：保证同一页的写入按快照先后顺序落盘。
             var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
             var pageOffset = CalculatePageOffset(page.PageID);
 
@@ -134,15 +137,49 @@ public sealed partial class PageManager
         }
         finally
         {
+            writeGate.Release();
             page.Unpin();
+        }
+    }
+
+    private SemaphoreSlim GetPageWriteGate(uint pageID)
+    {
+        return _pageWriteStripes[(int)(pageID % PageWriteStripeCount)];
+    }
+
+    /// <summary>
+    /// 在该页的写锁内执行一次原始写盘（不基于 Page 快照，如 WAL 恢复页、空闲链表链接）。
+    /// 调用方可持有 _stateLock：写锁持有者从不等待 _stateLock，锁顺序始终为 _stateLock → 写锁。
+    /// </summary>
+    private void WriteRawPageUnderWriteGate(uint pageId, long pageOffset, byte[] logicalPage)
+    {
+        var writeGate = GetPageWriteGate(pageId);
+        writeGate.Wait();
+        try
+        {
+            WriteEncodedPageToDisk(pageId, pageOffset, logicalPage);
+        }
+        finally
+        {
+            writeGate.Release();
         }
     }
 
     private void WritePageToDisk(Page page, bool forceFlush)
     {
         var pageOffset = CalculatePageOffset(page.PageID);
-        var wroteCleanPage = page.WriteForDiskWithoutSnapshot(
-            logicalPage => WriteEncodedPageToDisk(page.PageID, pageOffset, logicalPage));
+        bool wroteCleanPage;
+        var writeGate = GetPageWriteGate(page.PageID);
+        writeGate.Wait();
+        try
+        {
+            wroteCleanPage = page.WriteForDiskWithoutSnapshot(
+                logicalPage => WriteEncodedPageToDisk(page.PageID, pageOffset, logicalPage));
+        }
+        finally
+        {
+            writeGate.Release();
+        }
 
         if (forceFlush)
         {
@@ -256,6 +293,8 @@ public sealed partial class PageManager
         }
 
         page.Pin();
+        var writeGate = GetPageWriteGate(page.PageID);
+        await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var snapshot = page.SnapshotForDiskWrite(out var dirtyGeneration);
@@ -269,6 +308,7 @@ public sealed partial class PageManager
         }
         finally
         {
+            writeGate.Release();
             page.Unpin();
         }
         return true;

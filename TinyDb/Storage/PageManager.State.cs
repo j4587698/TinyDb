@@ -285,7 +285,7 @@ public sealed partial class PageManager
         header.Checksum = TinyCrc32.HashToUInt32WithZeroedRange(pageData, 21, sizeof(uint));
         header.WriteTo(pageData);
 
-        WriteEncodedPageToDisk(pageId, pageOffset, pageData);
+        WriteRawPageUnderWriteGate(pageId, pageOffset, pageData);
         RemoveFromCache(pageId);
     }
 
