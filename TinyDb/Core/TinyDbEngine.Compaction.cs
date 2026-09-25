@@ -31,6 +31,9 @@ public sealed partial class TinyDbEngine
 
     private void DisposeComponents()
     {
+        // 顺序很重要：页管理器的后台写回会调用 WAL（追加日志、刷到 LSN），
+        // 必须在释放 WAL 之前停止并等待它结束；原先要到 _pageManager.Dispose 才等待，那时 WAL 已关闭。
+        _pageManager.StopBackgroundWriteback(TimeSpan.FromSeconds(5));
         _flushScheduler.Dispose();
         _writeAheadLog.Dispose();
         _pageManager.Dispose();

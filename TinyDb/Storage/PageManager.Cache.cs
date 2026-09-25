@@ -322,7 +322,7 @@ public sealed partial class PageManager
 
     private void ScheduleBackgroundWriteback()
     {
-        if (_disposed)
+        if (_disposed || Volatile.Read(ref _backgroundWritebackStopped) != 0)
         {
             return;
         }
@@ -333,7 +333,33 @@ public sealed partial class PageManager
         }
 
         _backgroundWritebackIdle.Reset();
+
+        // Reset 之后再检查一次停止标志：与 StopBackgroundWriteback 的“先置标志、再等空闲”配对，
+        // 保证要么这里看到停止并撤销，要么 Stop 一定能等到这次写回结束。
+        if (Volatile.Read(ref _backgroundWritebackStopped) != 0)
+        {
+            Interlocked.Exchange(ref _backgroundWritebackScheduled, 0);
+            _backgroundWritebackIdle.Set();
+            return;
+        }
+
         _ = RunBackgroundWritebackAsync();
+    }
+
+    /// <summary>
+    /// 停止后台写回并等待进行中的写回结束。关闭引擎时必须在释放 WAL 之前调用，
+    /// 否则后台写回可能在 WAL 已释放后继续写日志。停止后不可恢复。
+    /// </summary>
+    internal bool StopBackgroundWriteback(TimeSpan timeout)
+    {
+        Interlocked.Exchange(ref _backgroundWritebackStopped, 1);
+        if (_backgroundWritebackIdle.Wait(timeout))
+        {
+            return true;
+        }
+
+        Log(TinyDbLogLevel.Warning, "Background page writeback did not stop before timeout.");
+        return false;
     }
 
     private async Task RunBackgroundWritebackAsync()
@@ -343,7 +369,7 @@ public sealed partial class PageManager
             await _backgroundWritebackGate.WaitAsync().ConfigureAwait(false);
             try
             {
-                if (_disposed)
+                if (_disposed || Volatile.Read(ref _backgroundWritebackStopped) != 0)
                 {
                     return;
                 }

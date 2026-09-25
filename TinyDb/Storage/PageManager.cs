@@ -52,6 +52,7 @@ public sealed partial class PageManager : IDisposable
     private readonly SemaphoreSlim _backgroundWritebackGate = new(1, 1);
     private readonly ManualResetEventSlim _backgroundWritebackIdle = new(true);
     private int _backgroundWritebackScheduled;
+    private int _backgroundWritebackStopped;
 
     private Action<long, WriteAheadLog.WriteLockContext?>? _flushLogToLsn;
     private Func<long, WriteAheadLog.WriteLockContext?, CancellationToken, Task>? _flushLogToLsnAsync;

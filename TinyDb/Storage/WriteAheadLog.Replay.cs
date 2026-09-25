@@ -108,7 +108,7 @@ public sealed partial class WriteAheadLog
         bool replayStoppedAtInvalidRecord = false;
         try
         {
-            stream.Flush(true);
+            FlushStreamToDisk(stream);
             stream.Seek(0, SeekOrigin.Begin);
 
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
@@ -278,12 +278,12 @@ public sealed partial class WriteAheadLog
             if (replayStoppedAtInvalidRecord)
             {
                 stream.SetLength(lastSuccessfulPosition);
-                stream.Flush(true);
+                FlushStreamToDisk(stream);
             }
             else if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 stream.SetLength(0);
-                stream.Flush(true);
+                FlushStreamToDisk(stream);
             }
 
             stream.Seek(0, SeekOrigin.End);
@@ -337,7 +337,7 @@ public sealed partial class WriteAheadLog
         bool replayStoppedAtInvalidRecord = false;
         try
         {
-            stream.Flush(true);
+            FlushStreamToDisk(stream);
             stream.Seek(0, SeekOrigin.Begin);
 
             const int FullHeaderSize = HeaderSize + 4; // 13 bytes
@@ -513,13 +513,13 @@ public sealed partial class WriteAheadLog
             if (replayStoppedAtInvalidRecord)
             {
                 stream.SetLength(lastSuccessfulPosition);
-                stream.Flush(true);
+                FlushStreamToDisk(stream);
             }
             else if (lastSuccessfulPosition > 0 || stream.Length > 0)
             {
                 // 如果没有处理完全部文件（因为损坏或截断），则将文件截断到最后一个有效的记录处
                 stream.SetLength(0);
-                stream.Flush(true);
+                FlushStreamToDisk(stream);
             }
 
             stream.Seek(0, SeekOrigin.End);

@@ -34,7 +34,7 @@ public sealed partial class WriteAheadLog : IDisposable
     private static readonly AsyncLocal<WriteLockContext?> s_currentWriteContext = new();
     private readonly AsyncLocal<TransactionContext?> _currentTransactionContext = new();
     private readonly int _maxRecordSize;
-    private bool _disposed;
+    private int _disposed;
     private int _hasPendingEntries;
     private long _flushedLSN;
 
@@ -138,13 +138,16 @@ public sealed partial class WriteAheadLog : IDisposable
             Directory.CreateDirectory(directory);
         }
 
+        // 同步句柄：WAL 绝大多数调用是同步的（Write + Flush(true)），在异步句柄上做同步 IO
+        // 每次都要额外分配 overlapped 并等待事件；.NET 也没有异步落盘 API，异步句柄没有收益。
+        // 同步句柄还使 TinyDb 不再持有任何绑定 IOCP 的句柄。
         _stream = new FileStream(
             _logFilePath,
             FileMode.OpenOrCreate,
             FileAccess.ReadWrite,
             FileShare.Read,
             bufferSize: Math.Max(pageSize, 4096),
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+            FileOptions.SequentialScan);
 
         _stream.Seek(0, SeekOrigin.End);
         SetHasPendingEntries(_stream.Length > 0);
@@ -195,6 +198,24 @@ public sealed partial class WriteAheadLog : IDisposable
         TinyDbLogging.SafeLog(_log, level, message, ex);
     }
 
+    private long _diskFlushCount;
+
+    /// <summary>
+    /// 真正刷到磁盘（FlushFileBuffers）的次数，仅供测试断言持久化语义。
+    /// </summary>
+    internal long DiskFlushCount => Interlocked.Read(ref _diskFlushCount);
+
+    /// <summary>
+    /// WAL 唯一的“刷到磁盘”入口。所有把日志标记为已持久化（SetFlushedLSN）之前的刷盘都必须经过这里。
+    /// 注意：FileStream.FlushAsync 只会把托管缓冲区写给操作系统，不会调用 FlushFileBuffers，
+    /// 不能用于持久化；.NET 也没有异步落盘 API，所以异步路径同样调用本方法。
+    /// </summary>
+    private void FlushStreamToDisk(FileStream stream)
+    {
+        stream.Flush(flushToDisk: true);
+        Interlocked.Increment(ref _diskFlushCount);
+    }
+
     private void TryDeleteExistingLog()
     {
         try
@@ -210,10 +231,20 @@ public sealed partial class WriteAheadLog : IDisposable
         }
     }
 
+    private static readonly TimeSpan DisposeLockTimeout = TimeSpan.FromSeconds(5);
+
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+        // 先拿写锁，等进行中的持锁者（刷盘、截断、事务提交）完成当前 IO 再关闭文件。
+        // 当前线程已在写锁内（例如在 Synchronize 回调里触发关闭）时不能再等，否则自锁。
+        var holdsLockAlready = HasActiveWriteContext(null);
+        var acquired = !holdsLockAlready && _mutex.Wait(DisposeLockTimeout);
+        if (!acquired && !holdsLockAlready)
+        {
+            Log(TinyDbLogLevel.Warning, "WAL dispose timed out waiting for an in-flight write; closing the log anyway.");
+        }
 
         try
         {
@@ -221,7 +252,14 @@ public sealed partial class WriteAheadLog : IDisposable
         }
         finally
         {
-            _mutex.Dispose();
+            if (acquired)
+            {
+                _mutex.Release();
+            }
+
+            // 有意不释放 _mutex：SemaphoreSlim.Dispose 不会唤醒已排队的等待者，它们会永远阻塞；
+            // 未使用 AvailableWaitHandle 时它也不持有非托管资源。关闭后的等待者拿到锁后
+            // 访问已释放的流，会得到明确的 ObjectDisposedException。
         }
     }
 
