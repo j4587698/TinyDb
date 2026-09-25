@@ -62,19 +62,17 @@ public sealed partial class WriteAheadLog
     {
         if (targetLSN >= ReadFlushedLSN())
         {
-            _stream!.Flush(true);
+            FlushStreamToDisk(_stream!);
             SetFlushedLSN(_stream.Position);
         }
     }
 
 
-    private async Task FlushToLSNCoreAsync(long targetLSN, CancellationToken cancellationToken)
+    private Task FlushToLSNCoreAsync(long targetLSN, CancellationToken cancellationToken)
     {
-        if (targetLSN >= ReadFlushedLSN())
-        {
-            await _stream!.FlushAsync(cancellationToken).ConfigureAwait(false);
-            SetFlushedLSN(_stream.Position);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        FlushToLSNCore(targetLSN);
+        return Task.CompletedTask;
     }
 
 
@@ -134,19 +132,17 @@ public sealed partial class WriteAheadLog
     {
         if (HasPendingEntriesCore)
         {
-            _stream!.Flush(true);
+            FlushStreamToDisk(_stream!);
             SetFlushedLSN(_stream.Position);
         }
     }
 
 
-    private async Task FlushLogCoreAsync(CancellationToken cancellationToken)
+    private Task FlushLogCoreAsync(CancellationToken cancellationToken)
     {
-        if (HasPendingEntriesCore)
-        {
-            await _stream!.FlushAsync(cancellationToken).ConfigureAwait(false);
-            SetFlushedLSN(_stream.Position);
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        FlushLogCore();
+        return Task.CompletedTask;
     }
 
 
@@ -193,7 +189,7 @@ public sealed partial class WriteAheadLog
 
             if (HasPendingEntriesCore)
             {
-                stream.Flush(true);
+                FlushStreamToDisk(stream);
                 SetFlushedLSN(stream.Position);
             }
 
@@ -205,7 +201,7 @@ public sealed partial class WriteAheadLog
                 {
                     stream.SetLength(0);
                     stream.Seek(0, SeekOrigin.End);
-                    stream.Flush(true);
+                    FlushStreamToDisk(stream);
                 }
 
                 SetHasPendingEntries(false);
@@ -266,7 +262,7 @@ public sealed partial class WriteAheadLog
 
             if (HasPendingEntriesCore)
             {
-                stream.Flush(true);
+                FlushStreamToDisk(stream);
                 SetFlushedLSN(stream.Position);
             }
 
@@ -280,7 +276,7 @@ public sealed partial class WriteAheadLog
                 {
                     stream.SetLength(0);
                     stream.Seek(0, SeekOrigin.End);
-                    stream.Flush(true);
+                    FlushStreamToDisk(stream);
                 }
 
                 SetHasPendingEntries(false);
@@ -305,7 +301,8 @@ public sealed partial class WriteAheadLog
             var stream = _stream!;
             stream.SetLength(0);
             stream.Seek(0, SeekOrigin.End);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            // 截断后必须落盘，FlushAsync 不会调用 FlushFileBuffers。
+            FlushStreamToDisk(stream);
             SetHasPendingEntries(false);
             SetFlushedLSN(stream.Position);
         }
@@ -326,7 +323,7 @@ public sealed partial class WriteAheadLog
             var stream = _stream!;
             stream.SetLength(0);
             stream.Seek(0, SeekOrigin.End);
-            stream.Flush(true);
+            FlushStreamToDisk(stream);
             SetHasPendingEntries(false);
             SetFlushedLSN(stream.Position);
         }
