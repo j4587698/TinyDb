@@ -173,6 +173,88 @@ public class NullableValueTypeTests
         await Assert.That(restored.Detail.Codes.UShortValue).IsEqualTo((ushort)300);
         await Assert.That(restored.Detail.Codes.ULongValue).IsEqualTo(9UL);
     }
+
+    [Test]
+    public async Task AotFallback_NullableDateTimeContainers_ShouldConvert()
+    {
+        var when = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var array = new BsonArray(new BsonValue[] { new BsonDateTime(when), BsonNull.Value });
+        var doc = new BsonDocument().Set("a", new BsonDateTime(when)).Set("b", BsonNull.Value);
+
+        var list = (List<DateTime?>)AotBsonMapper.ConvertValue(array, typeof(List<DateTime?>))!;
+        await Assert.That(list).Count().IsEqualTo(2);
+        await Assert.That(list[0]).IsEqualTo(when);
+        await Assert.That(list[1]).IsNull();
+
+        var values = (DateTime?[])AotBsonMapper.ConvertValue(array, typeof(DateTime?[]))!;
+        await Assert.That(values.Length).IsEqualTo(2);
+        await Assert.That(values[0]).IsEqualTo(when);
+        await Assert.That(values[1]).IsNull();
+
+        var map = (Dictionary<string, DateTime?>)AotBsonMapper.ConvertValue(doc, typeof(Dictionary<string, DateTime?>))!;
+        await Assert.That(map["a"]).IsEqualTo(when);
+        await Assert.That(map["b"]).IsNull();
+    }
+
+    [Test]
+    public async Task AotFallback_NonNullableScalarContainers_ShouldConvert()
+    {
+        var when = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var array = new BsonArray(new BsonValue[] { new BsonDateTime(when) });
+        var doc = new BsonDocument().Set("a", new BsonDateTime(when));
+
+        var list = (List<DateTime>)AotBsonMapper.ConvertValue(array, typeof(List<DateTime>))!;
+        await Assert.That(list[0]).IsEqualTo(when);
+
+        var map = (Dictionary<string, DateTime>)AotBsonMapper.ConvertValue(doc, typeof(Dictionary<string, DateTime>))!;
+        await Assert.That(map["a"]).IsEqualTo(when);
+
+        var guidArray = (Guid?[])AotBsonMapper.ConvertValue(
+            new BsonArray(new BsonValue[] { new BsonString(Guid.Empty.ToString()), BsonNull.Value }),
+            typeof(Guid?[]))!;
+        await Assert.That(guidArray[0]).IsEqualTo(Guid.Empty);
+        await Assert.That(guidArray[1]).IsNull();
+    }
+
+    [Test]
+    public async Task BsonConversionUntyped_NullableDateTimeContainers_ShouldConvert()
+    {
+        var when = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var array = new BsonArray(new BsonValue[] { new BsonDateTime(when), BsonNull.Value });
+        var doc = new BsonDocument().Set("a", new BsonDateTime(when)).Set("b", BsonNull.Value);
+
+        var list = (List<DateTime?>)BsonConversion.FromBsonValue(array, typeof(List<DateTime?>))!;
+        await Assert.That(list[0]).IsEqualTo(when);
+        await Assert.That(list[1]).IsNull();
+
+        var values = (DateTime?[])BsonConversion.FromBsonValue(array, typeof(DateTime?[]))!;
+        await Assert.That(values[0]).IsEqualTo(when);
+        await Assert.That(values[1]).IsNull();
+
+        var map = (Dictionary<string, DateTime?>)BsonConversion.FromBsonValue(doc, typeof(Dictionary<string, DateTime?>))!;
+        await Assert.That(map["a"]).IsEqualTo(when);
+        await Assert.That(map["b"]).IsNull();
+    }
+
+    [Test]
+    public async Task BsonConversionGeneric_NullableDateTimeContainers_ShouldConvert()
+    {
+        var when = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var array = new BsonArray(new BsonValue[] { new BsonDateTime(when), BsonNull.Value });
+        var doc = new BsonDocument().Set("a", new BsonDateTime(when)).Set("b", BsonNull.Value);
+
+        var list = BsonConversion.FromBsonValue<List<DateTime?>>(array)!;
+        await Assert.That(list[0]).IsEqualTo(when);
+        await Assert.That(list[1]).IsNull();
+
+        var values = BsonConversion.FromBsonValue<DateTime?[]>(array)!;
+        await Assert.That(values[0]).IsEqualTo(when);
+        await Assert.That(values[1]).IsNull();
+
+        var map = BsonConversion.FromBsonValue<Dictionary<string, DateTime?>>(doc)!;
+        await Assert.That(map["a"]).IsEqualTo(when);
+        await Assert.That(map["b"]).IsNull();
+    }
 }
 
 [Entity]
