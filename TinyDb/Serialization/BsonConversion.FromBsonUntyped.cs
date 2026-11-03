@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -78,6 +79,12 @@ public static partial class BsonConversion
                 }
                 return array;
             }
+
+            var elementType = targetType.GetElementType();
+            if (elementType != null && AotFallbackTypes.IsSupportedElementType(elementType))
+            {
+                return ConvertArrayOfElements(bsonArray, elementType);
+            }
         }
 
         // Handle generic collections
@@ -118,7 +125,26 @@ public static partial class BsonConversion
                     return list;
                 }
 
+                var elementType = targetType.GetGenericArguments()[0];
+                if (AotFallbackTypes.IsSupportedElementType(elementType))
+                {
+                    return ConvertListOfElements(listArray, targetType, elementType);
+                }
+
                 throw new NotSupportedException($"List element type '{targetType.GetGenericArguments()[0].FullName}' is not supported in AOT mode.");
+            }
+        }
+        else if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(HashSet<>))
+        {
+            if (bsonValue is BsonArray setArray)
+            {
+                var elementType = targetType.GetGenericArguments()[0];
+                if (AotFallbackTypes.IsSupportedElementType(elementType))
+                {
+                    return ConvertHashSetOfElements(setArray, targetType, elementType);
+                }
+
+                throw new NotSupportedException($"HashSet element type '{targetType.GetGenericArguments()[0].FullName}' is not supported in AOT mode.");
             }
         }
         else if (targetType.IsGenericType && targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>))
@@ -158,7 +184,14 @@ public static partial class BsonConversion
                     return dict;
                 }
 
-                throw new NotSupportedException($"Dictionary type '{targetType.FullName}' is not supported in AOT mode. Supported key/value pairs are string/int, string/string, and string/object.");
+                var genericArguments = targetType.GetGenericArguments();
+                var valueType = genericArguments[1];
+                if (genericArguments[0] == typeof(string) && AotFallbackTypes.IsSupportedElementType(valueType))
+                {
+                    return ConvertDictionaryOfElements(bsonDoc, targetType, valueType);
+                }
+
+                throw new NotSupportedException($"Dictionary type '{targetType.FullName}' is not supported in AOT mode. Only string keys with scalar or object values are supported.");
             }
         }
 
@@ -469,5 +502,63 @@ public static partial class BsonConversion
 
         // 处理复杂对象类型（class 和 struct）
         return type.IsClass || (type.IsValueType && !type.IsEnum && !type.IsPrimitive);
+    }
+
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Array element types are restricted to scalars/enums, BsonValue, or recursively supported containers; their array code is available.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Array element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "Array element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static Array ConvertArrayOfElements(BsonArray array, Type elementType)
+    {
+        var values = Array.CreateInstance(elementType, array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            values.SetValue(FromBsonValue(array[i], elementType), i);
+        }
+
+        return values;
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "List element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "List element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static IList ConvertListOfElements(
+        BsonArray array,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type listType,
+        Type elementType)
+    {
+        var list = (IList)Activator.CreateInstance(listType)!;
+        foreach (var item in array)
+        {
+            list.Add(FromBsonValue(item, elementType));
+        }
+
+        return list;
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Set element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Set element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "Set element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static object ConvertHashSetOfElements(
+        BsonArray array,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type hashSetType,
+        Type elementType)
+    {
+        var values = ConvertArrayOfElements(array, elementType);
+        return Activator.CreateInstance(hashSetType, new object?[] { values })!;
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Dictionary value types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Dictionary value types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static IDictionary ConvertDictionaryOfElements(
+        BsonDocument document,
+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)] Type dictionaryType,
+        Type valueType)
+    {
+        var dictionary = (IDictionary)Activator.CreateInstance(dictionaryType)!;
+        foreach (var element in document.Entries)
+        {
+            dictionary[element.Key] = FromBsonValue(element.Value, valueType);
+        }
+
+        return dictionary;
     }
 }
