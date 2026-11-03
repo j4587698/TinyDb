@@ -1,0 +1,135 @@
+using TinyDb.Attributes;
+using TinyDb.Bson;
+using TinyDb.Serialization;
+using TUnit.Assertions;
+using TUnit.Assertions.Extensions;
+
+namespace TinyDb.Tests.Serialization;
+
+public class AotFallbackContainerCoverageTests
+{
+    [Test]
+    public async Task NestedContainers_ShouldConvert_ThroughFallback()
+    {
+        var nestedArray = new BsonArray(new BsonValue[]
+        {
+            new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2) }),
+            new BsonArray(new BsonValue[] { new BsonInt32(3) })
+        });
+
+        var aotNested = (List<List<int>>)AotBsonMapper.ConvertValue(nestedArray, typeof(List<List<int>>))!;
+        await Assert.That(aotNested[0][1]).IsEqualTo(2);
+        await Assert.That(aotNested[1][0]).IsEqualTo(3);
+
+        var convertedNested = (List<List<int>>)BsonConversion.FromBsonValue(nestedArray, typeof(List<List<int>>))!;
+        await Assert.That(convertedNested[0][1]).IsEqualTo(2);
+
+        var nestedDocument = new BsonDocument().Set("a", new BsonArray(new BsonValue[] { 1, 2 }));
+        var aotDictionary = (Dictionary<string, List<int>>)AotBsonMapper.ConvertValue(
+            nestedDocument, typeof(Dictionary<string, List<int>>))!;
+        await Assert.That(aotDictionary["a"].Count).IsEqualTo(2);
+        await Assert.That(aotDictionary["a"][1]).IsEqualTo(2);
+
+        var convertedDictionary = (Dictionary<string, List<int>>)BsonConversion.FromBsonValue(
+            nestedDocument, typeof(Dictionary<string, List<int>>))!;
+        await Assert.That(convertedDictionary["a"][0]).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task HashSet_ShouldConvert_ThroughFallback()
+    {
+        var array = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2) });
+
+        var genericSet = BsonConversion.FromBsonValue<HashSet<int>>(array)!;
+        await Assert.That(genericSet.Count).IsEqualTo(2);
+        await Assert.That(genericSet.Contains(1)).IsTrue();
+        await Assert.That(genericSet.Contains(2)).IsTrue();
+
+        var aotSet = (HashSet<int>)AotBsonMapper.ConvertValue(array, typeof(HashSet<int>))!;
+        await Assert.That(aotSet.Count).IsEqualTo(2);
+        await Assert.That(aotSet.Contains(2)).IsTrue();
+
+        var untypedSet = (HashSet<int>)BsonConversion.FromBsonValue(array, typeof(HashSet<int>))!;
+        await Assert.That(untypedSet.Contains(1)).IsTrue();
+    }
+
+    [Test]
+    public async Task BsonValueElements_ShouldConvert_ThroughFallback()
+    {
+        var array = new BsonArray(new BsonValue[]
+        {
+            new BsonInt32(1),
+            new BsonDocument().Set("a", 2)
+        });
+
+        var aotValues = (List<BsonValue>)AotBsonMapper.ConvertValue(array, typeof(List<BsonValue>))!;
+        await Assert.That(aotValues[0]).IsTypeOf<BsonInt32>();
+        await Assert.That(aotValues[1]).IsTypeOf<BsonDocument>();
+
+        var convertedValues = (List<BsonValue>)BsonConversion.FromBsonValue(array, typeof(List<BsonValue>))!;
+        await Assert.That(convertedValues[1]).IsTypeOf<BsonDocument>();
+    }
+
+    [Test]
+    public async Task BsonValue_ToType_NullableScalars_ShouldReturnUnderlyingValue()
+    {
+        var intValue = new BsonInt32(5).ToType(typeof(int?), null);
+        await Assert.That(intValue).IsTypeOf<int>();
+        await Assert.That((int)intValue!).IsEqualTo(5);
+
+        var dateValue = new BsonDateTime(DateTime.UnixEpoch).ToType(typeof(DateTime?), null);
+        await Assert.That(dateValue).IsTypeOf<DateTime>();
+        await Assert.That((DateTime)dateValue!).IsEqualTo(DateTime.UnixEpoch);
+
+        var decimalValue = new BsonDecimal128(1.5m).ToType(typeof(decimal?), null);
+        await Assert.That(decimalValue).IsTypeOf<decimal>();
+
+        var arrayCount = new BsonArray(new BsonValue[] { 1, 2 }).ToType(typeof(int?), null);
+        await Assert.That((int)arrayCount!).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GeneratedEntity_NestedList_ShouldRoundTrip()
+    {
+        var entity = new NestedListEntity { Id = 1, Matrix = [[1, 2], [3]] };
+
+        var document = AotBsonMapper.ToDocument(entity);
+        var restored = AotBsonMapper.FromDocument<NestedListEntity>(document);
+
+        await Assert.That(restored.Matrix[0][1]).IsEqualTo(2);
+        await Assert.That(restored.Matrix[1][0]).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task GeneratedEntity_NestedHashSet_ShouldRoundTrip()
+    {
+        var entity = new NestedHashSetEntity
+        {
+            Id = 1,
+            Sets = [new HashSet<int> { 1, 2 }, new HashSet<int> { 3 }],
+            Map = new Dictionary<string, HashSet<int>> { ["a"] = new HashSet<int> { 4 } }
+        };
+
+        var document = AotBsonMapper.ToDocument(entity);
+        var restored = AotBsonMapper.FromDocument<NestedHashSetEntity>(document);
+
+        await Assert.That(restored.Sets[0].Count).IsEqualTo(2);
+        await Assert.That(restored.Sets[0].Contains(2)).IsTrue();
+        await Assert.That(restored.Map["a"].Contains(4)).IsTrue();
+    }
+
+    [Entity]
+    internal sealed class NestedListEntity
+    {
+        public int Id { get; set; }
+        public List<List<int>> Matrix { get; set; } = [];
+    }
+
+    [Entity]
+    internal sealed class NestedHashSetEntity
+    {
+        public int Id { get; set; }
+        public List<HashSet<int>> Sets { get; set; } = [];
+        public Dictionary<string, HashSet<int>> Map { get; set; } = new();
+    }
+}

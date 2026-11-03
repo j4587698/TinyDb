@@ -50,6 +50,7 @@ public sealed class BsonDouble : BsonValue
     public override string ToString(IFormatProvider? provider) => Value.ToString(provider);
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(double)) return Value;
         if (conversionType == typeof(BsonDouble)) return this;
         if (conversionType == typeof(object)) return this;

@@ -134,6 +134,7 @@ public sealed class BsonTimestamp : BsonValue
     public override string ToString(IFormatProvider? provider) => ToString();
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(long)) return Value;
         if (conversionType == typeof(BsonTimestamp)) return this;
         if (conversionType == typeof(object)) return this;

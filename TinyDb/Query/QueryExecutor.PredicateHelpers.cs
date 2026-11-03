@@ -105,7 +105,8 @@ public sealed partial class QueryExecutor
         object? convertedValue;
         try
         {
-            convertedValue = Convert.ChangeType(constant.Value, targetType);
+            var conversionType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+            convertedValue = Convert.ChangeType(constant.Value, conversionType);
         }
         catch (InvalidCastException)
         {

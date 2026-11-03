@@ -43,6 +43,7 @@ public static partial class AotBsonMapper
         return builder.Build();
     }
 
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Dictionary value types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
     private static object? ConvertDictionary([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type dictionaryType, BsonDocument document)
     {
         if (document == null) return null;
@@ -93,6 +94,18 @@ public static partial class AotBsonMapper
             foreach (var element in document.Entries)
             {
                 typedDictionary[element.Key] = UnwrapBsonValue(element.Value);
+            }
+
+            return typedDictionary;
+        }
+
+        var valueType = args[1];
+        if (IsDictionaryType(dictionaryType) && AotFallbackTypes.IsSupportedElementType(valueType))
+        {
+            var typedDictionary = (IDictionary)Activator.CreateInstance(dictionaryType)!;
+            foreach (var element in document.Entries)
+            {
+                typedDictionary[element.Key] = ConvertFromBsonValue(element.Value, valueType);
             }
 
             return typedDictionary;
