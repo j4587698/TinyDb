@@ -33,30 +33,24 @@ public static partial class SourceGeneratorHelpers
             : typeName;
     }
 
-    internal static string CreateCollectionInstanceExpression(string collectionTypeName, string elementType)
+    internal static string CreateCollectionAccumulatorExpression(string elementType)
     {
-        return IsSetCollectionType(collectionTypeName)
-            ? $"new System.Collections.Generic.HashSet<{elementType}>()"
-            : $"new System.Collections.Generic.List<{elementType}>()";
+        return $"new System.Collections.Generic.List<{elementType}>()";
     }
 
-    private static bool IsSetCollectionType(string collectionTypeName)
+    internal static string CreateCollectionAssignmentExpression(
+        string collectionTypeName,
+        string elementType,
+        string accumulatorName,
+        bool isArray)
     {
-        if (string.IsNullOrWhiteSpace(collectionTypeName)) return false;
-
-        var normalized = collectionTypeName.Trim();
-        if (normalized.EndsWith("?", StringComparison.Ordinal))
+        if (isArray)
         {
-            normalized = normalized.Substring(0, normalized.Length - 1).TrimEnd();
+            return $"{accumulatorName}.ToArray()";
         }
 
-        if (normalized.StartsWith("global::", StringComparison.Ordinal))
-        {
-            normalized = normalized.Substring("global::".Length);
-        }
-
-        return normalized.StartsWith("System.Collections.Generic.HashSet<", StringComparison.Ordinal) ||
-               normalized.StartsWith("System.Collections.Generic.ISet<", StringComparison.Ordinal);
+        var collectionType = NonNullableTypeName(collectionTypeName);
+        return $"global::TinyDb.Serialization.AotCollectionFactory.Create<{collectionType}, {elementType}>({accumulatorName})";
     }
 
     private static string NormalizeTypeName(string type)
@@ -529,7 +523,7 @@ public static partial class SourceGeneratorHelpers
         sb.AppendLine($@"                }}
                 else if (bson{propertyName} is BsonArray array{propertyName})
                 {{
-                    var list_{propertyName} = {CreateCollectionInstanceExpression(prop.FullyQualifiedType, elementType)};
+                    var list_{propertyName} = {CreateCollectionAccumulatorExpression(elementType)};
                     foreach (var item in array{propertyName})
                     {{
                         if (item.IsNull)
@@ -556,7 +550,7 @@ public static partial class SourceGeneratorHelpers
         }
         else
         {
-            sb.AppendLine($"                    entity.{propertyAccess} = list_{propertyName};");
+            sb.AppendLine($"                    entity.{propertyAccess} = {CreateCollectionAssignmentExpression(prop.FullyQualifiedType, elementType, $"list_{propertyName}", isArray: false)};");
         }
 
         sb.AppendLine(@"                }

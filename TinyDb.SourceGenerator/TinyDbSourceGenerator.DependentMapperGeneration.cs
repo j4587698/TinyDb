@@ -246,9 +246,7 @@ public partial class TinyDbSourceGenerator
                 }
 
                 var elementType = prop.ElementType ?? "object";
-                var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(
-                    prop.FullyQualifiedTypeName,
-                    elementType);
+                var collectionInstance = SourceGeneratorHelpers.CreateCollectionAccumulatorExpression(elementType);
 
                 sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
                 sb.AppendLine("            {");
@@ -287,7 +285,7 @@ public partial class TinyDbSourceGenerator
                 }
                 else
                 {
-                    sb.AppendLine($"                    result.{prop.AccessName} = list_{prop.Name};");
+                    sb.AppendLine($"                    result.{prop.AccessName} = {SourceGeneratorHelpers.CreateCollectionAssignmentExpression(prop.FullyQualifiedTypeName, elementType, $"list_{prop.Name}", isArray: false)};");
                 }
                 sb.AppendLine("                }");
                 sb.AppendLine("            }");
@@ -560,9 +558,7 @@ public partial class TinyDbSourceGenerator
             }
 
             var elementType = prop.ElementType ?? "object";
-            var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(
-                prop.FullyQualifiedTypeName,
-                elementType);
+            var collectionInstance = SourceGeneratorHelpers.CreateCollectionAccumulatorExpression(elementType);
 
             sb.AppendLine($"            if (document.TryGetValue(\"{bsonFieldName}\", out var bson_{prop.Name}))");
             sb.AppendLine("            {");
@@ -601,7 +597,7 @@ public partial class TinyDbSourceGenerator
             }
             else
             {
-                sb.AppendLine($"                    {assignmentTarget} = list_{prop.Name};");
+                sb.AppendLine($"                    {assignmentTarget} = {SourceGeneratorHelpers.CreateCollectionAssignmentExpression(prop.FullyQualifiedTypeName, elementType, $"list_{prop.Name}", isArray: false)};");
             }
             sb.AppendLine("                }");
             sb.AppendLine("            }");

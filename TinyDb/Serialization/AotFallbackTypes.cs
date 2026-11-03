@@ -37,6 +37,14 @@ internal static class AotFallbackTypes
             {
                 return IsSupportedElementType(targetType.GetGenericArguments()[0]);
             }
+
+            if (!targetType.IsInterface &&
+                !targetType.IsAbstract &&
+                targetType.GetGenericArguments().Length == 1 &&
+                typeof(System.Collections.IEnumerable).IsAssignableFrom(targetType))
+            {
+                return IsSupportedElementType(targetType.GetGenericArguments()[0]);
+            }
         }
 
         if (typeof(BsonValue).IsAssignableFrom(targetType))

@@ -262,7 +262,12 @@ public static partial class BsonConversion
                  (targetType.IsGenericType &&
                   (targetType.GetGenericTypeDefinition() == typeof(List<>) ||
                    targetType.GetGenericTypeDefinition() == typeof(HashSet<>) ||
-                   targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>))))
+                   targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>) ||
+                   (targetType.GetGenericArguments().Length == 1 &&
+                    !targetType.IsInterface &&
+                    !targetType.IsAbstract &&
+                    typeof(System.Collections.IEnumerable).IsAssignableFrom(targetType) &&
+                    AotFallbackTypes.IsSupportedElementType(targetType.GetGenericArguments()[0])))))
         {
             converted = FromBsonValueContainer(bsonValue, targetType);
         }

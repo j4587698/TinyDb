@@ -195,6 +195,33 @@ public static partial class BsonConversion
             }
         }
 
+        else if (targetType.IsGenericType &&
+                 targetType.GetGenericArguments().Length == 1 &&
+                 !targetType.IsInterface &&
+                 !targetType.IsAbstract &&
+                 typeof(System.Collections.IEnumerable).IsAssignableFrom(targetType) &&
+                 bsonValue is BsonArray genericCollectionArray)
+        {
+            var elementType = targetType.GetGenericArguments()[0];
+            if (AotFallbackTypes.IsSupportedElementType(elementType))
+            {
+                var values = ConvertArrayOfElements(genericCollectionArray, elementType);
+
+                if (targetType.GetGenericTypeDefinition() == typeof(Stack<>) ||
+                    targetType.GetGenericTypeDefinition() == typeof(System.Collections.Concurrent.ConcurrentStack<>))
+                {
+                    Array.Reverse(values);
+                }
+
+                if (AotCollectionFactory.TryCreateFromEnumerable(targetType, values, out var instance))
+                {
+                    return instance;
+                }
+            }
+
+            throw new NotSupportedException($"Collection type '{targetType.FullName}' is not supported in AOT mode.");
+        }
+
         // 处理枚举类型（在switch之前特殊处理，因为枚举也是值类型）
         if (targetType.IsEnum)
         {
