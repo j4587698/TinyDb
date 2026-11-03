@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using TinyDb.Attributes;
 using TinyDb.Bson;
 using TinyDb.Serialization;
@@ -116,6 +117,98 @@ public class AotFallbackContainerCoverageTests
         await Assert.That(restored.Sets[0].Count).IsEqualTo(2);
         await Assert.That(restored.Sets[0].Contains(2)).IsTrue();
         await Assert.That(restored.Map["a"].Contains(4)).IsTrue();
+    }
+
+    [Test]
+    public async Task GeneratedEntity_ConcreteCollections_ShouldRoundTrip()
+    {
+        var entity = new ConcreteCollectionEntity
+        {
+            Id = 1,
+            Queue = new Queue<int>([1, 2, 3]),
+            Stack = new Stack<int>([1, 2, 3]),
+            Observable = new ObservableCollection<int> { 4, 5 },
+            Linked = new LinkedList<int>([6, 7]),
+            ReadOnlyList = [8, 9],
+            InterfaceSet = new HashSet<int> { 10, 11 },
+            ReadOnlySet = new HashSet<int> { 12, 13 }
+        };
+
+        var document = AotBsonMapper.ToDocument(entity);
+        var restored = AotBsonMapper.FromDocument<ConcreteCollectionEntity>(document);
+
+        await AssertSequenceAsync(restored.Queue, 1, 2, 3);
+        await AssertSequenceAsync(restored.Stack, 3, 2, 1);
+        await AssertSequenceAsync(restored.Observable, 4, 5);
+        await AssertSequenceAsync(restored.Linked, 6, 7);
+        await Assert.That(restored.ReadOnlyList).IsTypeOf<List<int>>();
+        await AssertSequenceAsync(restored.ReadOnlyList, 8, 9);
+        await Assert.That(restored.InterfaceSet).IsTypeOf<HashSet<int>>();
+        await Assert.That(restored.InterfaceSet.SetEquals([10, 11])).IsTrue();
+        await Assert.That(restored.ReadOnlySet.SetEquals([12, 13])).IsTrue();
+    }
+
+    [Test]
+    public async Task GeneratedDependentType_QueueProperty_ShouldRoundTrip()
+    {
+        var entity = new DependentCollectionEntity
+        {
+            Id = 1,
+            Holder = new DependentCollectionHolder { Queue = new Queue<string>(["a", "b"]) }
+        };
+
+        var document = AotBsonMapper.ToDocument(entity);
+        var restored = AotBsonMapper.FromDocument<DependentCollectionEntity>(document);
+
+        await AssertSequenceAsync(restored.Holder.Queue, "a", "b");
+    }
+
+    [Test]
+    public async Task RuntimeFallback_ConcreteCollections_ShouldConvert()
+    {
+        var array = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2), new BsonInt32(3) });
+
+        var aotQueue = (Queue<int>)AotBsonMapper.ConvertValue(array, typeof(Queue<int>))!;
+        await AssertSequenceAsync(aotQueue, 1, 2, 3);
+
+        var genericQueue = BsonConversion.FromBsonValue<Queue<int>>(array)!;
+        await AssertSequenceAsync(genericQueue, 1, 2, 3);
+
+        var observable = (ObservableCollection<int>)BsonConversion.FromBsonValue(array, typeof(ObservableCollection<int>))!;
+        await AssertSequenceAsync(observable, 1, 2, 3);
+
+        var aotStack = (Stack<int>)AotBsonMapper.ConvertValue(array, typeof(Stack<int>))!;
+        await AssertSequenceAsync(aotStack, 1, 2, 3);
+    }
+
+    private static async Task AssertSequenceAsync<T>(IEnumerable<T> actual, params T[] expected)
+    {
+        await Assert.That(actual.SequenceEqual(expected)).IsTrue();
+    }
+
+    [Entity]
+    internal sealed class ConcreteCollectionEntity
+    {
+        public int Id { get; set; }
+        public Queue<int> Queue { get; set; } = new();
+        public Stack<int> Stack { get; set; } = new();
+        public ObservableCollection<int> Observable { get; set; } = new();
+        public LinkedList<int> Linked { get; set; } = new();
+        public IReadOnlyList<int> ReadOnlyList { get; set; } = [];
+        public ISet<int> InterfaceSet { get; set; } = new HashSet<int>();
+        public IReadOnlySet<int> ReadOnlySet { get; set; } = new HashSet<int>();
+    }
+
+    [Entity]
+    internal sealed class DependentCollectionEntity
+    {
+        public int Id { get; set; }
+        public DependentCollectionHolder Holder { get; set; } = new();
+    }
+
+    internal sealed class DependentCollectionHolder
+    {
+        public Queue<string> Queue { get; set; } = new();
     }
 
     [Entity]
