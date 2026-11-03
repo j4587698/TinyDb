@@ -51,6 +51,7 @@ public sealed class BsonString : BsonValue
     public override string ToString(IFormatProvider? provider) => Value;
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(string)) return Value;
         if (conversionType == typeof(BsonString)) return this;
         if (conversionType == typeof(object)) return this;

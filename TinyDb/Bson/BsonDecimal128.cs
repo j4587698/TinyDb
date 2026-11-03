@@ -51,6 +51,7 @@ public sealed class BsonDecimal128 : BsonValue, IComparable<BsonDecimal128>, IEq
     public override TypeCode GetTypeCode() => TypeCode.Decimal;
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(decimal)) return ToDecimal(provider);
         if (conversionType == typeof(Decimal128)) return Value;
         // Default BsonValue implementation might handle others via IConvertible if we call base, 

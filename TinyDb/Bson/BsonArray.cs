@@ -350,6 +350,7 @@ public sealed class BsonArray : BsonValue, IList<BsonValue>, IReadOnlyList<BsonV
     public override string ToString(IFormatProvider? provider) => ToString();
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(BsonArray)) return this;
         if (conversionType == typeof(List<object?>)) return ToList();
 

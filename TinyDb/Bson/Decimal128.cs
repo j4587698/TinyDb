@@ -366,6 +366,7 @@ public struct Decimal128 : IEquatable<Decimal128>, IComparable<Decimal128>, ICon
     public string ToString(IFormatProvider? provider) => ToString();
     public object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(decimal)) return ToDecimal();
         if (conversionType == typeof(Decimal128)) return this;
         if (conversionType == typeof(double)) return ToDouble(provider);
