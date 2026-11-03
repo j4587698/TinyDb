@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using TinyDb.Attributes;
 using TinyDb.Bson;
@@ -127,6 +129,7 @@ public class AotFallbackContainerCoverageTests
             Id = 1,
             Queue = new Queue<int>([1, 2, 3]),
             Stack = new Stack<int>([1, 2, 3]),
+            Concurrent = new ConcurrentStack<int>([1, 2, 3]),
             Observable = new ObservableCollection<int> { 4, 5 },
             Linked = new LinkedList<int>([6, 7]),
             ReadOnlyList = [8, 9],
@@ -139,6 +142,7 @@ public class AotFallbackContainerCoverageTests
 
         await AssertSequenceAsync(restored.Queue, 1, 2, 3);
         await AssertSequenceAsync(restored.Stack, 3, 2, 1);
+        await AssertSequenceAsync(restored.Concurrent, 3, 2, 1);
         await AssertSequenceAsync(restored.Observable, 4, 5);
         await AssertSequenceAsync(restored.Linked, 6, 7);
         await Assert.That(restored.ReadOnlyList).IsTypeOf<List<int>>();
@@ -179,6 +183,54 @@ public class AotFallbackContainerCoverageTests
 
         var aotStack = (Stack<int>)AotBsonMapper.ConvertValue(array, typeof(Stack<int>))!;
         await AssertSequenceAsync(aotStack, 1, 2, 3);
+
+        var genericStack = BsonConversion.FromBsonValue<Stack<int>>(array)!;
+        await AssertSequenceAsync(genericStack, 1, 2, 3);
+
+        var untypedStack = (ConcurrentStack<int>)BsonConversion.FromBsonValue(array, typeof(ConcurrentStack<int>))!;
+        await AssertSequenceAsync(untypedStack, 1, 2, 3);
+    }
+
+    [Test]
+    public async Task GeneratedEntity_NestedQueue_ShouldRoundTrip()
+    {
+        var entity = new NestedQueueEntity
+        {
+            Id = 1,
+            Queues = [new Queue<int>([1, 2]), new Queue<int>([3])]
+        };
+
+        var document = AotBsonMapper.ToDocument(entity);
+        var restored = AotBsonMapper.FromDocument<NestedQueueEntity>(document);
+
+        await AssertSequenceAsync(restored.Queues[0], 1, 2);
+        await AssertSequenceAsync(restored.Queues[1], 3);
+    }
+
+    [Test]
+    public async Task AotCollectionFactory_ParameterlessConstructorWithAdd_ShouldMaterialize()
+    {
+        var created = AotCollectionFactory.Create<AddOnlyCollection<int>, int>([1, 2, 3]);
+
+        await Assert.That(created).IsTypeOf<AddOnlyCollection<int>>();
+        await AssertSequenceAsync(created, 1, 2, 3);
+    }
+
+    [Test]
+    public async Task AotCollectionFactory_AssignableInterface_ShouldReturnConcreteInstance()
+    {
+        var asList = AotCollectionFactory.Create<IReadOnlyList<int>, int>([1, 2]);
+        await Assert.That(asList).IsTypeOf<List<int>>();
+
+        var asSet = AotCollectionFactory.Create<ISet<int>, int>([1, 2]);
+        await Assert.That(asSet).IsTypeOf<HashSet<int>>();
+    }
+
+    [Test]
+    public async Task AotCollectionFactory_UnsupportedCollection_ShouldThrow()
+    {
+        await Assert.That(() => AotCollectionFactory.Create<UnsupportedCollection<int>, int>([1]))
+            .Throws<NotSupportedException>();
     }
 
     private static async Task AssertSequenceAsync<T>(IEnumerable<T> actual, params T[] expected)
@@ -192,11 +244,45 @@ public class AotFallbackContainerCoverageTests
         public int Id { get; set; }
         public Queue<int> Queue { get; set; } = new();
         public Stack<int> Stack { get; set; } = new();
+        public ConcurrentStack<int> Concurrent { get; set; } = new();
         public ObservableCollection<int> Observable { get; set; } = new();
         public LinkedList<int> Linked { get; set; } = new();
         public IReadOnlyList<int> ReadOnlyList { get; set; } = [];
         public ISet<int> InterfaceSet { get; set; } = new HashSet<int>();
         public IReadOnlySet<int> ReadOnlySet { get; set; } = new HashSet<int>();
+    }
+
+    [Entity]
+    internal sealed class NestedQueueEntity
+    {
+        public int Id { get; set; }
+        public List<Queue<int>> Queues { get; set; } = [];
+    }
+
+    private sealed class AddOnlyCollection<T> : ICollection<T>
+    {
+        private readonly List<T> _items = new();
+
+        public int Count => _items.Count;
+        public bool IsReadOnly => false;
+
+        public void Add(T item) => _items.Add(item);
+        public void Clear() => _items.Clear();
+        public bool Contains(T item) => _items.Contains(item);
+        public void CopyTo(T[] array, int arrayIndex) => _items.CopyTo(array, arrayIndex);
+        public bool Remove(T item) => _items.Remove(item);
+        public IEnumerator<T> GetEnumerator() => _items.GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class UnsupportedCollection<T> : IEnumerable<T>
+    {
+        private UnsupportedCollection()
+        {
+        }
+
+        public IEnumerator<T> GetEnumerator() => Enumerable.Empty<T>().GetEnumerator();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     [Entity]
