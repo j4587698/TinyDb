@@ -13,6 +13,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write   # NuGet.org 可信发布（OIDC），无需长期 API Key
 
     steps:
     - name: Checkout code
@@ -159,16 +160,27 @@ jobs:
           --title "TinyDb v${{ env.current_version }}" \
           --generate-notes
 
-    - name: Setup NuGet
+    - name: NuGet.org login (OIDC)
       if: env.version_changed == 'true'
-      run: |
-        echo "Setting up NuGet..."
+      id: nuget_login
+      uses: NuGet/login@v1
+      with:
+        user: j4587698
 
     - name: Publish to NuGet.org
       if: env.version_changed == 'true'
+      env:
+        NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
       run: |
         echo "Publishing to NuGet.org..."
-        dotnet nuget push ./nupkg/TinyDb.${{ env.current_version }}.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }} --skip-duplicate
+        if [ -z "$NUGET_API_KEY" ]; then
+          echo "::error::NuGet OIDC login did not return an API key. Check the trusted publishing policy on nuget.org."
+          exit 1
+        fi
+        dotnet nuget push "./nupkg/TinyDb.${{ env.current_version }}.nupkg" \
+          --source https://api.nuget.org/v3/index.json \
+          --api-key "$NUGET_API_KEY" \
+          --skip-duplicate
 
     - name: Publish to GitHub Packages
       if: env.version_changed == 'true'
