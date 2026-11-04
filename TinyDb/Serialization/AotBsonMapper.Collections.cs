@@ -231,6 +231,30 @@ public static partial class AotBsonMapper
             }
         }
 
+        if (collectionType.IsGenericType &&
+            collectionType.GetGenericArguments().Length == 1 &&
+            typeof(IEnumerable).IsAssignableFrom(collectionType))
+        {
+            var elementType = collectionType.GetGenericArguments()[0];
+            if (AotFallbackTypes.IsSupportedElementType(elementType))
+            {
+                var values = ConvertArrayOfElements(array, elementType);
+
+                // Stack/ConcurrentStack 的 IEnumerable 构造函数按枚举顺序压栈，
+                // 逆序后构造可保持序列化前后的枚举顺序一致。
+                if (collectionType.GetGenericTypeDefinition() == typeof(Stack<>) ||
+                    collectionType.GetGenericTypeDefinition() == typeof(System.Collections.Concurrent.ConcurrentStack<>))
+                {
+                    Array.Reverse(values);
+                }
+
+                if (AotCollectionFactory.TryCreateFromEnumerable(collectionType, values, out var instance))
+                {
+                    return instance;
+                }
+            }
+        }
+
         throw new NotSupportedException($"AOT fallback does not support collection type '{collectionType.FullName}'.");
     }
 
