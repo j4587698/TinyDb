@@ -160,22 +160,12 @@ jobs:
           --title "TinyDb v${{ env.current_version }}" \
           --generate-notes
 
-    - name: Check NuGet trusted publishing configuration
-      if: env.version_changed == 'true'
-      env:
-        NUGET_USER: ${{ secrets.NUGET_USER }}
-      run: |
-        if [ -z "$NUGET_USER" ]; then
-          echo "::error::NUGET_USER secret is not set. Add it with the nuget.org username, then create a trusted publishing policy for repository j4587698/TinyDb, workflow release.yml."
-          exit 1
-        fi
-
     - name: NuGet.org login (OIDC)
       if: env.version_changed == 'true'
       id: nuget_login
       uses: NuGet/login@v1
       with:
-        user: ${{ secrets.NUGET_USER }}
+        user: j4587698
 
     - name: Publish to NuGet.org
       if: env.version_changed == 'true'

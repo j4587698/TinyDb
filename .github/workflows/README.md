@@ -82,7 +82,7 @@ NuGet.org 使用 **可信发布（Trusted Publishing / OIDC）**，不再使用�
 
 1. `NuGet/login@v1` 通过 GitHub OIDC 换取短期 API Key
 2. 工作流 job 需要 `id-token: write` 权限
-3. 只需要配置一个 `NUGET_USER` secret（nuget.org 用户名）
+3. nuget.org 用户名直接写在 `NuGet/login` 步骤里（`j4587698`），不需要 secret
 4. 在 nuget.org 上预先创建 Trusted Publishing 策略
 
 **nuget.org 策略配置**（https://www.nuget.org/account/trusted-publishing）：
@@ -101,7 +101,7 @@ NuGet.org 使用 **可信发布（Trusted Publishing / OIDC）**，不再使用�
   id: nuget_login
   uses: NuGet/login@v1
   with:
-    user: ${{ secrets.NUGET_USER }}
+    user: j4587698
 
 - name: Publish to NuGet.org
   env:
@@ -206,10 +206,9 @@ permissions:
 
 | Secret | 说明 |
 | --- | --- |
-| `NUGET_USER` | nuget.org 用户名，用于 OIDC 换取临时 API Key |
 | `GITHUB_TOKEN` | 自动提供，用于 GitHub Packages 和 Release |
 
-`NUGET_API_KEY` 不再需要，可以删除。
+NuGet.org 用户名（`j4587698`）直接写在工作流里，`NUGET_USER` 和 `NUGET_API_KEY` 都不需要。
 
 ## 🔍 故障排除
 
@@ -228,7 +227,6 @@ permissions:
    - 确保测试环境配置正确
 
 4. **NuGet发布失败**
-   - 检查 `NUGET_USER` secret 是否配置为 nuget.org 用户名
    - 确认 nuget.org 的 Trusted Publishing 策略中仓库为 `j4587698/TinyDb`、工作流文件为 `release.yml`
    - 确认 job 具备 `id-token: write` 权限（缺失时 OIDC 登录会失败）
 
