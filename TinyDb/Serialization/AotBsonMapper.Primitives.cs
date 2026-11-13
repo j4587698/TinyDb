@@ -52,6 +52,8 @@ public static partial class AotBsonMapper
 
     private static object ConvertPrimitiveValue(BsonValue bsonValue, Type targetType)
     {
+        targetType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
         if (targetType == typeof(BsonValue) || targetType.IsAssignableFrom(bsonValue.GetType()))
         {
             return bsonValue;

@@ -293,11 +293,11 @@ public class AotBsonMapperFallbackBranchCoverageTests
     }
 
     [Test]
-    public async Task ConvertValue_CollectionWithoutPublicAdd_ShouldThrow()
+    public async Task ConvertValue_CollectionWithEnumerableConstructor_ShouldCreate()
     {
-        var arr = new BsonArray(new BsonValue[] { new BsonInt32(1) });
-        await Assert.That(() => AotBsonMapper.ConvertValue(arr, typeof(Queue<int>)))
-            .Throws<NotSupportedException>();
+        var arr = new BsonArray(new BsonValue[] { new BsonInt32(1), new BsonInt32(2) });
+        var queue = (Queue<int>)AotBsonMapper.ConvertValue(arr, typeof(Queue<int>))!;
+        await Assert.That(queue.SequenceEqual([1, 2])).IsTrue();
     }
 
     [Test]

@@ -100,6 +100,7 @@ public sealed class BsonDateTime : BsonValue
     public override string ToString(IFormatProvider? provider) => ToString();
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
+        conversionType = Nullable.GetUnderlyingType(conversionType) ?? conversionType;
         if (conversionType == typeof(DateTime)) return Value;
         if (conversionType == typeof(BsonDateTime)) return this;
         if (conversionType == typeof(object)) return this;

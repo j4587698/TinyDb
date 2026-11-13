@@ -78,15 +78,42 @@ git push origin "v$CURRENT_VERSION"
 
 ### 5. NuGet发布
 
-**配置NuGet源**：
-```bash
-dotnet nuget add source --name "github" --username "github-actions" --password "${{ secrets.GITHUB_TOKEN }}" --store-password-in-clear-text
+NuGet.org 使用 **可信发布（Trusted Publishing / OIDC）**，不再使用长期 API Key：
+
+1. `NuGet/login@v1` 通过 GitHub OIDC 换取短期 API Key
+2. 工作流 job 需要 `id-token: write` 权限
+3. nuget.org 用户名直接写在 `NuGet/login` 步骤里（`j4587698`），不需要 secret
+4. 在 nuget.org 上预先创建 Trusted Publishing 策略
+
+**nuget.org 策略配置**（https://www.nuget.org/account/trusted-publishing）：
+
+| 字段 | 值 |
+| --- | --- |
+| Repository Owner | `j4587698` |
+| Repository | `TinyDb` |
+| Workflow File | `release.yml` |
+| Environment | 留空（工作流未使用 environment） |
+
+**工作流步骤**：
+
+```yaml
+- name: NuGet.org login (OIDC)
+  id: nuget_login
+  uses: NuGet/login@v1
+  with:
+    user: j4587698
+
+- name: Publish to NuGet.org
+  env:
+    NUGET_API_KEY: ${{ steps.nuget_login.outputs.NUGET_API_KEY }}
+  run: |
+    dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg \
+      --source https://api.nuget.org/v3/index.json \
+      --api-key "$NUGET_API_KEY" \
+      --skip-duplicate
 ```
 
-**发布包**：
-```bash
-dotnet nuget push ./nupkg/TinyDb.$CURRENT_VERSION.nupkg --source "github" --skip-duplicate --no-symbols
-```
+GitHub Packages 仍然使用 `GITHUB_TOKEN` 推送。
 
 ### 6. GitHub Release
 
@@ -171,8 +198,17 @@ GitHub Actions将自动：
 ```yaml
 permissions:
   contents: write    # 创建标签和Release
-  packages: write    # 发布到NuGet
+  packages: write    # 发布到 GitHub Packages
+  id-token: write    # NuGet.org 可信发布（OIDC）
 ```
+
+### Secrets
+
+| Secret | 说明 |
+| --- | --- |
+| `GITHUB_TOKEN` | 自动提供，用于 GitHub Packages 和 Release |
+
+NuGet.org 用户名（`j4587698`）直接写在工作流里，`NUGET_USER` 和 `NUGET_API_KEY` 都不需要。
 
 ## 🔍 故障排除
 
@@ -191,8 +227,8 @@ permissions:
    - 确保测试环境配置正确
 
 4. **NuGet发布失败**
-   - 检查`GITHUB_TOKEN`权限
-   - 确保包内容验证通过
+   - 确认 nuget.org 的 Trusted Publishing 策略中仓库为 `j4587698/TinyDb`、工作流文件为 `release.yml`
+   - 确认 job 具备 `id-token: write` 权限（缺失时 OIDC 登录会失败）
 
 ### 调试命令
 

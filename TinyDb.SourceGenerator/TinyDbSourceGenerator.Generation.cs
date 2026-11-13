@@ -475,7 +475,7 @@ public partial class TinyDbSourceGenerator
         string bsonLocalName)
     {
         var elementType = prop.ElementType ?? "object";
-        var collectionInstance = SourceGeneratorHelpers.CreateCollectionInstanceExpression(prop.FullyQualifiedType, elementType);
+        var collectionInstance = SourceGeneratorHelpers.CreateCollectionAccumulatorExpression(elementType);
 
         sb.AppendLine($"                if ({bsonLocalName} is BsonArray array_{prop.Name})");
         sb.AppendLine("                {");
@@ -505,7 +505,7 @@ public partial class TinyDbSourceGenerator
         }
         else
         {
-            sb.AppendLine($"                    {localName} = list_{prop.Name};");
+            sb.AppendLine($"                    {localName} = {SourceGeneratorHelpers.CreateCollectionAssignmentExpression(prop.FullyQualifiedType, elementType, $"list_{prop.Name}", isArray: false)};");
         }
         sb.AppendLine("                }");
         sb.AppendLine("                else");

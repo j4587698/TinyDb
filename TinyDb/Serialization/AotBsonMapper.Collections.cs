@@ -102,6 +102,39 @@ public static partial class AotBsonMapper
         return (T)ConvertPrimitiveValue(bsonValue, typeof(T));
     }
 
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Array element types are restricted to scalars/enums, BsonValue, or recursively supported containers; their array code is available.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static Array ConvertArrayOfElements(BsonArray array, Type elementType)
+    {
+        var values = Array.CreateInstance(elementType, array.Count);
+        for (var i = 0; i < array.Count; i++)
+        {
+            values.SetValue(ConvertFromBsonValue(array[i], elementType), i);
+        }
+
+        return values;
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static IList ConvertListOfElements(BsonArray array, [DynamicallyAccessedMembers(TypeInspectionRequirements)] Type listType, Type elementType)
+    {
+        var list = (IList)Activator.CreateInstance(listType)!;
+        foreach (var bsonValue in array)
+        {
+            list.Add(ConvertFromBsonValue(bsonValue, elementType));
+        }
+
+        return list;
+    }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2072", Justification = "Element types are restricted to scalars/enums, BsonValue, or recursively supported containers that do not require adapter metadata.")]
+    private static object ConvertHashSetOfElements(BsonArray array, [DynamicallyAccessedMembers(TypeInspectionRequirements)] Type hashSetType, Type elementType)
+    {
+        var values = ConvertArrayOfElements(array, elementType);
+        return Activator.CreateInstance(hashSetType, new object?[] { values })!;
+    }
+
     private static object? ConvertCollection([DynamicallyAccessedMembers(TypeInspectionRequirements)] Type collectionType, BsonArray array)
     {
         if (array == null) return null;
@@ -130,6 +163,12 @@ public static partial class AotBsonMapper
             if (collectionType == typeof(Guid[])) return ConvertArray(array, static value => ConvertScalarArrayValue<Guid>(value));
             if (collectionType == typeof(ObjectId[])) return ConvertArray(array, static value => ConvertScalarArrayValue<ObjectId>(value));
             if (collectionType == typeof(object[])) return ConvertArray(array, UnwrapBsonValue);
+
+            var arrayElementType = collectionType.GetElementType();
+            if (arrayElementType != null && AotFallbackTypes.IsSupportedElementType(arrayElementType))
+            {
+                return ConvertArrayOfElements(array, arrayElementType);
+            }
 
             throw new NotSupportedException($"AOT fallback does not support array type '{collectionType.FullName}'.");
         }
@@ -170,6 +209,50 @@ public static partial class AotBsonMapper
             }
 
             return list;
+        }
+
+        if (collectionType.IsGenericType &&
+            collectionType.GetGenericTypeDefinition() == typeof(HashSet<>))
+        {
+            var hashSetElementType = collectionType.GetGenericArguments()[0];
+            if (AotFallbackTypes.IsSupportedElementType(hashSetElementType))
+            {
+                return ConvertHashSetOfElements(array, collectionType, hashSetElementType);
+            }
+        }
+
+        if (collectionType.IsGenericType &&
+            collectionType.GetGenericTypeDefinition() == typeof(List<>))
+        {
+            var elementType = collectionType.GetGenericArguments()[0];
+            if (AotFallbackTypes.IsSupportedElementType(elementType))
+            {
+                return ConvertListOfElements(array, collectionType, elementType);
+            }
+        }
+
+        if (collectionType.IsGenericType &&
+            collectionType.GetGenericArguments().Length == 1 &&
+            typeof(IEnumerable).IsAssignableFrom(collectionType))
+        {
+            var elementType = collectionType.GetGenericArguments()[0];
+            if (AotFallbackTypes.IsSupportedElementType(elementType))
+            {
+                var values = ConvertArrayOfElements(array, elementType);
+
+                // Stack/ConcurrentStack 的 IEnumerable 构造函数按枚举顺序压栈，
+                // 逆序后构造可保持序列化前后的枚举顺序一致。
+                if (collectionType.GetGenericTypeDefinition() == typeof(Stack<>) ||
+                    collectionType.GetGenericTypeDefinition() == typeof(System.Collections.Concurrent.ConcurrentStack<>))
+                {
+                    Array.Reverse(values);
+                }
+
+                if (AotCollectionFactory.TryCreateFromEnumerable(collectionType, values, out var instance))
+                {
+                    return instance;
+                }
+            }
         }
 
         throw new NotSupportedException($"AOT fallback does not support collection type '{collectionType.FullName}'.");

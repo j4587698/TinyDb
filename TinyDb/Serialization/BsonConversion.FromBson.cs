@@ -259,6 +259,19 @@ public static partial class BsonConversion
 
             converted = list;
         }
+        else if (targetType.IsArray ||
+                 (targetType.IsGenericType &&
+                  (targetType.GetGenericTypeDefinition() == typeof(List<>) ||
+                   targetType.GetGenericTypeDefinition() == typeof(HashSet<>) ||
+                   targetType.GetGenericTypeDefinition() == typeof(Dictionary<,>) ||
+                   (targetType.GetGenericArguments().Length == 1 &&
+                    !targetType.IsInterface &&
+                    !targetType.IsAbstract &&
+                    typeof(System.Collections.IEnumerable).IsAssignableFrom(targetType) &&
+                    AotFallbackTypes.IsSupportedElementType(targetType.GetGenericArguments()[0])))))
+        {
+            converted = FromBsonValueContainer(bsonValue, targetType);
+        }
         else if (typeof(BsonValue).IsAssignableFrom(targetType) && targetType.IsInstanceOfType(bsonValue))
         {
             converted = bsonValue;
@@ -275,5 +288,11 @@ public static partial class BsonConversion
 
         return (T?)converted;
     }
+
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2062", Justification = "Container fallback forwards only scalar/enum/BsonValue element types and recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2067", Justification = "Container fallback forwards only scalar/enum/BsonValue element types and recursively supported containers that do not require adapter metadata.")]
+    [UnconditionalSuppressMessage("TrimAnalysis", "IL2087", Justification = "Container fallback forwards only scalar/enum/BsonValue element types and recursively supported containers that do not require adapter metadata.")]
+    private static object? FromBsonValueContainer(BsonValue bsonValue, Type targetType)
+        => FromBsonValue(bsonValue, targetType);
 
 }

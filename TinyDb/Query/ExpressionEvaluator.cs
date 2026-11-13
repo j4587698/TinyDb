@@ -221,7 +221,8 @@ public static partial class ExpressionEvaluator
                 {
                     try
                     {
-                        value = Convert.ChangeType(value, prop.PropertyType);
+                        var targetType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                        value = Convert.ChangeType(value, targetType);
                     }
                     catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
                     {
@@ -266,7 +267,8 @@ public static partial class ExpressionEvaluator
         if (nodeType == ExpressionType.Convert)
         {
             if (value == null) return null;
-            return Convert.ChangeType(value, targetType);
+            var conversionType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+            return Convert.ChangeType(value, conversionType);
         }
         else if (nodeType == ExpressionType.Not)
         {

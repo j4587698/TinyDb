@@ -108,6 +108,11 @@ public static partial class AotBsonMapper
             return UnwrapBsonValue(bsonValue);
         }
 
+        if (typeof(BsonValue).IsAssignableFrom(nonNullableType) && nonNullableType.IsInstanceOfType(bsonValue))
+        {
+            return bsonValue;
+        }
+
         if (IsDictionaryType(nonNullableType))
         {
             if (bsonValue is BsonDocument doc)

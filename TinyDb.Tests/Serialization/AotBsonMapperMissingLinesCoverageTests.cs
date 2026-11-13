@@ -289,7 +289,16 @@ public class AotBsonMapperMissingLinesCoverageTests
         await Assert.That(list[0]).IsEqualTo("a");
         await Assert.That(list[1]).IsNull();
 
-        await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(List<DateTime>))).Throws<NotSupportedException>();
+        var dateOnlyList = (List<DateTime>)AotBsonMapper.ConvertValue(
+            new BsonArray(new BsonValue[] { new BsonDateTime(DateTime.UnixEpoch) }),
+            typeof(List<DateTime>))!;
+        await Assert.That(dateOnlyList[0]).IsEqualTo(DateTime.UnixEpoch);
+
+        var nullableDateList = (List<DateTime?>)AotBsonMapper.ConvertValue(
+            new BsonArray(new BsonValue[] { new BsonDateTime(DateTime.UnixEpoch), BsonNull.Value }),
+            typeof(List<DateTime?>))!;
+        await Assert.That(nullableDateList[0]).IsEqualTo(DateTime.UnixEpoch);
+        await Assert.That(nullableDateList[1]).IsNull();
 
         await Assert.That(() => AotBsonMapper.ConvertValue(array, typeof(StringListWrapper)))
             .Throws<NotSupportedException>();
@@ -312,7 +321,14 @@ public class AotBsonMapperMissingLinesCoverageTests
         await Assert.That(objectDict["b"]).IsEqualTo("x");
         await Assert.That(objectDict["c"]).IsNull();
 
-        await Assert.That(() => AotBsonMapper.ConvertValue(doc, typeof(Dictionary<string, DateTime>))).Throws<NotSupportedException>();
+        var dateDict = (Dictionary<string, DateTime?>)AotBsonMapper.ConvertValue(
+            new BsonDocument().Set("a", new BsonDateTime(DateTime.UnixEpoch)).Set("b", BsonNull.Value),
+            typeof(Dictionary<string, DateTime?>))!;
+        await Assert.That(dateDict["a"]).IsEqualTo(DateTime.UnixEpoch);
+        await Assert.That(dateDict["b"]).IsNull();
+
+        await Assert.That(() => AotBsonMapper.ConvertValue(doc, typeof(Dictionary<string, Tuple<int, int>>)))
+            .Throws<NotSupportedException>();
     }
 
     [Test]

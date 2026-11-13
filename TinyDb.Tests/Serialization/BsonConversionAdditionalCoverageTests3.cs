@@ -81,8 +81,8 @@ public class BsonConversionAdditionalCoverageTests3
     public async Task FromBsonValue_IsComplexObjectType_EnumerableAndBsonValueGuards_ShouldNotTreatAsComplex()
     {
         var value = BsonConversion.FromBsonValue(new BsonArray(new BsonValue[] { 1, 2 }), typeof(HashSet<int>));
-        await Assert.That(value).IsTypeOf<string>();
-        await Assert.That(((string)value!).Length).IsGreaterThan(0);
+        await Assert.That(value).IsTypeOf<HashSet<int>>();
+        await Assert.That(((HashSet<int>)value!).Count).IsEqualTo(2);
 
         var value2 = BsonConversion.FromBsonValue(new BsonInt32(5), typeof(BsonInt32));
         await Assert.That(value2).IsTypeOf<BsonInt32>();

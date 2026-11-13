@@ -107,7 +107,8 @@ internal static partial class ExpressionConstantEvaluator
 
         try
         {
-            return Convert.ChangeType(operand, unaryExpr.Type);
+            var targetType = Nullable.GetUnderlyingType(unaryExpr.Type) ?? unaryExpr.Type;
+            return Convert.ChangeType(operand, targetType);
         }
         catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or ArgumentException)
         {

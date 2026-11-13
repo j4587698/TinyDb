@@ -56,7 +56,7 @@ public sealed class BsonConversionMissingLinesCoverageTests
     public async Task FromBsonValue_DictionaryUnsupportedValueType_ShouldThrow()
     {
         var doc = new BsonDocument().Set("a", 1);
-        await Assert.That(() => BsonConversion.FromBsonValue(doc, typeof(Dictionary<string, double>)))
+        await Assert.That(() => BsonConversion.FromBsonValue(doc, typeof(Dictionary<string, Tuple<int, int>>)))
             .Throws<NotSupportedException>();
     }
 
