@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Linq.Expressions;
 using System.Text;
 using TinyDb.Bson;
+using TinyDb.Utils;
 
 namespace TinyDb.Query;
 
@@ -214,7 +215,12 @@ public static class BinaryPredicateEvaluator
         try
         {
             if (value is Decimal128 d128) { result = d128.ToDecimal(); return true; }
-            result = Convert.ToDecimal(value);
+            result = value switch
+            {
+                double d => DoubleToDecimalCompat.FromDouble(d),
+                float f => DoubleToDecimalCompat.FromSingle(f),
+                _ => Convert.ToDecimal(value)
+            };
             return true;
         }
         catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)

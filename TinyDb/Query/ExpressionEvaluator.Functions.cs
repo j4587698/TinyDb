@@ -322,7 +322,14 @@ public static partial class ExpressionEvaluator
 
         try
         {
-            return checked(current + Convert.ToDecimal(value));
+            var converted = value switch
+            {
+                double d => DoubleToDecimalCompat.FromDouble(d),
+                float f => DoubleToDecimalCompat.FromSingle(f),
+                _ => Convert.ToDecimal(value)
+            };
+
+            return checked(current + converted);
         }
         catch (Exception ex) when (ex is OverflowException or InvalidCastException or FormatException)
         {

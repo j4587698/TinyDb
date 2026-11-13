@@ -1,4 +1,5 @@
 using System.Globalization;
+using TinyDb.Utils;
 
 namespace TinyDb.Bson;
 
@@ -40,7 +41,7 @@ public sealed class BsonDouble : BsonValue
     public override byte ToByte(IFormatProvider? provider) => Convert.ToByte(Value, provider);
     public override char ToChar(IFormatProvider? provider) => Convert.ToChar(Value, provider);
     public override DateTime ToDateTime(IFormatProvider? provider) => throw new InvalidCastException();
-    public override decimal ToDecimal(IFormatProvider? provider) => Convert.ToDecimal(Value, provider);
+    public override decimal ToDecimal(IFormatProvider? provider) => DoubleToDecimalCompat.FromDouble(Value);
     public override double ToDouble(IFormatProvider? provider) => Value;
     public override short ToInt16(IFormatProvider? provider) => Convert.ToInt16(Value, provider);
     public override int ToInt32(IFormatProvider? provider) => Convert.ToInt32(Value, provider);
@@ -51,6 +52,7 @@ public sealed class BsonDouble : BsonValue
     public override object ToType(Type conversionType, IFormatProvider? provider)
     {
         if (conversionType == typeof(double)) return Value;
+        if (conversionType == typeof(decimal)) return ToDecimal(provider);
         if (conversionType == typeof(BsonDouble)) return this;
         if (conversionType == typeof(object)) return this;
         if (conversionType == typeof(string)) return ToString(provider);

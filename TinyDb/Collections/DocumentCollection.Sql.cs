@@ -10,6 +10,7 @@ using TinyDb.Query;
 using TinyDb.Index;
 using TinyDb.Attributes;
 using TinyDb.IdGeneration;
+using TinyDb.Utils;
 
 namespace TinyDb.Collections;
 
@@ -677,7 +678,12 @@ public sealed partial class DocumentCollection<T> where T : class
     {
         if (IsIntegralType(targetType))
         {
-            var decimalValue = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+            var decimalValue = value switch
+            {
+                double d => DoubleToDecimalCompat.FromDouble(d),
+                float f => DoubleToDecimalCompat.FromSingle(f),
+                _ => Convert.ToDecimal(value, CultureInfo.InvariantCulture)
+            };
             if (decimal.Truncate(decimalValue) != decimalValue)
             {
                 throw new InvalidOperationException(

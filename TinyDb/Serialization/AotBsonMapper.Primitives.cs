@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using TinyDb.Bson;
+using TinyDb.Utils;
 
 namespace TinyDb.Serialization;
 
@@ -146,7 +147,7 @@ public static partial class AotBsonMapper
             var t when t == typeof(decimal) => bsonValue switch
             {
                 BsonDecimal128 dec => dec.Value.ToDecimal(),
-                BsonDouble dbl => Convert.ToDecimal(dbl.Value, CultureInfo.InvariantCulture),
+                BsonDouble dbl => DoubleToDecimalCompat.FromDouble(dbl.Value),
                 BsonInt32 i32 => (decimal)i32.Value,
                 BsonInt64 i64 => (decimal)i64.Value,
                 BsonString s => decimal.Parse(s.Value, CultureInfo.InvariantCulture),
