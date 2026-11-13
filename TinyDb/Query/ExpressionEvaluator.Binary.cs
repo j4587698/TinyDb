@@ -204,12 +204,12 @@ public static partial class ExpressionEvaluator
         if (val is uint ui) return ui;
         if (val is long l) return l;
         if (val is ulong ul) return ul;
-        if (val is float f) return Convert.ToDecimal(f, CultureInfo.InvariantCulture);
-        if (val is double d) return Convert.ToDecimal(d, CultureInfo.InvariantCulture);
+        if (val is float f) return DoubleToDecimalCompat.FromSingle(f);
+        if (val is double d) return DoubleToDecimalCompat.FromDouble(d);
 
         if (val is BsonInt32 bsonInt32) return bsonInt32.Value;
         if (val is BsonInt64 bsonInt64) return bsonInt64.Value;
-        if (val is BsonDouble bsonDouble) return Convert.ToDecimal(bsonDouble.Value, CultureInfo.InvariantCulture);
+        if (val is BsonDouble bsonDouble) return DoubleToDecimalCompat.FromDouble(bsonDouble.Value);
 
         throw CreateNumericConversionException(val, "decimal");
     }

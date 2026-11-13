@@ -456,7 +456,7 @@ dotnet run --project TinyDb.Demo
 
 ## 开发环境
 
-- .NET 8.0 / 9.0 / 10.0
+- .NET 8.0 / 9.0 / 10.0 / 11.0
 - C# 12+
 - 推荐 IDE: Rider / Visual Studio 2022
 

@@ -1,4 +1,5 @@
 using TinyDb.Bson;
+using TinyDb.Utils;
 
 namespace TinyDb.Query;
 
@@ -298,7 +299,12 @@ internal static class QueryValueComparer
                 return false;
             }
 
-            result = Convert.ToDecimal(value);
+            result = value switch
+            {
+                double doubleValue => DoubleToDecimalCompat.FromDouble(doubleValue),
+                float singleValue => DoubleToDecimalCompat.FromSingle(singleValue),
+                _ => Convert.ToDecimal(value)
+            };
             return true;
         }
         catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)

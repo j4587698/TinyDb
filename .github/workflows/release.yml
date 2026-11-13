@@ -28,6 +28,7 @@ jobs:
           8.0.x
           9.0.x
           10.0.x
+          11.0.x
 
     - name: Get previous version
       id: get_previous_version
@@ -81,7 +82,7 @@ jobs:
         dotnet build TinyDb.sln -c Release
 
         # 运行测试 (TUnit 支持 dotnet test，会同时运行所有目标框架)
-        echo "Running tests on all target frameworks (net8.0, net9.0, net10.0)..."
+        echo "Running tests on all target frameworks (net8.0, net9.0, net10.0, net11.0)..."
         dotnet test --project TinyDb.Tests/TinyDb.Tests.csproj -c Release
 
         # 构建 NuGet 包
@@ -96,6 +97,15 @@ jobs:
 
         echo "Running AOT tests..."
         ./TinyDb.Tests/bin/Release/net10.0/linux-x64/publish/TinyDb.Tests
+
+    - name: Run AOT tests on .NET 11
+      if: env.version_changed == 'true'
+      run: |
+        echo "Publishing AOT test binary for .NET 11..."
+        dotnet publish TinyDb.Tests/TinyDb.Tests.csproj -c Release -f net11.0 -r linux-x64 --self-contained true
+
+        echo "Running AOT tests..."
+        ./TinyDb.Tests/bin/Release/net11.0/linux-x64/publish/TinyDb.Tests
 
     - name: Verify NuGet package
       if: env.version_changed == 'true'
@@ -113,6 +123,7 @@ jobs:
           [ -f "$TEMP_DIR/lib/net8.0/TinyDb.dll" ] && echo "  ✅ .NET 8.0 library"
           [ -f "$TEMP_DIR/lib/net9.0/TinyDb.dll" ] && echo "  ✅ .NET 9.0 library"
           [ -f "$TEMP_DIR/lib/net10.0/TinyDb.dll" ] && echo "  ✅ .NET 10.0 library"
+          [ -f "$TEMP_DIR/lib/net11.0/TinyDb.dll" ] && echo "  ✅ .NET 11.0 library"
 
           if [ -f "$TEMP_DIR/analyzers/dotnet/cs/TinyDb.SourceGenerator.dll" ]; then
             echo "  ✅ SourceGenerator analyzer"

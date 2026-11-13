@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using TinyDb.Bson;
+using TinyDb.Utils;
 
 namespace TinyDb.Serialization;
 
@@ -78,7 +79,7 @@ public static partial class BsonConversion
             converted = bsonValue switch
             {
                 BsonDecimal128 dec128 => dec128.Value.ToDecimal(),
-                BsonDouble dbl => Convert.ToDecimal(dbl.Value),
+                BsonDouble dbl => DoubleToDecimalCompat.FromDouble(dbl.Value),
                 BsonInt32 i32 => Convert.ToDecimal(i32.Value),
                 BsonInt64 i64 => Convert.ToDecimal(i64.Value),
                 _ => Convert.ToDecimal(bsonValue.ToString(), CultureInfo.InvariantCulture)
