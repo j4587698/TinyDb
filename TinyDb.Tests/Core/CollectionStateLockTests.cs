@@ -30,14 +30,19 @@ public class CollectionStateLockTests
         {
         }
 
-        var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // 用同步事件而不是 TaskCompletionSource：TCS 的续体要排到线程池，
+        // CI 上全量测试并行时线程池饱和会让续体延迟数秒，产生假超时。
+        using var attempted = new ManualResetEventSlim(false);
+        using var acquired = new ManualResetEventSlim(false);
         var competingThread = new Thread(() =>
         {
+            attempted.Set();
             using var competingScope = state.EnterPageMutationLock(42);
-            acquired.TrySetResult();
+            acquired.Set();
         })
         {
-            IsBackground = true
+            IsBackground = true,
+            Name = "page-mutation-lock-competitor"
         };
 
         using (ExecutionContext.SuppressFlow())
@@ -45,12 +50,14 @@ public class CollectionStateLockTests
             competingThread.Start();
         }
 
-        var acquiredWhileRetained = await Task.WhenAny(acquired.Task, Task.Delay(TimeSpan.FromMilliseconds(200))) == acquired.Task;
-        await Assert.That(acquiredWhileRetained).IsFalse();
+        // 先确认竞争线程确实开始尝试，避免"线程还没跑起来就断言未获取"的时序假象。
+        await Assert.That(attempted.Wait(TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(acquired.Wait(TimeSpan.FromMilliseconds(200))).IsFalse();
 
         retention.Dispose();
 
-        await acquired.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        await Assert.That(competingThread.Join(TimeSpan.FromSeconds(2))).IsTrue();
+        // 释放是同步的，正常会立刻唤醒等待者；给足宽限以容忍 CI 的 CPU 抢占。
+        await Assert.That(acquired.Wait(TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(competingThread.Join(TimeSpan.FromSeconds(10))).IsTrue();
     }
 }
